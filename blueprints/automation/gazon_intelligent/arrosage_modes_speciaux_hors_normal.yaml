@@ -1,0 +1,160 @@
+blueprint:
+  name: Gazon Intelligent - Arrosage intelligent (modes spéciaux hors Normal)
+  description: >
+    Blueprint d'arrosage intelligent pour tous les modes sauf Normal.
+    - Sursemis: fractionné en 3 passages/jour.
+    - Fertilisation / Biostimulant / Agent Mouillant / Scarification: matin + soir si forte demande climatique.
+    - Traitement / Hivernage: pas d'arrosage auto.
+    Ajuste aussi selon pluie, ETP et humidité.
+  domain: automation
+  input:
+    mode_select:
+      name: Sélecteur mode gazon
+      selector:
+        entity:
+          domain: select
+    sensor_objectif:
+      name: Capteur objectif d'arrosage (mm)
+      selector:
+        entity:
+          domain: sensor
+    sensor_pluie_24h:
+      name: Capteur pluie 24h (mm)
+      selector:
+        entity:
+          domain: sensor
+    sensor_pluie_demain:
+      name: Capteur pluie prévue demain (mm)
+      selector:
+        entity:
+          domain: sensor
+    sensor_etp:
+      name: Capteur ETP estimée (mm/j)
+      selector:
+        entity:
+          domain: sensor
+    sensor_humidite:
+      name: Capteur humidité extérieure (%)
+      selector:
+        entity:
+          domain: sensor
+
+    heure_matin:
+      name: Heure matin
+      default: "06:00:00"
+      selector:
+        time: {}
+    heure_midi:
+      name: Heure midi
+      default: "12:30:00"
+      selector:
+        time: {}
+    heure_soir:
+      name: Heure soir
+      default: "18:30:00"
+      selector:
+        time: {}
+
+    seuil_pluie_stop_24h:
+      name: Seuil stop pluie 24h (mm)
+      default: 8
+      selector:
+        number:
+          min: 0
+          max: 30
+          step: 0.5
+          unit_of_measurement: mm
+    seuil_pluie_stop_demain:
+      name: Seuil stop pluie demain (mm)
+      default: 6
+      selector:
+        number:
+          min: 0
+          max: 30
+          step: 0.5
+          unit_of_measurement: mm
+
+mode: single
+
+trigger:
+  - platform: time
+    at: !input heure_matin
+    id: matin
+  - platform: time
+    at: !input heure_midi
+    id: midi
+  - platform: time
+    at: !input heure_soir
+    id: soir
+
+variables:
+  mode_select_entity: !input mode_select
+  sensor_objectif_entity: !input sensor_objectif
+  sensor_pluie_24h_entity: !input sensor_pluie_24h
+  sensor_pluie_demain_entity: !input sensor_pluie_demain
+  sensor_etp_entity: !input sensor_etp
+  sensor_humidite_entity: !input sensor_humidite
+  seuil_pluie_stop_24h_value: !input seuil_pluie_stop_24h
+  seuil_pluie_stop_demain_value: !input seuil_pluie_stop_demain
+
+  mode_gazon: "{{ states(mode_select_entity) }}"
+  obj_mode: "{{ states(sensor_objectif_entity) | float(0) }}"
+  pluie24: "{{ states(sensor_pluie_24h_entity) | float(0) }}"
+  pluie_demain: "{{ states(sensor_pluie_demain_entity) | float(0) }}"
+  etp: "{{ states(sensor_etp_entity) | float(0) }}"
+  hum: "{{ states(sensor_humidite_entity) | float(0) }}"
+
+  pluie_stop: >
+    {{
+      pluie24 >= seuil_pluie_stop_24h_value
+      or pluie_demain >= seuil_pluie_stop_demain_value
+    }}
+
+  meteo_coef: >-
+    {% set c = 1.0 %}
+    {% if etp >= 4 %}{% set c = c + 0.25 %}{% endif %}
+    {% if hum >= 85 %}{% set c = c - 0.35 %}{% endif %}
+    {% if hum <= 45 and etp >= 3 %}{% set c = c + 0.15 %}{% endif %}
+    {{ [0.4, [c, 1.5] | min] | max }}
+
+condition:
+  - condition: template
+    value_template: "{{ mode_gazon not in ['unknown','unavailable','Normal'] }}"
+
+action:
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: >
+              {{ mode_gazon == 'Sursemis' and trigger.id in ['matin','midi','soir'] and not pluie_stop }}
+        sequence:
+          - service: gazon_intelligent.start_auto_irrigation
+            data:
+              objectif_mm: >
+                {{ [30, [0, ((obj_mode * meteo_coef) / 3)] | max] | min | round(2) }}
+
+      - conditions:
+          - condition: template
+            value_template: >
+              {{
+                mode_gazon in ['Fertilisation','Biostimulant','Agent Mouillant','Scarification']
+                and (
+                  trigger.id == 'matin'
+                  or (trigger.id == 'soir' and etp >= 4 and hum <= 55)
+                )
+                and not pluie_stop
+              }}
+        sequence:
+          - service: gazon_intelligent.start_auto_irrigation
+            data:
+              objectif_mm: >
+                {% if trigger.id == 'soir' %}
+                  {{ [30, [0, (obj_mode * 0.6 * meteo_coef)] | max] | min | round(2) }}
+                {% else %}
+                  {{ [30, [0, (obj_mode * meteo_coef)] | max] | min | round(2) }}
+                {% endif %}
+
+      - conditions:
+          - condition: template
+            value_template: "{{ mode_gazon in ['Traitement','Hivernage'] }}"
+        sequence: []

@@ -16,7 +16,7 @@ Intégration Home Assistant pour gérer les modes gazon :
 - Configuration UI simple (formulaire d’entités).
 - Sélection des zones, capteurs et débits pour calculer l’arrosage.
 - Calcul automatique de l'objectif d'arrosage selon le mode et la météo.
-- Indicateurs clairs : autorisation tonte, arrosage auto, arrosage conseillé.
+- Indicateurs clairs : autorisation tonte et arrosage conseillé.
 - Gestion complète des phases (durées, dates d’action, dates de fin).
 
 ## Installation simple 🧰
@@ -41,7 +41,6 @@ Intégration Home Assistant pour gérer les modes gazon :
 - Capteur `Humidité extérieure` (%) si fourni.
 - Capteur `Arrosage (auto/personnalisé)` : `auto` en mode Normal, sinon `personnalise`.
 - Binaire `Tonte autorisée`.
-- Binaire `Arrosage automatique autorisé` (à combiner dans tes automations).
 - Bouton `Repasser en mode normal`.
 - Bouton `Date action = aujourd'hui` : fixe rapidement la date d'action si tu mets la phase en retard.
 
@@ -66,6 +65,13 @@ Toutes les entités sont rattachées à un appareil « Gazon Intelligent » 
 Objectif en mode Normal 💧  
 - Pensé pour 3 arrosages/sem : 8.3 mm par passage (~25 mm/sem).  
 - Si tu arroses 2×/sem : mets `objectif_mm: 12.5` dans ton automation `start_auto_irrigation`.
+
+## Blueprint 🧩
+
+- Fichier: `blueprints/automation/gazon_intelligent/arrosage_modes_speciaux_hors_normal.yaml`
+- Nom: `Gazon Intelligent - Arrosage intelligent (modes spéciaux hors Normal)`
+- Utilisation: *Paramètres → Automatisations et scènes → Blueprints → Importer un blueprint → Importer depuis un fichier*.
+- C'est un blueprint d'arrosage: il pilote les modes spéciaux (hors `Normal`) avec adaptation météo (pluie 24h/J+1, ETP, humidité).
 
 ## Événement
 

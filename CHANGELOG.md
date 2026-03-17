@@ -6,6 +6,8 @@
 - Harmonise les unités de débit en `mm/h` dans les textes (conversion interne en `mm/min`).
 - Aligne `set_date_action` en optionnel dans la documentation service.
 - Met `integration_type` à `hub`.
+- Supprime le binaire `Arrosage automatique autorisé` devenu inutile.
+- Nettoie le calcul interne `arrosage_auto_autorise` associé.
 
 ## 0.3.7
 - Persistance du mode et de la date d'action entre redémarrages.

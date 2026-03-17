@@ -5,9 +5,11 @@ import asyncio
 import logging
 from typing import Any
 
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.helpers.storage import Store
 
@@ -41,6 +43,8 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.mode: str = DEFAULT_MODE
         self.date_action: date | None = None
         self._auto_irrigation_task: asyncio.Task | None = None
+        self._unsub_start_listener: CALLBACK_TYPE | None = None
+        self._unsub_delayed_refresh: CALLBACK_TYPE | None = None
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Récupère et calcule les données exposées par l'intégration."""
@@ -67,7 +71,6 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "humidite": humidite,
             "objectif_mm": self._compute_objectif_mm(pluie_24h=pluie_24h),
             "tonte_autorisee": self._compute_tonte_autorisee(),
-            "arrosage_auto_autorise": self._compute_arrosage_auto_autorise(),
             "arrosage_conseille": self._compute_arrosage_conseille(),
             "jours_restants": self._compute_jours_restants(),
         }
@@ -145,14 +148,6 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Indique si la tonte est autorisée selon le mode actif."""
         # Autorisée uniquement en mode Normal
         return self.mode == "Normal"
-
-    def _compute_arrosage_auto_autorise(self) -> bool:
-        """Indique si l'arrosage automatique est autorisé.
-
-        Reste géré en externe pour l'instant, on ne force rien ici.
-        """
-        # Autorisé sauf en Traitement et Hivernage
-        return self.mode not in {"Traitement", "Hivernage"}
 
     def _compute_arrosage_conseille(self) -> str:
         """Retourne le conseil d'arrosage : auto / personnalise."""
@@ -285,8 +280,41 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _sequence(), "gazon_intelligent_auto_irrigation_sequence"
         )
 
+    def schedule_post_start_refresh(self, delay_seconds: int = 30) -> None:
+        """Planifie un refresh peu après le démarrage de Home Assistant."""
+        self._cancel_post_start_refresh()
+
+        @callback
+        def _on_started(_event: Event | None = None) -> None:
+            self._unsub_start_listener = None
+            self._unsub_delayed_refresh = async_call_later(
+                self.hass, delay_seconds, self._async_delayed_refresh
+            )
+
+        if self.hass.is_running:
+            _on_started()
+        else:
+            self._unsub_start_listener = self.hass.bus.async_listen_once(
+                EVENT_HOMEASSISTANT_STARTED, _on_started
+            )
+
+    async def _async_delayed_refresh(self, _now) -> None:
+        """Déclenche un refresh différé après redémarrage."""
+        self._unsub_delayed_refresh = None
+        await self.async_request_refresh()
+
+    def _cancel_post_start_refresh(self) -> None:
+        """Annule les callbacks de refresh post-démarrage."""
+        if self._unsub_start_listener:
+            self._unsub_start_listener()
+            self._unsub_start_listener = None
+        if self._unsub_delayed_refresh:
+            self._unsub_delayed_refresh()
+            self._unsub_delayed_refresh = None
+
     async def async_shutdown(self) -> None:
         """Nettoie les tâches en cours à la fermeture de l'intégration."""
+        self._cancel_post_start_refresh()
         if self._auto_irrigation_task and not self._auto_irrigation_task.done():
             self._auto_irrigation_task.cancel()
             try:

@@ -24,7 +24,6 @@ async def async_setup_entry(hass, entry, async_add_entities):
     async_add_entities(
         [
             GazonTonteAutoriseeBinarySensor(coordinator),
-            GazonArrosageAutoAutoriseBinarySensor(coordinator),
         ]
     )
 
@@ -40,16 +39,3 @@ class GazonTonteAutoriseeBinarySensor(_GazonBaseEntity, BinarySensorEntity):
     @property
     def is_on(self):
         return self.coordinator.data["tonte_autorisee"]
-
-
-class GazonArrosageAutoAutoriseBinarySensor(_GazonBaseEntity, BinarySensorEntity):
-    _attr_name = "Arrosage automatique autorisé"
-    _attr_has_entity_name = True
-
-    def __init__(self, coordinator):
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_arrosage_auto_autorise"
-
-    @property
-    def is_on(self):
-        return self.coordinator.data["arrosage_auto_autorise"]
