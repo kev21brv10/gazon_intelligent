@@ -70,6 +70,8 @@ Objectif en mode Normal 💧
 
 - Fichier: `blueprints/automation/gazon_intelligent/arrosage_modes_speciaux_hors_normal.yaml`
 - Nom: `Gazon Intelligent - Arrosage intelligent (modes spéciaux hors Normal)`
+- Bouton d'import direct:
+  [![Importer ce blueprint dans Home Assistant](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https://github.com/kev21brv10/gazon_intelligent/blob/main/blueprints/automation/gazon_intelligent/arrosage_modes_speciaux_hors_normal.yaml)
 - Utilisation: *Paramètres → Automatisations et scènes → Blueprints → Importer un blueprint → Importer depuis un fichier*.
 - C'est un blueprint d'arrosage: il pilote les modes spéciaux (hors `Normal`) avec adaptation météo (pluie 24h/J+1, ETP, humidité).
 
