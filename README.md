@@ -10,7 +10,7 @@ Objectif: configurer une fois, déclarer les actions terrain, laisser le systèm
 
 ## Version actuelle 🏷️
 
-- Version `manifest`: `0.3.9`
+- Version `manifest`: `0.3.10`
 - Compatibilité HACS indiquée: Home Assistant `2026.3.2`
 
 ## Installation 🚀

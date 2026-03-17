@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.10
+- Refonte du moteur de décision avec scores internes (`score_hydrique`, `score_stress`, `score_tonte`).
+- Calcul d'arrosage recentré sur bilan hydrique + scores, avec profils par phase.
+- Conseils rendus contextuels (météo, stress, humidité, pluie J+1, phase).
+- Ajout des capteurs `Bilan hydrique`, `Score hydrique` et `Score stress gazon`.
+- Correction d'une incohérence dans `services.yaml` (doublon `Hivernage`).
+- Refonte complète du README et amélioration de la lisibilité.
+
 ## 0.3.9
 - Ajoute un moteur décisionnel V1 basé sur l'historique, la météo, le type de sol et la phase dominante.
 - Ajoute l'historique persistant des actions (interventions, tonte, arrosage).
