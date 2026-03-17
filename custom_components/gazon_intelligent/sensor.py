@@ -30,6 +30,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
         [
             GazonPhaseActiveSensor(coordinator),
             GazonObjectifMmSensor(coordinator),
+            GazonBilanHydriqueSensor(coordinator),
             GazonJoursRestantsSensor(coordinator),
             GazonEtpSensor(coordinator),
             GazonHumiditeSensor(coordinator),
@@ -40,6 +41,9 @@ async def async_setup_entry(hass, entry, async_add_entities):
             GazonTemperatureSensor(coordinator),
             GazonArrosageConseilleSensor(coordinator),
             GazonTypeArrosageSensor(coordinator),
+            GazonScoreHydriqueSensor(coordinator),
+            GazonScoreStressSensor(coordinator),
+            GazonScoreTonteSensor(coordinator),
             GazonRaisonDecisionSensor(coordinator),
             GazonConseilPrincipalSensor(coordinator),
             GazonActionRecommandeeSensor(coordinator),
@@ -75,6 +79,21 @@ class GazonObjectifMmSensor(_GazonBaseEntity, SensorEntity):
     @property
     def native_value(self):
         return self.coordinator.data["objectif_mm"]
+
+
+class GazonBilanHydriqueSensor(_GazonBaseEntity, SensorEntity):
+    _attr_name = "Bilan hydrique (déficit)"
+    _attr_native_unit_of_measurement = "mm"
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_bilan_hydrique"
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("bilan_hydrique_mm")
 
 
 class GazonJoursRestantsSensor(_GazonBaseEntity, SensorEntity):
@@ -223,6 +242,45 @@ class GazonTypeArrosageSensor(_GazonBaseEntity, SensorEntity):
     @property
     def native_value(self):
         return self.coordinator.data.get("type_arrosage")
+
+
+class GazonScoreHydriqueSensor(_GazonBaseEntity, SensorEntity):
+    _attr_name = "Score hydrique"
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_score_hydrique"
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("score_hydrique")
+
+
+class GazonScoreStressSensor(_GazonBaseEntity, SensorEntity):
+    _attr_name = "Score stress gazon"
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_score_stress"
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("score_stress")
+
+
+class GazonScoreTonteSensor(_GazonBaseEntity, SensorEntity):
+    _attr_name = "Score tonte"
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_score_tonte"
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("score_tonte")
 
 
 class GazonRaisonDecisionSensor(_GazonBaseEntity, SensorEntity):
