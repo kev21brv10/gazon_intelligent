@@ -6,6 +6,7 @@ blueprint:
     - Fertilisation / Biostimulant / Agent Mouillant / Scarification: matin + soir si forte demande climatique.
     - Traitement / Hivernage: pas d'arrosage auto.
     Ajuste aussi selon pluie, ETP et humidité.
+    Les entités à sélectionner ci-dessous font partie du système Gazon Intelligent (entités de l'intégration).
   domain: automation
   input:
     mode_select:
