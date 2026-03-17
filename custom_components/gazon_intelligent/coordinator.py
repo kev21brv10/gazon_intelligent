@@ -8,6 +8,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.storage import Store
 
 from .const import (
     CONF_CAPTEUR_ETP,
@@ -33,12 +34,18 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             update_interval=timedelta(minutes=5),
         )
         self.entry = entry
+        self._store = Store(hass, 1, f"{DOMAIN}_{entry.entry_id}.json")
+        self._loaded = False
         self._config: dict[str, Any] = {**entry.data, **entry.options}
         self.mode: str = DEFAULT_MODE
         self.date_action: date | None = None
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Récupère et calcule les données exposées par l'intégration."""
+        if not self._loaded:
+            await self._async_load_state()
+            self._loaded = True
+
         pluie_24h = self._get_float_state(self._get_conf(CONF_CAPTEUR_PLUIE_24H))
         pluie_demain = self._get_float_state(self._get_conf(CONF_CAPTEUR_PLUIE_DEMAIN))
         temperature = self._get_float_state(self._get_conf(CONF_CAPTEUR_TEMPERATURE))
@@ -198,17 +205,20 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if mode == "Normal":
             self.date_action = None
 
+        await self._async_save_state()
         await self.async_request_refresh()
 
     async def async_set_date_action(self, date_action: date | None = None) -> None:
         """Définit la date réelle de l'action (par défaut aujourd'hui)."""
         self.date_action = date_action or date.today()
+        await self._async_save_state()
         await self.async_request_refresh()
 
     async def async_set_normal(self) -> None:
         """Réinitialise le système en mode Normal."""
         self.mode = "Normal"
         self.date_action = None
+        await self._async_save_state()
         await self.async_request_refresh()
 
     async def async_start_manual_irrigation(self, objectif_mm: float) -> None:
@@ -269,3 +279,25 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _get_conf(self, key: str) -> Any:
         """Récupère la valeur de configuration (options > data)."""
         return self.entry.options.get(key, self.entry.data.get(key))
+
+    async def _async_load_state(self) -> None:
+        """Charge l'état persistant (mode, date_action)."""
+        data = await self._store.async_load() or {}
+        mode = data.get("mode")
+        if mode:
+            self.mode = mode
+        date_str = data.get("date_action")
+        if date_str:
+            try:
+                self.date_action = date.fromisoformat(date_str)
+            except ValueError:
+                self.date_action = None
+
+    async def _async_save_state(self) -> None:
+        """Sauvegarde l'état persistant (mode, date_action)."""
+        await self._store.async_save(
+            {
+                "mode": self.mode,
+                "date_action": self.date_action.isoformat() if self.date_action else None,
+            }
+        )
