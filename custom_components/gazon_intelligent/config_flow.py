@@ -16,11 +16,15 @@ from .const import (
     CONF_DEBIT_ZONE_4,
     CONF_DEBIT_ZONE_5,
     CONF_TONDEUSE,
+    CONF_ENTITE_METEO,
     CONF_CAPTEUR_PLUIE_24H,
     CONF_CAPTEUR_PLUIE_DEMAIN,
     CONF_CAPTEUR_TEMPERATURE,
     CONF_CAPTEUR_ETP,
     CONF_CAPTEUR_HUMIDITE,
+    CONF_TYPE_SOL,
+    DEFAULT_TYPE_SOL,
+    TYPES_SOL,
 )
 
 
@@ -63,6 +67,9 @@ def build_schema(current: dict | None = None):
             vol.Optional(CONF_TONDEUSE, default=_d(current.get(CONF_TONDEUSE))): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="lawn_mower")
             ),
+            vol.Optional(CONF_ENTITE_METEO, default=_d(current.get(CONF_ENTITE_METEO))): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="weather")
+            ),
             vol.Required(CONF_CAPTEUR_PLUIE_24H, default=_d(current.get(CONF_CAPTEUR_PLUIE_24H))): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="sensor")
             ),
@@ -77,6 +84,11 @@ def build_schema(current: dict | None = None):
             ),
             vol.Optional(CONF_CAPTEUR_HUMIDITE, default=_d(current.get(CONF_CAPTEUR_HUMIDITE))): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_TYPE_SOL, default=_d(current.get(CONF_TYPE_SOL, DEFAULT_TYPE_SOL))): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=TYPES_SOL,
+                )
             ),
         }
     )

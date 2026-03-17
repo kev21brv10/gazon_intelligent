@@ -8,6 +8,12 @@
 - Met `integration_type` à `hub`.
 - Supprime le binaire `Arrosage automatique autorisé` devenu inutile.
 - Nettoie le calcul interne `arrosage_auto_autorise` associé.
+- Rend la conversion capteurs plus tolérante (`12,3` accepté en float).
+- Force l'extinction de chaque zone en mode bloquant pour une séquence plus fiable.
+- Retourne une erreur explicite si aucune zone/débit valide n'est configurée.
+- Ajoute le paramètre `type de sol` (`sableux` / `limoneux` / `argileux`) pour ajuster l'objectif.
+- Utilise la pluie prévue demain pour réduire ou annuler automatiquement l'objectif du jour.
+- Ajoute une entité météo `weather` optionnelle pour récupérer automatiquement la pluie J+1 via `weather.get_forecasts` si `capteur_pluie_demain` n'est pas configuré.
 
 ## 0.3.7
 - Persistance du mode et de la date d'action entre redémarrages.

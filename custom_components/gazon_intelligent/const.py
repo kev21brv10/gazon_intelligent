@@ -11,13 +11,22 @@ CONF_DEBIT_ZONE_3 = "debit_zone_3"
 CONF_DEBIT_ZONE_4 = "debit_zone_4"
 CONF_DEBIT_ZONE_5 = "debit_zone_5"
 CONF_TONDEUSE = "tondeuse"
+CONF_ENTITE_METEO = "entite_meteo"
 CONF_CAPTEUR_PLUIE_24H = "capteur_pluie_24h"
 CONF_CAPTEUR_PLUIE_DEMAIN = "capteur_pluie_demain"
 CONF_CAPTEUR_HUMIDITE = "capteur_humidite"
 CONF_CAPTEUR_TEMPERATURE = "capteur_temperature"
 CONF_CAPTEUR_ETP = "capteur_etp"
+CONF_TYPE_SOL = "type_sol"
 
 DEFAULT_MODE = "Normal"
+DEFAULT_TYPE_SOL = "limoneux"
+
+TYPES_SOL = [
+    "sableux",
+    "limoneux",
+    "argileux",
+]
 
 MODES_GAZON = [
     "Normal",

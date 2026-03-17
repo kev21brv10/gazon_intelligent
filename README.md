@@ -29,7 +29,9 @@ Intégration Home Assistant pour gérer les modes gazon :
 
 - Zone 1 (obligatoire) + Zones 2 à 5 (optionnelles) : ce sont tes `switch` d’électrovannes.
 - Tondeuse (optionnel, domaine `lawn_mower`).
+- Entité météo `weather` (optionnelle) : permet de récupérer automatiquement la pluie prévue J+1 si le capteur dédié n'est pas renseigné.
 - Capteur pluie 24h (obligatoire), pluie demain J+1 (prévision, pas la pluie du jour) / température / ETP / humidité extérieure (optionnels).
+- Type de sol : `sableux`, `limoneux` ou `argileux` (ajuste automatiquement la dose calculée).
 - Débit par zone (mm/h) : combien de millimètres d’eau la zone apporte en 1 heure. Si tu ne sais pas, laisse 60 mm/h (≈ 1 mm/min) et ajuste après mesure.
 
 ## Entités créées 📡
@@ -64,6 +66,7 @@ Toutes les entités sont rattachées à un appareil « Gazon Intelligent » 
 
 Objectif en mode Normal 💧  
 - Pensé pour 3 arrosages/sem : 8.3 mm par passage (~25 mm/sem).  
+- L'objectif est modulé automatiquement selon le type de sol et la pluie prévue demain (réduction, voire annulation en cas de forte pluie annoncée).  
 - Si tu arroses 2×/sem : mets `objectif_mm: 12.5` dans ton automation `start_auto_irrigation`.
 
 ## Blueprint 🧩

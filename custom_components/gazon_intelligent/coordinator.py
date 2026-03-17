@@ -18,9 +18,12 @@ from .const import (
     CONF_CAPTEUR_ETP,
     CONF_CAPTEUR_PLUIE_24H,
     CONF_CAPTEUR_PLUIE_DEMAIN,
+    CONF_ENTITE_METEO,
     CONF_CAPTEUR_TEMPERATURE,
     CONF_CAPTEUR_HUMIDITE,
+    CONF_TYPE_SOL,
     DEFAULT_MODE,
+    DEFAULT_TYPE_SOL,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -54,9 +57,12 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         pluie_24h = self._get_float_state(self._get_conf(CONF_CAPTEUR_PLUIE_24H))
         pluie_demain = self._get_float_state(self._get_conf(CONF_CAPTEUR_PLUIE_DEMAIN))
+        if pluie_demain is None:
+            pluie_demain = await self._get_forecast_pluie_demain(self._get_conf(CONF_ENTITE_METEO))
         temperature = self._get_float_state(self._get_conf(CONF_CAPTEUR_TEMPERATURE))
         etp_capteur = self._get_float_state(self._get_conf(CONF_CAPTEUR_ETP))
         humidite = self._get_float_state(self._get_conf(CONF_CAPTEUR_HUMIDITE))
+        type_sol = self._get_conf(CONF_TYPE_SOL) or DEFAULT_TYPE_SOL
         etp_calcule = self._compute_etp(temperature=temperature, pluie_24h=pluie_24h, etp_capteur=etp_capteur)
 
         return {
@@ -69,7 +75,12 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "temperature": temperature,
             "etp": etp_calcule,
             "humidite": humidite,
-            "objectif_mm": self._compute_objectif_mm(pluie_24h=pluie_24h),
+            "type_sol": type_sol,
+            "objectif_mm": self._compute_objectif_mm(
+                pluie_24h=pluie_24h,
+                pluie_demain=pluie_demain,
+                type_sol=type_sol,
+            ),
             "tonte_autorisee": self._compute_tonte_autorisee(),
             "arrosage_conseille": self._compute_arrosage_conseille(),
             "jours_restants": self._compute_jours_restants(),
@@ -85,9 +96,52 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return None
 
         try:
-            return float(state.state)
+            raw = str(state.state).strip().replace(",", ".")
+            return float(raw)
         except (TypeError, ValueError):
             _LOGGER.debug("Impossible de convertir l'état de %s en float: %s", entity_id, state.state)
+            return None
+
+    async def _get_forecast_pluie_demain(self, weather_entity_id: str | None) -> float | None:
+        """Récupère la pluie prévue demain (mm) via weather.get_forecasts."""
+        if not weather_entity_id:
+            return None
+
+        try:
+            response = await self.hass.services.async_call(
+                "weather",
+                "get_forecasts",
+                {"entity_id": weather_entity_id, "type": "daily"},
+                blocking=True,
+                return_response=True,
+            )
+        except Exception as err:  # pragma: no cover
+            _LOGGER.debug("Echec weather.get_forecasts pour %s: %s", weather_entity_id, err)
+            return None
+
+        if not isinstance(response, dict):
+            return None
+
+        entity_data = response.get(weather_entity_id)
+        if not isinstance(entity_data, dict):
+            return None
+
+        forecasts = entity_data.get("forecast")
+        if not isinstance(forecasts, list) or not forecasts:
+            return None
+
+        idx = 1 if len(forecasts) > 1 else 0
+        tomorrow = forecasts[idx]
+        if not isinstance(tomorrow, dict):
+            return None
+
+        precipitation = tomorrow.get("precipitation")
+        if precipitation is None:
+            return None
+
+        try:
+            return float(str(precipitation).strip().replace(",", "."))
+        except (TypeError, ValueError):
             return None
 
     def _get_mode_duration_days(self) -> int:
@@ -115,7 +169,33 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         return self.date_action + timedelta(days=duration)
 
-    def _compute_objectif_mm(self, pluie_24h: float | None) -> float:
+    def _soil_factor(self, type_sol: str) -> float:
+        """Retourne un coefficient selon le type de sol."""
+        factors = {
+            "sableux": 1.2,
+            "limoneux": 1.0,
+            "argileux": 0.85,
+        }
+        return factors.get(type_sol, 1.0)
+
+    def _forecast_factor(self, pluie_demain: float | None) -> float:
+        """Réduit l'objectif en fonction de la pluie prévue demain."""
+        if pluie_demain is None:
+            return 1.0
+        if pluie_demain >= 8.0:
+            return 0.0
+        if pluie_demain >= 5.0:
+            return 0.4
+        if pluie_demain >= 2.0:
+            return 0.75
+        return 1.0
+
+    def _compute_objectif_mm(
+        self,
+        pluie_24h: float | None,
+        pluie_demain: float | None,
+        type_sol: str,
+    ) -> float:
         """Calcule l'objectif d'arrosage en mm selon le mode."""
         pluie_24h = pluie_24h or 0.0
 
@@ -124,25 +204,25 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         if self.mode == "Sursemis":
             if pluie_24h > 5:
-                return 0.0
-            if pluie_24h > 2:
-                return 1.0
-            return 3.0
+                base = 0.0
+            elif pluie_24h > 2:
+                base = 1.0
+            else:
+                base = 3.0
+        elif self.mode == "Fertilisation":
+            base = 1.5
+        elif self.mode == "Biostimulant":
+            base = 1.0
+        elif self.mode == "Agent Mouillant":
+            base = 2.0
+        elif self.mode == "Scarification":
+            base = 1.0
+        else:
+            # Mode Normal : viser ~25 mm/semaine pour 3 arrosages/sem ≈ 8.3 mm par passage
+            base = 8.3
 
-        if self.mode == "Fertilisation":
-            return 1.5
-
-        if self.mode == "Biostimulant":
-            return 1.0
-
-        if self.mode == "Agent Mouillant":
-            return 2.0
-
-        if self.mode == "Scarification":
-            return 1.0
-
-        # Mode Normal : viser ~25 mm/semaine pour 3 arrosages/sem ≈ 8.3 mm par passage
-        return 8.3
+        objectif = base * self._soil_factor(type_sol) * self._forecast_factor(pluie_demain)
+        return round(max(0.0, objectif), 1)
 
     def _compute_tonte_autorisee(self) -> bool:
         """Indique si la tonte est autorisée selon le mode actif."""
@@ -252,6 +332,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         objectif = float(objectif_mm) if objectif_mm is not None else float(
             self.data.get("objectif_mm", 0.0)
         )
+        zones = list(self._iter_zones_with_rate())
+        if not zones:
+            raise HomeAssistantError(
+                "Aucune zone d'arrosage valide n'est configurée (zone + débit mm/h)."
+            )
 
         async def _run_zone(entity_id: str, duration_minutes: float) -> None:
             await self.hass.services.async_call(
@@ -261,12 +346,12 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 await asyncio.sleep(max(duration_minutes, 0) * 60)
             finally:
                 await self.hass.services.async_call(
-                    "switch", "turn_off", {"entity_id": entity_id}, blocking=False
+                    "switch", "turn_off", {"entity_id": entity_id}, blocking=True
                 )
 
         async def _sequence():
             try:
-                for entity_id, rate in self._iter_zones_with_rate():
+                for entity_id, rate in zones:
                     if rate <= 0:
                         continue
                     duration = objectif / rate
