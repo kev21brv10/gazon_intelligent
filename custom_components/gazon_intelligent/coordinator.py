@@ -215,14 +215,17 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
     def _iter_zones_with_rate(self):
-        """Itère sur les zones configurées avec leur débit mm/min."""
+        """Itère sur les zones configurées avec leur débit converti en mm/min."""
         data = self.entry.data
+        opts = self.entry.options
         for idx in range(1, 6):
-            entity_id = data.get(f"zone_{idx}")
-            rate = data.get(f"debit_zone_{idx}")
-            if entity_id and rate:
+            entity_id = opts.get(f"zone_{idx}", data.get(f"zone_{idx}"))
+            rate_h = opts.get(f"debit_zone_{idx}", data.get(f"debit_zone_{idx}"))
+            if entity_id and rate_h:
                 try:
-                    yield entity_id, float(rate)
+                    rate_h_float = float(rate_h)
+                    rate_mm_min = rate_h_float / 60.0
+                    yield entity_id, rate_mm_min
                 except (TypeError, ValueError):
                     continue
 

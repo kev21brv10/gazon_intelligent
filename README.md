@@ -39,7 +39,7 @@ Intégration Home Assistant pour gérer les modes gazon :
 - Zone 1 (obligatoire) + Zones 2 à 5 (optionnelles) : ce sont tes `switch` d’électrovannes.
 - Tondeuse (optionnel, domaine `lawn_mower`).
 - Capteur pluie 24h (obligatoire), pluie demain J+1 (prévision, pas la pluie du jour) / température / ETP / humidité extérieure (optionnels).
-- Débit par zone (mm/min) : combien de millimètres d’eau la zone apporte en 1 minute. Si tu ne sais pas, laisse 1.0 (tu affineras plus tard).
+- Débit par zone (mm/h) : combien de millimètres d’eau la zone apporte en 1 heure. Si tu ne sais pas, laisse 60 mm/h (≈ 1 mm/min) et ajuste après mesure.
 
 ## Entités créées
 
@@ -63,7 +63,7 @@ Toutes les entités sont rattachées à un appareil « Gazon Intelligent » 
 - `gazon_intelligent.set_date_action` (`date_action` au format `AAAA-MM-JJ`).
 - `gazon_intelligent.reset_mode` (revient en Normal).
 - `gazon_intelligent.start_manual_irrigation` (`objectif_mm` float, 0‑30).
-- `gazon_intelligent.start_auto_irrigation` (objectif optionnel, utilise l'objectif calculé si omis). Lance chaque zone en séquence en convertissant l'objectif mm en durée selon le débit renseigné.
+- `gazon_intelligent.start_auto_irrigation` (objectif optionnel, utilise l'objectif calculé si omis). Lance chaque zone en séquence en convertissant l'objectif mm en durée selon le débit renseigné (mm/h).
 
 ## Événement
 

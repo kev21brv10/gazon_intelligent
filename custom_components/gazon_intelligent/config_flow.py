@@ -43,20 +43,20 @@ def build_schema(current: dict | None = None):
             vol.Optional(CONF_ZONE_5, default=current.get(CONF_ZONE_5)): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="switch")
             ),
-            vol.Optional(CONF_DEBIT_ZONE_1, default=current.get(CONF_DEBIT_ZONE_1, 1.0)): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0.1, max=10, step=0.1, unit_of_measurement="mm/min")
+            vol.Optional(CONF_DEBIT_ZONE_1, default=current.get(CONF_DEBIT_ZONE_1, 60.0)): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=1, max=200, step=1, unit_of_measurement="mm/h")
             ),
             vol.Optional(CONF_DEBIT_ZONE_2, default=current.get(CONF_DEBIT_ZONE_2)): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0.1, max=10, step=0.1, unit_of_measurement="mm/min")
+                selector.NumberSelectorConfig(min=1, max=200, step=1, unit_of_measurement="mm/h")
             ),
             vol.Optional(CONF_DEBIT_ZONE_3, default=current.get(CONF_DEBIT_ZONE_3)): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0.1, max=10, step=0.1, unit_of_measurement="mm/min")
+                selector.NumberSelectorConfig(min=1, max=200, step=1, unit_of_measurement="mm/h")
             ),
             vol.Optional(CONF_DEBIT_ZONE_4, default=current.get(CONF_DEBIT_ZONE_4)): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0.1, max=10, step=0.1, unit_of_measurement="mm/min")
+                selector.NumberSelectorConfig(min=1, max=200, step=1, unit_of_measurement="mm/h")
             ),
             vol.Optional(CONF_DEBIT_ZONE_5, default=current.get(CONF_DEBIT_ZONE_5)): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0.1, max=10, step=0.1, unit_of_measurement="mm/min")
+                selector.NumberSelectorConfig(min=1, max=200, step=1, unit_of_measurement="mm/h")
             ),
             vol.Optional(CONF_TONDEUSE, default=current.get(CONF_TONDEUSE)): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="lawn_mower")
