@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 import voluptuous as vol
 
@@ -217,7 +217,7 @@ async def _handle_start_auto_irrigation(call: ServiceCall) -> None:
     await coordinator.async_start_auto_irrigation(call.data.get("objectif_mm"))
 
 
-def _parse_optional_date(date_str: str | None) -> datetime.date | None:
+def _parse_optional_date(date_str: str | None) -> date | None:
     if not date_str:
         return None
     return datetime.strptime(date_str, "%Y-%m-%d").date()

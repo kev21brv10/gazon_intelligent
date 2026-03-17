@@ -83,7 +83,7 @@ class GazonObjectifMmSensor(_GazonBaseEntity, SensorEntity):
 
     @property
     def native_value(self):
-        return self.coordinator.data["objectif_mm"]
+        return self.coordinator.data.get("objectif_mm")
 
     @property
     def extra_state_attributes(self):
@@ -91,7 +91,7 @@ class GazonObjectifMmSensor(_GazonBaseEntity, SensorEntity):
 
 
 class GazonBilanHydriqueSensor(_GazonBaseEntity, SensorEntity):
-    _attr_name = "Bilan hydrique (déficit)"
+    _attr_name = "Manque d'eau estimé"
     _attr_native_unit_of_measurement = "mm"
     _attr_has_entity_name = True
 
@@ -121,7 +121,7 @@ class GazonJoursRestantsSensor(_GazonBaseEntity, SensorEntity):
 
     @property
     def native_value(self):
-        return self.coordinator.data["jours_restants"]
+        return self.coordinator.data.get("jours_restants")
 
     @property
     def extra_state_attributes(self):
@@ -129,7 +129,7 @@ class GazonJoursRestantsSensor(_GazonBaseEntity, SensorEntity):
 
 
 class GazonEtpSensor(_GazonBaseEntity, SensorEntity):
-    _attr_name = "ETP estimée"
+    _attr_name = "Besoin en eau du jour (ETP)"
     _attr_native_unit_of_measurement = "mm/j"
     _attr_has_entity_name = True
 
@@ -251,7 +251,7 @@ class GazonTemperatureSensor(_GazonBaseEntity, SensorEntity):
 
 
 class GazonArrosageConseilleSensor(_GazonBaseEntity, SensorEntity):
-    _attr_name = "Arrosage (auto/personnalisé)"
+    _attr_name = "Arrosage conseillé"
     _attr_has_entity_name = True
 
     def __init__(self, coordinator):
@@ -269,7 +269,7 @@ class GazonArrosageConseilleSensor(_GazonBaseEntity, SensorEntity):
 
 
 class GazonTypeArrosageSensor(_GazonBaseEntity, SensorEntity):
-    _attr_name = "Type d'arrosage"
+    _attr_name = "Mode d'arrosage"
     _attr_has_entity_name = True
 
     def __init__(self, coordinator):
@@ -286,7 +286,7 @@ class GazonTypeArrosageSensor(_GazonBaseEntity, SensorEntity):
 
 
 class GazonScoreHydriqueSensor(_GazonBaseEntity, SensorEntity):
-    _attr_name = "Score hydrique"
+    _attr_name = "Niveau de manque d'eau"
     _attr_has_entity_name = True
 
     def __init__(self, coordinator):
@@ -303,7 +303,7 @@ class GazonScoreHydriqueSensor(_GazonBaseEntity, SensorEntity):
 
 
 class GazonScoreStressSensor(_GazonBaseEntity, SensorEntity):
-    _attr_name = "Score stress gazon"
+    _attr_name = "Niveau de stress du gazon"
     _attr_has_entity_name = True
 
     def __init__(self, coordinator):
@@ -320,7 +320,7 @@ class GazonScoreStressSensor(_GazonBaseEntity, SensorEntity):
 
 
 class GazonScoreTonteSensor(_GazonBaseEntity, SensorEntity):
-    _attr_name = "Score tonte"
+    _attr_name = "Risque de tonte"
     _attr_has_entity_name = True
 
     def __init__(self, coordinator):
@@ -337,7 +337,7 @@ class GazonScoreTonteSensor(_GazonBaseEntity, SensorEntity):
 
 
 class GazonRaisonDecisionSensor(_GazonBaseEntity, SensorEntity):
-    _attr_name = "Raison décision"
+    _attr_name = "Pourquoi ce choix"
     _attr_has_entity_name = True
 
     def __init__(self, coordinator):
@@ -401,7 +401,7 @@ class GazonActionAEviterSensor(_GazonBaseEntity, SensorEntity):
 
 
 class GazonUrgenceSensor(_GazonBaseEntity, SensorEntity):
-    _attr_name = "Urgence"
+    _attr_name = "Niveau d'urgence"
     _attr_has_entity_name = True
 
     def __init__(self, coordinator):

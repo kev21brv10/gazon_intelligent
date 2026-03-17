@@ -45,7 +45,7 @@ class GazonTonteAutoriseeBinarySensor(_GazonBaseEntity, BinarySensorEntity):
 
     @property
     def is_on(self):
-        return self.coordinator.data["tonte_autorisee"]
+        return self.coordinator.data.get("tonte_autorisee", False)
 
     @property
     def extra_state_attributes(self):

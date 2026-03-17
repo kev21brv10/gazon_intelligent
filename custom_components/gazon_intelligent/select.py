@@ -2,7 +2,7 @@ from homeassistant.components.select import SelectEntity
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, MODES_GAZON
+from .const import DOMAIN, DEFAULT_MODE, MODES_GAZON
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -21,7 +21,7 @@ class GazonModeSelect(CoordinatorEntity, SelectEntity):
 
     @property
     def current_option(self):
-        return self.coordinator.data["mode"]
+        return self.coordinator.data.get("mode", DEFAULT_MODE)
 
     async def async_select_option(self, option: str):
         await self.coordinator.async_set_mode(option)

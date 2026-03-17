@@ -80,25 +80,27 @@ Les phases restent des contraintes métier, mais la décision s'appuie désormai
 
 - `Phase active`
 - `Objectif d'arrosage` (mm)
-- `Bilan hydrique (déficit)` (mm)
-- `Score hydrique`
-- `Score stress gazon`
-- `Score tonte`
+- `Manque d'eau estimé` (mm)
+- `Besoin en eau du jour (ETP)` (mm/j)
+- `Niveau de manque d'eau`
+- `Niveau de stress du gazon`
+- `Risque de tonte`
 - `Jours restants de la phase` (j)
-- `ETP estimée` (mm/j)
 - `Humidité extérieure` (%)
 - `Date de l'action`
 - `Date de fin de phase`
 - `Pluie 24h` (mm)
 - `Pluie prévue demain` (mm)
 - `Température extérieure` (°C)
-- `Arrosage (auto/personnalisé)`
-- `Type d'arrosage`
-- `Raison décision`
+- `Arrosage conseillé`
+- `Mode d'arrosage`
+- `Pourquoi ce choix`
 - `Conseil principal`
 - `Action recommandée`
 - `Action à éviter`
-- `Urgence`
+- `Niveau d'urgence`
+
+Le capteur `Arrosage conseillé` expose une valeur technique `auto` ou `personnalise`.
 
 ### Binary sensors
 
@@ -190,3 +192,11 @@ action:
 - Les données de mode, date d'action et historique sont persistées.
 - L'historique est limité aux 300 derniers enregistrements.
 - En cas de capteur absent/inconnu, le moteur applique des valeurs de repli pour rester opérationnel.
+
+## Glossaire simple 👇
+
+- `ETP`: besoin en eau estimé de la pelouse pour la journée.
+- `Manque d'eau estimé`: quantité d'eau qu'il manque actuellement (en mm).
+- `Niveau de manque d'eau`: indicateur 0-100, plus il est haut, plus la pelouse a soif.
+- `Niveau de stress du gazon`: indicateur 0-100, plus il est haut, plus le gazon est fragile.
+- `Risque de tonte`: indicateur 0-100, plus il est haut, moins il faut tondre.
