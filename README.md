@@ -37,8 +37,8 @@ Intégration Home Assistant pour gérer les modes gazon :
 ## Configuration (ce qui est demandé)
 
 - Zone 1 (obligatoire) + Zones 2 à 5 (optionnelles) : ce sont tes `switch` d’électrovannes.
-- Tondeuse (optionnel).
-- Capteur pluie 24h (obligatoire), pluie demain / température / ETP (optionnels).
+- Tondeuse (optionnel, domaine `lawn_mower`).
+- Capteur pluie 24h (obligatoire), pluie demain J+1 (prévision, pas la pluie du jour) / température / ETP / humidité extérieure (optionnels).
 - Débit par zone (mm/min) : combien de millimètres d’eau la zone apporte en 1 minute. Si tu ne sais pas, laisse 1.0 (tu affineras plus tard).
 
 ## Entités créées
@@ -46,9 +46,14 @@ Intégration Home Assistant pour gérer les modes gazon :
 - Sélecteur de mode gazon (Normal, Sursemis, Traitement, Fertilisation, Biostimulant, Agent Mouillant, Scarification, Hivernage).
 - Capteur `Objectif d'arrosage` (mm).
 - Capteur `Jours restants de la phase`.
+- Capteur `ETP estimée` (mm/j) : prend la valeur du capteur ETP si fourni, sinon calcule une estimation simple à partir de la température et de la pluie récente.
+- Capteur `Humidité extérieure` (%) : reflète le capteur fourni s'il existe.
 - Binaire `Tonte autorisée`.
 - Binaire `Arrosage automatique autorisé`.
 - Bouton `Repasser en mode normal`.
+
+Reconfigurer plus tard
+- Tu peux modifier à tout moment les entités (zones, capteurs, débits) via le menu Options de l'intégration dans Home Assistant. Les nouvelles valeurs sont prises en compte sans devoir tout recréer.
 
 Toutes les entités sont rattachées à un appareil « Gazon Intelligent » pour permettre le renommage persistant.
 
@@ -81,3 +86,27 @@ action:
 #    data:
 #      objectif_mm: 2
 ```
+
+### Exemple : créer un cumul pluie 24h simple
+
+Si tu n'as qu'un capteur de pluie horaire ou instantanée (ex. `sensor.pluie_horaire`), crée un cumul 24h glissant avec `statistics` :
+
+```yaml
+template:
+  - sensor:
+      - name: "Pluie 24h"
+        unit_of_measurement: "mm"
+        state: "{{ states('sensor.pluie_24h_stats') }}"
+        availability: "{{ states('sensor.pluie_24h_stats') not in ['unknown','unavailable','none'] }}"
+
+sensor:
+  - platform: statistics
+    name: "Pluie 24h stats"
+    entity_id: sensor.pluie_horaire
+    sampling_size: 200
+    max_age:
+      hours: 24
+    state_characteristic: sum
+```
+
+Puis utilise `sensor.pluie_24h` comme `capteur_pluie_24h` dans l'intégration.

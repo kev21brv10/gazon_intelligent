@@ -14,6 +14,7 @@ from .const import (
     CONF_CAPTEUR_PLUIE_24H,
     CONF_CAPTEUR_PLUIE_DEMAIN,
     CONF_CAPTEUR_TEMPERATURE,
+    CONF_CAPTEUR_HUMIDITE,
     DEFAULT_MODE,
 )
 
@@ -32,15 +33,18 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             update_interval=timedelta(minutes=5),
         )
         self.entry = entry
+        self._config: dict[str, Any] = {**entry.data, **entry.options}
         self.mode: str = DEFAULT_MODE
         self.date_action: date | None = None
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Récupère et calcule les données exposées par l'intégration."""
-        pluie_24h = self._get_float_state(self.entry.data.get(CONF_CAPTEUR_PLUIE_24H))
-        pluie_demain = self._get_float_state(self.entry.data.get(CONF_CAPTEUR_PLUIE_DEMAIN))
-        temperature = self._get_float_state(self.entry.data.get(CONF_CAPTEUR_TEMPERATURE))
-        etp = self._get_float_state(self.entry.data.get(CONF_CAPTEUR_ETP))
+        pluie_24h = self._get_float_state(self._get_conf(CONF_CAPTEUR_PLUIE_24H))
+        pluie_demain = self._get_float_state(self._get_conf(CONF_CAPTEUR_PLUIE_DEMAIN))
+        temperature = self._get_float_state(self._get_conf(CONF_CAPTEUR_TEMPERATURE))
+        etp_capteur = self._get_float_state(self._get_conf(CONF_CAPTEUR_ETP))
+        humidite = self._get_float_state(self._get_conf(CONF_CAPTEUR_HUMIDITE))
+        etp_calcule = self._compute_etp(temperature=temperature, pluie_24h=pluie_24h, etp_capteur=etp_capteur)
 
         return {
             "mode": self.mode,
@@ -50,7 +54,8 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "pluie_24h": pluie_24h,
             "pluie_demain": pluie_demain,
             "temperature": temperature,
-            "etp": etp,
+            "etp": etp_calcule,
+            "humidite": humidite,
             "objectif_mm": self._compute_objectif_mm(pluie_24h=pluie_24h),
             "tonte_autorisee": self._compute_tonte_autorisee(),
             "arrosage_auto_autorise": self._compute_arrosage_auto_autorise(),
@@ -139,6 +144,24 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _compute_arrosage_auto_autorise(self) -> bool:
         """Indique si l'arrosage automatique est autorisé."""
         return self.mode == "Normal"
+
+    def _compute_etp(
+        self,
+        temperature: float | None,
+        pluie_24h: float | None,
+        etp_capteur: float | None,
+    ) -> float | None:
+        """Renvoie l'ETP fournie ou une estimation simple (mm/jour)."""
+        if etp_capteur is not None:
+            return etp_capteur
+
+        if temperature is None:
+            return None
+
+        # Approximation grossière : 0.08 * T + correction pluie
+        base = max(0.0, 0.08 * temperature)
+        correction = max(0.0, (pluie_24h or 0) * 0.05)
+        return max(0.0, base - correction)
 
     def _compute_jours_restants(self) -> int:
         """Calcule le nombre de jours restants pour le mode en cours."""
@@ -232,3 +255,6 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.hass.async_create_task(
             _sequence(), "gazon_intelligent_auto_irrigation_sequence"
         )
+    def _get_conf(self, key: str) -> Any:
+        """Récupère la valeur de configuration (options > data)."""
+        return self.entry.options.get(key, self.entry.data.get(key))

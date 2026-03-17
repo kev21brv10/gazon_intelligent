@@ -13,6 +13,7 @@ CONF_DEBIT_ZONE_5 = "debit_zone_5"
 CONF_TONDEUSE = "tondeuse"
 CONF_CAPTEUR_PLUIE_24H = "capteur_pluie_24h"
 CONF_CAPTEUR_PLUIE_DEMAIN = "capteur_pluie_demain"
+CONF_CAPTEUR_HUMIDITE = "capteur_humidite"
 CONF_CAPTEUR_TEMPERATURE = "capteur_temperature"
 CONF_CAPTEUR_ETP = "capteur_etp"
 

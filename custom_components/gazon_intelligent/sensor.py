@@ -25,6 +25,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
         [
             GazonObjectifMmSensor(coordinator),
             GazonJoursRestantsSensor(coordinator),
+            GazonEtpSensor(coordinator),
+            GazonHumiditeSensor(coordinator),
         ]
     )
 
@@ -57,3 +59,33 @@ class GazonJoursRestantsSensor(_GazonBaseEntity, SensorEntity):
     @property
     def native_value(self):
         return self.coordinator.data["jours_restants"]
+
+
+class GazonEtpSensor(_GazonBaseEntity, SensorEntity):
+    _attr_name = "ETP estimée"
+    _attr_native_unit_of_measurement = "mm/j"
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_etp"
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("etp")
+
+
+class GazonHumiditeSensor(_GazonBaseEntity, SensorEntity):
+    _attr_name = "Humidité extérieure"
+    _attr_native_unit_of_measurement = "%"
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_humidite"
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("humidite")
