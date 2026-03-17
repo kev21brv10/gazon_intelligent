@@ -24,9 +24,31 @@ from .const import (
     CONF_TYPE_SOL,
     DEFAULT_MODE,
     DEFAULT_TYPE_SOL,
+    INTERVENTIONS_ACTIONS,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+PHASE_DURATIONS_DAYS: dict[str, int] = {
+    "Normal": 0,
+    "Sursemis": 21,
+    "Traitement": 2,
+    "Fertilisation": 2,
+    "Biostimulant": 1,
+    "Agent Mouillant": 1,
+    "Scarification": 7,
+    "Hivernage": 999,
+}
+
+PHASE_PRIORITIES: dict[str, int] = {
+    "Traitement": 100,
+    "Hivernage": 95,
+    "Sursemis": 90,
+    "Scarification": 80,
+    "Fertilisation": 70,
+    "Agent Mouillant": 60,
+    "Biostimulant": 50,
+}
 
 
 class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -45,6 +67,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._loaded = False
         self.mode: str = DEFAULT_MODE
         self.date_action: date | None = None
+        self.history: list[dict[str, Any]] = []
         self._auto_irrigation_task: asyncio.Task | None = None
         self._unsub_start_listener: CALLBACK_TYPE | None = None
         self._unsub_delayed_refresh: CALLBACK_TYPE | None = None
@@ -67,12 +90,28 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         humidite = self._get_float_state(self._get_conf(CONF_CAPTEUR_HUMIDITE))
         type_sol = self._get_conf(CONF_TYPE_SOL) or DEFAULT_TYPE_SOL
         etp_calcule = self._compute_etp(temperature=temperature, pluie_24h=pluie_24h, etp_capteur=etp_capteur)
+        phase_active, date_action, date_fin = self._compute_phase_active(temperature=temperature)
+        jours_restants = self._compute_jours_restants_for(phase_active=phase_active, date_fin=date_fin)
+        self.mode = phase_active
+        self.date_action = date_action
+        objectif_mm = self._compute_objectif_mm(
+            pluie_24h=pluie_24h,
+            pluie_demain=pluie_demain,
+            type_sol=type_sol,
+            phase_active=phase_active,
+        )
+        decision = self._compute_decision(
+            phase_active=phase_active,
+            pluie_24h=pluie_24h,
+            objectif_mm=objectif_mm,
+            jours_restants=jours_restants,
+        )
 
         return {
-            "mode": self.mode,
-            "phase_active": self.mode,
-            "date_action": self.date_action,
-            "date_fin": self._compute_date_fin(),
+            "mode": phase_active,
+            "phase_active": phase_active,
+            "date_action": date_action,
+            "date_fin": date_fin,
             "pluie_24h": pluie_24h,
             "pluie_demain": pluie_demain,
             "pluie_demain_source": pluie_demain_source,
@@ -80,14 +119,19 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "etp": etp_calcule,
             "humidite": humidite,
             "type_sol": type_sol,
-            "objectif_mm": self._compute_objectif_mm(
-                pluie_24h=pluie_24h,
-                pluie_demain=pluie_demain,
-                type_sol=type_sol,
-            ),
-            "tonte_autorisee": self._compute_tonte_autorisee(),
-            "arrosage_conseille": self._compute_arrosage_conseille(),
-            "jours_restants": self._compute_jours_restants(),
+            "objectif_mm": objectif_mm,
+            "tonte_autorisee": decision["tonte_autorisee"],
+            "arrosage_auto_autorise": decision["arrosage_auto_autorise"],
+            "arrosage_recommande": decision["arrosage_recommande"],
+            "type_arrosage": decision["type_arrosage"],
+            "arrosage_conseille": decision["arrosage_conseille"],
+            "raison_decision": decision["raison_decision"],
+            "conseil_principal": decision["conseil_principal"],
+            "action_recommandee": decision["action_recommandee"],
+            "action_a_eviter": decision["action_a_eviter"],
+            "urgence": decision["urgence"],
+            "jours_restants": jours_restants,
+            "historique_total": len(self.history),
         }
 
     def _get_float_state(self, entity_id: str | None) -> float | None:
@@ -148,30 +192,54 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except (TypeError, ValueError):
             return None
 
-    def _get_mode_duration_days(self) -> int:
-        """Retourne la durée théorique du mode en jours."""
-        durations = {
-            "Normal": 0,
-            "Sursemis": 21,
-            "Traitement": 2,
-            "Fertilisation": 2,
-            "Biostimulant": 1,
-            "Agent Mouillant": 1,
-            "Scarification": 7,
-            "Hivernage": 999,
-        }
-        return durations.get(self.mode, 0)
+    def _phase_duration_days(self, phase: str) -> int:
+        return PHASE_DURATIONS_DAYS.get(phase, 0)
 
-    def _compute_date_fin(self) -> date | None:
-        """Calcule la date de fin théorique du mode."""
-        if not self.date_action:
-            return None
+    def _is_hivernage(self, temperature: float | None) -> bool:
+        today = date.today()
+        if today.month in {11, 12, 1, 2}:
+            return True
+        if temperature is not None and temperature <= 5:
+            return True
+        return False
 
-        duration = self._get_mode_duration_days()
-        if duration == 999:
-            return None
+    def _compute_phase_active(self, temperature: float | None) -> tuple[str, date | None, date | None]:
+        """Détermine la phase dominante à partir de l'historique."""
+        today = date.today()
+        best: tuple[int, date] | None = None
+        active_phase: str | None = None
+        active_date: date | None = None
+        active_end: date | None = None
+        for item in self.history:
+            phase = item.get("type")
+            if phase not in INTERVENTIONS_ACTIONS:
+                continue
+            raw_date = item.get("date")
+            if not raw_date:
+                continue
+            try:
+                start = date.fromisoformat(raw_date)
+            except ValueError:
+                continue
+            if start > today:
+                continue
+            duration = self._phase_duration_days(phase)
+            end = start + timedelta(days=duration)
+            if today > end:
+                continue
+            priority = PHASE_PRIORITIES.get(phase, 0)
+            rank = (priority, start)
+            if best is None or rank > best:
+                best = rank
+                active_phase = phase
+                active_date = start
+                active_end = end
 
-        return self.date_action + timedelta(days=duration)
+        if active_phase:
+            return active_phase, active_date, active_end
+        if self._is_hivernage(temperature):
+            return "Hivernage", None, None
+        return "Normal", None, None
 
     def _soil_factor(self, type_sol: str) -> float:
         """Retourne un coefficient selon le type de sol."""
@@ -199,27 +267,28 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         pluie_24h: float | None,
         pluie_demain: float | None,
         type_sol: str,
+        phase_active: str,
     ) -> float:
         """Calcule l'objectif d'arrosage en mm selon le mode."""
         pluie_24h = pluie_24h or 0.0
 
-        if self.mode in ("Traitement", "Hivernage"):
+        if phase_active in ("Traitement", "Hivernage"):
             return 0.0
 
-        if self.mode == "Sursemis":
+        if phase_active == "Sursemis":
             if pluie_24h > 5:
                 base = 0.0
             elif pluie_24h > 2:
                 base = 1.0
             else:
                 base = 3.0
-        elif self.mode == "Fertilisation":
+        elif phase_active == "Fertilisation":
             base = 1.5
-        elif self.mode == "Biostimulant":
+        elif phase_active == "Biostimulant":
             base = 1.0
-        elif self.mode == "Agent Mouillant":
+        elif phase_active == "Agent Mouillant":
             base = 2.0
-        elif self.mode == "Scarification":
+        elif phase_active == "Scarification":
             base = 1.0
         else:
             # Mode Normal : viser ~25 mm/semaine pour 3 arrosages/sem ≈ 8.3 mm par passage
@@ -228,16 +297,69 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         objectif = base * self._soil_factor(type_sol) * self._forecast_factor(pluie_demain)
         return round(max(0.0, objectif), 1)
 
-    def _compute_tonte_autorisee(self) -> bool:
-        """Indique si la tonte est autorisée selon le mode actif."""
-        # Autorisée uniquement en mode Normal
-        return self.mode == "Normal"
+    def _compute_decision(
+        self,
+        phase_active: str,
+        pluie_24h: float | None,
+        objectif_mm: float,
+        jours_restants: int,
+    ) -> dict[str, Any]:
+        pluie_24h = pluie_24h or 0.0
+        if phase_active == "Traitement":
+            return {
+                "tonte_autorisee": False,
+                "arrosage_auto_autorise": False,
+                "arrosage_recommande": False,
+                "type_arrosage": "bloque",
+                "arrosage_conseille": "personnalise",
+                "raison_decision": "Traitement actif: tonte et arrosage bloqués.",
+                "conseil_principal": "Laisser agir le traitement.",
+                "action_recommandee": "Attendre la fin du traitement.",
+                "action_a_eviter": "Tondre ou arroser.",
+                "urgence": "faible",
+            }
+        if phase_active == "Hivernage":
+            return {
+                "tonte_autorisee": False,
+                "arrosage_auto_autorise": False,
+                "arrosage_recommande": False,
+                "type_arrosage": "bloque",
+                "arrosage_conseille": "personnalise",
+                "raison_decision": "Hivernage actif: repos végétatif.",
+                "conseil_principal": "Limiter les interventions.",
+                "action_recommandee": "Surveiller uniquement.",
+                "action_a_eviter": "Arrosages fréquents.",
+                "urgence": "faible",
+            }
+        if phase_active == "Sursemis":
+            return {
+                "tonte_autorisee": False,
+                "arrosage_auto_autorise": False,
+                "arrosage_recommande": objectif_mm > 0,
+                "type_arrosage": "manuel_frequent",
+                "arrosage_conseille": "personnalise",
+                "raison_decision": "Sursemis actif: maintenir l'humidité sans stress.",
+                "conseil_principal": "Arroser en passages courts et réguliers.",
+                "action_recommandee": f"Appliquer {objectif_mm} mm fractionnés.",
+                "action_a_eviter": "Tondre avant levée complète.",
+                "urgence": "haute" if objectif_mm > 0 else "moyenne",
+            }
 
-    def _compute_arrosage_conseille(self) -> str:
-        """Retourne le conseil d'arrosage : auto / personnalise."""
-        if self.mode == "Normal":
-            return "auto"
-        return "personnalise"
+        tonte_ok = phase_active == "Normal" and pluie_24h < 6
+        auto_ok = phase_active in {"Normal", "Fertilisation", "Biostimulant", "Agent Mouillant", "Scarification"}
+        recommande = objectif_mm > 0
+        return {
+            "tonte_autorisee": tonte_ok,
+            "arrosage_auto_autorise": auto_ok,
+            "arrosage_recommande": recommande,
+            "type_arrosage": "auto" if auto_ok else "personnalise",
+            "arrosage_conseille": "auto" if phase_active == "Normal" else "personnalise",
+            "raison_decision": f"Phase {phase_active} active ({jours_restants} j restants).",
+            "conseil_principal": "Suivre l'objectif d'arrosage calculé.",
+            "action_recommandee": f"Appliquer {objectif_mm} mm.",
+            "action_a_eviter": "Tondre sur sol détrempé." if not tonte_ok else "Aucune action bloquante.",
+            "urgence": "moyenne" if recommande else "faible",
+        }
 
     def _compute_etp(
         self,
@@ -257,51 +379,99 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         correction = max(0.0, (pluie_24h or 0) * 0.05)
         return max(0.0, base - correction)
 
-    def _compute_jours_restants(self) -> int:
-        """Calcule le nombre de jours restants pour le mode en cours."""
-        if not self.date_action:
-            return 0
-
-        duration = self._get_mode_duration_days()
-        if duration == 999:
+    def _compute_jours_restants_for(self, phase_active: str, date_fin: date | None) -> int:
+        if phase_active == "Hivernage":
             return 999
-
-        date_fin = self._compute_date_fin()
-        if date_fin is None:
+        if not date_fin:
             return 0
-
         return max((date_fin - date.today()).days, 0)
 
     async def async_set_mode(self, mode: str) -> None:
         """Définit le mode gazon."""
-        self.mode = mode
-
-        # On ne réécrit pas la date si elle existe déjà,
-        # pour éviter de casser un mode rétroactif.
-        if self.date_action is None and mode != "Normal":
-            self.date_action = date.today()
-
         if mode == "Normal":
-            self.date_action = None
-
-        await self._async_save_state()
-        await self.async_request_refresh()
+            await self.async_set_normal()
+            return
+        await self.async_declare_intervention(mode)
 
     async def async_set_date_action(self, date_action: date | None = None) -> None:
-        """Définit la date réelle de l'action (par défaut aujourd'hui)."""
-        self.date_action = date_action or date.today()
+        """Définit la date de la dernière intervention de phase."""
+        target_date = date_action or date.today()
+        for idx in range(len(self.history) - 1, -1, -1):
+            item_type = self.history[idx].get("type")
+            if item_type in INTERVENTIONS_ACTIONS:
+                self.history[idx]["date"] = target_date.isoformat()
+                break
         await self._async_save_state()
         await self.async_request_refresh()
 
     async def async_set_normal(self) -> None:
-        """Réinitialise le système en mode Normal."""
+        """Réinitialise la phase active vers Normal (historique conservé)."""
+        today = date.today()
+        self.history = [
+            item for item in self.history
+            if item.get("type") not in INTERVENTIONS_ACTIONS
+            or not item.get("date")
+            or self._is_history_item_expired(item, today)
+        ]
         self.mode = "Normal"
         self.date_action = None
         await self._async_save_state()
         await self.async_request_refresh()
 
+    def _is_history_item_expired(self, item: dict[str, Any], today: date) -> bool:
+        item_type = item.get("type")
+        if item_type not in INTERVENTIONS_ACTIONS:
+            return False
+        raw_date = item.get("date")
+        if not raw_date:
+            return False
+        try:
+            start = date.fromisoformat(raw_date)
+        except ValueError:
+            return False
+        end = start + timedelta(days=self._phase_duration_days(item_type))
+        return today > end
+
+    async def async_declare_intervention(self, intervention: str, date_action: date | None = None) -> None:
+        if intervention not in INTERVENTIONS_ACTIONS:
+            raise HomeAssistantError(f"Intervention non supportée: {intervention}")
+        self._append_history(
+            {
+                "type": intervention,
+                "date": (date_action or date.today()).isoformat(),
+            }
+        )
+        await self._async_save_state()
+        await self.async_request_refresh()
+
+    async def async_record_mowing(self, date_action: date | None = None) -> None:
+        self._append_history(
+            {
+                "type": "tonte",
+                "date": (date_action or date.today()).isoformat(),
+            }
+        )
+        await self._async_save_state()
+        await self.async_request_refresh()
+
+    async def async_record_watering(self, date_action: date | None = None, objectif_mm: float | None = None) -> None:
+        payload: dict[str, Any] = {
+            "type": "arrosage",
+            "date": (date_action or date.today()).isoformat(),
+        }
+        if objectif_mm is not None:
+            payload["objectif_mm"] = float(objectif_mm)
+        self._append_history(payload)
+        await self._async_save_state()
+        await self.async_request_refresh()
+
+    def _append_history(self, item: dict[str, Any]) -> None:
+        self.history.append(item)
+        self.history = self.history[-300:]
+
     async def async_start_manual_irrigation(self, objectif_mm: float) -> None:
         """Déclenche une demande d'arrosage manuel via un événement HA."""
+        await self.async_record_watering(objectif_mm=objectif_mm)
         self.hass.bus.async_fire(
             "gazon_intelligent_manual_irrigation_requested",
             {
@@ -362,6 +532,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     if duration <= 0:
                         continue
                     await _run_zone(entity_id, duration)
+                await self.async_record_watering(objectif_mm=objectif)
             finally:
                 self._auto_irrigation_task = None
 
@@ -436,6 +607,10 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "type_sol": self._get_conf(CONF_TYPE_SOL) or DEFAULT_TYPE_SOL,
             },
             "pluie_demain_source": self.data.get("pluie_demain_source") if self.data else None,
+            "historique_resume": {
+                "total": len(self.history),
+                "derniere_intervention": self.history[-1] if self.history else None,
+            },
         }
         return attrs
 
@@ -451,6 +626,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.date_action = date.fromisoformat(date_str)
             except ValueError:
                 self.date_action = None
+        history = data.get("history")
+        if isinstance(history, list):
+            self.history = [item for item in history if isinstance(item, dict)]
+        else:
+            self.history = []
 
     async def _async_save_state(self) -> None:
         """Sauvegarde l'état persistant (mode, date_action)."""
@@ -458,5 +638,6 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             {
                 "mode": self.mode,
                 "date_action": self.date_action.isoformat() if self.date_action else None,
+                "history": self.history[-300:],
             }
         )

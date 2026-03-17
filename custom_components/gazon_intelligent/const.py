@@ -28,6 +28,16 @@ TYPES_SOL = [
     "argileux",
 ]
 
+INTERVENTIONS_ACTIONS = [
+    "Sursemis",
+    "Traitement",
+    "Fertilisation",
+    "Biostimulant",
+    "Agent Mouillant",
+    "Scarification",
+    "Hivernage",
+]
+
 MODES_GAZON = [
     "Normal",
     "Sursemis",

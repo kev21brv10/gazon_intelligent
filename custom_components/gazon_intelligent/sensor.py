@@ -28,6 +28,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
         [
+            GazonPhaseActiveSensor(coordinator),
             GazonObjectifMmSensor(coordinator),
             GazonJoursRestantsSensor(coordinator),
             GazonEtpSensor(coordinator),
@@ -38,8 +39,27 @@ async def async_setup_entry(hass, entry, async_add_entities):
             GazonPluieDemainSensor(coordinator),
             GazonTemperatureSensor(coordinator),
             GazonArrosageConseilleSensor(coordinator),
+            GazonTypeArrosageSensor(coordinator),
+            GazonRaisonDecisionSensor(coordinator),
+            GazonConseilPrincipalSensor(coordinator),
+            GazonActionRecommandeeSensor(coordinator),
+            GazonActionAEviterSensor(coordinator),
+            GazonUrgenceSensor(coordinator),
         ]
     )
+
+
+class GazonPhaseActiveSensor(_GazonBaseEntity, SensorEntity):
+    _attr_name = "Phase active"
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_phase_active"
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("phase_active")
 
 
 class GazonObjectifMmSensor(_GazonBaseEntity, SensorEntity):
@@ -190,3 +210,81 @@ class GazonArrosageConseilleSensor(_GazonBaseEntity, SensorEntity):
     def native_value(self):
         # valeurs: auto / personnalise
         return self.coordinator.data.get("arrosage_conseille")
+
+
+class GazonTypeArrosageSensor(_GazonBaseEntity, SensorEntity):
+    _attr_name = "Type d'arrosage"
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_type_arrosage"
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("type_arrosage")
+
+
+class GazonRaisonDecisionSensor(_GazonBaseEntity, SensorEntity):
+    _attr_name = "Raison décision"
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_raison_decision"
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("raison_decision")
+
+
+class GazonConseilPrincipalSensor(_GazonBaseEntity, SensorEntity):
+    _attr_name = "Conseil principal"
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_conseil_principal"
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("conseil_principal")
+
+
+class GazonActionRecommandeeSensor(_GazonBaseEntity, SensorEntity):
+    _attr_name = "Action recommandée"
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_action_recommandee"
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("action_recommandee")
+
+
+class GazonActionAEviterSensor(_GazonBaseEntity, SensorEntity):
+    _attr_name = "Action à éviter"
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_action_a_eviter"
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("action_a_eviter")
+
+
+class GazonUrgenceSensor(_GazonBaseEntity, SensorEntity):
+    _attr_name = "Urgence"
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_urgence"
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("urgence")

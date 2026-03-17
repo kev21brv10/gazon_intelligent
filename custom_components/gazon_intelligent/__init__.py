@@ -8,7 +8,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 
-from .const import DOMAIN
+from .const import DOMAIN, INTERVENTIONS_ACTIONS
 from .coordinator import GazonIntelligentCoordinator
 
 PLATFORMS = ["select", "sensor", "binary_sensor", "button"]
@@ -18,6 +18,9 @@ SERVICE_SET_DATE_ACTION = "set_date_action"
 SERVICE_RESET_MODE = "reset_mode"
 SERVICE_START_MANUAL_IRRIGATION = "start_manual_irrigation"
 SERVICE_START_AUTO_IRRIGATION = "start_auto_irrigation"
+SERVICE_DECLARE_INTERVENTION = "declare_intervention"
+SERVICE_DECLARE_MOWING = "declare_mowing"
+SERVICE_DECLARE_WATERING = "declare_watering"
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -98,6 +101,43 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             ),
         )
 
+    if not hass.services.has_service(DOMAIN, SERVICE_DECLARE_INTERVENTION):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_DECLARE_INTERVENTION,
+            _handle_declare_intervention,
+            schema=vol.Schema(
+                {
+                    vol.Required("intervention"): vol.In(INTERVENTIONS_ACTIONS),
+                    vol.Optional("date_action"): str,
+                }
+            ),
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_DECLARE_MOWING):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_DECLARE_MOWING,
+            _handle_declare_mowing,
+            schema=vol.Schema({vol.Optional("date_action"): str}),
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_DECLARE_WATERING):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_DECLARE_WATERING,
+            _handle_declare_watering,
+            schema=vol.Schema(
+                {
+                    vol.Optional("date_action"): str,
+                    vol.Optional("objectif_mm"): vol.All(
+                        vol.Coerce(float),
+                        vol.Range(min=0, max=30),
+                    ),
+                }
+            ),
+        )
+
     return True
 
 
@@ -115,6 +155,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             SERVICE_RESET_MODE,
             SERVICE_START_MANUAL_IRRIGATION,
             SERVICE_START_AUTO_IRRIGATION,
+            SERVICE_DECLARE_INTERVENTION,
+            SERVICE_DECLARE_MOWING,
+            SERVICE_DECLARE_WATERING,
         ):
             if hass.services.has_service(DOMAIN, service):
                 hass.services.async_remove(DOMAIN, service)
@@ -132,7 +175,11 @@ def _get_first_coordinator(hass: HomeAssistant) -> GazonIntelligentCoordinator:
 async def _handle_set_mode(call: ServiceCall) -> None:
     hass = call.hass
     coordinator = _get_first_coordinator(hass)
-    await coordinator.async_set_mode(call.data["mode"])
+    mode = call.data["mode"]
+    if mode == "Normal":
+        await coordinator.async_set_normal()
+    else:
+        await coordinator.async_declare_intervention(mode)
 
 
 async def _handle_set_date_action(call: ServiceCall) -> None:
@@ -168,3 +215,42 @@ async def _handle_start_auto_irrigation(call: ServiceCall) -> None:
     hass = call.hass
     coordinator = _get_first_coordinator(hass)
     await coordinator.async_start_auto_irrigation(call.data.get("objectif_mm"))
+
+
+def _parse_optional_date(date_str: str | None) -> datetime.date | None:
+    if not date_str:
+        return None
+    return datetime.strptime(date_str, "%Y-%m-%d").date()
+
+
+async def _handle_declare_intervention(call: ServiceCall) -> None:
+    hass = call.hass
+    coordinator = _get_first_coordinator(hass)
+    try:
+        await coordinator.async_declare_intervention(
+            call.data["intervention"],
+            _parse_optional_date(call.data.get("date_action")),
+        )
+    except ValueError as err:
+        raise HomeAssistantError("La date doit être au format AAAA-MM-JJ.") from err
+
+
+async def _handle_declare_mowing(call: ServiceCall) -> None:
+    hass = call.hass
+    coordinator = _get_first_coordinator(hass)
+    try:
+        await coordinator.async_record_mowing(_parse_optional_date(call.data.get("date_action")))
+    except ValueError as err:
+        raise HomeAssistantError("La date doit être au format AAAA-MM-JJ.") from err
+
+
+async def _handle_declare_watering(call: ServiceCall) -> None:
+    hass = call.hass
+    coordinator = _get_first_coordinator(hass)
+    try:
+        await coordinator.async_record_watering(
+            _parse_optional_date(call.data.get("date_action")),
+            call.data.get("objectif_mm"),
+        )
+    except ValueError as err:
+        raise HomeAssistantError("La date doit être au format AAAA-MM-JJ.") from err

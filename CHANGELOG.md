@@ -1,6 +1,11 @@
 # Changelog
 
 ## 0.3.9
+- Ajoute un moteur décisionnel V1 basé sur l'historique, la météo, le type de sol et la phase dominante.
+- Ajoute l'historique persistant des actions (interventions, tonte, arrosage).
+- Ajoute les services `declare_intervention`, `declare_mowing`, `declare_watering`.
+- Ajoute des capteurs de décision/conseil (`phase active`, `raison`, `conseil`, `urgence`, etc.).
+- Ajoute les binaires `arrosage auto autorisé` et `arrosage recommandé`.
 - Empêche les lancements concurrents de `start_auto_irrigation`.
 - Annule proprement l'arrosage auto en cours au déchargement de l'intégration.
 - Harmonise les unités de débit en `mm/h` dans les textes (conversion interne en `mm/min`).

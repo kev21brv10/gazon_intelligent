@@ -18,6 +18,7 @@ set_mode:
             - Agent Mouillant
             - Scarification
             - Hivernage
+            - Hivernage
 
 set_date_action:
   name: Définir la date d'action
@@ -58,6 +59,61 @@ start_auto_irrigation:
     objectif_mm:
       name: Objectif d'arrosage (optionnel)
       description: Quantité d'eau en mm. Si omis, prend l'objectif calculé par le mode courant.
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 30
+          step: 0.5
+          unit_of_measurement: mm
+
+declare_intervention:
+  name: Déclarer une intervention
+  description: Déclare une intervention réelle (sursemis, fertilisation, etc.) pour alimenter le moteur de décision.
+  fields:
+    intervention:
+      name: Intervention
+      required: true
+      selector:
+        select:
+          options:
+            - Sursemis
+            - Traitement
+            - Fertilisation
+            - Biostimulant
+            - Agent Mouillant
+            - Scarification
+    date_action:
+      name: Date d'action (optionnelle)
+      description: Date au format AAAA-MM-JJ. Si vide, aujourd'hui.
+      required: false
+      selector:
+        text:
+
+declare_mowing:
+  name: Déclarer une tonte
+  description: Enregistre une tonte dans l'historique.
+  fields:
+    date_action:
+      name: Date de tonte (optionnelle)
+      description: Date au format AAAA-MM-JJ. Si vide, aujourd'hui.
+      required: false
+      selector:
+        text:
+
+declare_watering:
+  name: Déclarer un arrosage
+  description: Enregistre un arrosage dans l'historique.
+  fields:
+    date_action:
+      name: Date d'arrosage (optionnelle)
+      description: Date au format AAAA-MM-JJ. Si vide, aujourd'hui.
+      required: false
+      selector:
+        text:
+    objectif_mm:
+      name: Quantité appliquée (optionnelle)
+      description: Quantité d'eau appliquée en mm.
       required: false
       selector:
         number:

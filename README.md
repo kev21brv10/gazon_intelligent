@@ -37,12 +37,16 @@ Intégration Home Assistant pour gérer les modes gazon :
 ## Entités créées 📡
 
 - Sélecteur de mode gazon (Normal, Sursemis, Traitement, Fertilisation, Biostimulant, Agent Mouillant, Scarification, Hivernage).
+- Capteur `Phase active`.
 - Capteur `Objectif d'arrosage` (mm).
 - Capteur `Jours restants de la phase`.
 - Capteur `ETP estimée` (mm/j) : capteur ETP si présent, sinon estimation simple (température + pluie).
 - Capteur `Humidité extérieure` (%) si fourni.
 - Capteur `Arrosage (auto/personnalisé)` : `auto` en mode Normal, sinon `personnalise`.
+- Capteurs conseil : `Type d'arrosage`, `Raison décision`, `Conseil principal`, `Action recommandée`, `Action à éviter`, `Urgence`.
 - Binaire `Tonte autorisée`.
+- Binaire `Arrosage auto autorisé`.
+- Binaire `Arrosage recommandé`.
 - Bouton `Repasser en mode normal`.
 - Bouton `Date action = aujourd'hui` : fixe rapidement la date d'action si tu mets la phase en retard.
 
@@ -63,6 +67,9 @@ Toutes les entités sont rattachées à un appareil « Gazon Intelligent » 
 - `gazon_intelligent.reset_mode` (revient en Normal).
 - `gazon_intelligent.start_manual_irrigation` (`objectif_mm` float, 0‑30).
 - `gazon_intelligent.start_auto_irrigation` (objectif optionnel, utilise l'objectif calculé si omis). Lance chaque zone en séquence en convertissant l'objectif mm en durée selon le débit renseigné (mm/h).
+- `gazon_intelligent.declare_intervention` (`intervention` + `date_action` optionnelle) : déclare Sursemis/Traitement/Fertilisation/Biostimulant/Agent Mouillant/Scarification/Hivernage.
+- `gazon_intelligent.declare_mowing` (`date_action` optionnelle) : enregistre une tonte.
+- `gazon_intelligent.declare_watering` (`date_action` optionnelle + `objectif_mm` optionnel) : enregistre un arrosage.
 
 Objectif en mode Normal 💧  
 - Pensé pour 3 arrosages/sem : 8.3 mm par passage (~25 mm/sem).  
