@@ -12,6 +12,9 @@
 ## 0.3.5
 - Binaire \"Arrosage modes spéciaux\" pour Sursemis, Fertilisation, Biostimulant, Agent Mouillant, Scarification.
 
+## 0.3.6
+- Remplace le binaire spécial par un capteur texte \"Arrosage conseillé\" (auto / personnalise / interdit).
+
 ## 0.3.1
 - Objectif mode Normal relevé à 3.5 mm/j (≈25 mm/sem).
 - Ajout bouton `Date action = aujourd'hui`.

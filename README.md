@@ -48,9 +48,9 @@ Intégration Home Assistant pour gérer les modes gazon :
 - Capteur `Jours restants de la phase`.
 - Capteur `ETP estimée` (mm/j) : prend la valeur du capteur ETP si fourni, sinon calcule une estimation simple à partir de la température et de la pluie récente.
 - Capteur `Humidité extérieure` (%) : reflète le capteur fourni s'il existe.
+- Capteur `Arrosage conseillé` : auto / personnalise / interdit selon le mode.
 - Binaire `Tonte autorisée`.
 - Binaire `Arrosage automatique autorisé` (reste à gérer par tes automations externes).
-- Binaire `Arrosage modes spéciaux` (Sursemis, Fertilisation, Biostimulant, Agent Mouillant, Scarification).
 - Bouton `Repasser en mode normal`.
 - Bouton `Date action = aujourd'hui` : fixe la date d'action à aujourd'hui (utile pour Sursemis ou autres phases si tu ajustes en retard).
 

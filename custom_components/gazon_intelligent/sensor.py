@@ -34,6 +34,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
             GazonPluie24hSensor(coordinator),
             GazonPluieDemainSensor(coordinator),
             GazonTemperatureSensor(coordinator),
+            GazonArrosageConseilleSensor(coordinator),
         ]
     )
 
@@ -172,3 +173,17 @@ class GazonTemperatureSensor(_GazonBaseEntity, SensorEntity):
     @property
     def native_value(self):
         return self.coordinator.data.get("temperature")
+
+
+class GazonArrosageConseilleSensor(_GazonBaseEntity, SensorEntity):
+    _attr_name = "Arrosage conseillé"
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_arrosage_conseille"
+
+    @property
+    def native_value(self):
+        # valeurs: auto / personnalise / interdit
+        return self.coordinator.data.get("arrosage_conseille")
