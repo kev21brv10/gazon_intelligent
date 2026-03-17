@@ -136,16 +136,17 @@ async def _handle_set_date_action(call: ServiceCall) -> None:
     hass = call.hass
     coordinator = _get_first_coordinator(hass)
 
-    date_str = call.data.get("date_action")
-    if date_str:
-        try:
+    try:
+        date_str = call.data.get("date_action")
+        if date_str:
             date_action = datetime.strptime(date_str, "%Y-%m-%d").date()
-        except ValueError as err:
-            raise HomeAssistantError("La date doit être au format AAAA-MM-JJ.") from err
-    else:
-        date_action = None  # sera interprété comme aujourd'hui dans le coordinator
-
-    await coordinator.async_set_date_action(date_action)
+        else:
+            date_action = None  # aujourd'hui par défaut
+        await coordinator.async_set_date_action(date_action)
+    except ValueError as err:
+        raise HomeAssistantError("La date doit être au format AAAA-MM-JJ.") from err
+    except Exception as err:  # pragma: no cover
+        raise HomeAssistantError(f"Echec set_date_action: {err}") from err
 
 
 async def _handle_reset_mode(call: ServiceCall) -> None:

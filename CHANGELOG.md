@@ -7,6 +7,7 @@
 - Persistance du mode et de la date d'action entre redémarrages.
 - Service `set_date_action` : date optionnelle (par défaut aujourd'hui).
 - Clean imports mineurs.
+- Gestion d'erreurs améliorée pour `set_date_action`.
 
 ## 0.3.5
 - Binaire \"Arrosage modes spéciaux\" pour Sursemis, Fertilisation, Biostimulant, Agent Mouillant, Scarification.
