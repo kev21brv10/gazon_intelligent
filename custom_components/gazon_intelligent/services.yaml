@@ -1,0 +1,67 @@
+set_mode:
+  name: Définir le mode gazon
+  description: Choisit un mode (Sursemis, Traitement, etc.) et met à jour les calculs.
+  fields:
+    mode:
+      name: Mode
+      description: Mode gazon à appliquer.
+      required: true
+      example: Sursemis
+      selector:
+        select:
+          options:
+            - Normal
+            - Sursemis
+            - Traitement
+            - Fertilisation
+            - Biostimulant
+            - Agent Mouillant
+            - Scarification
+            - Hivernage
+
+set_date_action:
+  name: Définir la date d'action
+  description: Indique la date réelle de l'intervention (AAAA-MM-JJ).
+  fields:
+    date_action:
+      name: Date d'action
+      description: Date de l'action au format AAAA-MM-JJ.
+      required: true
+      example: "2026-03-12"
+      selector:
+        text:
+
+reset_mode:
+  name: Repasser en mode normal
+  description: Réinitialise le système gazon en mode Normal.
+
+start_manual_irrigation:
+  name: Lancer un arrosage manuel
+  description: Déclenche un arrosage manuel et indique l'objectif d'eau en mm.
+  fields:
+    objectif_mm:
+      name: Objectif d'arrosage
+      description: Quantité d'eau à appliquer en millimètres.
+      required: true
+      example: 3
+      selector:
+        number:
+          min: 0
+          max: 30
+          step: 0.5
+          unit_of_measurement: mm
+
+start_auto_irrigation:
+  name: Lancer l'arrosage automatique
+  description: Lance chaque zone à la suite en utilisant le débit (mm/min) configuré. Si l'objectif est vide, il prend l'objectif calculé automatiquement.
+  fields:
+    objectif_mm:
+      name: Objectif d'arrosage (optionnel)
+      description: Quantité d'eau en mm. Si omis, prend l'objectif calculé par le mode courant.
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 30
+          step: 0.5
+          unit_of_measurement: mm

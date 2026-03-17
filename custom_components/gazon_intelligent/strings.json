@@ -1,0 +1,30 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configuration du système gazon",
+        "description": "Choisissez vos zones (switchs), vos capteurs météo et le débit approximatif de chaque zone (mm/min = millimètres d'eau apportés en 1 minute). Si vous ne connaissez pas le débit, laissez 1.0.",
+        "data": {
+          "zone_1": "Zone d'arrosage 1",
+          "zone_2": "Zone d'arrosage 2",
+          "zone_3": "Zone d'arrosage 3",
+          "zone_4": "Zone d'arrosage 4",
+          "zone_5": "Zone d'arrosage 5",
+          "debit_zone_1": "Débit zone 1 (mm/min)",
+          "debit_zone_2": "Débit zone 2 (mm/min)",
+          "debit_zone_3": "Débit zone 3 (mm/min)",
+          "debit_zone_4": "Débit zone 4 (mm/min)",
+          "debit_zone_5": "Débit zone 5 (mm/min)",
+          "tondeuse": "Robot tondeuse",
+          "capteur_pluie_24h": "Capteur pluie 24h",
+          "capteur_pluie_demain": "Capteur pluie demain",
+          "capteur_temperature": "Capteur température",
+          "capteur_etp": "Capteur évapotranspiration"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Gazon Intelligent est déjà configuré."
+    }
+  }
+}

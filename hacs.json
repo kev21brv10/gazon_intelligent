@@ -1,0 +1,7 @@
+{
+  "name": "Gazon Intelligent",
+  "content_in_root": false,
+  "render_readme": true,
+  "country": ["FR"],
+  "homeassistant": "2026.3.2"
+}
