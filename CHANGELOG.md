@@ -1,17 +1,5 @@
 # Changelog
 
-## 0.3.2
-- Ajuste l'objectif du mode Normal à 8.3 mm (3 arrosages/sem ~25 mm/sem).
-
-## 0.3.3
-- Ajout du logo/icon pour HACS.
-
-## 0.3.4
-- Tonte autorisée uniquement en Normal; arrosage interdit en Traitement/Hivernage.
-
-## 0.3.5
-- Binaire \"Arrosage modes spéciaux\" pour Sursemis, Fertilisation, Biostimulant, Agent Mouillant, Scarification.
-
 ## 0.3.6
 - Remplace le binaire spécial par un capteur texte \"Arrosage conseillé\" (auto / personnalise / interdit).
 
@@ -19,6 +7,18 @@
 - Persistance du mode et de la date d'action entre redémarrages.
 - Service `set_date_action` : date optionnelle (par défaut aujourd'hui).
 - Clean imports mineurs.
+
+## 0.3.5
+- Binaire \"Arrosage modes spéciaux\" pour Sursemis, Fertilisation, Biostimulant, Agent Mouillant, Scarification.
+
+## 0.3.4
+- Tonte autorisée uniquement en Normal; arrosage interdit en Traitement/Hivernage.
+
+## 0.3.3
+- Ajout du logo/icon pour HACS.
+
+## 0.3.2
+- Ajuste l'objectif du mode Normal à 8.3 mm (3 arrosages/sem ~25 mm/sem).
 
 ## 0.3.1
 - Objectif mode Normal relevé à 3.5 mm/j (≈25 mm/sem).
