@@ -56,8 +56,8 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return {
             "mode": self.mode,
             "phase_active": self.mode,
-            "date_action": self.date_action.isoformat() if self.date_action else None,
-            "date_fin": self._compute_date_fin().isoformat() if self._compute_date_fin() else None,
+            "date_action": self.date_action,
+            "date_fin": self._compute_date_fin(),
             "pluie_24h": pluie_24h,
             "pluie_demain": pluie_demain,
             "temperature": temperature,
