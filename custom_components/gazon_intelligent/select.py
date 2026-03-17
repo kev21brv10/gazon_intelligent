@@ -28,7 +28,9 @@ class GazonModeSelect(CoordinatorEntity, SelectEntity):
 
     @property
     def extra_state_attributes(self):
-        return self.coordinator.get_used_entities_attributes()
+        attrs = self.coordinator.get_used_entities_attributes()
+        # Le sélecteur conserve le contexte système complet.
+        return attrs
 
     @property
     def device_info(self) -> DeviceInfo:
