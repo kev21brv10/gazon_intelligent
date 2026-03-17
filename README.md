@@ -57,6 +57,10 @@ Reconfigurer plus tard
 
 Toutes les entités sont rattachées à un appareil « Gazon Intelligent » pour permettre le renommage persistant.
 
+## Versions / Releases
+- Voir `CHANGELOG.md` pour le détail des versions (dernière : 0.3.0).
+- La version du manifeste est alignée ; pousser main met à jour la release HACS.
+
 ## Services
 
 - `gazon_intelligent.set_mode` (`mode` parmi la liste ci-dessus).
