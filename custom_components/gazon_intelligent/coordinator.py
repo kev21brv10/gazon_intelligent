@@ -133,20 +133,16 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _compute_tonte_autorisee(self) -> bool:
         """Indique si la tonte est autorisée selon le mode actif."""
-        return self.mode not in {
-            "Sursemis",
-            "Traitement",
-            "Fertilisation",
-            "Scarification",
-            "Hivernage",
-        }
+        # Autorisée uniquement en mode Normal
+        return self.mode == "Normal"
 
     def _compute_arrosage_auto_autorise(self) -> bool:
         """Indique si l'arrosage automatique est autorisé.
 
         Reste géré en externe pour l'instant, on ne force rien ici.
         """
-        return self.mode == "Normal"
+        # Autorisé sauf en Traitement et Hivernage
+        return self.mode not in {"Traitement", "Hivernage"}
 
     def _compute_etp(
         self,

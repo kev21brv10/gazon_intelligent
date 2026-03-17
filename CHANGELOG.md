@@ -6,6 +6,9 @@
 ## 0.3.3
 - Ajout du logo/icon pour HACS.
 
+## 0.3.4
+- Tonte autorisée uniquement en Normal; arrosage interdit en Traitement/Hivernage.
+
 ## 0.3.1
 - Objectif mode Normal relevé à 3.5 mm/j (≈25 mm/sem).
 - Ajout bouton `Date action = aujourd'hui`.
