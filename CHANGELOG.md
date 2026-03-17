@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1
+- Objectif mode Normal relevé à 3.5 mm/j (≈25 mm/sem).
+- Ajout bouton `Date action = aujourd'hui`.
+- Corrections d'UX (options avec valeurs vides sûres).
+
 ## 0.3.0
 - Débits zones saisis en mm/h (conversion interne mm/min).
 - Options flow : modification des entités après installation.

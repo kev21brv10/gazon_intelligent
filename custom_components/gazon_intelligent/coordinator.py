@@ -128,8 +128,8 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if self.mode == "Scarification":
             return 1.0
 
-        # Mode Normal
-        return 2.0
+        # Mode Normal : viser ~25 mm/semaine ≈ 3,6 mm/jour (arrondi 3.5)
+        return 3.5
 
     def _compute_tonte_autorisee(self) -> bool:
         """Indique si la tonte est autorisée selon le mode actif."""

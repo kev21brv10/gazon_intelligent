@@ -71,6 +71,9 @@ Toutes les entités sont rattachées à un appareil « Gazon Intelligent » 
 - `gazon_intelligent.start_auto_irrigation` (objectif optionnel, utilise l'objectif calculé si omis). Lance chaque zone en séquence en convertissant l'objectif mm en durée selon le débit renseigné (mm/h).
 - `gazon_intelligent.set_date_action` (`date_action` au format `AAAA-MM-JJ`) pour fixer une date spécifique différente d'aujourd'hui.
 
+Objectif en mode Normal
+- Par défaut 3.5 mm/jour (~25 mm/semaine). Si tu préfères arroser 2×/semaine, donne `objectif_mm: 12.5` dans ton automation `start_auto_irrigation`.
+
 ## Événement
 
 `gazon_intelligent_manual_irrigation_requested` émis lors de `start_manual_irrigation` avec `objectif_mm`, `mode`, `date_action`.
