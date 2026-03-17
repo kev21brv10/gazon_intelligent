@@ -11,6 +11,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.helpers.storage import Store
 
 from .const import (
+    DOMAIN,
     CONF_CAPTEUR_ETP,
     CONF_CAPTEUR_PLUIE_24H,
     CONF_CAPTEUR_PLUIE_DEMAIN,
@@ -36,7 +37,6 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.entry = entry
         self._store = Store(hass, 1, f"{DOMAIN}_{entry.entry_id}.json")
         self._loaded = False
-        self._config: dict[str, Any] = {**entry.data, **entry.options}
         self.mode: str = DEFAULT_MODE
         self.date_action: date | None = None
 

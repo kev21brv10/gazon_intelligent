@@ -1,6 +1,5 @@
-from homeassistant.components.sensor import SensorEntity, SensorStateClass
-from homeassistant.const import UnitOfTemperature, UnitOfVolume
-from homeassistant.components.sensor import SensorDeviceClass
+from homeassistant.components.sensor import SensorEntity, SensorStateClass, SensorDeviceClass
+from homeassistant.const import UnitOfTemperature
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 

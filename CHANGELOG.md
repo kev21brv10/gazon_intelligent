@@ -15,6 +15,11 @@
 ## 0.3.6
 - Remplace le binaire spécial par un capteur texte \"Arrosage conseillé\" (auto / personnalise / interdit).
 
+## 0.3.7
+- Persistance du mode et de la date d'action entre redémarrages.
+- Service `set_date_action` : date optionnelle (par défaut aujourd'hui).
+- Clean imports mineurs.
+
 ## 0.3.1
 - Objectif mode Normal relevé à 3.5 mm/j (≈25 mm/sem).
 - Ajout bouton `Date action = aujourd'hui`.
