@@ -142,8 +142,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
 
     def _compute_arrosage_auto_autorise(self) -> bool:
-        """Indique si l'arrosage automatique est autorisé."""
-        return self.mode == "Normal"
+        """Indique si l'arrosage automatique est autorisé.
+
+        Désactivé pour l'instant quel que soit le mode.
+        """
+        return False
 
     def _compute_etp(
         self,

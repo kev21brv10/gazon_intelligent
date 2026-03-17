@@ -49,7 +49,7 @@ Intégration Home Assistant pour gérer les modes gazon :
 - Capteur `ETP estimée` (mm/j) : prend la valeur du capteur ETP si fourni, sinon calcule une estimation simple à partir de la température et de la pluie récente.
 - Capteur `Humidité extérieure` (%) : reflète le capteur fourni s'il existe.
 - Binaire `Tonte autorisée`.
-- Binaire `Arrosage automatique autorisé`.
+- Binaire `Arrosage automatique autorisé` (désactivé pour l'instant).
 - Bouton `Repasser en mode normal`.
 
 Reconfigurer plus tard
