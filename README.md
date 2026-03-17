@@ -1,4 +1,4 @@
-# Gazon Intelligent
+# Gazon Intelligent 🌱
 
 Intégration Home Assistant pour piloter l'entretien du gazon avec un moteur de décision basé sur:
 - la météo,
@@ -8,37 +8,37 @@ Intégration Home Assistant pour piloter l'entretien du gazon avec un moteur de 
 
 Objectif: configurer une fois, déclarer les actions terrain, laisser le système décider.
 
-## Version actuelle
+## Version actuelle 🏷️
 
 - Version `manifest`: `0.3.9`
 - Compatibilité HACS indiquée: Home Assistant `2026.3.2`
 
-## Installation
+## Installation 🚀
 
-### 1) Via HACS (recommandé)
+### 1) Via HACS (recommandé) 🧩
 
 1. Ajouter ce dépôt comme dépôt personnalisé HACS (catégorie `Integration`).
 2. Installer **Gazon Intelligent**.
 3. Redémarrer Home Assistant.
 4. Aller dans `Paramètres > Appareils et services > Ajouter une intégration` puis choisir **Gazon Intelligent**.
 
-### 2) Installation manuelle
+### 2) Installation manuelle 🛠️
 
 1. Copier `custom_components/gazon_intelligent` dans votre dossier `config/custom_components`.
 2. Redémarrer Home Assistant.
 3. Ajouter l'intégration depuis `Paramètres > Appareils et services`.
 
-## Configuration initiale (UI)
+## Configuration initiale (UI) ⚙️
 
 L'intégration se configure entièrement via formulaire:
 
-- Zones d'arrosage `switch`:
+- Zones d'arrosage `switch` 💧:
   - `zone_1` obligatoire
   - `zone_2` à `zone_5` optionnelles
 - Débit par zone (mm/h):
   - `debit_zone_1` obligatoire (défaut conseillé: `60`)
   - autres débits optionnels
-- Capteurs météo:
+- Capteurs météo 🌦️:
   - `capteur_pluie_24h` obligatoire
   - `capteur_pluie_demain` optionnel
   - `capteur_temperature`, `capteur_etp`, `capteur_humidite` optionnels
@@ -51,17 +51,17 @@ L'intégration se configure entièrement via formulaire:
 
 Vous pouvez modifier cette configuration plus tard via les **Options** de l'intégration, sans suppression/recréation.
 
-## Moteur de décision
+## Moteur de décision 🧠
 
 Le moteur décide à chaque rafraîchissement (toutes les 5 minutes) avec:
 
 - phase active dominante issue de l'historique (`Sursemis`, `Traitement`, `Fertilisation`, `Biostimulant`, `Agent Mouillant`, `Scarification`, `Hivernage`, sinon `Normal`),
 - bilan hydrique basé sur `ETP`, pluie 24h, pluie J+1 et arrosages récents,
-- scores internes:
+- scores internes 📊:
   - `score_hydrique` (besoin en eau),
   - `score_stress` (stress global gazon),
   - `score_tonte` (risque tonte),
-- décisions finales:
+- décisions finales ✅:
   - `tonte_autorisee`,
   - `arrosage_auto_autorise`,
   - `arrosage_recommande`,
@@ -70,7 +70,7 @@ Le moteur décide à chaque rafraîchissement (toutes les 5 minutes) avec:
 
 Les phases restent des contraintes métier, mais la décision s'appuie désormais sur les scores.
 
-## Entités créées
+## Entités créées 📡
 
 ### Select
 
@@ -111,7 +111,7 @@ Les phases restent des contraintes métier, mais la décision s'appuie désormai
 - `Repasser en mode normal`
 - `Date action = aujourd'hui`
 
-## Attributs utiles exposés
+## Attributs utiles exposés 📝
 
 Les entités de l'intégration exposent des attributs communs:
 
@@ -127,7 +127,7 @@ Les entités de l'intégration exposent des attributs communs:
   - total d'actions mémorisées,
   - dernière intervention
 
-## Services disponibles
+## Services disponibles 🧰
 
 - `gazon_intelligent.set_mode`
 - `gazon_intelligent.set_date_action`
@@ -140,7 +140,7 @@ Les entités de l'intégration exposent des attributs communs:
 
 Détails des champs: voir `custom_components/gazon_intelligent/services.yaml`.
 
-## Événement Home Assistant
+## Événement Home Assistant 🔔
 
 - `gazon_intelligent_manual_irrigation_requested`
 
@@ -149,7 +149,7 @@ Détails des champs: voir `custom_components/gazon_intelligent/services.yaml`.
 - `mode`
 - `date_action`
 
-## Blueprint d'arrosage (modes spéciaux hors Normal)
+## Blueprint d'arrosage (modes spéciaux hors Normal) 📘
 
 - Fichier:
   - `blueprints/automation/gazon_intelligent/arrosage_modes_speciaux_hors_normal.yaml`
@@ -161,7 +161,7 @@ Détails des champs: voir `custom_components/gazon_intelligent/services.yaml`.
 
 Ce blueprint utilise les entités créées par l'intégration pour automatiser l'arrosage hors mode `Normal`.
 
-## Exemple d'automatisation (événement -> arrosage auto)
+## Exemple d'automatisation (événement -> arrosage auto) 🤖
 
 ```yaml
 alias: Gazon - Arrosage manuel relayé en auto
@@ -174,7 +174,7 @@ action:
     data: {}
 ```
 
-## Structure du dépôt
+## Structure du dépôt 📁
 
 - `custom_components/gazon_intelligent/`:
   - code de l'intégration
@@ -185,7 +185,7 @@ action:
 - `CHANGELOG.md`:
   - historique des versions
 
-## Notes
+## Notes ℹ️
 
 - Les données de mode, date d'action et historique sont persistées.
 - L'historique est limité aux 300 derniers enregistrements.
