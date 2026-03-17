@@ -1,16 +1,21 @@
 # Changelog
 
-## 0.3.6
-- Remplace le binaire spécial par un capteur texte \"Arrosage conseillé\" (auto / personnalise / interdit).
+## 0.3.8
+- Empêche les lancements concurrents de `start_auto_irrigation`.
+- Annule proprement l'arrosage auto en cours au déchargement de l'intégration.
+- Harmonise les unités de débit en `mm/h` dans les textes (conversion interne en `mm/min`).
+- Aligne `set_date_action` en optionnel dans la documentation service.
+- Met `integration_type` à `hub`.
 
 ## 0.3.7
 - Persistance du mode et de la date d'action entre redémarrages.
 - Service `set_date_action` : date optionnelle (par défaut aujourd'hui).
 - Clean imports mineurs.
 - Gestion d'erreurs améliorée pour `set_date_action`.
-
-## 0.3.8
 - Capteur arrosage simplifié : valeurs `auto` ou `personnalise` uniquement.
+
+## 0.3.6
+- Remplace le binaire spécial par un capteur texte \"Arrosage conseillé\" (auto / personnalise / interdit).
 
 ## 0.3.5
 - Binaire \"Arrosage modes spéciaux\" pour Sursemis, Fertilisation, Biostimulant, Agent Mouillant, Scarification.

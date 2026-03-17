@@ -9,5 +9,5 @@
   "requirements": [],
   "codeowners": ["@kev21brv10"],
   "loggers": ["custom_components.gazon_intelligent"],
-  "integration_type": "service"
+  "integration_type": "hub"
 }

@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Configuration du système gazon",
-        "description": "Choisissez vos zones (switchs), vos capteurs météo et le débit approximatif de chaque zone (mm/min = millimètres d'eau apportés en 1 minute). Si vous ne connaissez pas le débit, laissez 1.0.",
+        "description": "Choisissez vos zones (switchs), vos capteurs météo et le débit approximatif de chaque zone (mm/h = millimètres d'eau apportés en 1 heure). Si vous ne connaissez pas le débit, laissez 60.",
         "data": {
           "zone_1": "Zone d'arrosage 1",
           "zone_2": "Zone d'arrosage 2",

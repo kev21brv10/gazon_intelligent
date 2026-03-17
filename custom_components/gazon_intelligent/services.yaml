@@ -21,12 +21,12 @@ set_mode:
 
 set_date_action:
   name: Définir la date d'action
-  description: Indique la date réelle de l'intervention (AAAA-MM-JJ).
+  description: Indique la date réelle de l'intervention (AAAA-MM-JJ). Si vide, prend la date du jour.
   fields:
     date_action:
       name: Date d'action
       description: Date de l'action au format AAAA-MM-JJ.
-      required: true
+      required: false
       example: "2026-03-12"
       selector:
         text:
@@ -53,7 +53,7 @@ start_manual_irrigation:
 
 start_auto_irrigation:
   name: Lancer l'arrosage automatique
-  description: Lance chaque zone à la suite en utilisant le débit (mm/min) configuré. Si l'objectif est vide, il prend l'objectif calculé automatiquement.
+  description: Lance chaque zone à la suite en utilisant le débit (mm/h) configuré (conversion interne en mm/min). Si l'objectif est vide, il prend l'objectif calculé automatiquement.
   fields:
     objectif_mm:
       name: Objectif d'arrosage (optionnel)

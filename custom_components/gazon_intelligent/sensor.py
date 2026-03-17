@@ -184,5 +184,5 @@ class GazonArrosageConseilleSensor(_GazonBaseEntity, SensorEntity):
 
     @property
     def native_value(self):
-        # valeurs: auto / personnalise / interdit
+        # valeurs: auto / personnalise
         return self.coordinator.data.get("arrosage_conseille")

@@ -7,6 +7,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.helpers.storage import Store
 
@@ -39,6 +40,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._loaded = False
         self.mode: str = DEFAULT_MODE
         self.date_action: date | None = None
+        self._auto_irrigation_task: asyncio.Task | None = None
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Récupère et calcule les données exposées par l'intégration."""
@@ -247,6 +249,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_start_auto_irrigation(self, objectif_mm: float | None) -> None:
         """Arrose automatiquement chaque zone en séquence selon le débit renseigné."""
+        if self._auto_irrigation_task and not self._auto_irrigation_task.done():
+            raise HomeAssistantError(
+                "Un arrosage automatique est déjà en cours."
+            )
+
         objectif = float(objectif_mm) if objectif_mm is not None else float(
             self.data.get("objectif_mm", 0.0)
         )
@@ -263,17 +270,31 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
 
         async def _sequence():
-            for entity_id, rate in self._iter_zones_with_rate():
-                if rate <= 0:
-                    continue
-                duration = objectif / rate
-                if duration <= 0:
-                    continue
-                await _run_zone(entity_id, duration)
+            try:
+                for entity_id, rate in self._iter_zones_with_rate():
+                    if rate <= 0:
+                        continue
+                    duration = objectif / rate
+                    if duration <= 0:
+                        continue
+                    await _run_zone(entity_id, duration)
+            finally:
+                self._auto_irrigation_task = None
 
-        self.hass.async_create_task(
+        self._auto_irrigation_task = self.hass.async_create_task(
             _sequence(), "gazon_intelligent_auto_irrigation_sequence"
         )
+
+    async def async_shutdown(self) -> None:
+        """Nettoie les tâches en cours à la fermeture de l'intégration."""
+        if self._auto_irrigation_task and not self._auto_irrigation_task.done():
+            self._auto_irrigation_task.cancel()
+            try:
+                await self._auto_irrigation_task
+            except asyncio.CancelledError:
+                pass
+        self._auto_irrigation_task = None
+
     def _get_conf(self, key: str) -> Any:
         """Récupère la valeur de configuration (options > data)."""
         return self.entry.options.get(key, self.entry.data.get(key))
