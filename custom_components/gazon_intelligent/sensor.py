@@ -1,4 +1,6 @@
 from homeassistant.components.sensor import SensorEntity, SensorStateClass
+from homeassistant.const import UnitOfTemperature, UnitOfVolume
+from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -27,6 +29,11 @@ async def async_setup_entry(hass, entry, async_add_entities):
             GazonJoursRestantsSensor(coordinator),
             GazonEtpSensor(coordinator),
             GazonHumiditeSensor(coordinator),
+            GazonDateActionSensor(coordinator),
+            GazonDateFinSensor(coordinator),
+            GazonPluie24hSensor(coordinator),
+            GazonPluieDemainSensor(coordinator),
+            GazonTemperatureSensor(coordinator),
         ]
     )
 
@@ -89,3 +96,79 @@ class GazonHumiditeSensor(_GazonBaseEntity, SensorEntity):
     @property
     def native_value(self):
         return self.coordinator.data.get("humidite")
+
+
+class GazonDateActionSensor(_GazonBaseEntity, SensorEntity):
+    _attr_name = "Date de l'action"
+    _attr_has_entity_name = True
+    _attr_device_class = SensorDeviceClass.DATE
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_date_action"
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("date_action")
+
+
+class GazonDateFinSensor(_GazonBaseEntity, SensorEntity):
+    _attr_name = "Date de fin de phase"
+    _attr_has_entity_name = True
+    _attr_device_class = SensorDeviceClass.DATE
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_date_fin"
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("date_fin")
+
+
+class GazonPluie24hSensor(_GazonBaseEntity, SensorEntity):
+    _attr_name = "Pluie 24h"
+    _attr_native_unit_of_measurement = "mm"
+    _attr_has_entity_name = True
+    _attr_device_class = SensorDeviceClass.PRECIPITATION
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_pluie_24h"
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("pluie_24h")
+
+
+class GazonPluieDemainSensor(_GazonBaseEntity, SensorEntity):
+    _attr_name = "Pluie prévue demain"
+    _attr_native_unit_of_measurement = "mm"
+    _attr_has_entity_name = True
+    _attr_device_class = SensorDeviceClass.PRECIPITATION
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_pluie_demain"
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("pluie_demain")
+
+
+class GazonTemperatureSensor(_GazonBaseEntity, SensorEntity):
+    _attr_name = "Température extérieure"
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_has_entity_name = True
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_temperature"
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("temperature")
