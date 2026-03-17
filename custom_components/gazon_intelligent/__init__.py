@@ -57,7 +57,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             DOMAIN,
             SERVICE_SET_DATE_ACTION,
             _handle_set_date_action,
-            schema=vol.Schema({vol.Required("date_action"): str}),
+            schema=vol.Schema({vol.Optional("date_action"): str}),
         )
 
     if not hass.services.has_service(DOMAIN, SERVICE_RESET_MODE):
@@ -136,10 +136,14 @@ async def _handle_set_date_action(call: ServiceCall) -> None:
     hass = call.hass
     coordinator = _get_first_coordinator(hass)
 
-    try:
-        date_action = datetime.strptime(call.data["date_action"], "%Y-%m-%d").date()
-    except ValueError as err:
-        raise HomeAssistantError("La date doit être au format AAAA-MM-JJ.") from err
+    date_str = call.data.get("date_action")
+    if date_str:
+        try:
+            date_action = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError as err:
+            raise HomeAssistantError("La date doit être au format AAAA-MM-JJ.") from err
+    else:
+        date_action = None  # sera interprété comme aujourd'hui dans le coordinator
 
     await coordinator.async_set_date_action(date_action)
 
