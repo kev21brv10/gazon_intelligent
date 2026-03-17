@@ -9,6 +9,9 @@
 - Clean imports mineurs.
 - Gestion d'erreurs améliorée pour `set_date_action`.
 
+## 0.3.8
+- Capteur arrosage simplifié : valeurs `auto` ou `personnalise` uniquement.
+
 ## 0.3.5
 - Binaire \"Arrosage modes spéciaux\" pour Sursemis, Fertilisation, Biostimulant, Agent Mouillant, Scarification.
 

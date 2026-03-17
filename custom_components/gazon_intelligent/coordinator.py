@@ -153,9 +153,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return self.mode not in {"Traitement", "Hivernage"}
 
     def _compute_arrosage_conseille(self) -> str:
-        """Retourne le conseil d'arrosage : auto / personnalise / interdit."""
-        if self.mode in {"Traitement", "Hivernage"}:
-            return "interdit"
+        """Retourne le conseil d'arrosage : auto / personnalise."""
         if self.mode == "Normal":
             return "auto"
         return "personnalise"

@@ -175,7 +175,7 @@ class GazonTemperatureSensor(_GazonBaseEntity, SensorEntity):
 
 
 class GazonArrosageConseilleSensor(_GazonBaseEntity, SensorEntity):
-    _attr_name = "Arrosage conseillé"
+    _attr_name = "Arrosage (auto/personnalisé)"
     _attr_has_entity_name = True
 
     def __init__(self, coordinator):
