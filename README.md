@@ -52,8 +52,8 @@ Reconfigurer plus tard 🔄
 Toutes les entités sont rattachées à un appareil « Gazon Intelligent » pour un renommage persistant.
 
 ## Versions / Releases 🏷️
-- Voir `CHANGELOG.md` (dernière : 0.3.8).
-- Le manifest est aligné ; crée une release taguée (ex. v0.3.8) pour HACS.
+- Voir `CHANGELOG.md` (dernière : 0.3.9).
+- Le manifest est aligné ; crée une release taguée (ex. v0.3.9) pour HACS.
 - Mode et date d'action sont persistés entre redémarrages.
 
 ## Services ⚙️

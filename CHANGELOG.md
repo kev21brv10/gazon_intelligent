@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.8
+## 0.3.9
 - Empêche les lancements concurrents de `start_auto_irrigation`.
 - Annule proprement l'arrosage auto en cours au déchargement de l'intégration.
 - Harmonise les unités de débit en `mm/h` dans les textes (conversion interne en `mm/min`).
