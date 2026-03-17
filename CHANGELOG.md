@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.11
+- Extraction du moteur de décision dans un module pur pour le rendre testable sans Home Assistant.
+- Ajout d'une base de tests unitaires sur les règles métier principales.
+- Nettoyage du coordinateur pour le recentrer sur l'orchestration HA.
+- Alignement des libellés README / entités et ajout de `single_config_entry` au manifest.
+
 ## 0.3.10
 - Refonte du moteur de décision avec scores internes (`score_hydrique`, `score_stress`, `score_tonte`).
 - Calcul d'arrosage recentré sur bilan hydrique + scores, avec profils par phase.
