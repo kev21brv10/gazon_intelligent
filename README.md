@@ -51,6 +51,7 @@ Intégration Home Assistant pour gérer les modes gazon :
 - Binaire `Tonte autorisée`.
 - Binaire `Arrosage automatique autorisé` (reste à gérer par tes automations externes).
 - Bouton `Repasser en mode normal`.
+- Bouton `Date action = aujourd'hui` : fixe la date d'action à aujourd'hui (utile pour Sursemis ou autres phases si tu ajustes en retard).
 
 Reconfigurer plus tard
 - Tu peux modifier à tout moment les entités (zones, capteurs, débits) via le menu Options de l'intégration dans Home Assistant. Les nouvelles valeurs sont prises en compte sans devoir tout recréer.
@@ -68,6 +69,7 @@ Toutes les entités sont rattachées à un appareil « Gazon Intelligent » 
 - `gazon_intelligent.reset_mode` (revient en Normal).
 - `gazon_intelligent.start_manual_irrigation` (`objectif_mm` float, 0‑30).
 - `gazon_intelligent.start_auto_irrigation` (objectif optionnel, utilise l'objectif calculé si omis). Lance chaque zone en séquence en convertissant l'objectif mm en durée selon le débit renseigné (mm/h).
+- `gazon_intelligent.set_date_action` (`date_action` au format `AAAA-MM-JJ`) pour fixer une date spécifique différente d'aujourd'hui.
 
 ## Événement
 

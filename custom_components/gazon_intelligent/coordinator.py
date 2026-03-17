@@ -195,9 +195,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         await self.async_request_refresh()
 
-    async def async_set_date_action(self, date_action: date) -> None:
-        """Définit la date réelle de l'action."""
-        self.date_action = date_action
+    async def async_set_date_action(self, date_action: date | None = None) -> None:
+        """Définit la date réelle de l'action (par défaut aujourd'hui)."""
+        self.date_action = date_action or date.today()
         await self.async_request_refresh()
 
     async def async_set_normal(self) -> None:
