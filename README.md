@@ -72,7 +72,8 @@ Toutes les entités sont rattachées à un appareil « Gazon Intelligent » 
 - `gazon_intelligent.set_date_action` (`date_action` au format `AAAA-MM-JJ`) pour fixer une date spécifique différente d'aujourd'hui.
 
 Objectif en mode Normal
-- Par défaut 3.5 mm/jour (~25 mm/semaine). Si tu préfères arroser 2×/semaine, donne `objectif_mm: 12.5` dans ton automation `start_auto_irrigation`.
+- Pensé pour 3 arrosages par semaine : 8.3 mm par passage (~25 mm/sem).
+- Si tu arroses 2×/sem : passe `objectif_mm: 12.5` dans ton automation `start_auto_irrigation`.
 
 ## Événement
 

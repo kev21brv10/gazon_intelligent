@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.3.2
+- Ajuste l'objectif du mode Normal à 8.3 mm (3 arrosages/sem ~25 mm/sem).
+
 ## 0.3.1
 - Objectif mode Normal relevé à 3.5 mm/j (≈25 mm/sem).
 - Ajout bouton `Date action = aujourd'hui`.
