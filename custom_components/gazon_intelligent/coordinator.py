@@ -59,6 +59,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "objectif_mm": self._compute_objectif_mm(pluie_24h=pluie_24h),
             "tonte_autorisee": self._compute_tonte_autorisee(),
             "arrosage_auto_autorise": self._compute_arrosage_auto_autorise(),
+            "arrosage_special_autorise": self._compute_arrosage_special_autorise(),
             "jours_restants": self._compute_jours_restants(),
         }
 
@@ -143,6 +144,16 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         # Autorisé sauf en Traitement et Hivernage
         return self.mode not in {"Traitement", "Hivernage"}
+
+    def _compute_arrosage_special_autorise(self) -> bool:
+        """Indique si l'arrosage est recommandé/autorisé pour les modes non Normaux."""
+        return self.mode in {
+            "Sursemis",
+            "Fertilisation",
+            "Biostimulant",
+            "Agent Mouillant",
+            "Scarification",
+        }
 
     def _compute_etp(
         self,

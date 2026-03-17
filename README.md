@@ -50,6 +50,7 @@ Intégration Home Assistant pour gérer les modes gazon :
 - Capteur `Humidité extérieure` (%) : reflète le capteur fourni s'il existe.
 - Binaire `Tonte autorisée`.
 - Binaire `Arrosage automatique autorisé` (reste à gérer par tes automations externes).
+- Binaire `Arrosage modes spéciaux` (Sursemis, Fertilisation, Biostimulant, Agent Mouillant, Scarification).
 - Bouton `Repasser en mode normal`.
 - Bouton `Date action = aujourd'hui` : fixe la date d'action à aujourd'hui (utile pour Sursemis ou autres phases si tu ajustes en retard).
 
