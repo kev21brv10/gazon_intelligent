@@ -56,9 +56,12 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._loaded = True
 
         pluie_24h = self._get_float_state(self._get_conf(CONF_CAPTEUR_PLUIE_24H))
-        pluie_demain = self._get_float_state(self._get_conf(CONF_CAPTEUR_PLUIE_DEMAIN))
+        pluie_demain_entity = self._get_conf(CONF_CAPTEUR_PLUIE_DEMAIN)
+        pluie_demain = self._get_float_state(pluie_demain_entity)
+        pluie_demain_source = "capteur"
         if pluie_demain is None:
             pluie_demain = await self._get_forecast_pluie_demain(self._get_conf(CONF_ENTITE_METEO))
+            pluie_demain_source = "meteo_forecast" if pluie_demain is not None else "indisponible"
         temperature = self._get_float_state(self._get_conf(CONF_CAPTEUR_TEMPERATURE))
         etp_capteur = self._get_float_state(self._get_conf(CONF_CAPTEUR_ETP))
         humidite = self._get_float_state(self._get_conf(CONF_CAPTEUR_HUMIDITE))
@@ -72,6 +75,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "date_fin": self._compute_date_fin(),
             "pluie_24h": pluie_24h,
             "pluie_demain": pluie_demain,
+            "pluie_demain_source": pluie_demain_source,
             "temperature": temperature,
             "etp": etp_calcule,
             "humidite": humidite,
@@ -411,6 +415,29 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _get_conf(self, key: str) -> Any:
         """Récupère la valeur de configuration (options > data)."""
         return self.entry.options.get(key, self.entry.data.get(key))
+
+    def get_used_entities_attributes(self) -> dict[str, Any]:
+        """Expose les entités/config utilisées dans les attributs des entités."""
+        attrs = {
+            "entites_utilisees": {
+                "zone_1": self._get_conf("zone_1"),
+                "zone_2": self._get_conf("zone_2"),
+                "zone_3": self._get_conf("zone_3"),
+                "zone_4": self._get_conf("zone_4"),
+                "zone_5": self._get_conf("zone_5"),
+                "capteur_pluie_24h": self._get_conf(CONF_CAPTEUR_PLUIE_24H),
+                "capteur_pluie_demain": self._get_conf(CONF_CAPTEUR_PLUIE_DEMAIN),
+                "entite_meteo": self._get_conf(CONF_ENTITE_METEO),
+                "capteur_temperature": self._get_conf(CONF_CAPTEUR_TEMPERATURE),
+                "capteur_etp": self._get_conf(CONF_CAPTEUR_ETP),
+                "capteur_humidite": self._get_conf(CONF_CAPTEUR_HUMIDITE),
+            },
+            "configuration": {
+                "type_sol": self._get_conf(CONF_TYPE_SOL) or DEFAULT_TYPE_SOL,
+            },
+            "pluie_demain_source": self.data.get("pluie_demain_source") if self.data else None,
+        }
+        return attrs
 
     async def _async_load_state(self) -> None:
         """Charge l'état persistant (mode, date_action)."""

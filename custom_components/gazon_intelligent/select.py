@@ -27,6 +27,10 @@ class GazonModeSelect(CoordinatorEntity, SelectEntity):
         await self.coordinator.async_set_mode(option)
 
     @property
+    def extra_state_attributes(self):
+        return self.coordinator.get_used_entities_attributes()
+
+    @property
     def device_info(self) -> DeviceInfo:
         entry_id = self.coordinator.entry.entry_id
         return DeviceInfo(
