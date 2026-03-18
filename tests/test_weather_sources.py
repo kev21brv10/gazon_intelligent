@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from datetime import date, timedelta
 from importlib import util
 from pathlib import Path
 import sys
@@ -88,8 +89,33 @@ class WeatherSourcesTests(unittest.TestCase):
     def test_extract_weather_forecast_summary_collects_day_values(self) -> None:
         forecasts = [
             {
+                "datetime": "2026-03-19",
+                "temperature": "16.2",
+                "precipitation": "3.1",
+            },
+            {
+                "datetime": "2026-03-18",
                 "temperature": "19.4",
                 "apparent_temperature": "18.0",
+                "precipitation": "0.8",
+                "condition": "cloudy",
+            },
+        ]
+
+        summary = weather_sources.extract_weather_forecast_summary(forecasts)
+
+        self.assertEqual(summary["forecast_temperature_today"], 19.4)
+        self.assertEqual(summary["forecast_pluie_24h"], 0.8)
+        self.assertEqual(summary["forecast_pluie_demain"], 3.1)
+        self.assertEqual(summary["forecast_condition_today"], "cloudy")
+        today = date.today()
+        self.assertEqual(summary["forecast_date_today"], today.isoformat())
+        self.assertEqual(summary["forecast_date_tomorrow"], (today + timedelta(days=1)).isoformat())
+
+    def test_extract_weather_forecast_summary_falls_back_when_dates_missing(self) -> None:
+        forecasts = [
+            {
+                "temperature": "19.4",
                 "precipitation": "0.8",
                 "condition": "cloudy",
             },
@@ -104,4 +130,3 @@ class WeatherSourcesTests(unittest.TestCase):
         self.assertEqual(summary["forecast_temperature_today"], 19.4)
         self.assertEqual(summary["forecast_pluie_24h"], 0.8)
         self.assertEqual(summary["forecast_pluie_demain"], 3.1)
-        self.assertEqual(summary["forecast_condition_today"], "cloudy")

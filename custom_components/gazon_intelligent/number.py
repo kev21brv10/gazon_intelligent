@@ -57,10 +57,4 @@ class GazonDebitZoneNumber(GazonEntityBase, NumberEntity):
 
     @property
     def extra_state_attributes(self):
-        return self._attrs_from_data(
-            "phase_active",
-            "mode",
-            "objectif_mm",
-            "arrosage_auto_autorise",
-            "arrosage_recommande",
-        )
+        return self._attrs_from_data("phase_active", "mode", "objectif_mm")

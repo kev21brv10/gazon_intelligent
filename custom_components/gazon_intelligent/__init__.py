@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import date, datetime
-
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
@@ -12,6 +10,10 @@ from .const import (
     DOMAIN,
     INTERVENTIONS_ACTIONS,
     MODES_GAZON,
+)
+from .entity_migration import (
+    CURRENT_CONFIG_ENTRY_VERSION,
+    async_cleanup_obsolete_entities,
 )
 from .coordinator import GazonIntelligentCoordinator
 from .date_utils import parse_optional_date
@@ -37,6 +39,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
+    await async_cleanup_obsolete_entities(hass, entry.entry_id)
     await coordinator.async_start_zone_monitoring()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     coordinator.schedule_post_start_refresh(delay_seconds=30)
@@ -204,6 +207,19 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 hass.services.async_remove(DOMAIN, service)
 
     return unload_ok
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migre les anciennes versions et nettoie les entités obsolètes."""
+    if entry.version > CURRENT_CONFIG_ENTRY_VERSION:
+        return False
+
+    await async_cleanup_obsolete_entities(hass, entry.entry_id)
+
+    if entry.version < CURRENT_CONFIG_ENTRY_VERSION:
+        hass.config_entries.async_update_entry(entry, version=CURRENT_CONFIG_ENTRY_VERSION)
+
+    return True
 
 
 def _get_first_coordinator(hass: HomeAssistant) -> GazonIntelligentCoordinator:

@@ -11,7 +11,7 @@
           "zone_3": "Zona 3",
           "zone_4": "Zona 4",
           "zone_5": "Zona 5",
-          "debit_zone_1": "Caudal zona 1 (mm/h, 60 por defecto)",
+          "debit_zone_1": "Caudal zona 1 (mm/h, 0 si no se usa)",
           "debit_zone_2": "Caudal zona 2 (mm/h, 0 si no se usa)",
           "debit_zone_3": "Caudal zona 3 (mm/h, 0 si no se usa)",
           "debit_zone_4": "Caudal zona 4 (mm/h, 0 si no se usa)",
@@ -37,6 +37,7 @@
           "capteur_etp": "ETP diario (opcional, automática si está vacío)",
           "capteur_humidite": "Humedad (opcional, si no tiempo)",
           "capteur_hauteur_gazon": "Altura del césped (recomendado)",
+          "capteur_retour_arrosage": "Retorno de riego (opcional, si no usa historial)",
           "capteur_humidite_sol": "Humedad del suelo (%) (opcional)",
           "capteur_vent": "Viento (opcional si se usa meteorología)",
           "capteur_rosee": "Rocío / humedad foliar (opcional)"

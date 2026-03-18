@@ -25,6 +25,7 @@ from .const import (
     CONF_CAPTEUR_VENT,
     CONF_CAPTEUR_ROSEE,
     CONF_CAPTEUR_HAUTEUR_GAZON,
+    CONF_CAPTEUR_RETOUR_ARROSAGE,
     CONF_TYPE_SOL,
     DEFAULT_TYPE_SOL,
     TYPES_SOL,
@@ -104,6 +105,9 @@ def build_advanced_schema(current: dict | None = None):
             vol.Optional(CONF_CAPTEUR_HAUTEUR_GAZON, default=_d(current.get(CONF_CAPTEUR_HAUTEUR_GAZON))): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="sensor")
             ),
+            vol.Optional(CONF_CAPTEUR_RETOUR_ARROSAGE, default=_d(current.get(CONF_CAPTEUR_RETOUR_ARROSAGE))): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="sensor")
+            ),
             vol.Optional(CONF_CAPTEUR_HUMIDITE_SOL, default=_d(current.get(CONF_CAPTEUR_HUMIDITE_SOL))): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="sensor")
             ),
@@ -118,7 +122,7 @@ def build_advanced_schema(current: dict | None = None):
 
 
 class GazonIntelligentConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    VERSION = 1
+    VERSION = 2
 
     async def async_step_user(self, user_input=None):
         if user_input is not None:

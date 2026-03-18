@@ -11,7 +11,7 @@
           "zone_3": "Zone 3",
           "zone_4": "Zone 4",
           "zone_5": "Zone 5",
-          "debit_zone_1": "Zone 1 flow (mm/h, 60 by default)",
+          "debit_zone_1": "Zone 1 flow (mm/h, 0 if unused)",
           "debit_zone_2": "Zone 2 flow (mm/h, 0 if unused)",
           "debit_zone_3": "Zone 3 flow (mm/h, 0 if unused)",
           "debit_zone_4": "Zone 4 flow (mm/h, 0 if unused)",
@@ -37,6 +37,7 @@
           "capteur_etp": "Daily ETP (optional, auto if empty)",
           "capteur_humidite": "Humidity (optional, otherwise weather)",
           "capteur_hauteur_gazon": "Grass height (recommended)",
+          "capteur_retour_arrosage": "Watering return (optional, otherwise history)",
           "capteur_humidite_sol": "Soil humidity (%) (optional)",
           "capteur_vent": "Wind (optional if weather is provided)",
           "capteur_rosee": "Dew / leaf wetness (optional)"

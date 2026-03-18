@@ -11,7 +11,7 @@
           "zone_3": "Zone 3",
           "zone_4": "Zone 4",
           "zone_5": "Zone 5",
-          "debit_zone_1": "Doorstroom zone 1 (mm/h, standaard 60)",
+          "debit_zone_1": "Doorstroom zone 1 (mm/h, 0 indien niet gebruikt)",
           "debit_zone_2": "Doorstroom zone 2 (mm/h, 0 indien ongebruikt)",
           "debit_zone_3": "Doorstroom zone 3 (mm/h, 0 indien ongebruikt)",
           "debit_zone_4": "Doorstroom zone 4 (mm/h, 0 indien ongebruikt)",
@@ -37,6 +37,7 @@
           "capteur_etp": "Dagelijkse ETP (optioneel, automatisch als leeg)",
           "capteur_humidite": "Vochtigheid (optioneel, anders weer)",
           "capteur_hauteur_gazon": "Grashoogte (aanbevolen)",
+          "capteur_retour_arrosage": "Terugkeer van besproeiing (optioneel, anders geschiedenis)",
           "capteur_humidite_sol": "Bodemvocht (%) (optioneel)",
           "capteur_vent": "Wind (optioneel als weer beschikbaar is)",
           "capteur_rosee": "Dauw / bladnat (optioneel)"

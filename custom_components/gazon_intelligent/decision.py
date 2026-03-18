@@ -48,7 +48,6 @@ compute_memory = _memory.compute_memory
 compute_action_guidance = _guidance.compute_action_guidance
 compute_jours_restants_for = _guidance.compute_jours_restants_for
 compute_next_reevaluation = _guidance.compute_next_reevaluation
-compute_legacy_urgence = _guidance.compute_legacy_urgence
 compute_objectif_mm = _guidance.compute_objectif_mm
 compute_tonte_statut = _guidance.compute_tonte_statut
 
@@ -59,6 +58,55 @@ def _passage_spacing_text(passages: int) -> str:
     if passages == 2:
         return "en 2 passages courts espacés de 20 à 30 min"
     return f"en {passages} passages courts espacés de 20 min"
+
+
+def _decision_urgence(
+    phase_dominante: str,
+    arrosage_recommande: bool,
+    niveau_action: str,
+    risque_gazon: str,
+    bilan_hydrique_mm: float,
+    pluie_demain: float,
+) -> str:
+    if phase_dominante in {"Traitement", "Hivernage"}:
+        return "faible"
+    if not arrosage_recommande:
+        if pluie_demain >= 2.0 or bilan_hydrique_mm >= 0.0:
+            return "faible"
+        return "moyenne" if niveau_action == "surveiller" or bilan_hydrique_mm < 0 else "faible"
+    if bilan_hydrique_mm <= -2.5 or niveau_action == "critique" or risque_gazon == "eleve":
+        return "haute"
+    if phase_dominante == "Sursemis" and (bilan_hydrique_mm <= -1.0 or niveau_action == "a_faire"):
+        return "moyenne"
+    if niveau_action in {"a_faire", "surveiller"} or bilan_hydrique_mm <= -0.5:
+        return "moyenne"
+    return "faible"
+
+
+def _decision_resume(
+    arrosage_recommande: bool,
+    tonte_autorisee: bool,
+    objectif_mm: float,
+    type_arrosage: str,
+    niveau_action: str,
+    fenetre_optimale: str,
+    risque_gazon: str,
+) -> dict[str, Any]:
+    if arrosage_recommande:
+        action = "arrosage"
+    elif tonte_autorisee:
+        action = "aucune_action"
+    else:
+        action = "surveillance"
+    return {
+        "faire": arrosage_recommande,
+        "action": action,
+        "moment": fenetre_optimale,
+        "objectif_mm": objectif_mm,
+        "type_arrosage": type_arrosage,
+        "niveau_action": niveau_action,
+        "risque_gazon": risque_gazon,
+    }
 
 
 def compute_decision(
@@ -92,6 +140,9 @@ def compute_decision(
     deficit_3j = water_balance.get("deficit_3j", 0.0)
     deficit_7j = water_balance.get("deficit_7j", 0.0)
     pluie_efficace = water_balance.get("pluie_efficace", 0.0)
+    bilan_hydrique_mm = water_balance.get("bilan_hydrique_mm", 0.0)
+    bilan_hydrique_3j = water_balance.get("bilan_hydrique_3j", 0.0)
+    bilan_hydrique_7j = water_balance.get("bilan_hydrique_7j", 0.0)
     now_hour = hour_of_day if hour_of_day is not None else datetime.now().hour
     prochain_creneau = "ce matin" if now_hour < 9 else "demain matin"
     action_guidance = compute_action_guidance(
@@ -105,9 +156,6 @@ def compute_decision(
         temperature=temperature,
         etp=etp,
         objectif_mm=objectif_mm,
-        score_hydrique=score_hydrique,
-        score_stress=score_stress,
-        score_tonte=score_tonte,
         hour_of_day=hour_of_day,
     )
     prochaine_reevaluation = compute_next_reevaluation(
@@ -133,9 +181,25 @@ def compute_decision(
             "niveau_action": action_guidance["niveau_action"],
             "fenetre_optimale": action_guidance["fenetre_optimale"],
             "risque_gazon": action_guidance["risque_gazon"],
-            "urgence": "faible",
+            "urgence": _decision_urgence(
+                phase_dominante,
+                False,
+                action_guidance["niveau_action"],
+                action_guidance["risque_gazon"],
+                bilan_hydrique_mm,
+                pluie_demain,
+            ),
             "prochaine_reevaluation": prochaine_reevaluation,
             "score_tonte": score_tonte,
+            "decision_resume": _decision_resume(
+                False,
+                False,
+                objectif_mm,
+                "bloque",
+                action_guidance["niveau_action"],
+                action_guidance["fenetre_optimale"],
+                action_guidance["risque_gazon"],
+            ),
         }
     if phase_dominante == "Hivernage":
         return {
@@ -152,14 +216,37 @@ def compute_decision(
             "niveau_action": action_guidance["niveau_action"],
             "fenetre_optimale": action_guidance["fenetre_optimale"],
             "risque_gazon": action_guidance["risque_gazon"],
-            "urgence": "faible",
+            "urgence": _decision_urgence(
+                phase_dominante,
+                False,
+                action_guidance["niveau_action"],
+                action_guidance["risque_gazon"],
+                bilan_hydrique_mm,
+                pluie_demain,
+            ),
             "prochaine_reevaluation": prochaine_reevaluation,
             "score_tonte": score_tonte,
+            "decision_resume": _decision_resume(
+                False,
+                False,
+                objectif_mm,
+                "bloque",
+                action_guidance["niveau_action"],
+                action_guidance["fenetre_optimale"],
+                action_guidance["risque_gazon"],
+            ),
         }
     if phase_dominante == "Sursemis":
         passages = 3 if objectif_mm >= 2 else 2
         passage_spacing = _passage_spacing_text(passages)
-        urgence_sursemis = "haute" if score_hydrique >= 45 or action_guidance["risque_gazon"] == "eleve" else "moyenne"
+        urgence_sursemis = _decision_urgence(
+            phase_dominante,
+            True,
+            action_guidance["niveau_action"],
+            action_guidance["risque_gazon"],
+            bilan_hydrique_mm,
+            pluie_demain,
+        )
         return {
             "tonte_autorisee": False,
             "tonte_statut": "interdite",
@@ -168,7 +255,7 @@ def compute_decision(
             "type_arrosage": "manuel_frequent",
             "arrosage_conseille": "personnalise",
             "raison_decision": (
-                f"Sursemis / {sous_phase}: déficit jour={deficit_jour} mm, 3j={deficit_3j} mm, 7j={deficit_7j} mm. "
+                f"Sursemis / {sous_phase}: bilan={bilan_hydrique_mm:.1f} mm, tendance 3j={bilan_hydrique_3j:.1f} mm, 7j={bilan_hydrique_7j:.1f} mm. "
                 f"Pluie efficace={pluie_efficace:.1f} mm."
             ),
             "conseil_principal": f"Arroser {prochain_creneau} {passage_spacing}.",
@@ -180,11 +267,25 @@ def compute_decision(
             "urgence": urgence_sursemis,
             "prochaine_reevaluation": prochaine_reevaluation,
             "score_tonte": score_tonte,
+            "decision_resume": _decision_resume(
+                True,
+                False,
+                objectif_mm,
+                "manuel_frequent",
+                action_guidance["niveau_action"],
+                action_guidance["fenetre_optimale"],
+                action_guidance["risque_gazon"],
+            ),
         }
 
     tonte_ok = score_tonte < 45 and score_stress < 70
     auto_ok = phase_dominante in {"Normal", "Fertilisation", "Biostimulant", "Agent Mouillant", "Scarification"}
-    recommande = score_hydrique >= 30 and objectif_mm > 0
+    besoin_eau = (
+        bilan_hydrique_mm <= -0.2
+        or deficit_3j > 0.8
+        or deficit_7j > 1.5
+    )
+    recommande = objectif_mm > 0 and besoin_eau
     if not tonte_ok:
         if humidite >= 85:
             tonte_reason = "Humidité trop élevée: pelouse humide."
@@ -257,9 +358,9 @@ def compute_decision(
         action_a_eviter = "Tondre sur sol humide." if not tonte_ok else "Intervention agressive inutile."
 
     facteurs = [
-        f"deficit_jour={deficit_jour:.1f}",
-        f"deficit_3j={deficit_3j:.1f}",
-        f"deficit_7j={deficit_7j:.1f}",
+        f"bilan_hydrique={bilan_hydrique_mm:.1f}",
+        f"bilan_hydrique_3j={bilan_hydrique_3j:.1f}",
+        f"bilan_hydrique_7j={bilan_hydrique_7j:.1f}",
         f"pluie_efficace={pluie_efficace:.1f}",
         f"arrosage_recent={arrosage_recent:.1f}",
     ]
@@ -286,13 +387,22 @@ def compute_decision(
         score_tonte=score_tonte,
         risque_gazon=action_guidance["risque_gazon"],
     )
-    urgence = compute_legacy_urgence(
+    urgence = _decision_urgence(
         phase_dominante=phase_dominante,
         arrosage_recommande=recommande,
         niveau_action=action_guidance["niveau_action"],
         risque_gazon=action_guidance["risque_gazon"],
-        score_hydrique=score_hydrique,
-        score_stress=score_stress,
+        bilan_hydrique_mm=bilan_hydrique_mm,
+        pluie_demain=pluie_demain,
+    )
+    decision_resume = _decision_resume(
+        recommande,
+        tonte_ok,
+        objectif_mm,
+        "auto" if auto_ok else "personnalise",
+        action_guidance["niveau_action"],
+        action_guidance["fenetre_optimale"],
+        action_guidance["risque_gazon"],
     )
 
     return {
@@ -304,7 +414,8 @@ def compute_decision(
         "arrosage_conseille": "auto" if phase_dominante == "Normal" else "personnalise",
         "raison_decision": (
             f"Mode {phase_dominante} / {sous_phase} en cours ({jours_restants} jour(s) restants). "
-            f"Niveaux: eau={score_hydrique}/stress={score_stress}/tonte={score_tonte}. {facteurs_txt}. {tonte_reason}"
+            f"Bilan hydrique={bilan_hydrique_mm:.1f} mm, tendance 3j={bilan_hydrique_3j:.1f} mm, "
+            f"7j={bilan_hydrique_7j:.1f} mm. {facteurs_txt}. {tonte_reason}"
         ),
         "conseil_principal": conseil_principal,
         "action_recommandee": action_recommandee,
@@ -315,6 +426,7 @@ def compute_decision(
         "urgence": urgence,
         "prochaine_reevaluation": prochaine_reevaluation,
         "score_tonte": score_tonte,
+        "decision_resume": decision_resume,
     }
 
 
@@ -335,6 +447,7 @@ def build_decision_snapshot(
     retour_arrosage: float | None = None,
     pluie_source: str = "capteur_pluie_24h",
     weather_profile: dict[str, Any] | None = None,
+    soil_balance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     today = today or date.today()
     etp = compute_etp(
@@ -378,6 +491,19 @@ def build_decision_snapshot(
         advanced_context=advanced_context,
         weather_profile=weather_profile,
     )
+    balance_snapshot = dict(water_balance)
+    balance_snapshot["bilan_hydrique_journalier_mm"] = balance_snapshot.get("bilan_hydrique_mm", 0.0)
+    if soil_balance:
+        reserve_mm = soil_balance.get("reserve_mm")
+        if reserve_mm is not None:
+            balance_snapshot["bilan_hydrique_mm"] = reserve_mm
+        balance_snapshot["soil_balance"] = soil_balance
+        balance_snapshot["bilan_hydrique_precedent_mm"] = soil_balance.get("previous_reserve_mm")
+        balance_snapshot["pluie_jour_mm"] = soil_balance.get("pluie_mm")
+        balance_snapshot["arrosage_jour_mm"] = soil_balance.get("arrosage_mm")
+        balance_snapshot["etp_jour_mm"] = soil_balance.get("etp_mm")
+        balance_snapshot["delta_jour_mm"] = soil_balance.get("delta_mm")
+    water_balance = balance_snapshot
     scores = compute_internal_scores(
         history=history,
         today=today,
@@ -395,8 +521,10 @@ def build_decision_snapshot(
         phase_dominante=phase_dominante,
         sous_phase=sous_phase["sous_phase"],
         water_balance=water_balance,
-        score_hydrique=scores["score_hydrique"],
-        score_stress=scores["score_stress"],
+        pluie_demain=pluie_demain,
+        humidite=humidite,
+        temperature=temperature,
+        etp=etp,
     )
     decision = compute_decision(
         phase_dominante=phase_dominante,
@@ -441,12 +569,17 @@ def build_decision_snapshot(
         "deficit_jour": water_balance["deficit_jour"],
         "deficit_3j": water_balance["deficit_3j"],
         "deficit_7j": water_balance["deficit_7j"],
+        "bilan_hydrique_journalier_mm": water_balance.get("bilan_hydrique_journalier_mm"),
+        "bilan_hydrique_precedent_mm": water_balance.get("bilan_hydrique_precedent_mm"),
+        "soil_balance": water_balance.get("soil_balance"),
         "pluie_efficace": water_balance["pluie_efficace"],
         "arrosage_recent": water_balance["arrosage_recent"],
         "arrosage_recent_jour": water_balance["arrosage_recent_jour"],
         "arrosage_recent_3j": water_balance["arrosage_recent_3j"],
         "arrosage_recent_7j": water_balance["arrosage_recent_7j"],
-        "bilan_hydrique_mm": water_balance["deficit_jour"],
+        "bilan_hydrique_mm": water_balance["bilan_hydrique_mm"],
+        "bilan_hydrique_3j": water_balance["bilan_hydrique_3j"],
+        "bilan_hydrique_7j": water_balance["bilan_hydrique_7j"],
         "objectif_mm": objectif_mm,
         "score_hydrique": scores["score_hydrique"],
         "score_stress": scores["score_stress"],
@@ -466,5 +599,6 @@ def build_decision_snapshot(
         "urgence": decision["urgence"],
         "prochaine_reevaluation": decision["prochaine_reevaluation"],
         "score_tonte": decision["score_tonte"],
+        "decision_resume": decision["decision_resume"],
         "jours_restants": jours_restants,
     }

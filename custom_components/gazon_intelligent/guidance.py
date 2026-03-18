@@ -16,52 +16,67 @@ def compute_objectif_mm(
     phase_dominante: str,
     sous_phase: str,
     water_balance: dict[str, float],
-    score_hydrique: int,
-    score_stress: int,
+    pluie_demain: float | None = None,
+    humidite: float | None = None,
+    temperature: float | None = None,
+    etp: float | None = None,
 ) -> float:
     if phase_dominante in ("Traitement", "Hivernage"):
         return 0.0
 
+    pluie_demain = pluie_demain or 0.0
+    humidite = humidite or 0.0
+    temperature = temperature or 0.0
+    etp = etp or 0.0
+
+    bilan_hydrique_mm = water_balance.get("bilan_hydrique_mm", 0.0)
     deficit_jour = water_balance.get("deficit_jour", 0.0)
     deficit_3j = water_balance.get("deficit_3j", 0.0)
     deficit_7j = water_balance.get("deficit_7j", 0.0)
+    besoin_court = max(0.0, -bilan_hydrique_mm)
+    besoin_tendance = (deficit_3j * 0.18) + (deficit_7j * 0.06)
+
+    if bilan_hydrique_mm >= 1.2:
+        return 0.0
+    if pluie_demain >= 2.0 and bilan_hydrique_mm >= -0.5:
+        return 0.0
 
     if phase_dominante == "Sursemis":
-        base_mm = (deficit_jour * 0.95) + (deficit_3j * 0.12)
+        if sous_phase == "Germination":
+            objectif = (besoin_court * 0.45) + (besoin_tendance * 0.08)
+            if humidite >= 85 and temperature < 28:
+                objectif *= 0.8
+            minimum, maximum = 0.4, 1.6
+        elif sous_phase == "Enracinement":
+            objectif = (besoin_court * 0.55) + (besoin_tendance * 0.10)
+            minimum, maximum = 0.5, 2.1
+        else:
+            objectif = (besoin_court * 0.7) + (besoin_tendance * 0.12)
+            minimum, maximum = 0.5, 2.5
     elif phase_dominante == "Scarification":
-        base_mm = (deficit_jour * 0.7) + (deficit_3j * 0.15)
-    elif phase_dominante == "Fertilisation":
-        base_mm = (deficit_jour * 0.65) + (deficit_3j * 0.12)
-    elif phase_dominante == "Biostimulant":
-        base_mm = (deficit_jour * 0.6) + (deficit_3j * 0.1)
+        objectif = (besoin_court * 0.6) + (besoin_tendance * 0.10)
+        minimum, maximum = 0.0, 2.5
+    elif phase_dominante in {"Fertilisation", "Biostimulant"}:
+        objectif = (besoin_court * 0.4) + (besoin_tendance * 0.08)
+        minimum, maximum = 0.0, 1.8
     elif phase_dominante == "Agent Mouillant":
-        base_mm = (deficit_jour * 0.75) + (deficit_3j * 0.1)
+        objectif = (besoin_court * 0.55) + (besoin_tendance * 0.10)
+        minimum, maximum = 0.0, 2.8
     else:
-        base_mm = (deficit_jour * 0.55) + (deficit_3j * 0.25) + (deficit_7j * 0.08)
+        objectif = (besoin_court * 0.85) + (besoin_tendance * 0.12)
+        minimum, maximum = 0.0, 5.0
 
-    if score_hydrique < 15:
-        base_mm *= 0.25
+    if temperature >= 30 and etp >= 4:
+        objectif += 0.4
+    if humidite >= 85 and phase_dominante == "Normal":
+        objectif *= 0.75
+    if humidite >= 90 and phase_dominante != "Sursemis":
+        objectif *= 0.8
 
-    profile = {
-        "Normal": (1.00, 0.0, 12.0),
-        "Sursemis": (0.65, 0.5, 3.0),
-        "Fertilisation": (0.80, 0.5, 3.5),
-        "Biostimulant": (0.72, 0.4, 3.0),
-        "Agent Mouillant": (0.88, 0.8, 4.0),
-        "Scarification": (0.82, 0.6, 3.5),
-    }.get(phase_dominante, (1.00, 0.0, 12.0))
+    if bilan_hydrique_mm > 0.5 and phase_dominante == "Normal":
+        return 0.0
 
-    mult, min_mm, max_mm = profile
-    objectif = base_mm * mult
-    if phase_dominante == "Sursemis" and sous_phase == "Germination":
-        max_mm = min(max_mm, 2.0)
-    elif phase_dominante == "Sursemis" and sous_phase == "Enracinement":
-        max_mm = min(max_mm, 2.5)
-    elif phase_dominante == "Sursemis":
-        max_mm = min(max_mm, 3.0)
-    if score_hydrique < 20 and score_stress < 35:
-        min_mm = 0.0
-    objectif = max(min_mm, min(max_mm, objectif))
+    objectif = max(minimum, min(maximum, objectif))
     return round(max(0.0, objectif), 1)
 
 
@@ -89,9 +104,6 @@ def compute_action_guidance(
     temperature: float | None,
     etp: float | None,
     objectif_mm: float,
-    score_hydrique: int,
-    score_stress: int,
-    score_tonte: int,
     hour_of_day: int | None = None,
 ) -> dict[str, str]:
     advanced_context = advanced_context or {}
@@ -100,8 +112,14 @@ def compute_action_guidance(
     humidite = humidite or 0.0
     temperature = temperature or 0.0
     etp = etp or 0.0
+    bilan_hydrique_mm = water_balance.get("bilan_hydrique_mm", 0.0)
+    deficit_jour = water_balance.get("deficit_jour", 0.0)
+    deficit_3j = water_balance.get("deficit_3j", 0.0)
+    deficit_7j = water_balance.get("deficit_7j", 0.0)
 
-    pressure = max(score_hydrique, score_stress, score_tonte)
+    besoin_court = max(0.0, -bilan_hydrique_mm)
+    besoin_tendance = (deficit_3j * 0.18) + (deficit_7j * 0.06)
+    pression_hydrique = besoin_court + besoin_tendance
     pluie_compensatrice = objectif_mm > 0 and pluie_demain >= max(2.0, objectif_mm * 0.8)
     pluie_proche = pluie_24h >= 4 or pluie_demain >= 4
     now_hour = hour_of_day if hour_of_day is not None else datetime.now().hour
@@ -118,10 +136,8 @@ def compute_action_guidance(
 
     if objectif_mm <= 0:
         fenetre_optimale = "attendre"
-        if rosee is not None and rosee > 0:
-            fenetre_optimale = "attendre"
-        if vent is not None and vent >= 20:
-            fenetre_optimale = "attendre"
+        if pluie_proche:
+            fenetre_optimale = "apres_pluie"
         return {
             "niveau_action": "aucune_action" if phase_dominante == "Normal" else "surveiller",
             "fenetre_optimale": fenetre_optimale,
@@ -129,14 +145,14 @@ def compute_action_guidance(
         }
 
     if phase_dominante == "Sursemis":
-        niveau_action = "critique" if pressure >= 70 or score_hydrique >= 55 else "a_faire"
+        niveau_action = "critique" if pression_hydrique >= 2.2 or bilan_hydrique_mm <= -1.5 else "a_faire"
         if pluie_compensatrice or pluie_proche:
             fenetre_optimale = "apres_pluie"
-        elif now_hour < 9:
+        elif now_hour < 9 and (vent is None or vent < 15):
             fenetre_optimale = "maintenant"
         else:
             fenetre_optimale = "demain_matin"
-        risque_gazon = "eleve" if pressure >= 70 or score_hydrique >= 55 or score_stress >= 70 else "modere"
+        risque_gazon = "eleve" if bilan_hydrique_mm <= -1.5 or pression_hydrique >= 2.5 else "modere"
         if vent is not None and vent >= 20:
             risque_gazon = "eleve"
         if hauteur_gazon is not None and hauteur_gazon >= 12:
@@ -150,7 +166,7 @@ def compute_action_guidance(
     if pluie_compensatrice:
         fenetre_optimale = "apres_pluie"
         niveau_action = "surveiller"
-    elif humidite >= 85:
+    elif humidite >= 85 and bilan_hydrique_mm >= -0.5:
         fenetre_optimale = "attendre"
         niveau_action = "surveiller"
     elif temperature >= 30 and etp >= 4:
@@ -162,6 +178,12 @@ def compute_action_guidance(
     elif rosee is not None and rosee > 0:
         fenetre_optimale = "attendre"
         niveau_action = "surveiller"
+    elif bilan_hydrique_mm <= -4.0:
+        fenetre_optimale = "maintenant" if now_hour < 9 else "demain_matin"
+        niveau_action = "critique"
+    elif bilan_hydrique_mm <= -0.8 or pression_hydrique >= 1.5:
+        fenetre_optimale = "maintenant" if now_hour < 10 else "demain_matin"
+        niveau_action = "a_faire"
     elif now_hour < 9:
         fenetre_optimale = "maintenant"
         niveau_action = "a_faire"
@@ -169,9 +191,9 @@ def compute_action_guidance(
         fenetre_optimale = "demain_matin"
         niveau_action = "a_faire"
 
-    if pressure >= 75 or score_hydrique >= 60 or score_stress >= 75:
+    if bilan_hydrique_mm <= -2.5:
         risque_gazon = "eleve"
-    elif pressure >= 40 or score_hydrique >= 35 or score_stress >= 50:
+    elif bilan_hydrique_mm <= -0.8 or pression_hydrique >= 1.2:
         risque_gazon = "modere"
     else:
         risque_gazon = "faible"

@@ -58,6 +58,25 @@ class DecisionEngineTests(unittest.TestCase):
 
         self.assertEqual(total, 4.0)
 
+    def test_compute_recent_watering_mm_uses_session_totals(self) -> None:
+        history = [
+            {
+                "type": "arrosage",
+                "date": "2026-03-17",
+                "objectif_mm": 1.2,
+                "total_mm": 3.6,
+                "zones": [
+                    {"zone": "zone_1", "mm": 1.2},
+                    {"zone": "zone_2", "mm": 1.1},
+                    {"zone": "zone_3", "mm": 1.3},
+                ],
+            }
+        ]
+
+        total = decision.compute_recent_watering_mm(history, today=date(2026, 3, 17), days=2)
+
+        self.assertEqual(total, 3.6)
+
     def test_compute_dominant_phase_prefers_highest_priority_active_window(self) -> None:
         history = [
             {"type": "Sursemis", "date": "2026-03-10"},
@@ -108,6 +127,37 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertEqual(balance["deficit_3j"], 19.9)
         self.assertEqual(balance["deficit_7j"], 48.5)
 
+    def test_build_decision_snapshot_uses_persistent_soil_balance(self) -> None:
+        snapshot = decision.build_decision_snapshot(
+            history=[],
+            today=date(2026, 3, 17),
+            hour_of_day=7,
+            temperature=20,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=60,
+            type_sol="limoneux",
+            etp_capteur=3.0,
+            soil_balance={
+                "date": "2026-03-17",
+                "reserve_mm": 14.0,
+                "previous_reserve_mm": 11.0,
+                "pluie_mm": 1.0,
+                "arrosage_mm": 5.0,
+                "etp_mm": 3.0,
+                "delta_mm": 3.0,
+                "type_sol": "limoneux",
+                "reserve_max_mm": 24.0,
+                "reserve_min_mm": 0.0,
+                "ledger": [],
+            },
+        )
+
+        self.assertEqual(snapshot["bilan_hydrique_mm"], 14.0)
+        self.assertAlmostEqual(snapshot["bilan_hydrique_journalier_mm"], -2.9, places=1)
+        self.assertEqual(snapshot["bilan_hydrique_precedent_mm"], 11.0)
+        self.assertEqual(snapshot["soil_balance"]["reserve_mm"], 14.0)
+
     def test_compute_advanced_context_uses_weather_probability(self) -> None:
         context = decision.compute_advanced_context(
             humidite_sol=22,
@@ -136,7 +186,16 @@ class DecisionEngineTests(unittest.TestCase):
         history = [
             {"type": "tonte", "date": "2026-03-12"},
             {"type": "arrosage", "date": "2026-03-13", "objectif_mm": 1.0},
-            {"type": "arrosage", "date": "2026-03-16", "objectif_mm": 3.0},
+            {
+                "type": "arrosage",
+                "date": "2026-03-16",
+                "objectif_mm": 0.8,
+                "total_mm": 3.0,
+                "zones": [
+                    {"zone": "zone_1", "mm": 1.2},
+                    {"zone": "zone_2", "mm": 1.8},
+                ],
+            },
             {"type": "Sursemis", "date": "2026-03-10"},
             {
                 "type": "Fertilisation",
@@ -205,6 +264,8 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertEqual(snapshot["risque_gazon"], "eleve")
         self.assertEqual(snapshot["prochaine_reevaluation"], "dans 24 h")
         self.assertGreater(snapshot["objectif_mm"], 0)
+        self.assertLess(snapshot["bilan_hydrique_mm"], 0)
+        self.assertEqual(snapshot["decision_resume"]["action"], "arrosage")
         self.assertTrue(snapshot["tonte_autorisee"])
 
     def test_build_decision_snapshot_treatment_blocks_actions(self) -> None:

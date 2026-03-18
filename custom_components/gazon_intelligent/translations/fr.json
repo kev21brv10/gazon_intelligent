@@ -11,7 +11,7 @@
           "zone_3": "Zone 3",
           "zone_4": "Zone 4",
           "zone_5": "Zone 5",
-          "debit_zone_1": "Débit zone 1 (mm/h, 60 par défaut)",
+          "debit_zone_1": "Débit zone 1 (mm/h, 0 si non utilisée)",
           "debit_zone_2": "Débit zone 2 (mm/h, 0 si non utilisée)",
           "debit_zone_3": "Débit zone 3 (mm/h, 0 si non utilisée)",
           "debit_zone_4": "Débit zone 4 (mm/h, 0 si non utilisée)",
@@ -37,6 +37,7 @@
           "capteur_etp": "ETP du jour (optionnel, auto si vide)",
           "capteur_humidite": "Humidité (optionnel, sinon météo)",
           "capteur_hauteur_gazon": "Hauteur du gazon (recommandé)",
+          "capteur_retour_arrosage": "Retour arrosage (optionnel, sinon historique)",
           "capteur_humidite_sol": "Humidité sol (%) (optionnel)",
           "capteur_vent": "Vent (optionnel si météo fournie)",
           "capteur_rosee": "Rosée / humidité foliaire (optionnel)"

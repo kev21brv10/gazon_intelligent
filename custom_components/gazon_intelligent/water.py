@@ -17,6 +17,89 @@ def _round_half_up_1(value: float) -> float:
     return float(int(value * 10.0 + 0.5)) / 10.0
 
 
+def _watering_item_mm(item: dict[str, Any] | None) -> float | None:
+    if not isinstance(item, dict):
+        return None
+    for key in ("total_mm", "session_total_mm", "objectif_mm", "mm"):
+        amount = _to_float(item.get(key))
+        if amount is not None:
+            return amount
+    zones = item.get("zones")
+    if not isinstance(zones, list):
+        return None
+    total = 0.0
+    found = False
+    for zone in zones:
+        if not isinstance(zone, dict):
+            continue
+        amount = _to_float(zone.get("mm"))
+        if amount is None:
+            amount = _to_float(zone.get("objectif_mm"))
+        if amount is None:
+            rate_mm_h = _to_float(zone.get("rate_mm_h"))
+            duration_min = _to_float(zone.get("duration_min"))
+            if rate_mm_h is not None and duration_min is not None:
+                amount = (rate_mm_h * duration_min) / 60.0
+        if amount is None:
+            continue
+        total += amount
+        found = True
+    if not found:
+        return None
+    return total
+
+
+def build_watering_session_summary(
+    zones: list[dict[str, Any]],
+    source: str | None = None,
+) -> dict[str, Any]:
+    normalized_zones: list[dict[str, Any]] = []
+    total_mm = 0.0
+    for order, zone in enumerate(zones, start=1):
+        if not isinstance(zone, dict):
+            continue
+        zone_name = str(zone.get("zone") or zone.get("entity_id") or "").strip()
+        if not zone_name:
+            continue
+        rate_mm_h = _to_float(zone.get("rate_mm_h"))
+        duration_min = _to_float(zone.get("duration_min"))
+        mm = _to_float(zone.get("mm"))
+        if mm is None and rate_mm_h is not None and duration_min is not None:
+            mm = (rate_mm_h * duration_min) / 60.0
+        if mm is None:
+            mm = _to_float(zone.get("objectif_mm"))
+        if mm is None:
+            continue
+        normalized_zone = {
+            "order": order,
+            "zone": zone_name,
+            "entity_id": zone.get("entity_id") or zone_name,
+            "mm": _round_half_up_1(mm),
+        }
+        if rate_mm_h is not None:
+            normalized_zone["rate_mm_h"] = _round_half_up_1(rate_mm_h)
+        if duration_min is not None:
+            normalized_zone["duration_min"] = _round_half_up_1(duration_min)
+        if zone.get("duration_seconds") is not None:
+            duration_seconds = _to_float(zone.get("duration_seconds"))
+            if duration_seconds is not None:
+                normalized_zone["duration_seconds"] = int(max(0.0, duration_seconds))
+        normalized_zones.append(normalized_zone)
+        total_mm += mm
+
+    total_mm = _round_half_up_1(total_mm)
+    session: dict[str, Any] = {
+        "objectif_mm": total_mm,
+        "total_mm": total_mm,
+        "session_total_mm": total_mm,
+        "zone_count": len(normalized_zones),
+        "zones": normalized_zones,
+    }
+    if source:
+        session["source"] = source
+    return session
+
+
 def compute_recent_watering_mm(
     history: list[dict[str, Any]],
     today: date | None = None,
@@ -37,13 +120,10 @@ def compute_recent_watering_mm(
         delta = (today - d).days
         if delta < 0 or delta > days:
             continue
-        mm = item.get("objectif_mm")
+        mm = _watering_item_mm(item)
         if mm is None:
             continue
-        try:
-            total += float(mm)
-        except (TypeError, ValueError):
-            continue
+        total += float(mm)
     return total
 
 
@@ -213,8 +293,14 @@ def compute_water_balance(
     deficit_jour = max(0.0, (etp_j - pluie_efficace - arrosage_recent_jour) * soil_factor)
     deficit_3j = max(0.0, ((etp_j * 3.0) - (pluie_efficace * 1.4) - arrosage_recent_3j) * soil_factor)
     deficit_7j = max(0.0, ((etp_j * 7.0) - (pluie_efficace * 2.4) - arrosage_recent_7j) * soil_factor)
+    bilan_hydrique_mm = _round_half_up_1((pluie_efficace + arrosage_recent_jour) - etp_j)
+    bilan_hydrique_3j = _round_half_up_1((pluie_efficace * 1.4 + arrosage_recent_3j) - (etp_j * 3.0))
+    bilan_hydrique_7j = _round_half_up_1((pluie_efficace * 2.4 + arrosage_recent_7j) - (etp_j * 7.0))
 
     return {
+        "bilan_hydrique_mm": bilan_hydrique_mm,
+        "bilan_hydrique_3j": bilan_hydrique_3j,
+        "bilan_hydrique_7j": bilan_hydrique_7j,
         "deficit_jour": _round_half_up_1(deficit_jour),
         "deficit_3j": _round_half_up_1(deficit_3j),
         "deficit_7j": _round_half_up_1(deficit_7j),

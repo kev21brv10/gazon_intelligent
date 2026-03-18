@@ -25,18 +25,15 @@ from .const import (
     CONF_CAPTEUR_VENT,
     CONF_CAPTEUR_ROSEE,
     CONF_CAPTEUR_HAUTEUR_GAZON,
+    CONF_CAPTEUR_RETOUR_ARROSAGE,
     CONF_TYPE_SOL,
-    DEFAULT_MODE,
     DEFAULT_TYPE_SOL,
-    INTERVENTIONS_ACTIONS,
 )
 from .decision import (
     build_decision_snapshot,
-    compute_memory,
     compute_recent_watering_mm,
-    phase_duration_days,
 )
-from .memory import normalize_product_id, normalize_product_record
+from .gazon_brain import GazonBrain
 from .weather_sources import extract_weather_profile, extract_weather_forecast_summary
 
 _LOGGER = logging.getLogger(__name__)
@@ -56,22 +53,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.entry = entry
         self._store = Store(hass, 1, f"{DOMAIN}_{entry.entry_id}.json")
         self._loaded = False
-        self.mode: str = DEFAULT_MODE
-        self.date_action: date | None = None
-        self.history: list[dict[str, Any]] = []
-        self.memory: dict[str, Any] = {
-            "historique_total": 0,
-            "derniere_tonte": None,
-            "dernier_arrosage": None,
-            "dernier_arrosage_significatif": None,
-            "derniere_phase_active": DEFAULT_MODE,
-            "dernier_conseil": None,
-            "derniere_application": None,
-            "prochaine_reapplication": None,
-            "catalogue_produits": 0,
-            "date_derniere_mise_a_jour": None,
-        }
-        self.products: dict[str, dict[str, Any]] = {}
+        self.brain = GazonBrain()
         self._auto_irrigation_task: asyncio.Task | None = None
         self._unsub_start_listener: CALLBACK_TYPE | None = None
         self._unsub_delayed_refresh: CALLBACK_TYPE | None = None
@@ -134,11 +116,14 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if rosee is None:
             rosee = self._estimate_rosee(weather_profile, temperature, humidite)
         hauteur_gazon = self._get_float_state(self._get_conf(CONF_CAPTEUR_HAUTEUR_GAZON))
-        retour_arrosage_today = compute_recent_watering_mm(self.history, today=date.today(), days=0)
-        retour_arrosage = retour_arrosage_today if retour_arrosage_today > 0 else None
+        retour_arrosage_sensor = self._get_float_state(self._get_conf(CONF_CAPTEUR_RETOUR_ARROSAGE))
+        if retour_arrosage_sensor is not None:
+            retour_arrosage = retour_arrosage_sensor
+        else:
+            retour_arrosage_today = compute_recent_watering_mm(self.history, today=date.today(), days=0)
+            retour_arrosage = retour_arrosage_today if retour_arrosage_today > 0 else None
         type_sol = self._get_conf(CONF_TYPE_SOL) or DEFAULT_TYPE_SOL
-        snapshot = build_decision_snapshot(
-            history=self.history,
+        snapshot = self.brain.compute_snapshot(
             today=date.today(),
             temperature=temperature,
             pluie_24h=pluie_24h,
@@ -154,16 +139,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             pluie_source=pluie_24h_source,
             weather_profile=weather_profile,
         )
-        self.mode = snapshot["phase_active"]
-        self.date_action = snapshot["date_action"]
-        self.memory = compute_memory(
-            history=self.history,
-            current_phase=snapshot["phase_active"],
-            decision=snapshot,
-            previous_memory=self.memory,
-            today=date.today(),
-        )
-        self.memory["catalogue_produits"] = len(self.products)
+        await self._async_save_state()
 
         return {
             "mode": snapshot["mode"],
@@ -186,6 +162,10 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "retour_arrosage": snapshot["retour_arrosage"],
             "pluie_source": snapshot["pluie_source"],
             "bilan_hydrique_mm": snapshot["bilan_hydrique_mm"],
+            "bilan_hydrique_3j": snapshot["bilan_hydrique_3j"],
+            "bilan_hydrique_7j": snapshot["bilan_hydrique_7j"],
+            "bilan_hydrique_journalier_mm": snapshot.get("bilan_hydrique_journalier_mm"),
+            "bilan_hydrique_precedent_mm": snapshot.get("bilan_hydrique_precedent_mm"),
             "objectif_mm": snapshot["objectif_mm"],
             "score_hydrique": snapshot["score_hydrique"],
             "score_stress": snapshot["score_stress"],
@@ -205,13 +185,63 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "urgence": snapshot["urgence"],
             "prochaine_reevaluation": snapshot["prochaine_reevaluation"],
             "score_tonte": snapshot["score_tonte"],
+            "decision_resume": snapshot["decision_resume"],
             "jours_restants": snapshot["jours_restants"],
+            "soil_balance": snapshot.get("soil_balance"),
             "memoire": self.memory,
             "derniere_application": self.memory.get("derniere_application"),
             "prochaine_reapplication": self.memory.get("prochaine_reapplication"),
             "catalogue_produits": len(self.products),
             "historique_total": len(self.history),
         }
+
+    @property
+    def mode(self) -> str:
+        return self.brain.mode
+
+    @mode.setter
+    def mode(self, value: str) -> None:
+        self.brain.mode = value
+
+    @property
+    def date_action(self) -> date | None:
+        return self.brain.date_action
+
+    @date_action.setter
+    def date_action(self, value: date | None) -> None:
+        self.brain.date_action = value
+
+    @property
+    def history(self) -> list[dict[str, Any]]:
+        return self.brain.history
+
+    @history.setter
+    def history(self, value: list[dict[str, Any]]) -> None:
+        self.brain.history = value
+
+    @property
+    def memory(self) -> dict[str, Any]:
+        return self.brain.memory
+
+    @memory.setter
+    def memory(self, value: dict[str, Any]) -> None:
+        self.brain.memory = value
+
+    @property
+    def products(self) -> dict[str, dict[str, Any]]:
+        return self.brain.products
+
+    @products.setter
+    def products(self, value: dict[str, dict[str, Any]]) -> None:
+        self.brain.products = value
+
+    @property
+    def soil_balance(self) -> dict[str, Any]:
+        return self.brain.soil_balance
+
+    @soil_balance.setter
+    def soil_balance(self, value: dict[str, Any]) -> None:
+        self.brain.soil_balance = value
 
     def _get_float_state(self, entity_id: str | None) -> float | None:
         """Retourne l'état float d'une entité Home Assistant."""
@@ -298,52 +328,15 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_set_date_action(self, date_action: date | None = None) -> None:
         """Définit la date de la dernière intervention de phase."""
-        target_date = date_action or date.today()
-        updated = False
-        for idx in range(len(self.history) - 1, -1, -1):
-            item_type = self.history[idx].get("type")
-            if item_type in INTERVENTIONS_ACTIONS:
-                self.history[idx]["date"] = target_date.isoformat()
-                updated = True
-                break
-        if not updated and self.mode in INTERVENTIONS_ACTIONS:
-            self._append_history(
-                {
-                    "type": self.mode,
-                    "date": target_date.isoformat(),
-                }
-            )
-        self.date_action = target_date
+        self.brain.set_date_action(date_action)
         await self._async_save_state()
         await self.async_request_refresh()
 
     async def async_set_normal(self) -> None:
         """Réinitialise la phase active vers Normal (historique conservé)."""
-        today = date.today()
-        self.history = [
-            item for item in self.history
-            if item.get("type") not in INTERVENTIONS_ACTIONS
-            or not item.get("date")
-            or self._is_history_item_expired(item, today)
-        ]
-        self.mode = "Normal"
-        self.date_action = None
+        self.brain.set_normal()
         await self._async_save_state()
         await self.async_request_refresh()
-
-    def _is_history_item_expired(self, item: dict[str, Any], today: date) -> bool:
-        item_type = item.get("type")
-        if item_type not in INTERVENTIONS_ACTIONS:
-            return False
-        raw_date = item.get("date")
-        if not raw_date:
-            return False
-        try:
-            start = date.fromisoformat(raw_date)
-        except ValueError:
-            return False
-        end = start + timedelta(days=phase_duration_days(item_type))
-        return today > end
 
     async def async_declare_intervention(
         self,
@@ -356,69 +349,39 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         reapplication_after_days: int | None = None,
         note: str | None = None,
     ) -> None:
-        if intervention not in INTERVENTIONS_ACTIONS:
-            raise HomeAssistantError(f"Intervention non supportée: {intervention}")
-        target_date = date_action or date.today()
-        product_record = self._resolve_product_record(produit_id)
-        if product_record:
-            produit = produit or product_record.get("nom")
-            if dose is None:
-                dose_conseillee = product_record.get("dose_conseillee")
-                if dose_conseillee not in (None, ""):
-                    dose = str(dose_conseillee)
-            if reapplication_after_days is None:
-                reapplication_after_days = product_record.get("reapplication_after_days")
-        item: dict[str, Any] = {
-            "type": intervention,
-            "date": target_date.isoformat(),
-            "source": "service",
-        }
-        if product_record:
-            item["produit_id"] = product_record.get("id")
-            item["produit_catalogue"] = product_record
-        if produit:
-            item["produit"] = produit
-        if dose is not None:
-            item["dose"] = dose
-        if zone:
-            item["zone"] = zone
-        if reapplication_after_days is not None:
-            item["reapplication_after_days"] = int(reapplication_after_days)
-        if note:
-            item["note"] = note
-        self._append_history(item)
-        self.mode = intervention
-        self.date_action = target_date
-        await self._async_save_state()
-        await self.async_request_refresh()
-
-    def _resolve_product_record(self, product_id: str | None) -> dict[str, Any] | None:
-        normalized = normalize_product_id(product_id)
-        if not normalized:
-            return None
-        product = self.products.get(normalized)
-        if not isinstance(product, dict):
-            return None
-        return product
-
-    async def async_record_mowing(self, date_action: date | None = None) -> None:
-        self._append_history(
-            {
-                "type": "tonte",
-                "date": (date_action or date.today()).isoformat(),
-            }
+        self.brain.declare_intervention(
+            intervention,
+            date_action=date_action,
+            produit_id=produit_id,
+            produit=produit,
+            dose=dose,
+            zone=zone,
+            reapplication_after_days=reapplication_after_days,
+            note=note,
         )
         await self._async_save_state()
         await self.async_request_refresh()
 
-    async def async_record_watering(self, date_action: date | None = None, objectif_mm: float | None = None) -> None:
-        payload: dict[str, Any] = {
-            "type": "arrosage",
-            "date": (date_action or date.today()).isoformat(),
-        }
-        if objectif_mm is not None:
-            payload["objectif_mm"] = float(objectif_mm)
-        self._append_history(payload)
+    async def async_record_mowing(self, date_action: date | None = None) -> None:
+        self.brain.record_mowing(date_action)
+        await self._async_save_state()
+        await self.async_request_refresh()
+
+    async def async_record_watering(
+        self,
+        date_action: date | None = None,
+        objectif_mm: float | None = None,
+        total_mm: float | None = None,
+        zones: list[dict[str, Any]] | None = None,
+        source: str = "service",
+    ) -> None:
+        self.brain.record_watering(
+            date_action=date_action,
+            objectif_mm=objectif_mm,
+            total_mm=total_mm,
+            zones=zones,
+            source=source,
+        )
         await self._async_save_state()
         await self.async_request_refresh()
 
@@ -466,25 +429,39 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
 
         self.hass.async_create_task(
-            self._async_record_switch_watering(entity_id, objectif_mm, new_state.last_changed)
+            self._async_record_switch_watering(
+                entity_id,
+                objectif_mm,
+                new_state.last_changed,
+                duration_minutes,
+                rate_mm_min,
+            )
         )
 
-    async def _async_record_switch_watering(self, entity_id: str, objectif_mm: float, ended_at) -> None:
-        self._append_history(
-            {
-                "type": "arrosage",
-                "date": ended_at.date().isoformat(),
-                "objectif_mm": float(objectif_mm),
-                "source": "zone_switch",
-                "zone": entity_id,
-            }
+    async def _async_record_switch_watering(
+        self,
+        entity_id: str,
+        objectif_mm: float,
+        ended_at,
+        duration_minutes: float,
+        rate_mm_min: float,
+    ) -> None:
+        rate_mm_h = max(0.0, rate_mm_min * 60.0)
+        await self.async_record_watering(
+            ended_at.date(),
+            objectif_mm=objectif_mm,
+            total_mm=objectif_mm,
+            zones=[
+                {
+                    "zone": entity_id,
+                    "entity_id": entity_id,
+                    "rate_mm_h": rate_mm_h,
+                    "duration_min": duration_minutes,
+                    "mm": objectif_mm,
+                }
+            ],
+            source="zone_switch",
         )
-        await self._async_save_state()
-        await self.async_request_refresh()
-
-    def _append_history(self, item: dict[str, Any]) -> None:
-        self.history.append(item)
-        self.history = self.history[-300:]
 
     async def async_register_product(
         self,
@@ -497,37 +474,27 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         phase_compatible: str | None = None,
         note: str | None = None,
     ) -> None:
-        record = normalize_product_record(
+        self.brain.register_product(
             product_id,
-            {
-                "nom": nom,
-                "type": type_produit,
-                "dose_conseillee": dose_conseillee,
-                "reapplication_after_days": reapplication_after_days,
-                "delai_avant_tonte_jours": delai_avant_tonte_jours,
-                "phase_compatible": phase_compatible,
-                "note": note,
-            },
+            nom,
+            type_produit,
+            dose_conseillee=dose_conseillee,
+            reapplication_after_days=reapplication_after_days,
+            delai_avant_tonte_jours=delai_avant_tonte_jours,
+            phase_compatible=phase_compatible,
+            note=note,
         )
-        if record is None:
-            raise HomeAssistantError("Identifiant ou produit invalide.")
-        self.products[record["id"]] = record
-        self.memory["catalogue_produits"] = len(self.products)
         await self._async_save_state()
         await self.async_request_refresh()
 
     async def async_remove_product(self, product_id: str) -> None:
-        normalized = normalize_product_id(product_id)
-        if not normalized:
-            raise HomeAssistantError("Identifiant produit invalide.")
-        self.products.pop(normalized, None)
-        self.memory["catalogue_produits"] = len(self.products)
+        self.brain.remove_product(product_id)
         await self._async_save_state()
         await self.async_request_refresh()
 
     async def async_start_manual_irrigation(self, objectif_mm: float) -> None:
         """Déclenche une demande d'arrosage manuel via un événement HA."""
-        await self.async_record_watering(objectif_mm=objectif_mm)
+        await self.async_record_watering(objectif_mm=objectif_mm, total_mm=objectif_mm, source="manual")
         self.hass.bus.async_fire(
             "gazon_intelligent_manual_irrigation_requested",
             {
@@ -589,16 +556,33 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
 
         async def _sequence():
+            session_zones: list[dict[str, Any]] = []
             try:
                 self._zone_tracking_suspended += 1
-                for entity_id, rate in zones:
+                for order, (entity_id, rate) in enumerate(zones, start=1):
                     if rate <= 0:
                         continue
                     duration = objectif / rate
                     if duration <= 0:
                         continue
                     await _run_zone(entity_id, duration)
-                await self.async_record_watering(objectif_mm=objectif)
+                    session_zones.append(
+                        {
+                            "order": order,
+                            "zone": entity_id,
+                            "entity_id": entity_id,
+                            "rate_mm_h": rate * 60.0,
+                            "duration_min": duration,
+                            "mm": round(duration * rate, 1),
+                        }
+                    )
+                if session_zones:
+                    await self.async_record_watering(
+                        date.today(),
+                        objectif_mm=objectif,
+                        zones=session_zones,
+                        source="auto_irrigation",
+                    )
             finally:
                 self._zone_tracking_suspended = max(0, self._zone_tracking_suspended - 1)
                 self._auto_irrigation_task = None
@@ -677,12 +661,6 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             },
             "pluie_demain_source": self.data.get("pluie_demain_source") if self.data else None,
             "phase_dominante_source": self.data.get("phase_dominante_source") if self.data else None,
-            "niveau_action": self.data.get("niveau_action") if self.data else None,
-            "fenetre_optimale": self.data.get("fenetre_optimale") if self.data else None,
-            "risque_gazon": self.data.get("risque_gazon") if self.data else None,
-            "tonte_autorisee": self.data.get("tonte_autorisee") if self.data else None,
-            "tonte_statut": self.data.get("tonte_statut") if self.data else None,
-            "prochaine_reevaluation": self.data.get("prochaine_reevaluation") if self.data else None,
         }
         clean = {key: value for key, value in attrs.items() if value not in (None, "", {}, [])}
         configuration = clean.get("configuration")
@@ -697,56 +675,8 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_load_state(self) -> None:
         """Charge l'état persistant (mode, date_action)."""
         data = await self._store.async_load() or {}
-        mode = data.get("mode")
-        if mode:
-            self.mode = mode
-        date_str = data.get("date_action")
-        if date_str:
-            try:
-                self.date_action = date.fromisoformat(date_str)
-            except ValueError:
-                self.date_action = None
-        history = data.get("history")
-        if isinstance(history, list):
-            self.history = [item for item in history if isinstance(item, dict)]
-        else:
-            self.history = []
-        products = data.get("products")
-        if isinstance(products, dict):
-            self.products = {}
-            for key, value in products.items():
-                if not isinstance(key, str) or not isinstance(value, dict):
-                    continue
-                cleaned = dict(value)
-                cleaned.pop("sol_compatible", None)
-                self.products[key] = cleaned
-        else:
-            self.products = {}
-        memory = data.get("memory")
-        if isinstance(memory, dict):
-            self.memory = memory
-        else:
-            self.memory = {
-                "historique_total": len(self.history),
-                "derniere_tonte": None,
-                "dernier_arrosage": None,
-                "dernier_arrosage_significatif": None,
-                "derniere_phase_active": self.mode,
-                "dernier_conseil": None,
-                "derniere_application": None,
-                "prochaine_reapplication": None,
-                "catalogue_produits": len(self.products),
-                "date_derniere_mise_a_jour": None,
-            }
+        self.brain.load_state(data)
 
     async def _async_save_state(self) -> None:
         """Sauvegarde l'état persistant (mode, date_action)."""
-        await self._store.async_save(
-            {
-                "mode": self.mode,
-                "date_action": self.date_action.isoformat() if self.date_action else None,
-                "history": self.history[-300:],
-                "products": self.products,
-                "memory": self.memory,
-            }
-        )
+        await self._store.async_save(self.brain.dump_state())

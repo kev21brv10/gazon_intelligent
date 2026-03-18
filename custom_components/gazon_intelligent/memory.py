@@ -45,6 +45,38 @@ def _to_int(value: Any) -> int | None:
         return None
 
 
+def _watering_item_mm(item: dict[str, Any] | None) -> float | None:
+    if not isinstance(item, dict):
+        return None
+    for key in ("total_mm", "session_total_mm", "objectif_mm", "mm"):
+        amount = _to_float(item.get(key))
+        if amount is not None:
+            return amount
+    zones = item.get("zones")
+    if not isinstance(zones, list):
+        return None
+    total = 0.0
+    found = False
+    for zone in zones:
+        if not isinstance(zone, dict):
+            continue
+        amount = _to_float(zone.get("mm"))
+        if amount is None:
+            amount = _to_float(zone.get("objectif_mm"))
+        if amount is None:
+            rate_mm_h = _to_float(zone.get("rate_mm_h"))
+            duration_min = _to_float(zone.get("duration_min"))
+            if rate_mm_h is not None and duration_min is not None:
+                amount = (rate_mm_h * duration_min) / 60.0
+        if amount is None:
+            continue
+        total += amount
+        found = True
+    if not found:
+        return None
+    return total
+
+
 def _split_csv_values(value: Any) -> list[str]:
     if value is None:
         return []
@@ -177,7 +209,7 @@ def compute_memory(
     last_significant_watering = _latest_history_item(
         history,
         lambda item: item.get("type") == "arrosage"
-        and (_to_float(item.get("objectif_mm")) or 0.0) >= significant_watering_threshold_mm,
+        and (_watering_item_mm(item) or 0.0) >= significant_watering_threshold_mm,
     )
     last_phase_event = _latest_history_item(
         history,
@@ -201,6 +233,7 @@ def compute_memory(
             "phase_dominante": decision.get("phase_dominante"),
             "sous_phase": decision.get("sous_phase"),
             "objectif_mm": decision.get("objectif_mm"),
+            "decision_resume": decision.get("decision_resume"),
             "conseil_principal": decision.get("conseil_principal"),
             "action_recommandee": decision.get("action_recommandee"),
             "action_a_eviter": decision.get("action_a_eviter"),
