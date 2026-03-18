@@ -787,6 +787,24 @@ def compute_next_reevaluation(
     return "dans 48 h"
 
 
+def compute_tonte_statut(
+    phase_dominante: str,
+    tonte_autorisee: bool,
+    score_tonte: int,
+    risque_gazon: str,
+) -> str:
+    if not tonte_autorisee:
+        if phase_dominante in {"Sursemis", "Traitement", "Hivernage"}:
+            return "interdite"
+        if score_tonte >= 70 or risque_gazon == "eleve":
+            return "deconseillee"
+        return "a_surveiller"
+
+    if score_tonte >= 45 or risque_gazon == "modere":
+        return "autorisee_avec_precaution"
+    return "autorisee"
+
+
 def compute_decision(
     phase_dominante: str,
     sous_phase: str,
@@ -847,6 +865,7 @@ def compute_decision(
     if phase_dominante == "Traitement":
         return {
             "tonte_autorisee": False,
+            "tonte_statut": "interdite",
             "arrosage_auto_autorise": False,
             "arrosage_recommande": False,
             "type_arrosage": "bloque",
@@ -864,6 +883,7 @@ def compute_decision(
     if phase_dominante == "Hivernage":
         return {
             "tonte_autorisee": False,
+            "tonte_statut": "interdite",
             "arrosage_auto_autorise": False,
             "arrosage_recommande": False,
             "type_arrosage": "bloque",
@@ -882,6 +902,7 @@ def compute_decision(
         passages = 3 if objectif_mm >= 2 else 2
         return {
             "tonte_autorisee": False,
+            "tonte_statut": "interdite",
             "arrosage_auto_autorise": False,
             "arrosage_recommande": objectif_mm > 0,
             "type_arrosage": "manuel_frequent",
@@ -998,9 +1019,16 @@ def compute_decision(
     if advanced_context.get("retour_arrosage") is not None:
         facteurs.append(f"retour_arrosage={advanced_context['retour_arrosage']:.1f}")
     facteurs_txt = ", ".join(facteurs)
+    tonte_statut = compute_tonte_statut(
+        phase_dominante=phase_dominante,
+        tonte_autorisee=tonte_ok,
+        score_tonte=score_tonte,
+        risque_gazon=action_guidance["risque_gazon"],
+    )
 
     return {
         "tonte_autorisee": tonte_ok,
+        "tonte_statut": tonte_statut,
         "arrosage_auto_autorise": auto_ok,
         "arrosage_recommande": recommande,
         "type_arrosage": "auto" if auto_ok else "personnalise",
@@ -1146,6 +1174,7 @@ def build_decision_snapshot(
         "score_hydrique": scores["score_hydrique"],
         "score_stress": scores["score_stress"],
         "tonte_autorisee": decision["tonte_autorisee"],
+        "tonte_statut": decision["tonte_statut"],
         "arrosage_auto_autorise": decision["arrosage_auto_autorise"],
         "arrosage_recommande": decision["arrosage_recommande"],
         "type_arrosage": decision["type_arrosage"],

@@ -1,5 +1,6 @@
 from homeassistant.components.sensor import SensorEntity, SensorStateClass, SensorDeviceClass
 from homeassistant.const import UnitOfTemperature
+from homeassistant.helpers.entity import EntityCategory
 
 from .entity_base import GazonEntityBase
 from .const import DOMAIN
@@ -10,22 +11,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
     async_add_entities(
         [
             GazonPhaseActiveSensor(coordinator),
-            GazonSousPhaseSensor(coordinator),
-            GazonObjectifMmSensor(coordinator),
-            GazonBilanHydriqueSensor(coordinator),
-            GazonJoursRestantsSensor(coordinator),
-            GazonEtpSensor(coordinator),
-            GazonHumiditeSensor(coordinator),
-            GazonDateActionSensor(coordinator),
-            GazonDateFinSensor(coordinator),
-            GazonPluie24hSensor(coordinator),
-            GazonPluieDemainSensor(coordinator),
-            GazonTemperatureSensor(coordinator),
-            GazonArrosageConseilleSensor(coordinator),
-            GazonTypeArrosageSensor(coordinator),
-            GazonScoreHydriqueSensor(coordinator),
-            GazonScoreStressSensor(coordinator),
-            GazonScoreTonteSensor(coordinator),
+            GazonTonteEtatSensor(coordinator),
             GazonRaisonDecisionSensor(coordinator),
             GazonConseilPrincipalSensor(coordinator),
             GazonActionRecommandeeSensor(coordinator),
@@ -34,6 +20,22 @@ async def async_setup_entry(hass, entry, async_add_entities):
             GazonFenetreOptimaleSensor(coordinator),
             GazonRisqueGazonSensor(coordinator),
             GazonProchaineReevaluationSensor(coordinator),
+            GazonSousPhaseSensor(coordinator),
+            GazonObjectifMmSensor(coordinator),
+            GazonJoursRestantsSensor(coordinator),
+            GazonDateActionSensor(coordinator),
+            GazonDateFinSensor(coordinator),
+            GazonArrosageConseilleSensor(coordinator),
+            GazonTypeArrosageSensor(coordinator),
+            GazonBilanHydriqueSensor(coordinator),
+            GazonEtpSensor(coordinator),
+            GazonHumiditeSensor(coordinator),
+            GazonPluie24hSensor(coordinator),
+            GazonPluieDemainSensor(coordinator),
+            GazonTemperatureSensor(coordinator),
+            GazonScoreHydriqueSensor(coordinator),
+            GazonScoreStressSensor(coordinator),
+            GazonScoreTonteSensor(coordinator),
         ]
     )
 
@@ -56,7 +58,7 @@ class GazonPhaseActiveSensor(GazonEntityBase, SensorEntity):
 
 
 class GazonSousPhaseSensor(GazonEntityBase, SensorEntity):
-    _attr_name = "Sous-phase"
+    _attr_name = "Stade actuel"
     _attr_has_entity_name = True
 
     def __init__(self, coordinator):
@@ -108,6 +110,8 @@ class GazonBilanHydriqueSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Manque d'eau estimé"
     _attr_native_unit_of_measurement = "mm"
     _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -159,6 +163,8 @@ class GazonEtpSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Besoin en eau du jour (ETP)"
     _attr_native_unit_of_measurement = "mm/j"
     _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -178,6 +184,8 @@ class GazonHumiditeSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Humidité extérieure"
     _attr_native_unit_of_measurement = "%"
     _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -231,6 +239,8 @@ class GazonPluie24hSensor(GazonEntityBase, SensorEntity):
     _attr_has_entity_name = True
     _attr_device_class = SensorDeviceClass.PRECIPITATION
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -247,6 +257,8 @@ class GazonPluieDemainSensor(GazonEntityBase, SensorEntity):
     _attr_has_entity_name = True
     _attr_device_class = SensorDeviceClass.PRECIPITATION
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -267,6 +279,8 @@ class GazonTemperatureSensor(GazonEntityBase, SensorEntity):
     _attr_has_entity_name = True
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -280,6 +294,8 @@ class GazonTemperatureSensor(GazonEntityBase, SensorEntity):
 class GazonArrosageConseilleSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Arrosage conseillé"
     _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -298,6 +314,8 @@ class GazonArrosageConseilleSensor(GazonEntityBase, SensorEntity):
 class GazonTypeArrosageSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Mode d'arrosage"
     _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -315,6 +333,8 @@ class GazonTypeArrosageSensor(GazonEntityBase, SensorEntity):
 class GazonScoreHydriqueSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Niveau de manque d'eau"
     _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -332,6 +352,8 @@ class GazonScoreHydriqueSensor(GazonEntityBase, SensorEntity):
 class GazonScoreStressSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Niveau de stress du gazon"
     _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -349,6 +371,8 @@ class GazonScoreStressSensor(GazonEntityBase, SensorEntity):
 class GazonScoreTonteSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Risque de tonte"
     _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -360,7 +384,40 @@ class GazonScoreTonteSensor(GazonEntityBase, SensorEntity):
 
     @property
     def extra_state_attributes(self):
-        return self._attrs_from_data("phase_active", "tonte_autorisee")
+        return self._attrs_from_data(
+            "phase_active",
+            "phase_dominante",
+            "sous_phase",
+            "tonte_autorisee",
+            "tonte_statut",
+            "niveau_action",
+            "fenetre_optimale",
+            "risque_gazon",
+        )
+
+
+class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):
+    _attr_name = "État de tonte"
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_tonte_etat"
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("tonte_statut")
+
+    @property
+    def extra_state_attributes(self):
+        return self._attrs_from_data(
+            "tonte_autorisee",
+            "score_tonte",
+            "niveau_action",
+            "fenetre_optimale",
+            "risque_gazon",
+            "raison_decision",
+        )
 
 
 class GazonRaisonDecisionSensor(GazonEntityBase, SensorEntity):

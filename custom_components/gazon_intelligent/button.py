@@ -19,7 +19,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
 
 class RetourModeNormalButton(GazonEntityBase, ButtonEntity):
-    _attr_name = "Repasser en mode normal"
+    _attr_name = "Retour au mode normal"
     _attr_has_entity_name = True
 
     def __init__(self, coordinator):
@@ -31,7 +31,7 @@ class RetourModeNormalButton(GazonEntityBase, ButtonEntity):
 
 
 class DateActionAujourdhuiButton(GazonEntityBase, ButtonEntity):
-    _attr_name = "Date action = aujourd'hui"
+    _attr_name = "Noter la date du jour"
     _attr_has_entity_name = True
 
     def __init__(self, coordinator):
@@ -56,23 +56,23 @@ class _InterventionButton(GazonEntityBase, ButtonEntity):
 
 class JAiSursemeButton(_InterventionButton):
     _intervention_name = "Sursemis"
-    _attr_name = "J'ai sursemé"
+    _attr_name = "Déclarer un sursemis"
     _attr_has_entity_name = True
 
 
 class JAiFertiliseButton(_InterventionButton):
     _intervention_name = "Fertilisation"
-    _attr_name = "J'ai fertilisé"
+    _attr_name = "Déclarer une fertilisation"
     _attr_has_entity_name = True
 
 
 class JAiTraiteButton(_InterventionButton):
     _intervention_name = "Traitement"
-    _attr_name = "J'ai traité"
+    _attr_name = "Déclarer un traitement"
     _attr_has_entity_name = True
 
 
 class JAiScarifieButton(_InterventionButton):
     _intervention_name = "Scarification"
-    _attr_name = "J'ai scarifié"
+    _attr_name = "Déclarer une scarification"
     _attr_has_entity_name = True

@@ -141,6 +141,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "score_hydrique": snapshot["score_hydrique"],
             "score_stress": snapshot["score_stress"],
             "tonte_autorisee": snapshot["tonte_autorisee"],
+            "tonte_statut": snapshot["tonte_statut"],
             "arrosage_auto_autorise": snapshot["arrosage_auto_autorise"],
             "arrosage_recommande": snapshot["arrosage_recommande"],
             "type_arrosage": snapshot["type_arrosage"],
@@ -482,6 +483,8 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "niveau_action": self.data.get("niveau_action") if self.data else None,
             "fenetre_optimale": self.data.get("fenetre_optimale") if self.data else None,
             "risque_gazon": self.data.get("risque_gazon") if self.data else None,
+            "tonte_autorisee": self.data.get("tonte_autorisee") if self.data else None,
+            "tonte_statut": self.data.get("tonte_statut") if self.data else None,
             "prochaine_reevaluation": self.data.get("prochaine_reevaluation") if self.data else None,
             "memoire": self.memory,
             "historique_resume": {

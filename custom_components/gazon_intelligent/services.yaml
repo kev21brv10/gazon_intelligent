@@ -4,7 +4,7 @@ set_mode:
   fields:
     mode:
       name: Mode
-      description: Mode gazon à appliquer.
+      description: Mode à appliquer.
       required: true
       example: Sursemis
       selector:
@@ -24,23 +24,23 @@ set_date_action:
   description: Indique la date réelle de l'intervention (AAAA-MM-JJ). Si vide, prend la date du jour.
   fields:
     date_action:
-      name: Date d'action
-      description: Date de l'action au format AAAA-MM-JJ.
+      name: Date
+      description: Date au format AAAA-MM-JJ.
       required: false
       example: "2026-03-12"
       selector:
         text:
 
 reset_mode:
-  name: Repasser en mode normal
-  description: Réinitialise le système gazon en mode Normal.
+  name: Retour au mode normal
+  description: Réinitialise le système en mode Normal.
 
 start_manual_irrigation:
   name: Lancer un arrosage manuel
-  description: Déclenche un arrosage manuel et indique l'objectif d'eau en mm.
+  description: Déclenche un arrosage manuel et indique l'eau à apporter en mm.
   fields:
     objectif_mm:
-      name: Objectif d'arrosage
+      name: Eau à apporter
       description: Quantité d'eau à appliquer en millimètres.
       required: true
       example: 3
@@ -53,10 +53,10 @@ start_manual_irrigation:
 
 start_auto_irrigation:
   name: Lancer l'arrosage automatique
-  description: Lance chaque zone à la suite en utilisant le débit (mm/h) configuré (conversion interne en mm/min). Si l'objectif est vide, il prend l'objectif calculé automatiquement.
+  description: Lance chaque zone à la suite avec le débit configuré. Si l'eau à apporter est vide, il prend la valeur calculée automatiquement.
   fields:
     objectif_mm:
-      name: Objectif d'arrosage (optionnel)
+      name: Eau à apporter (optionnel)
       description: Quantité d'eau en mm. Si omis, prend l'objectif calculé par le mode courant.
       required: false
       selector:
@@ -68,7 +68,7 @@ start_auto_irrigation:
 
 declare_intervention:
   name: Déclarer une intervention
-  description: Déclare une intervention réelle (sursemis, fertilisation, etc.) pour alimenter le moteur de décision.
+  description: Déclare une intervention réelle pour alimenter le moteur de décision.
   fields:
     intervention:
       name: Intervention

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.13
+- Simplifie et clarifie l'interface pour garder des noms métier lisibles.
+- Renforce la hiérarchie d'affichage pour mettre la décision en premier.
+- Simplifie les textes de configuration, des services et de la documentation.
+- Garde les modes existants exactement tels quels: Normal, Sursemis, Traitement, Fertilisation, Biostimulant, Agent Mouillant, Scarification, Hivernage.
+
 ## 0.3.12
 - Corrige le bouton `Date action = aujourd'hui` pour enregistrer une date même sans intervention déjà présente.
 - Harmonise le `Mode expert` avec le device commun de l'intégration.
@@ -25,7 +31,7 @@
 - Ajoute un moteur décisionnel V1 basé sur l'historique, la météo, le type de sol et la phase dominante.
 - Ajoute l'historique persistant des actions (interventions, tonte, arrosage).
 - Ajoute les services `declare_intervention`, `declare_mowing`, `declare_watering`.
-- Ajoute des capteurs de décision/conseil (`phase active`, `raison`, `conseil`, `urgence`, etc.).
+- Ajoute des capteurs de décision/conseil (`phase active`, `raison`, `conseil`, `niveau_action`, `fenetre_optimale`, `risque_gazon`, etc.).
 - Ajoute les binaires `arrosage auto autorisé` et `arrosage recommandé`.
 - Empêche les lancements concurrents de `start_auto_irrigation`.
 - Annule proprement l'arrosage auto en cours au déchargement de l'intégration.

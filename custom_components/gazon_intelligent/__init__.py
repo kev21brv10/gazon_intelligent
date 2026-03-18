@@ -8,7 +8,11 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 
-from .const import DOMAIN, INTERVENTIONS_ACTIONS
+from .const import (
+    DOMAIN,
+    INTERVENTIONS_ACTIONS,
+    MODES_GAZON,
+)
 from .coordinator import GazonIntelligentCoordinator
 
 PLATFORMS = ["select", "sensor", "binary_sensor", "button"]
@@ -40,18 +44,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _handle_set_mode,
             schema=vol.Schema(
                 {
-                    vol.Required("mode"): vol.In(
-                        [
-                            "Normal",
-                            "Sursemis",
-                            "Traitement",
-                            "Fertilisation",
-                            "Biostimulant",
-                            "Agent Mouillant",
-                            "Scarification",
-                            "Hivernage",
-                        ]
-                    )
+                    vol.Required("mode"): vol.In(MODES_GAZON)
                 }
             ),
         )

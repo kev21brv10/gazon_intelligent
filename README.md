@@ -1,9 +1,9 @@
 # Gazon Intelligent 🌱
 
-Intégration Home Assistant pour piloter l'entretien du gazon avec un moteur autonome.
-Elle utilise la météo, le type de sol, l'historique réel et, si présents, des capteurs avancés.
+Intégration Home Assistant pour aider à gérer le gazon simplement.
+Elle analyse la météo, le sol et l'historique, puis propose quoi faire.
 
-Objectif: installer, sélectionner les entités, déclarer les interventions réelles si besoin, puis laisser le système décider.
+Objectif: installer, choisir les capteurs, noter ce qui a été fait si besoin, puis laisser le système décider.
 
 ## Installation
 
@@ -46,23 +46,34 @@ L'intégration se configure via formulaire.
 
 Le chemin normal est simple:
 
-1. l'intégration calcule la phase dominante et le conseil,
-2. tu déclares les interventions réelles avec les boutons,
-3. le moteur ajuste ensuite ses décisions.
+1. l'intégration calcule ce qu'il faut faire,
+2. tu déclares les interventions avec les boutons,
+3. le système ajuste ses conseils.
 
 ### Boutons
 
-- `J'ai sursemé`
-- `J'ai fertilisé`
-- `J'ai traité`
-- `J'ai scarifié`
-- `Repasser en mode normal`
-- `Date action = aujourd'hui` met à jour la dernière intervention active avec la date du jour
+- `Déclarer un sursemis`
+- `Déclarer une fertilisation`
+- `Déclarer un traitement`
+- `Déclarer une scarification`
+- `Retour au mode normal`
+- `Noter la date du jour` met à jour la dernière intervention active avec la date du jour
 
 ### Mode expert
 
-- `Mode expert` reste disponible pour les cas de maintenance ou d'override.
+- `Mode expert` reste disponible pour les cas spéciaux.
 - Il n'est pas nécessaire à l'usage courant.
+
+## Lecture rapide
+
+Pour lire l'écran vite, regarde dans cet ordre:
+
+- `Phase dominante`: ce qui pilote vraiment le gazon
+- `État de tonte`: tonte autorisée ou non
+- `Conseil principal`: ce qu'il faut faire maintenant
+- `Action à éviter`: ce qu'il vaut mieux ne pas faire
+- `Niveau d'action`: priorité de l'action
+- `Fenêtre optimale`: meilleur moment pour agir
 
 ## Entités créées
 
@@ -73,22 +84,7 @@ Le chemin normal est simple:
 ### Sensors
 
 - `Phase dominante`
-- `Sous-phase`
-- `Objectif d'arrosage`
-- `Manque d'eau estimé`
-- `Besoin en eau du jour (ETP)`
-- `Niveau de manque d'eau`
-- `Niveau de stress du gazon`
-- `Risque de tonte`
-- `Jours restants de la phase`
-- `Humidité extérieure`
-- `Date de l'action`
-- `Date de fin de phase`
-- `Pluie 24h`
-- `Pluie prévue demain`
-- `Température extérieure`
-- `Arrosage conseillé`
-- `Mode d'arrosage`
+- `État de tonte`
 - `Pourquoi ce choix`
 - `Conseil principal`
 - `Action recommandée`
@@ -97,6 +93,25 @@ Le chemin normal est simple:
 - `Fenêtre optimale`
 - `Risque gazon`
 - `Prochaine réévaluation`
+- `Stade actuel`
+- `Objectif d'arrosage`
+- `Jours restants de la phase`
+- `Date d'action`
+- `Date de fin de phase`
+
+### Diagnostics
+
+- `Manque d'eau estimé`
+- `Besoin en eau du jour (ETP)`
+- `Niveau de manque d'eau`
+- `Niveau de stress du gazon`
+- `Risque de tonte`
+- `Humidité extérieure`
+- `Pluie 24h`
+- `Pluie prévue demain`
+- `Température extérieure`
+- `Arrosage conseillé`
+- `Mode d'arrosage`
 
 ### Binary sensors
 
@@ -109,9 +124,11 @@ Le chemin normal est simple:
 Les attributs sont ciblés selon l'entité.
 
 - `Phase dominante`:
-  - contexte de décision complet: entités utilisées, configuration, source de la pluie J+1, contexte avancé et état de la phase
-- `Sous-phase`:
+  - contexte de décision complet: entités utilisées, configuration, source de la pluie J+1, contexte avancé, état de la phase et état de tonte
+- `Stade actuel`:
   - détail, âge et progression de la phase
+- `État de tonte`:
+  - statut lisible de la tonte: autorisée, à surveiller, déconseillée ou interdite
 - `Pluie prévue demain`:
   - source de la valeur (`capteur`, `meteo_forecast`, `indisponible`)
 - `Objectif d'arrosage` et `Manque d'eau estimé`:
@@ -156,12 +173,12 @@ Les champs détaillés sont dans `custom_components/gazon_intelligent/services.y
 
 - `ETP`: besoin en eau estimé pour la journée.
 - `Phase dominante`: phase qui gouverne réellement le gazon.
-- `Sous-phase`: étape fine à l'intérieur d'une phase dominante.
+- `Stade actuel`: étape fine à l'intérieur d'une phase dominante.
 - `Manque d'eau estimé`: quantité d'eau manquante en mm.
 - `deficit_jour`, `deficit_3j`, `deficit_7j`: bilan hydrique court et moyen terme.
 - `pluie_efficace`: pluie réellement retenue par le calcul.
 - `arrosage_recent`: arrosage cumulé récent pris en compte par le moteur.
 - `Niveau d'action`: priorité du moteur, de `aucune_action` à `critique`.
 - `Fenêtre optimale`: meilleur moment pour agir.
-- `Risque gazon`: risque synthétique si l'action est retardée.
+- `Si on attend`: risque synthétique si l'action est retardée.
 - `Prochaine réévaluation`: quand relancer le calcul du moteur.

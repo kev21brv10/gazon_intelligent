@@ -9,8 +9,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
     async_add_entities(
         [
             GazonTonteAutoriseeBinarySensor(coordinator),
-            GazonArrosageAutoAutoriseBinarySensor(coordinator),
             GazonArrosageRecommandeBinarySensor(coordinator),
+            GazonArrosageAutoAutoriseBinarySensor(coordinator),
         ]
     )
 
@@ -29,7 +29,7 @@ class GazonTonteAutoriseeBinarySensor(GazonEntityBase, BinarySensorEntity):
 
     @property
     def extra_state_attributes(self):
-        return self._attrs_from_data("phase_active", "score_tonte", "raison_decision")
+        return self._attrs_from_data("phase_active", "tonte_statut", "niveau_action", "fenetre_optimale", "risque_gazon", "raison_decision")
 
 
 class GazonArrosageAutoAutoriseBinarySensor(GazonEntityBase, BinarySensorEntity):
