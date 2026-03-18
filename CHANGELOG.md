@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.12
+## 0.3.13
 - Corrige le bouton `Date action = aujourd'hui` pour enregistrer une date même sans intervention déjà présente.
 - Harmonise le `Mode expert` avec le device commun de l'intégration.
 - Durcit le blueprint d'arrosage pour ignorer les capteurs `unknown` / `unavailable` et éviter les déclenchements sur objectif nul.
