@@ -1,11 +1,5 @@
 # Changelog
 
-## 0.3.13
-- Simplifie et clarifie l'interface pour garder des noms métier lisibles.
-- Renforce la hiérarchie d'affichage pour mettre la décision en premier.
-- Simplifie les textes de configuration, des services et de la documentation.
-- Garde les modes existants exactement tels quels: Normal, Sursemis, Traitement, Fertilisation, Biostimulant, Agent Mouillant, Scarification, Hivernage.
-
 ## 0.3.12
 - Corrige le bouton `Date action = aujourd'hui` pour enregistrer une date même sans intervention déjà présente.
 - Harmonise le `Mode expert` avec le device commun de l'intégration.
