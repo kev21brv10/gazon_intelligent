@@ -2,28 +2,35 @@
 
 Version `0.3.15`
 
-Gazon Intelligent est une intégration Home Assistant qui transforme les infos du jardin en décisions simples et actionnables.
-Elle regarde la météo, l'arrosage, le type de sol, les phases du gazon et l'historique des actions, puis dit clairement:
+> Un système autonome qui décide pour ton gazon à ta place.
+
+Gazon Intelligent est une intégration Home Assistant qui transforme les données du jardin en décisions simples et actionnables.
+
+Elle analyse la météo, l’arrosage, le type de sol, les phases du gazon et l’historique des actions, puis te dit clairement :
 - quoi faire
 - quand le faire
 - pourquoi
 - quoi éviter
 
-Le but est simple:
-- vous laisser un écran lisible
+Le but est simple :
+- garder un écran lisible
 - automatiser le raisonnement
 - fonctionner avec ou sans capteurs avancés
 
-## ✨ Ce que fait l'intégration
+---
 
-- calcule la décision d'arrosage et de tonte
+## ✨ Ce que fait l’intégration
+
+- calcule les décisions d’arrosage et de tonte
 - adapte le comportement selon la phase du gazon
-- prend la météo du jour et de demain en compte
+- prend en compte la météo du jour et du lendemain
 - mémorise les interventions réelles
 - gère les produits personnalisés localement
-- garde l'interface Home Assistant simple au quotidien
+- garde l’interface Home Assistant simple au quotidien
 
-## 👀 Ce que vous voyez dans Home Assistant
+---
+
+## 👀 Ce que tu vois dans Home Assistant
 
 ### Entités principales
 
@@ -47,26 +54,30 @@ Le but est simple:
 - `Retour au mode normal`
 - `Noter la date du jour`
 
-👉 Les détails techniques restent internes pour éviter de surcharger l'écran principal.
+👉 Les détails techniques restent internes pour ne pas surcharger l’écran.
+
+---
 
 ## 🚀 Installation
 
 ### Via HACS
 
-1. Ajoutez ce dépôt dans HACS, catégorie **Integration**.
-2. Installez **Gazon Intelligent**.
-3. Redémarrez Home Assistant.
-4. Ajoutez l'intégration depuis `Paramètres > Appareils et services`.
+1. Ajoute ce dépôt dans HACS (catégorie **Integration**)
+2. Installe **Gazon Intelligent**
+3. Redémarre Home Assistant
+4. Ajoute l’intégration
 
 ### Manuelle
 
-1. Copiez `custom_components/gazon_intelligent` dans `config/custom_components`.
-2. Redémarrez Home Assistant.
-3. Ajoutez l'intégration depuis `Paramètres > Appareils et services`.
+1. Copie `custom_components/gazon_intelligent` dans `config/custom_components`
+2. Redémarre Home Assistant
+3. Ajoute l’intégration
+
+---
 
 ## ⚙️ Configuration
 
-L'intégration se configure via formulaire, sans YAML obligatoire.
+Aucune configuration YAML obligatoire.
 
 ### Configuration principale
 
@@ -88,44 +99,47 @@ L'intégration se configure via formulaire, sans YAML obligatoire.
 - `capteur_rosee`
 - `capteur_retour_arrosage`
 
-Règles simples:
-- si un capteur météo est vide, l'entité `weather` prend le relais
-- si `capteur_etp` est vide, l'ETP est estimée automatiquement
-- si `capteur_retour_arrosage` est vide, l'historique de la journée sert de secours
+Règles simples :
+- si un capteur est vide → la météo prend le relais
+- si `capteur_etp` est vide → estimation automatique
+- si `capteur_retour_arrosage` est vide → historique du jour utilisé
+
+---
 
 ## 🧭 Utilisation au quotidien
 
-Le fonctionnement normal est très simple:
+Le fonctionnement est volontairement simple :
 
-1. Home Assistant calcule la décision.
-2. Vous regardez le conseil principal.
-3. Vous lancez l'action proposée si besoin.
+1. Home Assistant calcule
+2. Tu regardes
+3. Tu agis
 
-À consulter en priorité:
+À consulter en priorité :
 - `Conseil principal`
 - `Action recommandée`
 - `Action à éviter`
 - `État de tonte`
 - `Arrosage recommandé`
 
-Exemple:
-- si l'intégration dit d'arroser, vous lancez l'action
-- si elle dit d'attendre, vous laissez passer
-- si elle dit de ne pas tondre, vous reportez la tonte
+👉 Tu ne calcules rien. Tu suis.
+
+---
 
 ### Exemple concret
 
-Le matin, Home Assistant peut vous afficher:
+Le matin, Home Assistant peut afficher :
 
 - `Phase dominante` = `Sursemis`
 - `Conseil principal` = `Arroser demain matin en 2 passages courts`
 - `Action recommandée` = `Appliquer 1.1 mm fractionnés`
 - `État de tonte` = `interdite`
 
-Dans ce cas:
-- vous ne recalculez rien
-- vous suivez simplement la consigne
-- l'intégration réévaluera la situation au prochain cycle
+Dans ce cas :
+- tu ne réfléchis pas
+- tu appliques
+- le système s’ajuste seul ensuite
+
+---
 
 ## 🛠️ Services avancés
 
@@ -142,78 +156,92 @@ Dans ce cas:
 - `gazon_intelligent.register_product`
 - `gazon_intelligent.remove_product`
 
+---
+
 ### Produits personnalisés
 
-Le flux recommandé est simple:
+Flux recommandé :
 
-1. enregistrez un produit une seule fois avec `register_product`
-2. déclarez l'intervention réelle avec `declare_intervention`
-3. fournissez `produit_id` seulement si vous voulez un suivi plus précis
+1. enregistrer un produit (`register_product`)
+2. déclarer l’intervention (`declare_intervention`)
+3. utiliser `produit_id` uniquement si nécessaire
 
-Si vous ne connaissez pas le produit exact:
-- le mode suffit
-- les règles par défaut continuent de fonctionner
+👉 Si tu ne sais pas :
+- utilise le mode
+- laisse le moteur décider
+
+---
 
 ## 🤖 Ce que le système automatise
 
-- le bilan hydrique
-- la comparaison pluie / arrosage / ETP
-- la phase active et la sous-phase
-- la décision arrosage / tonte
-- la mémoire des dernières actions
-- la prochaine réapplication d'un produit
+- bilan hydrique complet
+- comparaison pluie / arrosage / ETP
+- phase active et sous-phase
+- décision arrosage / tonte
+- mémoire des actions
+- réapplication des produits
 
-## ✅ Ce que vous devez renseigner au minimum
+---
 
-- les zones
-- les débits
-- le type de sol
-- l'entité météo
+## ✅ Ce que tu dois faire
 
-Le reste peut rester vide si vous n'avez pas de capteurs avancés.
+- configurer les zones
+- renseigner les débits
+- choisir le type de sol
+- définir la météo
+
+👉 Le reste est optionnel.
+
+---
 
 ## 📦 Blueprint
 
-Un blueprint d'arrosage intelligent est inclus pour automatiser les modes spéciaux hors `Normal`.
+Un blueprint est inclus pour automatiser l’arrosage en fonction du mode du gazon.
 
 - `blueprints/automation/gazon_intelligent/arrosage_modes_speciaux_hors_normal.yaml`
 
-[![Ouvrir le blueprint dans Home Assistant](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https://github.com/kev21brv10/gazon_intelligent/blob/main/blueprints/automation/gazon_intelligent/arrosage_modes_speciaux_hors_normal.yaml)
+[![Importer le blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https://github.com/kev21brv10/gazon_intelligent/blob/main/blueprints/automation/gazon_intelligent/arrosage_modes_speciaux_hors_normal.yaml)
 
-Lien direct:
-https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https://github.com/kev21brv10/gazon_intelligent/blob/main/blueprints/automation/gazon_intelligent/arrosage_modes_speciaux_hors_normal.yaml
+---
 
 ### À quoi il sert
 
-- lancer un arrosage automatique quand le mode du gazon l'autorise
-- bloquer l'arrosage en `Traitement` et `Hivernage`
-- ajuster le volume selon l'objectif calculé, la pluie prévue et l'humidité
+- déclencher l’arrosage automatiquement
+- bloquer selon le mode (`Traitement`, `Hivernage`, etc.)
+- adapter le volume selon l’objectif calculé
 
-### Comment l'utiliser
+---
 
-1. Sélectionnez votre entité `Mode du gazon`.
-2. Sélectionnez `Objectif d'arrosage`.
-3. Renseignez les capteurs météo si vous les avez.
-4. Choisissez les horaires du matin, du midi et du soir.
-5. Activez l'automation.
+### Comment l’utiliser
+
+1. sélectionner `Mode du gazon`
+2. sélectionner `Objectif d’arrosage`
+3. configurer les horaires
+4. activer
+
+---
 
 ### Limites
 
-- le blueprint ne remplace pas le moteur de décision
-- il dépend des capteurs choisis dans Home Assistant
-- il reste volontairement simple et ne gère pas tous les cas avancés
+- ne remplace pas le moteur de décision
+- dépend des capteurs disponibles
+- reste volontairement simple
+
+---
 
 ## 🔧 Fichiers utiles
 
-- `custom_components/gazon_intelligent/manifest.json`
-- `custom_components/gazon_intelligent/config_flow.py`
-- `custom_components/gazon_intelligent/coordinator.py`
-- `custom_components/gazon_intelligent/gazon_brain.py`
-- `custom_components/gazon_intelligent/decision.py`
-- `custom_components/gazon_intelligent/water.py`
-- `custom_components/gazon_intelligent/soil_balance.py`
+- `manifest.json`
+- `config_flow.py`
+- `coordinator.py`
+- `gazon_brain.py`
+- `decision.py`
+- `water.py`
+- `soil_balance.py`
 
-## 🧾 Cohérence de version
+---
+
+## 🧾 Version
 
 - `manifest.json`: `0.3.15`
 - `README.md`: `0.3.15`
