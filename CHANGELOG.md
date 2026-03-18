@@ -6,6 +6,7 @@
 - Exploite l'entité `weather` comme source de secours pour la pluie, la température, l'humidité, le vent et l'ETP.
 - Reconstruit l'arrosage réel à partir des changements d'état des zones.
 - Simplifie l'UI et aligne le README, les traductions et les calculs internes sur la même structure.
+- Simplifie le blueprint d'arrosage et clarifie l'expérience utilisateur.
 
 ## 0.3.13
 - Corrige le bouton `Date action = aujourd'hui` pour enregistrer une date même sans intervention déjà présente.

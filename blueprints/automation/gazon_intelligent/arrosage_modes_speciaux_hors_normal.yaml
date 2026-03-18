@@ -1,63 +1,60 @@
 blueprint:
   name: Gazon Intelligent - Arrosage intelligent (modes spéciaux hors Normal)
   description: >
-    Blueprint d'arrosage intelligent pour tous les modes sauf Normal.
-    - Sursemis: fractionné en 3 passages/jour.
-    - Fertilisation / Biostimulant / Agent Mouillant / Scarification: matin + soir si forte demande climatique.
-    - Traitement / Hivernage: pas d'arrosage auto.
-    Ajuste aussi selon pluie, ETP et humidité.
-    Les entités à sélectionner ci-dessous font partie du système Gazon Intelligent (entités de l'intégration).
+    Automatise l'arrosage des modes spéciaux hors Normal.
+    Le blueprint s'appuie sur le mode du gazon, l'objectif d'arrosage et la météo.
+    Il bloque volontairement l'arrosage en Traitement et en Hivernage.
   domain: automation
   input:
     mode_select:
-      name: Sélecteur mode gazon
+      name: Mode du gazon
       selector:
         entity:
           domain: select
     sensor_objectif:
-      name: Capteur objectif d'arrosage (mm)
+      name: Objectif d'arrosage
       selector:
         entity:
           domain: sensor
     sensor_pluie_24h:
-      name: Capteur pluie 24h (mm)
+      name: Pluie 24h
       selector:
         entity:
           domain: sensor
     sensor_pluie_demain:
-      name: Capteur pluie prévue demain (mm)
+      name: Pluie demain
       selector:
         entity:
           domain: sensor
     sensor_etp:
-      name: Capteur ETP estimée (mm/j)
+      name: ETP
       selector:
         entity:
           domain: sensor
     sensor_humidite:
-      name: Capteur humidité extérieure (%)
+      name: Humidité
       selector:
         entity:
           domain: sensor
 
     heure_matin:
-      name: Heure matin
+      name: Matin
       default: "06:00:00"
       selector:
         time: {}
     heure_midi:
-      name: Heure midi
+      name: Midi
       default: "12:30:00"
       selector:
         time: {}
     heure_soir:
-      name: Heure soir
+      name: Soir
       default: "18:30:00"
       selector:
         time: {}
 
     seuil_pluie_stop_24h:
-      name: Seuil stop pluie 24h (mm)
+      name: Pluie stop 24h (mm)
       default: 8
       selector:
         number:
@@ -66,7 +63,7 @@ blueprint:
           step: 0.5
           unit_of_measurement: mm
     seuil_pluie_stop_demain:
-      name: Seuil stop pluie demain (mm)
+      name: Pluie stop demain (mm)
       default: 6
       selector:
         number:

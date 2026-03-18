@@ -113,6 +113,20 @@ Exemple:
 - si elle dit d'attendre, vous laissez passer
 - si elle dit de ne pas tondre, vous reportez la tonte
 
+### Exemple concret
+
+Le matin, Home Assistant peut vous afficher:
+
+- `Phase dominante` = `Sursemis`
+- `Conseil principal` = `Arroser demain matin en 2 passages courts`
+- `Action recommandée` = `Appliquer 1.1 mm fractionnés`
+- `État de tonte` = `interdite`
+
+Dans ce cas:
+- vous ne recalculez rien
+- vous suivez simplement la consigne
+- l'intégration réévaluera la situation au prochain cycle
+
 ## 🛠️ Services avancés
 
 ### Actions disponibles
@@ -160,9 +174,29 @@ Le reste peut rester vide si vous n'avez pas de capteurs avancés.
 
 ## 📦 Blueprint
 
-Un blueprint d'arrosage intelligent est inclus:
+Un blueprint d'arrosage intelligent est inclus pour automatiser les modes spéciaux hors `Normal`.
 
 - `blueprints/automation/gazon_intelligent/arrosage_modes_speciaux_hors_normal.yaml`
+
+### À quoi il sert
+
+- lancer un arrosage automatique quand le mode du gazon l'autorise
+- bloquer l'arrosage en `Traitement` et `Hivernage`
+- ajuster le volume selon l'objectif calculé, la pluie prévue et l'humidité
+
+### Comment l'utiliser
+
+1. Sélectionnez votre entité `Mode du gazon`.
+2. Sélectionnez `Objectif d'arrosage`.
+3. Renseignez les capteurs météo si vous les avez.
+4. Choisissez les horaires du matin, du midi et du soir.
+5. Activez l'automation.
+
+### Limites
+
+- le blueprint ne remplace pas le moteur de décision
+- il dépend des capteurs choisis dans Home Assistant
+- il reste volontairement simple et ne gère pas tous les cas avancés
 
 ## 🔧 Fichiers utiles
 
