@@ -31,6 +31,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
             GazonPluie24hSensor(coordinator),
             GazonPluieDemainSensor(coordinator),
             GazonTemperatureSensor(coordinator),
+            GazonArrosageConseilleSensor(coordinator),
+            GazonTypeArrosageSensor(coordinator),
             GazonScoreHydriqueSensor(coordinator),
             GazonScoreStressSensor(coordinator),
             GazonScoreTonteSensor(coordinator),
@@ -151,7 +153,7 @@ class GazonJoursRestantsSensor(GazonEntityBase, SensorEntity):
 
 
 class GazonEtpSensor(GazonEntityBase, SensorEntity):
-    _attr_name = "Besoin en eau du jour (ETP)"
+    _attr_name = "ETP du jour"
     _attr_native_unit_of_measurement = "mm/j"
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -280,6 +282,44 @@ class GazonTemperatureSensor(GazonEntityBase, SensorEntity):
     @property
     def native_value(self):
         return self.coordinator.data.get("temperature")
+
+
+class GazonArrosageConseilleSensor(GazonEntityBase, SensorEntity):
+    _attr_name = "Arrosage conseillé"
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_arrosage_conseille"
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("arrosage_conseille")
+
+    @property
+    def extra_state_attributes(self):
+        return self._attrs_from_data("type_arrosage", "phase_active", "phase_dominante", "sous_phase")
+
+
+class GazonTypeArrosageSensor(GazonEntityBase, SensorEntity):
+    _attr_name = "Mode d'arrosage"
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_type_arrosage"
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("type_arrosage")
+
+    @property
+    def extra_state_attributes(self):
+        return self._attrs_from_data("phase_active", "objectif_mm")
 
 
 class GazonScoreHydriqueSensor(GazonEntityBase, SensorEntity):

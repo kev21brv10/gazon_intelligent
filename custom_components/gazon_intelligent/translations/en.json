@@ -1,0 +1,148 @@
+{
+  "title": "Gazon Intelligent",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Lawn irrigation settings",
+        "description": "Choose your zones, weather sensors, soil type, and each zone's flow rate. If you do not know the flow rate, leave 60.",
+        "data": {
+          "zone_1": "Zone 1",
+          "zone_2": "Zone 2",
+          "zone_3": "Zone 3",
+          "zone_4": "Zone 4",
+          "zone_5": "Zone 5",
+          "debit_zone_1": "Zone 1 flow (mm/h, 60 by default)",
+          "debit_zone_2": "Zone 2 flow (mm/h)",
+          "debit_zone_3": "Zone 3 flow (mm/h)",
+          "debit_zone_4": "Zone 4 flow (mm/h)",
+          "debit_zone_5": "Zone 5 flow (mm/h)",
+          "entite_meteo": "Weather (optional)",
+          "capteur_pluie_24h": "24h rain (mm)",
+          "capteur_pluie_demain": "Tomorrow rain (mm)",
+          "capteur_temperature": "Temperature",
+          "capteur_etp": "Daily ETP (optional, otherwise calculated)",
+          "capteur_humidite": "Air humidity (%) (optional)",
+          "capteur_humidite_sol": "Soil humidity (%) (optional)",
+          "capteur_vent": "Wind (optional)",
+          "capteur_rosee": "Dew / leaf wetness (optional)",
+          "capteur_hauteur_gazon": "Grass height (optional)",
+          "capteur_retour_arrosage": "Actual watering (mm, optional)",
+          "capteur_pluie_fine": "Light rain (optional)",
+          "type_sol": "Soil type"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Gazon Intelligent is already configured."
+    }
+  },
+  "selector": {
+    "gazon_mode": {
+      "options": {
+        "Normal": "Normal",
+        "Sursemis": "Overseeding",
+        "Traitement": "Treatment",
+        "Fertilisation": "Fertilization",
+        "Biostimulant": "Biostimulant",
+        "Agent Mouillant": "Wetting agent",
+        "Scarification": "Scarification",
+        "Hivernage": "Winter mode"
+      }
+    },
+    "gazon_intervention": {
+      "options": {
+        "Sursemis": "Overseeding",
+        "Traitement": "Treatment",
+        "Fertilisation": "Fertilization",
+        "Biostimulant": "Biostimulant",
+        "Agent Mouillant": "Wetting agent",
+        "Scarification": "Scarification",
+        "Hivernage": "Winter mode"
+      }
+    }
+  },
+  "services": {
+    "set_mode": {
+      "name": "Set mode",
+      "description": "Chooses a mode (Overseeding, Treatment, etc.) and updates the calculations.",
+      "fields": {
+        "mode": {
+          "name": "Mode",
+          "description": "Mode to apply."
+        }
+      }
+    },
+    "set_date_action": {
+      "name": "Record date",
+      "description": "Sets the real date of the intervention (YYYY-MM-DD). If empty, today is used.",
+      "fields": {
+        "date_action": {
+          "name": "Date",
+          "description": "Date in YYYY-MM-DD format."
+        }
+      }
+    },
+    "reset_mode": {
+      "name": "Back to normal mode",
+      "description": "Resets the system to Normal mode."
+    },
+    "start_manual_irrigation": {
+      "name": "Manual watering",
+      "description": "Starts a manual watering cycle and specifies how much water to apply in mm.",
+      "fields": {
+        "objectif_mm": {
+          "name": "Water to apply",
+          "description": "Amount of water to apply in millimeters."
+        }
+      }
+    },
+    "start_auto_irrigation": {
+      "name": "Automatic watering",
+      "description": "Runs each zone in sequence with the configured flow rate. If the water amount is empty, it uses the calculated value automatically.",
+      "fields": {
+        "objectif_mm": {
+          "name": "Water to apply (optional)",
+          "description": "Water amount in mm. If omitted, uses the objective calculated by the current mode."
+        }
+      }
+    },
+    "declare_intervention": {
+      "name": "Declare an intervention",
+      "description": "Logs a real intervention to feed the decision engine.",
+      "fields": {
+        "intervention": {
+          "name": "Intervention",
+          "description": "Intervention to record."
+        },
+        "date_action": {
+          "name": "Action date (optional)",
+          "description": "Date in YYYY-MM-DD format. If empty, today is used."
+        }
+      }
+    },
+    "declare_mowing": {
+      "name": "Declare mowing",
+      "description": "Logs a mowing event in the history.",
+      "fields": {
+        "date_action": {
+          "name": "Mowing date (optional)",
+          "description": "Date in YYYY-MM-DD format. If empty, today is used."
+        }
+      }
+    },
+    "declare_watering": {
+      "name": "Declare watering",
+      "description": "Logs a watering event in the history.",
+      "fields": {
+        "date_action": {
+          "name": "Watering date (optional)",
+          "description": "Date in YYYY-MM-DD format. If empty, today is used."
+        },
+        "objectif_mm": {
+          "name": "Applied amount (optional)",
+          "description": "Amount of water applied in mm."
+        }
+      }
+    }
+  }
+}

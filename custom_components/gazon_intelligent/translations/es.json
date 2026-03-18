@@ -1,0 +1,148 @@
+{
+  "title": "Gazon Intelligent",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Ajustes de riego del césped",
+        "description": "Elige tus zonas, los sensores meteorológicos, el tipo de suelo y el caudal de cada zona. Si no conoces el caudal, deja 60.",
+        "data": {
+          "zone_1": "Zona 1",
+          "zone_2": "Zona 2",
+          "zone_3": "Zona 3",
+          "zone_4": "Zona 4",
+          "zone_5": "Zona 5",
+          "debit_zone_1": "Caudal zona 1 (mm/h, 60 por defecto)",
+          "debit_zone_2": "Caudal zona 2 (mm/h)",
+          "debit_zone_3": "Caudal zona 3 (mm/h)",
+          "debit_zone_4": "Caudal zona 4 (mm/h)",
+          "debit_zone_5": "Caudal zona 5 (mm/h)",
+          "entite_meteo": "Meteorología (opcional)",
+          "capteur_pluie_24h": "Lluvia 24 h (mm)",
+          "capteur_pluie_demain": "Lluvia mañana (mm)",
+          "capteur_temperature": "Temperatura",
+          "capteur_etp": "ETP diario (opcional, si no se calcula)",
+          "capteur_humidite": "Humedad del aire (%) (opcional)",
+          "capteur_humidite_sol": "Humedad del suelo (%) (opcional)",
+          "capteur_vent": "Viento (opcional)",
+          "capteur_rosee": "Rocío / humedad foliar (opcional)",
+          "capteur_hauteur_gazon": "Altura del césped (opcional)",
+          "capteur_retour_arrosage": "Riego real (mm, opcional)",
+          "capteur_pluie_fine": "Lluvia fina (opcional)",
+          "type_sol": "Tipo de suelo"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Gazon Intelligent ya está configurado."
+    }
+  },
+  "selector": {
+    "gazon_mode": {
+      "options": {
+        "Normal": "Normal",
+        "Sursemis": "Resiembra",
+        "Traitement": "Tratamiento",
+        "Fertilisation": "Fertilización",
+        "Biostimulant": "Bioestimulante",
+        "Agent Mouillant": "Agente humectante",
+        "Scarification": "Escarificación",
+        "Hivernage": "Modo invierno"
+      }
+    },
+    "gazon_intervention": {
+      "options": {
+        "Sursemis": "Resiembra",
+        "Traitement": "Tratamiento",
+        "Fertilisation": "Fertilización",
+        "Biostimulant": "Bioestimulante",
+        "Agent Mouillant": "Agente humectante",
+        "Scarification": "Escarificación",
+        "Hivernage": "Modo invierno"
+      }
+    }
+  },
+  "services": {
+    "set_mode": {
+      "name": "Ajustar modo",
+      "description": "Elige un modo (Resiembra, Tratamiento, etc.) y actualiza los cálculos.",
+      "fields": {
+        "mode": {
+          "name": "Modo",
+          "description": "Modo a aplicar."
+        }
+      }
+    },
+    "set_date_action": {
+      "name": "Registrar fecha",
+      "description": "Indica la fecha real de la intervención (AAAA-MM-DD). Si está vacío, se usa hoy.",
+      "fields": {
+        "date_action": {
+          "name": "Fecha",
+          "description": "Fecha en formato AAAA-MM-DD."
+        }
+      }
+    },
+    "reset_mode": {
+      "name": "Volver al modo normal",
+      "description": "Restablece el sistema al modo Normal."
+    },
+    "start_manual_irrigation": {
+      "name": "Riego manual",
+      "description": "Inicia un riego manual y especifica cuánta agua aplicar en mm.",
+      "fields": {
+        "objectif_mm": {
+          "name": "Agua a aplicar",
+          "description": "Cantidad de agua a aplicar en milímetros."
+        }
+      }
+    },
+    "start_auto_irrigation": {
+      "name": "Riego automático",
+      "description": "Ejecuta cada zona en secuencia con el caudal configurado. Si la cantidad de agua está vacía, usa automáticamente el valor calculado.",
+      "fields": {
+        "objectif_mm": {
+          "name": "Agua a aplicar (opcional)",
+          "description": "Cantidad de agua en mm. Si se omite, usa el objetivo calculado por el modo actual."
+        }
+      }
+    },
+    "declare_intervention": {
+      "name": "Declarar una intervención",
+      "description": "Registra una intervención real para alimentar el motor de decisión.",
+      "fields": {
+        "intervention": {
+          "name": "Intervención",
+          "description": "Intervención a registrar."
+        },
+        "date_action": {
+          "name": "Fecha de acción (opcional)",
+          "description": "Fecha en formato AAAA-MM-DD. Si está vacío, se usa hoy."
+        }
+      }
+    },
+    "declare_mowing": {
+      "name": "Declarar corte",
+      "description": "Registra un corte de césped en el historial.",
+      "fields": {
+        "date_action": {
+          "name": "Fecha de corte (opcional)",
+          "description": "Fecha en formato AAAA-MM-DD. Si está vacío, se usa hoy."
+        }
+      }
+    },
+    "declare_watering": {
+      "name": "Declarar riego",
+      "description": "Registra un riego en el historial.",
+      "fields": {
+        "date_action": {
+          "name": "Fecha de riego (opcional)",
+          "description": "Fecha en formato AAAA-MM-DD. Si está vacío, se usa hoy."
+        },
+        "objectif_mm": {
+          "name": "Cantidad aplicada (opcional)",
+          "description": "Cantidad de agua aplicada en mm."
+        }
+      }
+    }
+  }
+}

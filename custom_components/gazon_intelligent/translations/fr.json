@@ -20,7 +20,7 @@
           "capteur_pluie_24h": "Pluie 24h (mm)",
           "capteur_pluie_demain": "Pluie demain (mm)",
           "capteur_temperature": "Température",
-          "capteur_etp": "ETP (optionnel, sinon calculé)",
+          "capteur_etp": "ETP du jour (optionnel, sinon calculé)",
           "capteur_humidite": "Humidité air (%) (optionnel)",
           "capteur_humidite_sol": "Humidité sol (%) (optionnel)",
           "capteur_vent": "Vent (optionnel)",
@@ -34,6 +34,115 @@
     },
     "abort": {
       "already_configured": "Gazon Intelligent est déjà configuré."
+    }
+  },
+  "selector": {
+    "gazon_mode": {
+      "options": {
+        "Normal": "Normal",
+        "Sursemis": "Sursemis",
+        "Traitement": "Traitement",
+        "Fertilisation": "Fertilisation",
+        "Biostimulant": "Biostimulant",
+        "Agent Mouillant": "Agent Mouillant",
+        "Scarification": "Scarification",
+        "Hivernage": "Hivernage"
+      }
+    },
+    "gazon_intervention": {
+      "options": {
+        "Sursemis": "Sursemis",
+        "Traitement": "Traitement",
+        "Fertilisation": "Fertilisation",
+        "Biostimulant": "Biostimulant",
+        "Agent Mouillant": "Agent Mouillant",
+        "Scarification": "Scarification",
+        "Hivernage": "Hivernage"
+      }
+    }
+  },
+  "services": {
+    "set_mode": {
+      "name": "Régler le mode",
+      "description": "Choisit un mode (Sursemis, Traitement, etc.) et met à jour les calculs.",
+      "fields": {
+        "mode": {
+          "name": "Mode",
+          "description": "Mode à appliquer."
+        }
+      }
+    },
+    "set_date_action": {
+      "name": "Noter la date",
+      "description": "Indique la date réelle de l'intervention (AAAA-MM-JJ). Si vide, prend la date du jour.",
+      "fields": {
+        "date_action": {
+          "name": "Date",
+          "description": "Date au format AAAA-MM-JJ."
+        }
+      }
+    },
+    "reset_mode": {
+      "name": "Retour au mode normal",
+      "description": "Réinitialise le système en mode Normal."
+    },
+    "start_manual_irrigation": {
+      "name": "Arrosage manuel",
+      "description": "Déclenche un arrosage manuel et indique l'eau à apporter en mm.",
+      "fields": {
+        "objectif_mm": {
+          "name": "Eau à apporter",
+          "description": "Quantité d'eau à appliquer en millimètres."
+        }
+      }
+    },
+    "start_auto_irrigation": {
+      "name": "Arrosage automatique",
+      "description": "Lance chaque zone à la suite avec le débit configuré. Si l'eau à apporter est vide, il prend la valeur calculée automatiquement.",
+      "fields": {
+        "objectif_mm": {
+          "name": "Eau à apporter (optionnel)",
+          "description": "Quantité d'eau en mm. Si omis, prend l'objectif calculé par le mode courant."
+        }
+      }
+    },
+    "declare_intervention": {
+      "name": "Déclarer une intervention",
+      "description": "Déclare une intervention réelle pour alimenter le moteur de décision.",
+      "fields": {
+        "intervention": {
+          "name": "Intervention",
+          "description": "Intervention à enregistrer."
+        },
+        "date_action": {
+          "name": "Date d'action (optionnelle)",
+          "description": "Date au format AAAA-MM-JJ. Si vide, aujourd'hui."
+        }
+      }
+    },
+    "declare_mowing": {
+      "name": "Déclarer une tonte",
+      "description": "Enregistre une tonte dans l'historique.",
+      "fields": {
+        "date_action": {
+          "name": "Date de tonte (optionnelle)",
+          "description": "Date au format AAAA-MM-JJ. Si vide, aujourd'hui."
+        }
+      }
+    },
+    "declare_watering": {
+      "name": "Déclarer un arrosage",
+      "description": "Enregistre un arrosage dans l'historique.",
+      "fields": {
+        "date_action": {
+          "name": "Date d'arrosage (optionnelle)",
+          "description": "Date au format AAAA-MM-JJ. Si vide, aujourd'hui."
+        },
+        "objectif_mm": {
+          "name": "Quantité appliquée (optionnelle)",
+          "description": "Quantité d'eau appliquée en mm."
+        }
+      }
     }
   }
 }

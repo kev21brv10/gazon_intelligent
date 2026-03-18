@@ -1,0 +1,148 @@
+{
+  "title": "Gazon Intelligent",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Gazonbewatering",
+        "description": "Kies je zones, weersensoren, bodemtype en doorstroom per zone. Als je de doorstroom niet weet, laat 60 staan.",
+        "data": {
+          "zone_1": "Zone 1",
+          "zone_2": "Zone 2",
+          "zone_3": "Zone 3",
+          "zone_4": "Zone 4",
+          "zone_5": "Zone 5",
+          "debit_zone_1": "Doorstroom zone 1 (mm/h, standaard 60)",
+          "debit_zone_2": "Doorstroom zone 2 (mm/h)",
+          "debit_zone_3": "Doorstroom zone 3 (mm/h)",
+          "debit_zone_4": "Doorstroom zone 4 (mm/h)",
+          "debit_zone_5": "Doorstroom zone 5 (mm/h)",
+          "entite_meteo": "Weer (optioneel)",
+          "capteur_pluie_24h": "Regen 24 uur (mm)",
+          "capteur_pluie_demain": "Regen morgen (mm)",
+          "capteur_temperature": "Temperatuur",
+          "capteur_etp": "Dagelijkse ETP (optioneel, anders berekend)",
+          "capteur_humidite": "Luchtvochtigheid (%) (optioneel)",
+          "capteur_humidite_sol": "Bodemvocht (%) (optioneel)",
+          "capteur_vent": "Wind (optioneel)",
+          "capteur_rosee": "Dauw / bladnat (optioneel)",
+          "capteur_hauteur_gazon": "Grashoogte (optioneel)",
+          "capteur_retour_arrosage": "Werkelijke beregening (mm, optioneel)",
+          "capteur_pluie_fine": "Lichte regen (optioneel)",
+          "type_sol": "Bodemtype"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Gazon Intelligent is al geconfigureerd."
+    }
+  },
+  "selector": {
+    "gazon_mode": {
+      "options": {
+        "Normal": "Normaal",
+        "Sursemis": "Doorzaai",
+        "Traitement": "Behandeling",
+        "Fertilisation": "Bemesting",
+        "Biostimulant": "Biostimulant",
+        "Agent Mouillant": "Bevochtigingsmiddel",
+        "Scarification": "Verticuteren",
+        "Hivernage": "Wintermodus"
+      }
+    },
+    "gazon_intervention": {
+      "options": {
+        "Sursemis": "Doorzaai",
+        "Traitement": "Behandeling",
+        "Fertilisation": "Bemesting",
+        "Biostimulant": "Biostimulant",
+        "Agent Mouillant": "Bevochtigingsmiddel",
+        "Scarification": "Verticuteren",
+        "Hivernage": "Wintermodus"
+      }
+    }
+  },
+  "services": {
+    "set_mode": {
+      "name": "Modus instellen",
+      "description": "Kiest een modus (Doorzaai, Behandeling, enz.) en werkt de berekeningen bij.",
+      "fields": {
+        "mode": {
+          "name": "Modus",
+          "description": "Toe te passen modus."
+        }
+      }
+    },
+    "set_date_action": {
+      "name": "Datum vastleggen",
+      "description": "Stelt de werkelijke datum van de actie in (JJJJ-MM-DD). Als leeg, wordt vandaag gebruikt.",
+      "fields": {
+        "date_action": {
+          "name": "Datum",
+          "description": "Datum in JJJJ-MM-DD-formaat."
+        }
+      }
+    },
+    "reset_mode": {
+      "name": "Terug naar normale modus",
+      "description": "Zet het systeem terug naar de normale modus."
+    },
+    "start_manual_irrigation": {
+      "name": "Handmatige irrigatie",
+      "description": "Start een handmatige irrigatie en geef aan hoeveel water in mm moet worden toegepast.",
+      "fields": {
+        "objectif_mm": {
+          "name": "Water toe te passen",
+          "description": "Hoeveelheid water in millimeters."
+        }
+      }
+    },
+    "start_auto_irrigation": {
+      "name": "Automatische irrigatie",
+      "description": "Voert elke zone achtereenvolgens uit met de geconfigureerde doorstroming. Als de hoeveelheid water leeg is, gebruikt het automatisch de berekende waarde.",
+      "fields": {
+        "objectif_mm": {
+          "name": "Water toe te passen (optioneel)",
+          "description": "Hoeveelheid water in mm. Indien weggelaten, wordt het doel van de huidige modus gebruikt."
+        }
+      }
+    },
+    "declare_intervention": {
+      "name": "Actie melden",
+      "description": "Legt een echte actie vast om de beslissingsmotor te voeden.",
+      "fields": {
+        "intervention": {
+          "name": "Actie",
+          "description": "Op te slaan actie."
+        },
+        "date_action": {
+          "name": "Actiedatum (optioneel)",
+          "description": "Datum in JJJJ-MM-DD-formaat. Als leeg, wordt vandaag gebruikt."
+        }
+      }
+    },
+    "declare_mowing": {
+      "name": "Maaien melden",
+      "description": "Slaat een maaibeurt op in de geschiedenis.",
+      "fields": {
+        "date_action": {
+          "name": "Maaidatum (optioneel)",
+          "description": "Datum in JJJJ-MM-DD-formaat. Als leeg, wordt vandaag gebruikt."
+        }
+      }
+    },
+    "declare_watering": {
+      "name": "Irrigatie melden",
+      "description": "Slaat een irrigatie op in de geschiedenis.",
+      "fields": {
+        "date_action": {
+          "name": "Irrigatiedatum (optioneel)",
+          "description": "Datum in JJJJ-MM-DD-formaat. Als leeg, wordt vandaag gebruikt."
+        },
+        "objectif_mm": {
+          "name": "Toegepaste hoeveelheid (optioneel)",
+          "description": "Toegepaste hoeveelheid water in mm."
+        }
+      }
+    }
+  }
+}

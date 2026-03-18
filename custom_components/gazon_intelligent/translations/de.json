@@ -1,0 +1,148 @@
+{
+  "title": "Gazon Intelligent",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Rasenbewässerung",
+        "description": "Wähle deine Zonen, Wettersensoren, den Bodentyp und den Durchfluss jeder Zone. Wenn du den Durchfluss nicht kennst, lasse 60 stehen.",
+        "data": {
+          "zone_1": "Zone 1",
+          "zone_2": "Zone 2",
+          "zone_3": "Zone 3",
+          "zone_4": "Zone 4",
+          "zone_5": "Zone 5",
+          "debit_zone_1": "Durchfluss Zone 1 (mm/h, Standard 60)",
+          "debit_zone_2": "Durchfluss Zone 2 (mm/h)",
+          "debit_zone_3": "Durchfluss Zone 3 (mm/h)",
+          "debit_zone_4": "Durchfluss Zone 4 (mm/h)",
+          "debit_zone_5": "Durchfluss Zone 5 (mm/h)",
+          "entite_meteo": "Wetter (optional)",
+          "capteur_pluie_24h": "Regen 24 h (mm)",
+          "capteur_pluie_demain": "Regen morgen (mm)",
+          "capteur_temperature": "Temperatur",
+          "capteur_etp": "ETP des Tages (optional, sonst berechnet)",
+          "capteur_humidite": "Luftfeuchtigkeit (%) (optional)",
+          "capteur_humidite_sol": "Bodenfeuchte (%) (optional)",
+          "capteur_vent": "Wind (optional)",
+          "capteur_rosee": "Tau / Blattnässe (optional)",
+          "capteur_hauteur_gazon": "Rasenhöhe (optional)",
+          "capteur_retour_arrosage": "Tatsächliche Bewässerung (mm, optional)",
+          "capteur_pluie_fine": "Leichter Regen (optional)",
+          "type_sol": "Bodentyp"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Gazon Intelligent ist bereits konfiguriert."
+    }
+  },
+  "selector": {
+    "gazon_mode": {
+      "options": {
+        "Normal": "Normal",
+        "Sursemis": "Nachsaat",
+        "Traitement": "Behandlung",
+        "Fertilisation": "Düngung",
+        "Biostimulant": "Biostimulans",
+        "Agent Mouillant": "Netzmittel",
+        "Scarification": "Vertikutierung",
+        "Hivernage": "Wintermodus"
+      }
+    },
+    "gazon_intervention": {
+      "options": {
+        "Sursemis": "Nachsaat",
+        "Traitement": "Behandlung",
+        "Fertilisation": "Düngung",
+        "Biostimulant": "Biostimulans",
+        "Agent Mouillant": "Netzmittel",
+        "Scarification": "Vertikutierung",
+        "Hivernage": "Wintermodus"
+      }
+    }
+  },
+  "services": {
+    "set_mode": {
+      "name": "Modus festlegen",
+      "description": "Wählt einen Modus (Nachsaat, Behandlung usw.) und aktualisiert die Berechnungen.",
+      "fields": {
+        "mode": {
+          "name": "Modus",
+          "description": "Anzuwendender Modus."
+        }
+      }
+    },
+    "set_date_action": {
+      "name": "Datum speichern",
+      "description": "Legt das tatsächliche Datum der Maßnahme fest (JJJJ-MM-TT). Wenn leer, wird heute verwendet.",
+      "fields": {
+        "date_action": {
+          "name": "Datum",
+          "description": "Datum im Format JJJJ-MM-TT."
+        }
+      }
+    },
+    "reset_mode": {
+      "name": "Zurück zum Normalmodus",
+      "description": "Setzt das System auf den Normalmodus zurück."
+    },
+    "start_manual_irrigation": {
+      "name": "Manuelle Bewässerung",
+      "description": "Startet eine manuelle Bewässerung und gibt an, wie viel Wasser in mm ausgebracht werden soll.",
+      "fields": {
+        "objectif_mm": {
+          "name": "Wasser ausbringen",
+          "description": "Wassermenge in Millimetern."
+        }
+      }
+    },
+    "start_auto_irrigation": {
+      "name": "Automatische Bewässerung",
+      "description": "Führt jede Zone nacheinander mit der konfigurierten Durchflussmenge aus. Wenn die Wassermenge leer ist, wird automatisch der berechnete Wert verwendet.",
+      "fields": {
+        "objectif_mm": {
+          "name": "Wasser ausbringen (optional)",
+          "description": "Wassermenge in mm. Falls leer, wird das vom aktuellen Modus berechnete Ziel verwendet."
+        }
+      }
+    },
+    "declare_intervention": {
+      "name": "Maßnahme melden",
+      "description": "Erfasst eine echte Maßnahme, um die Entscheidungslogik zu füttern.",
+      "fields": {
+        "intervention": {
+          "name": "Maßnahme",
+          "description": "Zu erfassende Maßnahme."
+        },
+        "date_action": {
+          "name": "Datum der Maßnahme (optional)",
+          "description": "Datum im Format JJJJ-MM-TT. Wenn leer, wird heute verwendet."
+        }
+      }
+    },
+    "declare_mowing": {
+      "name": "Mähen melden",
+      "description": "Erfasst einen Mähvorgang in der Historie.",
+      "fields": {
+        "date_action": {
+          "name": "Mähdatum (optional)",
+          "description": "Datum im Format JJJJ-MM-TT. Wenn leer, wird heute verwendet."
+        }
+      }
+    },
+    "declare_watering": {
+      "name": "Bewässerung melden",
+      "description": "Erfasst eine Bewässerung in der Historie.",
+      "fields": {
+        "date_action": {
+          "name": "Bewässerungsdatum (optional)",
+          "description": "Datum im Format JJJJ-MM-TT. Wenn leer, wird heute verwendet."
+        },
+        "objectif_mm": {
+          "name": "Ausgebrachte Menge (optional)",
+          "description": "Ausgebrachte Wassermenge in mm."
+        }
+      }
+    }
+  }
+}
