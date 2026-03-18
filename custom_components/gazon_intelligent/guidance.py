@@ -108,7 +108,6 @@ def compute_action_guidance(
     vent = advanced_context.get("vent")
     rosee = advanced_context.get("rosee")
     hauteur_gazon = advanced_context.get("hauteur_gazon")
-    rain_source = advanced_context.get("pluie_source")
 
     if phase_dominante in {"Traitement", "Hivernage"}:
         return {
@@ -137,8 +136,6 @@ def compute_action_guidance(
             fenetre_optimale = "maintenant"
         else:
             fenetre_optimale = "demain_matin"
-        if rain_source == "capteur_pluie_fine" and pluie_24h > 0:
-            fenetre_optimale = "apres_pluie" if pluie_compensatrice else fenetre_optimale
         risque_gazon = "eleve" if pressure >= 70 or score_hydrique >= 55 or score_stress >= 70 else "modere"
         if vent is not None and vent >= 20:
             risque_gazon = "eleve"

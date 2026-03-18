@@ -53,7 +53,7 @@ def compute_advanced_context(
     rosee: float | None = None,
     hauteur_gazon: float | None = None,
     retour_arrosage: float | None = None,
-    pluie_fine: float | None = None,
+    pluie_source: str = "capteur_pluie_24h",
     weather_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     weather_profile = weather_profile or {}
@@ -62,7 +62,9 @@ def compute_advanced_context(
     rosee = _to_float(rosee)
     hauteur_gazon = _to_float(hauteur_gazon)
     retour_arrosage = max(0.0, _to_float(retour_arrosage) or 0.0)
-    pluie_fine = _to_float(pluie_fine)
+    weather_precipitation_probability = _to_float(
+        weather_profile.get("weather_precipitation_probability")
+    )
 
     soil_factor = 1.0
     if humidite_sol is not None:
@@ -85,8 +87,18 @@ def compute_advanced_context(
             wind_factor = 1.04
 
     dew_factor = 0.96 if rosee is not None and rosee > 0 else 1.0
-    rain_factor = 0.92 if pluie_fine is not None else 0.85
-    pluie_source = "capteur_pluie_fine" if pluie_fine is not None else "capteur_pluie_24h"
+    rain_factor = 0.85
+    if weather_precipitation_probability is not None:
+        if weather_precipitation_probability >= 80:
+            rain_factor = 0.95
+        elif weather_precipitation_probability >= 50:
+            rain_factor = 0.9
+        elif weather_precipitation_probability >= 20:
+            rain_factor = 0.86
+        else:
+            rain_factor = 0.82
+    if weather_profile.get("weather_condition") in {"rainy", "pouring"}:
+        rain_factor = max(rain_factor, 0.95)
 
     return {
         "humidite_sol": humidite_sol,
@@ -94,12 +106,12 @@ def compute_advanced_context(
         "rosee": rosee,
         "hauteur_gazon": hauteur_gazon,
         "retour_arrosage": retour_arrosage if retour_arrosage > 0 else None,
-        "pluie_fine": pluie_fine,
         "pluie_source": pluie_source,
         "soil_factor": soil_factor,
         "wind_factor": wind_factor,
         "dew_factor": dew_factor,
         "rain_factor": rain_factor,
+        "weather_precipitation_probability": weather_precipitation_probability,
         "weather_temperature": weather_profile.get("weather_temperature"),
         "weather_apparent_temperature": weather_profile.get("weather_apparent_temperature"),
         "weather_humidity": weather_profile.get("weather_humidity"),
@@ -117,14 +129,39 @@ def compute_etp(
     temperature: float | None,
     pluie_24h: float | None,
     etp_capteur: float | None,
+    weather_profile: dict[str, Any] | None = None,
 ) -> float | None:
     if etp_capteur is not None:
         return etp_capteur
+    weather_profile = weather_profile or {}
+    if temperature is None:
+        temperature = weather_profile.get("weather_temperature") or weather_profile.get("weather_apparent_temperature")
     if temperature is None:
         return None
-    base = max(0.0, 0.08 * temperature)
-    correction = max(0.0, (pluie_24h or 0) * 0.05)
-    return max(0.0, base - correction)
+    temperature = float(temperature)
+
+    base = max(0.0, 0.06 * temperature)
+    apparent = weather_profile.get("weather_apparent_temperature")
+    humidity = weather_profile.get("weather_humidity")
+    wind = weather_profile.get("weather_wind_speed")
+    cloud = weather_profile.get("weather_cloud_coverage")
+    dew_point = weather_profile.get("weather_dew_point")
+    precip_probability = weather_profile.get("weather_precipitation_probability")
+
+    if apparent is not None and float(apparent) > temperature:
+        base += min(0.5, (float(apparent) - temperature) * 0.03)
+    if humidity is not None:
+        base *= max(0.75, 1.0 - max(0.0, float(humidity) - 50.0) / 300.0)
+    if wind is not None:
+        base += min(0.7, float(wind) * 0.02)
+    if cloud is not None:
+        base *= max(0.75, 1.0 - float(cloud) / 600.0)
+    if precip_probability is not None:
+        base *= max(0.7, 1.0 - float(precip_probability) / 250.0)
+    if dew_point is not None and temperature - float(dew_point) <= 2.0:
+        base *= 0.9
+    base = max(0.0, base - max(0.0, (pluie_24h or 0.0) * 0.05))
+    return round(base, 1)
 
 
 def compute_water_balance(
@@ -136,16 +173,15 @@ def compute_water_balance(
     type_sol: str = "limoneux",
     recent_watering_mm_override: float | None = None,
     advanced_context: dict[str, Any] | None = None,
+    weather_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     today = today or date.today()
     advanced_context = advanced_context or {}
+    weather_profile = weather_profile or {}
     etp_j = max(0.0, etp or 0.0)
     pluie_j = max(0.0, pluie_24h or 0.0)
     pluie_j1 = max(0.0, pluie_demain or 0.0)
-    pluie_fine = advanced_context.get("pluie_fine")
     pluie_source = advanced_context.get("pluie_source", "capteur_pluie_24h")
-    if pluie_fine is not None:
-        pluie_j = max(0.0, pluie_fine)
 
     reserve_sol = {
         "sableux": 8.0,
@@ -156,7 +192,8 @@ def compute_water_balance(
     soil_factor *= float(advanced_context.get("wind_factor", 1.0))
     soil_factor *= float(advanced_context.get("dew_factor", 1.0))
 
-    pluie_efficace = _round_half_up_1((pluie_j * float(advanced_context.get("rain_factor", 0.85))) + (pluie_j1 * 0.55))
+    pluie_factor = float(advanced_context.get("rain_factor", 0.85))
+    pluie_efficace = _round_half_up_1((pluie_j * pluie_factor) + (pluie_j1 * 0.55))
     arrosage_recent = (
         recent_watering_mm_override
         if recent_watering_mm_override is not None
@@ -187,7 +224,7 @@ def compute_water_balance(
         "arrosage_recent_3j": _round_half_up_1(arrosage_recent_3j),
         "arrosage_recent_7j": _round_half_up_1(arrosage_recent_7j),
         "pluie_source": pluie_source,
-        "pluie_fine": pluie_fine,
+        "weather_precipitation_probability": weather_profile.get("weather_precipitation_probability"),
         "humidite_sol": advanced_context.get("humidite_sol"),
         "vent": advanced_context.get("vent"),
         "rosee": advanced_context.get("rosee"),

@@ -53,6 +53,14 @@ compute_objectif_mm = _guidance.compute_objectif_mm
 compute_tonte_statut = _guidance.compute_tonte_statut
 
 
+def _passage_spacing_text(passages: int) -> str:
+    if passages <= 1:
+        return "en un passage"
+    if passages == 2:
+        return "en 2 passages courts espacés de 20 à 30 min"
+    return f"en {passages} passages courts espacés de 20 min"
+
+
 def compute_decision(
     phase_dominante: str,
     sous_phase: str,
@@ -138,9 +146,9 @@ def compute_decision(
             "type_arrosage": "bloque",
             "arrosage_conseille": "personnalise",
             "raison_decision": "Hivernage actif: repos végétatif.",
-            "conseil_principal": "Limiter les interventions et éviter les coupes stressantes.",
-            "action_recommandee": "Surveiller uniquement.",
-            "action_a_eviter": "Arrosages fréquents.",
+            "conseil_principal": "N'arrose pas et limite les interventions.",
+            "action_recommandee": "Surveille uniquement.",
+            "action_a_eviter": "Arroser fréquemment.",
             "niveau_action": action_guidance["niveau_action"],
             "fenetre_optimale": action_guidance["fenetre_optimale"],
             "risque_gazon": action_guidance["risque_gazon"],
@@ -150,6 +158,7 @@ def compute_decision(
         }
     if phase_dominante == "Sursemis":
         passages = 3 if objectif_mm >= 2 else 2
+        passage_spacing = _passage_spacing_text(passages)
         urgence_sursemis = "haute" if score_hydrique >= 45 or action_guidance["risque_gazon"] == "eleve" else "moyenne"
         return {
             "tonte_autorisee": False,
@@ -162,8 +171,8 @@ def compute_decision(
                 f"Sursemis / {sous_phase}: déficit jour={deficit_jour} mm, 3j={deficit_3j} mm, 7j={deficit_7j} mm. "
                 f"Pluie efficace={pluie_efficace:.1f} mm."
             ),
-            "conseil_principal": f"Arroser {prochain_creneau} en {passages} passages courts.",
-            "action_recommandee": f"Appliquer {objectif_mm} mm fractionnés ({passages}x).",
+            "conseil_principal": f"Arroser {prochain_creneau} {passage_spacing}.",
+            "action_recommandee": f"Appliquer {objectif_mm} mm fractionnés ({passages}x, 20 à 30 min entre les passages).",
             "action_a_eviter": "Tondre avant levée complète.",
             "niveau_action": action_guidance["niveau_action"],
             "fenetre_optimale": action_guidance["fenetre_optimale"],
@@ -198,53 +207,53 @@ def compute_decision(
     if phase_dominante == "Normal":
         if not recommande:
             if pluie_demain >= 2:
-                conseil_principal = "Pas d'arrosage aujourd'hui: la pluie prévue couvre le besoin court terme."
-                action_recommandee = "Laisser la pluie agir puis réévaluer demain."
-                action_a_eviter = "Cumuler pluie + arrosage sans contrôle."
+                conseil_principal = "N'arrose pas aujourd'hui: la pluie prévue couvre le besoin court terme."
+                action_recommandee = "Laisse la pluie agir puis réévalue demain."
+                action_a_eviter = "Cumuler pluie et arrosage."
             else:
-                conseil_principal = "Pas d'arrosage nécessaire pour le moment."
-                action_recommandee = "Réévaluer au prochain cycle météo."
+                conseil_principal = "N'arrose pas pour le moment."
+                action_recommandee = "Réévalue au prochain cycle météo."
                 action_a_eviter = "Arroser par réflexe."
         else:
             if pluie_compensatrice:
                 conseil_principal = (
-                    "Reporter l'arrosage: la pluie de demain peut compenser une grande partie du déficit."
+                    "Réduis ou reporte l'arrosage: la pluie de demain peut compenser une grande partie du déficit."
                 )
                 action_recommandee = (
-                    f"Réduire l'apport à {max(0.0, round(objectif_mm * 0.4, 1))} mm maximum aujourd'hui."
+                    f"Réduis l'apport à {max(0.0, round(objectif_mm * 0.4, 1))} mm maximum aujourd'hui."
                 )
-                action_a_eviter = "Lancer un cycle complet avant l'épisode pluvieux."
+                action_a_eviter = "Lancer un cycle complet avant la pluie."
             elif stress_thermique:
-                conseil_principal = f"Arroser {prochain_creneau} en deux passages pour limiter l'évaporation."
-                action_recommandee = f"Appliquer {objectif_mm} mm fractionnés (2x)."
+                conseil_principal = f"Arrose {prochain_creneau} en 2 passages courts espacés de 20 à 30 min."
+                action_recommandee = f"Appliquer {objectif_mm} mm fractionnés (2x, 20 à 30 min entre les passages)."
                 action_a_eviter = "Arroser entre 11h et 18h."
             elif humidite_haute:
-                conseil_principal = "Attendre un léger ressuyage avant arrosage."
-                action_recommandee = f"Programmer {objectif_mm} mm en fin de nuit si l'humidité baisse."
+                conseil_principal = "Attends un léger ressuyage avant d'arroser."
+                action_recommandee = f"Programme {objectif_mm} mm en fin de nuit si l'humidité baisse."
                 action_a_eviter = "Arroser immédiatement sur pelouse saturée."
             else:
-                conseil_principal = f"Arroser {prochain_creneau}: manque d'eau estimé à {objectif_mm} mm."
-                action_recommandee = f"Appliquer {objectif_mm} mm sur les zones actives."
+                conseil_principal = f"Arrose {prochain_creneau}: manque d'eau estimé à {objectif_mm} mm."
+                action_recommandee = f"Applique {objectif_mm} mm sur les zones actives."
                 action_a_eviter = "Arroser en pleine journée."
     else:
         if not recommande:
-            conseil_principal = f"Phase {phase_dominante}: pas d'arrosage requis pour l'instant."
-            action_recommandee = "Surveiller les capteurs et l'évolution météo."
+            conseil_principal = f"Phase {phase_dominante}: n'arrose pas pour l'instant."
+            action_recommandee = "Surveille les capteurs et l'évolution météo."
         elif phase_dominante == "Fertilisation":
-            conseil_principal = "Fertilisation active: humidifier légèrement pour activer l'apport."
-            action_recommandee = f"Appliquer {objectif_mm} mm en 1 à 2 passages."
+            conseil_principal = "Fertilisation active: arrose légèrement pour activer l'apport."
+            action_recommandee = f"Applique {objectif_mm} mm en 1 à 2 passages."
         elif phase_dominante == "Scarification":
-            conseil_principal = "Scarification: maintenir une humidité stable sans détremper."
-            action_recommandee = f"Appliquer {objectif_mm} mm en apports courts."
+            conseil_principal = "Scarification: garde une humidité stable sans détremper."
+            action_recommandee = f"Applique {objectif_mm} mm en apports courts."
         elif phase_dominante == "Agent Mouillant":
-            conseil_principal = "Agent mouillant: faire pénétrer l'eau plus en profondeur."
-            action_recommandee = f"Appliquer {objectif_mm} mm en cycle allongé."
+            conseil_principal = "Agent mouillant: fais pénétrer l'eau plus en profondeur."
+            action_recommandee = f"Applique {objectif_mm} mm en cycle allongé."
         elif phase_dominante == "Biostimulant":
-            conseil_principal = "Biostimulant: conserver un niveau hydrique modéré."
-            action_recommandee = f"Appliquer {objectif_mm} mm en un passage."
+            conseil_principal = "Biostimulant: garde un niveau hydrique modéré."
+            action_recommandee = f"Applique {objectif_mm} mm en un passage."
         else:
-            conseil_principal = f"Phase {phase_dominante}: maintenir un arrosage maîtrisé {prochain_creneau}."
-            action_recommandee = f"Appliquer {objectif_mm} mm en tenant compte de l'humidité actuelle."
+            conseil_principal = f"Phase {phase_dominante}: arrose de façon maîtrisée {prochain_creneau}."
+            action_recommandee = f"Applique {objectif_mm} mm en tenant compte de l'humidité actuelle."
         action_a_eviter = "Tondre sur sol humide." if not tonte_ok else "Intervention agressive inutile."
 
     facteurs = [
@@ -324,18 +333,23 @@ def build_decision_snapshot(
     rosee: float | None = None,
     hauteur_gazon: float | None = None,
     retour_arrosage: float | None = None,
-    pluie_fine: float | None = None,
+    pluie_source: str = "capteur_pluie_24h",
     weather_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     today = today or date.today()
-    etp = compute_etp(temperature=temperature, pluie_24h=pluie_24h, etp_capteur=etp_capteur)
+    etp = compute_etp(
+        temperature=temperature,
+        pluie_24h=pluie_24h,
+        etp_capteur=etp_capteur,
+        weather_profile=weather_profile,
+    )
     advanced_context = compute_advanced_context(
         humidite_sol=humidite_sol,
         vent=vent,
         rosee=rosee,
         hauteur_gazon=hauteur_gazon,
         retour_arrosage=retour_arrosage,
-        pluie_fine=pluie_fine,
+        pluie_source=pluie_source,
         weather_profile=weather_profile,
     )
     dominant = compute_dominant_phase(history, today=today, temperature=temperature)
@@ -362,6 +376,7 @@ def build_decision_snapshot(
         type_sol=type_sol,
         recent_watering_mm_override=retour_arrosage,
         advanced_context=advanced_context,
+        weather_profile=weather_profile,
     )
     scores = compute_internal_scores(
         history=history,
@@ -421,7 +436,6 @@ def build_decision_snapshot(
         "rosee": advanced_context["rosee"],
         "hauteur_gazon": advanced_context["hauteur_gazon"],
         "retour_arrosage": advanced_context["retour_arrosage"],
-        "pluie_fine": advanced_context["pluie_fine"],
         "pluie_source": advanced_context["pluie_source"],
         "water_balance": water_balance,
         "deficit_jour": water_balance["deficit_jour"],

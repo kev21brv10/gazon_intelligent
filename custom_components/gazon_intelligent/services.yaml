@@ -68,6 +68,84 @@ declare_intervention:
       required: false
       selector:
         text:
+    produit_id:
+      required: false
+      selector:
+        text:
+    produit:
+      required: false
+      selector:
+        text:
+    dose:
+      required: false
+      selector:
+        text:
+    zone:
+      required: false
+      selector:
+        text:
+    reapplication_after_days:
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 365
+          step: 1
+          unit_of_measurement: j
+    note:
+      required: false
+      selector:
+        text:
+
+register_product:
+  fields:
+    product_id:
+      required: true
+      selector:
+        text:
+    nom:
+      required: true
+      selector:
+        text:
+    type:
+      required: true
+      selector:
+        text:
+    dose_conseillee:
+      required: false
+      selector:
+        text:
+    reapplication_after_days:
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 3650
+          step: 1
+          unit_of_measurement: j
+    delai_avant_tonte_jours:
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 3650
+          step: 1
+          unit_of_measurement: j
+    phase_compatible:
+      required: false
+      selector:
+        text:
+    note:
+      required: false
+      selector:
+        text:
+
+remove_product:
+  fields:
+    product_id:
+      required: true
+      selector:
+        text:
 
 declare_mowing:
   fields:

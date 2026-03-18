@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Paramètres de base",
-        "description": "Renseignez les zones, les débits, les capteurs météo et l'entité météo obligatoire. Les capteurs complémentaires sont ensuite dans les options avancées de l'UI.",
+        "description": "Renseignez ici les zones, les débits et le type de sol.",
         "data": {
           "zone_1": "Zone 1",
           "zone_2": "Zone 2",
@@ -16,13 +16,7 @@
           "debit_zone_3": "Débit zone 3 (mm/h, 0 si non utilisée)",
           "debit_zone_4": "Débit zone 4 (mm/h, 0 si non utilisée)",
           "debit_zone_5": "Débit zone 5 (mm/h, 0 si non utilisée)",
-          "capteur_pluie_24h": "Pluie 24h (mm)",
-          "capteur_pluie_demain": "Pluie demain (mm)",
-          "capteur_temperature": "Température",
-          "capteur_etp": "ETP du jour",
-          "capteur_humidite": "Humidité",
-          "entite_meteo": "Météo obligatoire",
-          "type_sol": "Type de sol"
+          "type_sol": "Type de sol (obligatoire)"
         }
       }
     },
@@ -33,13 +27,17 @@
   "options": {
     "step": {
       "user": {
-        "title": "Options avancées",
-        "description": "Renseignez ici les capteurs complémentaires affichés dans l'UI.",
+        "title": "Options avancées dans l'UI",
+        "description": "Renseignez ici l'entité météo et les capteurs complémentaires si vous les avez. Si l'ETP n'est pas fournie, elle est calculée automatiquement à partir de la météo.",
         "data": {
+          "entite_meteo": "Météo (obligatoire)",
+          "capteur_pluie_24h": "Pluie 24h (optionnel, sinon météo)",
+          "capteur_pluie_demain": "Pluie demain (optionnel, sinon météo)",
+          "capteur_temperature": "Température (optionnel, sinon météo)",
+          "capteur_etp": "ETP du jour (optionnel, auto si vide)",
+          "capteur_humidite": "Humidité (optionnel, sinon météo)",
           "capteur_hauteur_gazon": "Hauteur du gazon (recommandé)",
           "capteur_humidite_sol": "Humidité sol (%) (optionnel)",
-          "capteur_retour_arrosage": "Arrosage réel (mm, optionnel)",
-          "capteur_pluie_fine": "Pluie fine (optionnel)",
           "capteur_vent": "Vent (optionnel si météo fournie)",
           "capteur_rosee": "Rosée / humidité foliaire (optionnel)"
         }
@@ -87,11 +85,11 @@
     },
     "set_date_action": {
       "name": "Noter la date",
-      "description": "Indique la date réelle de l'intervention (AAAA-MM-JJ). Si vide, prend la date du jour.",
+      "description": "Indique la date réelle de l'intervention (JJ/MM/AAAA). Si vide, prend la date du jour.",
       "fields": {
         "date_action": {
           "name": "Date",
-          "description": "Date au format AAAA-MM-JJ."
+          "description": "Date au format JJ/MM/AAAA."
         }
       }
     },
@@ -121,7 +119,7 @@
     },
     "declare_intervention": {
       "name": "Déclarer une intervention",
-      "description": "Déclare une intervention réelle pour alimenter le moteur de décision.",
+      "description": "Déclare une intervention réelle et peut mémoriser le produit, la dose et la prochaine réapplication.",
       "fields": {
         "intervention": {
           "name": "Intervention",
@@ -129,7 +127,79 @@
         },
         "date_action": {
           "name": "Date d'action (optionnelle)",
-          "description": "Date au format AAAA-MM-JJ. Si vide, aujourd'hui."
+          "description": "Date au format JJ/MM/AAAA. Si vide, aujourd'hui."
+        },
+        "produit_id": {
+          "name": "ID produit (optionnel)",
+          "description": "Identifiant d'un produit enregistré dans la base locale."
+        },
+        "produit": {
+          "name": "Produit (optionnel)",
+          "description": "Nom du produit ou de la référence appliquée."
+        },
+        "dose": {
+          "name": "Dose (optionnelle)",
+          "description": "Dose appliquée, en texte libre si besoin."
+        },
+        "zone": {
+          "name": "Zone (optionnelle)",
+          "description": "Zone concernée par l'intervention."
+        },
+        "reapplication_after_days": {
+          "name": "Réapplication dans X jours (optionnel)",
+          "description": "Délai avant de réévaluer ou de refaire l'application."
+        },
+        "note": {
+          "name": "Note (optionnelle)",
+          "description": "Commentaire libre."
+        }
+      }
+    },
+    "register_product": {
+      "name": "Enregistrer un produit",
+      "description": "Ajoute ou met à jour un produit personnalisé dans la base locale.",
+      "fields": {
+        "product_id": {
+          "name": "ID produit",
+          "description": "Identifiant court et unique."
+        },
+        "nom": {
+          "name": "Nom",
+          "description": "Nom lisible du produit."
+        },
+        "type": {
+          "name": "Type",
+          "description": "Catégorie du produit."
+        },
+        "dose_conseillee": {
+          "name": "Dose conseillée (optionnelle)",
+          "description": "Dose par défaut à proposer."
+        },
+        "reapplication_after_days": {
+          "name": "Réapplication dans X jours (optionnel)",
+          "description": "Délai conseillé avant de refaire ce produit."
+        },
+        "delai_avant_tonte_jours": {
+          "name": "Délai avant tonte (optionnel)",
+          "description": "Temps à attendre avant la prochaine tonte."
+        },
+        "phase_compatible": {
+          "name": "Phases compatibles (optionnel)",
+          "description": "Liste séparée par des virgules."
+        },
+        "note": {
+          "name": "Note (optionnelle)",
+          "description": "Commentaire libre."
+        }
+      }
+    },
+    "remove_product": {
+      "name": "Supprimer un produit",
+      "description": "Retire un produit de la base locale.",
+      "fields": {
+        "product_id": {
+          "name": "ID produit",
+          "description": "Identifiant du produit à supprimer."
         }
       }
     },
@@ -139,7 +209,7 @@
       "fields": {
         "date_action": {
           "name": "Date de tonte (optionnelle)",
-          "description": "Date au format AAAA-MM-JJ. Si vide, aujourd'hui."
+          "description": "Date au format JJ/MM/AAAA. Si vide, aujourd'hui."
         }
       }
     },
@@ -149,7 +219,7 @@
       "fields": {
         "date_action": {
           "name": "Date d'arrosage (optionnelle)",
-          "description": "Date au format AAAA-MM-JJ. Si vide, aujourd'hui."
+          "description": "Date au format JJ/MM/AAAA. Si vide, aujourd'hui."
         },
         "objectif_mm": {
           "name": "Quantité appliquée (optionnelle)",

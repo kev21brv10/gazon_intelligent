@@ -1,10 +1,11 @@
 # Changelog
 
 ## 0.3.14
-- Remet la configuration initiale sur les entités de base et bascule les capteurs spécialisés dans les options Home Assistant.
-- Exploite davantage l'entité `weather` comme source de secours pour les données météo standard.
-- Simplifie l'UI en gardant seulement les boutons utiles au quotidien et en déplaçant les actions avancées vers les services.
-- Maintient l'affichage produit et les traductions multi-langues tout en conservant la compatibilité avec les anciennes entités.
+- Remet la configuration initiale sur les zones, les débits et le type de sol.
+- Déplace l'entité `weather` et les capteurs météo complémentaires dans les options avancées.
+- Exploite l'entité `weather` comme source de secours pour la pluie, la température, l'humidité, le vent et l'ETP.
+- Reconstruit l'arrosage réel à partir des changements d'état des zones.
+- Simplifie l'UI et aligne le README, les traductions et les calculs internes sur la même structure.
 
 ## 0.3.13
 - Corrige le bouton `Date action = aujourd'hui` pour enregistrer une date même sans intervention déjà présente.

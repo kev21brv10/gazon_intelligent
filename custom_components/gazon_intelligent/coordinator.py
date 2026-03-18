@@ -25,15 +25,19 @@ from .const import (
     CONF_CAPTEUR_VENT,
     CONF_CAPTEUR_ROSEE,
     CONF_CAPTEUR_HAUTEUR_GAZON,
-    CONF_CAPTEUR_RETOUR_ARROSAGE,
-    CONF_CAPTEUR_PLUIE_FINE,
     CONF_TYPE_SOL,
     DEFAULT_MODE,
     DEFAULT_TYPE_SOL,
     INTERVENTIONS_ACTIONS,
 )
-from .decision import build_decision_snapshot, compute_memory, phase_duration_days
-from .weather_sources import extract_weather_profile
+from .decision import (
+    build_decision_snapshot,
+    compute_memory,
+    compute_recent_watering_mm,
+    phase_duration_days,
+)
+from .memory import normalize_product_id, normalize_product_record
+from .weather_sources import extract_weather_profile, extract_weather_forecast_summary
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -62,8 +66,12 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "dernier_arrosage_significatif": None,
             "derniere_phase_active": DEFAULT_MODE,
             "dernier_conseil": None,
+            "derniere_application": None,
+            "prochaine_reapplication": None,
+            "catalogue_produits": 0,
             "date_derniere_mise_a_jour": None,
         }
+        self.products: dict[str, dict[str, Any]] = {}
         self._auto_irrigation_task: asyncio.Task | None = None
         self._unsub_start_listener: CALLBACK_TYPE | None = None
         self._unsub_delayed_refresh: CALLBACK_TYPE | None = None
@@ -77,18 +85,43 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self._async_load_state()
             self._loaded = True
 
-        pluie_24h = self._get_float_state(self._get_conf(CONF_CAPTEUR_PLUIE_24H))
-        pluie_demain_entity = self._get_conf(CONF_CAPTEUR_PLUIE_DEMAIN)
-        pluie_demain = self._get_float_state(pluie_demain_entity)
-        pluie_demain_source = "capteur"
         weather_entity_id = self._get_conf(CONF_ENTITE_METEO)
         weather_profile = self._get_weather_profile(weather_entity_id)
-        if pluie_demain is None:
-            pluie_demain = await self._get_forecast_pluie_demain(weather_entity_id)
+        pluie_24h_sensor = self._get_float_state(self._get_conf(CONF_CAPTEUR_PLUIE_24H))
+        pluie_demain_sensor = self._get_float_state(self._get_conf(CONF_CAPTEUR_PLUIE_DEMAIN))
+        forecast_summary = await self._get_weather_forecast_summary(weather_entity_id)
+        forecast_pluie_24h = forecast_summary.get("forecast_pluie_24h")
+        forecast_pluie_demain = forecast_summary.get("forecast_pluie_demain")
+        forecast_temperature_today = forecast_summary.get("forecast_temperature_today")
+        if pluie_24h_sensor is not None:
+            pluie_24h = pluie_24h_sensor
+            pluie_24h_source = "capteur"
+        else:
+            pluie_24h = forecast_pluie_24h
+            pluie_24h_source = "meteo_forecast" if pluie_24h is not None else "indisponible"
+        if pluie_demain_sensor is not None:
+            pluie_demain = pluie_demain_sensor
+            pluie_demain_source = "capteur"
+        else:
+            pluie_demain = forecast_pluie_demain
             pluie_demain_source = "meteo_forecast" if pluie_demain is not None else "indisponible"
+
         temperature = self._get_float_state(self._get_conf(CONF_CAPTEUR_TEMPERATURE))
         if temperature is None:
             temperature = weather_profile.get("weather_temperature") or weather_profile.get("weather_apparent_temperature")
+        if forecast_temperature_today is not None:
+            try:
+                forecast_temperature_today = float(forecast_temperature_today)
+            except (TypeError, ValueError):
+                forecast_temperature_today = None
+        if forecast_temperature_today is not None:
+            if temperature is None:
+                temperature = forecast_temperature_today
+            else:
+                try:
+                    temperature = max(float(temperature), forecast_temperature_today)
+                except (TypeError, ValueError):
+                    temperature = forecast_temperature_today
         etp_capteur = self._get_float_state(self._get_conf(CONF_CAPTEUR_ETP))
         humidite = self._get_float_state(self._get_conf(CONF_CAPTEUR_HUMIDITE))
         if humidite is None:
@@ -101,8 +134,8 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if rosee is None:
             rosee = self._estimate_rosee(weather_profile, temperature, humidite)
         hauteur_gazon = self._get_float_state(self._get_conf(CONF_CAPTEUR_HAUTEUR_GAZON))
-        retour_arrosage = self._get_float_state(self._get_conf(CONF_CAPTEUR_RETOUR_ARROSAGE))
-        pluie_fine = self._get_float_state(self._get_conf(CONF_CAPTEUR_PLUIE_FINE))
+        retour_arrosage_today = compute_recent_watering_mm(self.history, today=date.today(), days=0)
+        retour_arrosage = retour_arrosage_today if retour_arrosage_today > 0 else None
         type_sol = self._get_conf(CONF_TYPE_SOL) or DEFAULT_TYPE_SOL
         snapshot = build_decision_snapshot(
             history=self.history,
@@ -118,7 +151,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             rosee=rosee,
             hauteur_gazon=hauteur_gazon,
             retour_arrosage=retour_arrosage,
-            pluie_fine=pluie_fine,
+            pluie_source=pluie_24h_source,
             weather_profile=weather_profile,
         )
         self.mode = snapshot["phase_active"]
@@ -130,6 +163,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             previous_memory=self.memory,
             today=date.today(),
         )
+        self.memory["catalogue_produits"] = len(self.products)
 
         return {
             "mode": snapshot["mode"],
@@ -139,6 +173,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "advanced_context": snapshot["advanced_context"],
             "pluie_24h": pluie_24h,
             "pluie_demain": pluie_demain,
+            "pluie_24h_source": pluie_24h_source,
             "pluie_demain_source": pluie_demain_source,
             "temperature": temperature,
             "etp": snapshot["etp"],
@@ -149,7 +184,6 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "rosee": snapshot["rosee"],
             "hauteur_gazon": snapshot["hauteur_gazon"],
             "retour_arrosage": snapshot["retour_arrosage"],
-            "pluie_fine": snapshot["pluie_fine"],
             "pluie_source": snapshot["pluie_source"],
             "bilan_hydrique_mm": snapshot["bilan_hydrique_mm"],
             "objectif_mm": snapshot["objectif_mm"],
@@ -173,6 +207,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "score_tonte": snapshot["score_tonte"],
             "jours_restants": snapshot["jours_restants"],
             "memoire": self.memory,
+            "derniere_application": self.memory.get("derniere_application"),
+            "prochaine_reapplication": self.memory.get("prochaine_reapplication"),
+            "catalogue_produits": len(self.products),
             "historique_total": len(self.history),
         }
 
@@ -222,10 +259,10 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return 1.0
         return None
 
-    async def _get_forecast_pluie_demain(self, weather_entity_id: str | None) -> float | None:
-        """Récupère la pluie prévue demain (mm) via weather.get_forecasts."""
+    async def _get_weather_forecast_summary(self, weather_entity_id: str | None) -> dict[str, Any]:
+        """Récupère les prévisions météo utiles du jour et de demain via weather.get_forecasts."""
         if not weather_entity_id:
-            return None
+            return {}
 
         try:
             response = await self.hass.services.async_call(
@@ -237,32 +274,20 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
         except Exception as err:  # pragma: no cover
             _LOGGER.debug("Echec weather.get_forecasts pour %s: %s", weather_entity_id, err)
-            return None
+            return {}
 
         if not isinstance(response, dict):
-            return None
+            return {}
 
         entity_data = response.get(weather_entity_id)
         if not isinstance(entity_data, dict):
-            return None
+            return {}
 
         forecasts = entity_data.get("forecast")
         if not isinstance(forecasts, list) or not forecasts:
-            return None
+            return {}
 
-        idx = 1 if len(forecasts) > 1 else 0
-        tomorrow = forecasts[idx]
-        if not isinstance(tomorrow, dict):
-            return None
-
-        precipitation = tomorrow.get("precipitation")
-        if precipitation is None:
-            return None
-
-        try:
-            return float(str(precipitation).strip().replace(",", "."))
-        except (TypeError, ValueError):
-            return None
+        return extract_weather_forecast_summary(forecasts)
 
     async def async_set_mode(self, mode: str) -> None:
         """Définit le mode gazon."""
@@ -320,20 +345,61 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         end = start + timedelta(days=phase_duration_days(item_type))
         return today > end
 
-    async def async_declare_intervention(self, intervention: str, date_action: date | None = None) -> None:
+    async def async_declare_intervention(
+        self,
+        intervention: str,
+        date_action: date | None = None,
+        produit_id: str | None = None,
+        produit: str | None = None,
+        dose: str | None = None,
+        zone: str | None = None,
+        reapplication_after_days: int | None = None,
+        note: str | None = None,
+    ) -> None:
         if intervention not in INTERVENTIONS_ACTIONS:
             raise HomeAssistantError(f"Intervention non supportée: {intervention}")
         target_date = date_action or date.today()
-        self._append_history(
-            {
-                "type": intervention,
-                "date": target_date.isoformat(),
-            }
-        )
+        product_record = self._resolve_product_record(produit_id)
+        if product_record:
+            produit = produit or product_record.get("nom")
+            if dose is None:
+                dose_conseillee = product_record.get("dose_conseillee")
+                if dose_conseillee not in (None, ""):
+                    dose = str(dose_conseillee)
+            if reapplication_after_days is None:
+                reapplication_after_days = product_record.get("reapplication_after_days")
+        item: dict[str, Any] = {
+            "type": intervention,
+            "date": target_date.isoformat(),
+            "source": "service",
+        }
+        if product_record:
+            item["produit_id"] = product_record.get("id")
+            item["produit_catalogue"] = product_record
+        if produit:
+            item["produit"] = produit
+        if dose is not None:
+            item["dose"] = dose
+        if zone:
+            item["zone"] = zone
+        if reapplication_after_days is not None:
+            item["reapplication_after_days"] = int(reapplication_after_days)
+        if note:
+            item["note"] = note
+        self._append_history(item)
         self.mode = intervention
         self.date_action = target_date
         await self._async_save_state()
         await self.async_request_refresh()
+
+    def _resolve_product_record(self, product_id: str | None) -> dict[str, Any] | None:
+        normalized = normalize_product_id(product_id)
+        if not normalized:
+            return None
+        product = self.products.get(normalized)
+        if not isinstance(product, dict):
+            return None
+        return product
 
     async def async_record_mowing(self, date_action: date | None = None) -> None:
         self._append_history(
@@ -419,6 +485,45 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _append_history(self, item: dict[str, Any]) -> None:
         self.history.append(item)
         self.history = self.history[-300:]
+
+    async def async_register_product(
+        self,
+        product_id: str,
+        nom: str,
+        type_produit: str,
+        dose_conseillee: str | None = None,
+        reapplication_after_days: int | None = None,
+        delai_avant_tonte_jours: int | None = None,
+        phase_compatible: str | None = None,
+        note: str | None = None,
+    ) -> None:
+        record = normalize_product_record(
+            product_id,
+            {
+                "nom": nom,
+                "type": type_produit,
+                "dose_conseillee": dose_conseillee,
+                "reapplication_after_days": reapplication_after_days,
+                "delai_avant_tonte_jours": delai_avant_tonte_jours,
+                "phase_compatible": phase_compatible,
+                "note": note,
+            },
+        )
+        if record is None:
+            raise HomeAssistantError("Identifiant ou produit invalide.")
+        self.products[record["id"]] = record
+        self.memory["catalogue_produits"] = len(self.products)
+        await self._async_save_state()
+        await self.async_request_refresh()
+
+    async def async_remove_product(self, product_id: str) -> None:
+        normalized = normalize_product_id(product_id)
+        if not normalized:
+            raise HomeAssistantError("Identifiant produit invalide.")
+        self.products.pop(normalized, None)
+        self.memory["catalogue_produits"] = len(self.products)
+        await self._async_save_state()
+        await self.async_request_refresh()
 
     async def async_start_manual_irrigation(self, objectif_mm: float) -> None:
         """Déclenche une demande d'arrosage manuel via un événement HA."""
@@ -564,32 +669,30 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self.async_start_zone_monitoring()
         await self.async_request_refresh()
 
-    def get_used_entities_attributes(self) -> dict[str, Any]:
+    def get_used_entities_attributes(self) -> dict[str, Any] | None:
         """Expose un contexte compact pour les attributs visibles."""
         attrs = {
             "configuration": {
                 "type_sol": self._get_conf(CONF_TYPE_SOL) or DEFAULT_TYPE_SOL,
             },
             "pluie_demain_source": self.data.get("pluie_demain_source") if self.data else None,
-            "phase_dominante": self.data.get("phase_dominante") if self.data else None,
             "phase_dominante_source": self.data.get("phase_dominante_source") if self.data else None,
-            "sous_phase": self.data.get("sous_phase") if self.data else None,
-            "sous_phase_detail": self.data.get("sous_phase_detail") if self.data else None,
-            "sous_phase_age_days": self.data.get("sous_phase_age_days") if self.data else None,
-            "sous_phase_progression": self.data.get("sous_phase_progression") if self.data else None,
             "niveau_action": self.data.get("niveau_action") if self.data else None,
             "fenetre_optimale": self.data.get("fenetre_optimale") if self.data else None,
             "risque_gazon": self.data.get("risque_gazon") if self.data else None,
             "tonte_autorisee": self.data.get("tonte_autorisee") if self.data else None,
             "tonte_statut": self.data.get("tonte_statut") if self.data else None,
             "prochaine_reevaluation": self.data.get("prochaine_reevaluation") if self.data else None,
-            "memoire": self.memory,
-            "historique_resume": {
-                "total": len(self.history),
-                "derniere_intervention": self.history[-1] if self.history else None,
-            },
         }
-        return attrs
+        clean = {key: value for key, value in attrs.items() if value not in (None, "", {}, [])}
+        configuration = clean.get("configuration")
+        if isinstance(configuration, dict):
+            configuration = {k: v for k, v in configuration.items() if v not in (None, "", {}, [])}
+            if configuration:
+                clean["configuration"] = configuration
+            else:
+                clean.pop("configuration", None)
+        return clean or None
 
     async def _async_load_state(self) -> None:
         """Charge l'état persistant (mode, date_action)."""
@@ -608,6 +711,17 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.history = [item for item in history if isinstance(item, dict)]
         else:
             self.history = []
+        products = data.get("products")
+        if isinstance(products, dict):
+            self.products = {}
+            for key, value in products.items():
+                if not isinstance(key, str) or not isinstance(value, dict):
+                    continue
+                cleaned = dict(value)
+                cleaned.pop("sol_compatible", None)
+                self.products[key] = cleaned
+        else:
+            self.products = {}
         memory = data.get("memory")
         if isinstance(memory, dict):
             self.memory = memory
@@ -619,6 +733,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "dernier_arrosage_significatif": None,
                 "derniere_phase_active": self.mode,
                 "dernier_conseil": None,
+                "derniere_application": None,
+                "prochaine_reapplication": None,
+                "catalogue_produits": len(self.products),
                 "date_derniere_mise_a_jour": None,
             }
 
@@ -629,6 +746,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "mode": self.mode,
                 "date_action": self.date_action.isoformat() if self.date_action else None,
                 "history": self.history[-300:],
+                "products": self.products,
                 "memory": self.memory,
             }
         )

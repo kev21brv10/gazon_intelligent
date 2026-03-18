@@ -46,11 +46,11 @@ class GazonDebitZoneNumber(GazonEntityBase, NumberEntity):
     def native_value(self):
         value = self.coordinator._get_conf(self._config_key)
         if value is None:
-            return 60.0 if self._zone_index == 1 else 0.0
+            return 0.0
         try:
             return float(value)
         except (TypeError, ValueError):
-            return 60.0 if self._zone_index == 1 else 0.0
+            return 0.0
 
     async def async_set_native_value(self, value: float) -> None:
         await self.coordinator.async_update_config({self._config_key: float(value)})

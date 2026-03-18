@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Ajustes básicos",
-        "description": "Rellena aquí las zonas, los caudales, los sensores meteorológicos y la entidad meteorológica obligatoria. Los sensores complementarios están después en las opciones avanzadas de la UI.",
+        "description": "Rellena aquí las zonas, los caudales y el tipo de suelo.",
         "data": {
           "zone_1": "Zona 1",
           "zone_2": "Zona 2",
@@ -12,17 +12,11 @@
           "zone_4": "Zona 4",
           "zone_5": "Zona 5",
           "debit_zone_1": "Caudal zona 1 (mm/h, 60 por defecto)",
-          "debit_zone_2": "Caudal zona 2 (mm/h)",
-          "debit_zone_3": "Caudal zona 3 (mm/h)",
-          "debit_zone_4": "Caudal zona 4 (mm/h)",
-          "debit_zone_5": "Caudal zona 5 (mm/h)",
-          "capteur_pluie_24h": "Lluvia 24 h (mm)",
-          "capteur_pluie_demain": "Lluvia mañana (mm)",
-          "capteur_temperature": "Temperatura",
-          "capteur_etp": "ETP diario",
-          "capteur_humidite": "Humedad",
-          "entite_meteo": "Meteorología obligatoria",
-          "type_sol": "Tipo de suelo"
+          "debit_zone_2": "Caudal zona 2 (mm/h, 0 si no se usa)",
+          "debit_zone_3": "Caudal zona 3 (mm/h, 0 si no se usa)",
+          "debit_zone_4": "Caudal zona 4 (mm/h, 0 si no se usa)",
+          "debit_zone_5": "Caudal zona 5 (mm/h, 0 si no se usa)",
+          "type_sol": "Tipo de suelo (obligatorio)"
         }
       }
     },
@@ -33,13 +27,17 @@
   "options": {
     "step": {
       "user": {
-        "title": "Opciones avanzadas",
-        "description": "Rellena aquí los sensores complementarios que se muestran en la UI.",
+        "title": "Opciones avanzadas en la UI",
+        "description": "Rellena aquí la entidad meteorológica y los sensores adicionales si los tienes. Si la ETP no se proporciona, se calcula automáticamente a partir del tiempo.",
         "data": {
+          "entite_meteo": "Meteorología (obligatoria)",
+          "capteur_pluie_24h": "Lluvia 24 h (opcional, si no tiempo)",
+          "capteur_pluie_demain": "Lluvia mañana (opcional, si no tiempo)",
+          "capteur_temperature": "Temperatura (opcional, si no tiempo)",
+          "capteur_etp": "ETP diario (opcional, automática si está vacío)",
+          "capteur_humidite": "Humedad (opcional, si no tiempo)",
           "capteur_hauteur_gazon": "Altura del césped (recomendado)",
           "capteur_humidite_sol": "Humedad del suelo (%) (opcional)",
-          "capteur_retour_arrosage": "Riego real (mm, opcional)",
-          "capteur_pluie_fine": "Lluvia fina (opcional)",
           "capteur_vent": "Viento (opcional si se usa meteorología)",
           "capteur_rosee": "Rocío / humedad foliar (opcional)"
         }
@@ -87,11 +85,11 @@
     },
     "set_date_action": {
       "name": "Registrar fecha",
-      "description": "Indica la fecha real de la intervención (AAAA-MM-DD). Si está vacío, se usa hoy.",
+      "description": "Indica la fecha real de la intervención (DD/MM/AAAA). Si está vacío, se usa hoy.",
       "fields": {
         "date_action": {
           "name": "Fecha",
-          "description": "Fecha en formato AAAA-MM-DD."
+          "description": "Fecha en formato DD/MM/AAAA."
         }
       }
     },
@@ -121,7 +119,7 @@
     },
     "declare_intervention": {
       "name": "Declarar una intervención",
-      "description": "Registra una intervención real para alimentar el motor de decisión.",
+      "description": "Registra una intervención real y puede recordar el producto, la dosis y la siguiente reaplicación.",
       "fields": {
         "intervention": {
           "name": "Intervención",
@@ -129,7 +127,79 @@
         },
         "date_action": {
           "name": "Fecha de acción (opcional)",
-          "description": "Fecha en formato AAAA-MM-DD. Si está vacío, se usa hoy."
+          "description": "Fecha en formato DD/MM/AAAA. Si está vacío, se usa hoy."
+        },
+        "produit_id": {
+          "name": "ID de producto (opcional)",
+          "description": "Identificador de un producto guardado en la base local."
+        },
+        "produit": {
+          "name": "Producto (opcional)",
+          "description": "Nombre del producto o referencia aplicada."
+        },
+        "dose": {
+          "name": "Dosis (opcional)",
+          "description": "Dosis aplicada, texto libre si hace falta."
+        },
+        "zone": {
+          "name": "Zona (opcional)",
+          "description": "Zona afectada por la intervención."
+        },
+        "reapplication_after_days": {
+          "name": "Reaplicar en X días (opcional)",
+          "description": "Plazo antes de reevaluar o reaplicar."
+        },
+        "note": {
+          "name": "Nota (opcional)",
+          "description": "Comentario libre."
+        }
+      }
+    },
+    "register_product": {
+      "name": "Registrar un producto",
+      "description": "Añade o actualiza un producto personalizado en la base local.",
+      "fields": {
+        "product_id": {
+          "name": "ID de producto",
+          "description": "Identificador corto y único."
+        },
+        "nom": {
+          "name": "Nombre",
+          "description": "Nombre legible del producto."
+        },
+        "type": {
+          "name": "Tipo",
+          "description": "Categoría del producto."
+        },
+        "dose_conseillee": {
+          "name": "Dosis recomendada (opcional)",
+          "description": "Dosis por defecto a sugerir."
+        },
+        "reapplication_after_days": {
+          "name": "Reaplicar en X días (opcional)",
+          "description": "Plazo recomendado antes de volver a usarlo."
+        },
+        "delai_avant_tonte_jours": {
+          "name": "Tiempo antes de cortar (opcional)",
+          "description": "Tiempo a esperar antes del próximo corte."
+        },
+        "phase_compatible": {
+          "name": "Fases compatibles (opcional)",
+          "description": "Lista separada por comas."
+        },
+        "note": {
+          "name": "Nota (opcional)",
+          "description": "Comentario libre."
+        }
+      }
+    },
+    "remove_product": {
+      "name": "Eliminar un producto",
+      "description": "Elimina un producto de la base local.",
+      "fields": {
+        "product_id": {
+          "name": "ID de producto",
+          "description": "Identificador del producto a borrar."
         }
       }
     },
@@ -139,7 +209,7 @@
       "fields": {
         "date_action": {
           "name": "Fecha de corte (opcional)",
-          "description": "Fecha en formato AAAA-MM-DD. Si está vacío, se usa hoy."
+          "description": "Fecha en formato DD/MM/AAAA. Si está vacío, se usa hoy."
         }
       }
     },
@@ -149,7 +219,7 @@
       "fields": {
         "date_action": {
           "name": "Fecha de riego (opcional)",
-          "description": "Fecha en formato AAAA-MM-DD. Si está vacío, se usa hoy."
+          "description": "Fecha en formato DD/MM/AAAA. Si está vacío, se usa hoy."
         },
         "objectif_mm": {
           "name": "Cantidad aplicada (opcional)",

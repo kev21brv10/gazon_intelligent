@@ -84,3 +84,24 @@ class WeatherSourcesTests(unittest.TestCase):
         self.assertEqual(profile["weather_uv_index"], 4.0)
         self.assertEqual(profile["weather_precipitation_probability"], 35.0)
         self.assertEqual(profile["weather_condition"], "sunny")
+
+    def test_extract_weather_forecast_summary_collects_day_values(self) -> None:
+        forecasts = [
+            {
+                "temperature": "19.4",
+                "apparent_temperature": "18.0",
+                "precipitation": "0.8",
+                "condition": "cloudy",
+            },
+            {
+                "temperature": "16.2",
+                "precipitation": "3.1",
+            },
+        ]
+
+        summary = weather_sources.extract_weather_forecast_summary(forecasts)
+
+        self.assertEqual(summary["forecast_temperature_today"], 19.4)
+        self.assertEqual(summary["forecast_pluie_24h"], 0.8)
+        self.assertEqual(summary["forecast_pluie_demain"], 3.1)
+        self.assertEqual(summary["forecast_condition_today"], "cloudy")

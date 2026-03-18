@@ -6,8 +6,6 @@ from homeassistant.helpers.entity import EntityCategory
 from .const import (
     CONF_CAPTEUR_HAUTEUR_GAZON,
     CONF_CAPTEUR_HUMIDITE_SOL,
-    CONF_CAPTEUR_PLUIE_FINE,
-    CONF_CAPTEUR_RETOUR_ARROSAGE,
     CONF_CAPTEUR_ROSEE,
     CONF_CAPTEUR_VENT,
     CONF_TYPE_SOL,
@@ -35,16 +33,6 @@ async def async_setup_entry(hass, entry, async_add_entities):
                 coordinator,
                 key=CONF_CAPTEUR_HUMIDITE_SOL,
                 name="Capteur humidité du sol",
-            ),
-            GazonSensorBindingSelect(
-                coordinator,
-                key=CONF_CAPTEUR_RETOUR_ARROSAGE,
-                name="Capteur retour arrosage",
-            ),
-            GazonSensorBindingSelect(
-                coordinator,
-                key=CONF_CAPTEUR_PLUIE_FINE,
-                name="Capteur pluie fine",
             ),
             GazonSensorBindingSelect(
                 coordinator,

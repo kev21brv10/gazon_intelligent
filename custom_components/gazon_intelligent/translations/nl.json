@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Basisinstellingen",
-        "description": "Vul hier de zones, doorstroomwaarden, weersensoren en de verplichte weerentiteit in. De aanvullende sensoren staan daarna in de geavanceerde UI-opties.",
+        "description": "Vul hier de zones, doorstroming en bodemtype in.",
         "data": {
           "zone_1": "Zone 1",
           "zone_2": "Zone 2",
@@ -12,17 +12,11 @@
           "zone_4": "Zone 4",
           "zone_5": "Zone 5",
           "debit_zone_1": "Doorstroom zone 1 (mm/h, standaard 60)",
-          "debit_zone_2": "Doorstroom zone 2 (mm/h)",
-          "debit_zone_3": "Doorstroom zone 3 (mm/h)",
-          "debit_zone_4": "Doorstroom zone 4 (mm/h)",
-          "debit_zone_5": "Doorstroom zone 5 (mm/h)",
-          "capteur_pluie_24h": "Regen 24 uur (mm)",
-          "capteur_pluie_demain": "Regen morgen (mm)",
-          "capteur_temperature": "Temperatuur",
-          "capteur_etp": "Dagelijkse ETP",
-          "capteur_humidite": "Vochtigheid",
-          "entite_meteo": "Verplichte weerentiteit",
-          "type_sol": "Bodemtype"
+          "debit_zone_2": "Doorstroom zone 2 (mm/h, 0 indien ongebruikt)",
+          "debit_zone_3": "Doorstroom zone 3 (mm/h, 0 indien ongebruikt)",
+          "debit_zone_4": "Doorstroom zone 4 (mm/h, 0 indien ongebruikt)",
+          "debit_zone_5": "Doorstroom zone 5 (mm/h, 0 indien ongebruikt)",
+          "type_sol": "Bodemtype (verplicht)"
         }
       }
     },
@@ -33,13 +27,17 @@
   "options": {
     "step": {
       "user": {
-        "title": "Geavanceerde opties",
-        "description": "Vul hier de aanvullende sensoren in die in de UI worden getoond.",
+        "title": "Geavanceerde opties in de UI",
+        "description": "Vul hier de weerentiteit en extra sensoren in als je ze hebt. Als ETP niet is opgegeven, wordt die automatisch uit het weer berekend.",
         "data": {
+          "entite_meteo": "Weer (verplicht)",
+          "capteur_pluie_24h": "Regen 24 uur (optioneel, anders weer)",
+          "capteur_pluie_demain": "Regen morgen (optioneel, anders weer)",
+          "capteur_temperature": "Temperatuur (optioneel, anders weer)",
+          "capteur_etp": "Dagelijkse ETP (optioneel, automatisch als leeg)",
+          "capteur_humidite": "Vochtigheid (optioneel, anders weer)",
           "capteur_hauteur_gazon": "Grashoogte (aanbevolen)",
           "capteur_humidite_sol": "Bodemvocht (%) (optioneel)",
-          "capteur_retour_arrosage": "Werkelijke beregening (mm, optioneel)",
-          "capteur_pluie_fine": "Lichte regen (optioneel)",
           "capteur_vent": "Wind (optioneel als weer beschikbaar is)",
           "capteur_rosee": "Dauw / bladnat (optioneel)"
         }
@@ -87,11 +85,11 @@
     },
     "set_date_action": {
       "name": "Datum vastleggen",
-      "description": "Stelt de werkelijke datum van de actie in (JJJJ-MM-DD). Als leeg, wordt vandaag gebruikt.",
+      "description": "Stelt de werkelijke datum van de actie in (DD/MM/JJJJ). Als leeg, wordt vandaag gebruikt.",
       "fields": {
         "date_action": {
           "name": "Datum",
-          "description": "Datum in JJJJ-MM-DD-formaat."
+          "description": "Datum in DD/MM/JJJJ-formaat."
         }
       }
     },
@@ -121,7 +119,7 @@
     },
     "declare_intervention": {
       "name": "Actie melden",
-      "description": "Legt een echte actie vast om de beslissingsmotor te voeden.",
+      "description": "Legt een echte actie vast en kan product, dosis en volgende herhaling onthouden.",
       "fields": {
         "intervention": {
           "name": "Actie",
@@ -129,7 +127,79 @@
         },
         "date_action": {
           "name": "Actiedatum (optioneel)",
-          "description": "Datum in JJJJ-MM-DD-formaat. Als leeg, wordt vandaag gebruikt."
+          "description": "Datum in DD/MM/JJJJ-formaat. Als leeg, wordt vandaag gebruikt."
+        },
+        "produit_id": {
+          "name": "Product-ID (optioneel)",
+          "description": "Identifier van een lokaal opgeslagen product."
+        },
+        "produit": {
+          "name": "Product (optioneel)",
+          "description": "Naam van het product of de toegepaste referentie."
+        },
+        "dose": {
+          "name": "Dosis (optioneel)",
+          "description": "Toegepaste dosis, eventueel vrije tekst."
+        },
+        "zone": {
+          "name": "Zone (optioneel)",
+          "description": "Zone waarop de actie van toepassing is."
+        },
+        "reapplication_after_days": {
+          "name": "Opnieuw toepassen over X dagen (optioneel)",
+          "description": "Termijn voor herbeoordeling of herhaling."
+        },
+        "note": {
+          "name": "Opmerking (optioneel)",
+          "description": "Vrije opmerking."
+        }
+      }
+    },
+    "register_product": {
+      "name": "Product registreren",
+      "description": "Voegt een aangepast product toe aan de lokale database of werkt het bij.",
+      "fields": {
+        "product_id": {
+          "name": "Product-ID",
+          "description": "Korte en unieke identifier."
+        },
+        "nom": {
+          "name": "Naam",
+          "description": "Leesbare productnaam."
+        },
+        "type": {
+          "name": "Type",
+          "description": "Productcategorie."
+        },
+        "dose_conseillee": {
+          "name": "Aanbevolen dosis (optioneel)",
+          "description": "Standaarddosis om voor te stellen."
+        },
+        "reapplication_after_days": {
+          "name": "Opnieuw toepassen over X dagen (optioneel)",
+          "description": "Aanbevolen termijn voor herhaling."
+        },
+        "delai_avant_tonte_jours": {
+          "name": "Wachttijd voor maaien (optioneel)",
+          "description": "Wachttijd tot de volgende maaibeurt."
+        },
+        "phase_compatible": {
+          "name": "Compatibele fases (optioneel)",
+          "description": "Door komma's gescheiden lijst."
+        },
+        "note": {
+          "name": "Opmerking (optioneel)",
+          "description": "Vrije opmerking."
+        }
+      }
+    },
+    "remove_product": {
+      "name": "Product verwijderen",
+      "description": "Verwijdert een product uit de lokale database.",
+      "fields": {
+        "product_id": {
+          "name": "Product-ID",
+          "description": "Identifier van het te verwijderen product."
         }
       }
     },
@@ -139,7 +209,7 @@
       "fields": {
         "date_action": {
           "name": "Maaidatum (optioneel)",
-          "description": "Datum in JJJJ-MM-DD-formaat. Als leeg, wordt vandaag gebruikt."
+          "description": "Datum in DD/MM/JJJJ-formaat. Als leeg, wordt vandaag gebruikt."
         }
       }
     },
@@ -149,7 +219,7 @@
       "fields": {
         "date_action": {
           "name": "Irrigatiedatum (optioneel)",
-          "description": "Datum in JJJJ-MM-DD-formaat. Als leeg, wordt vandaag gebruikt."
+          "description": "Datum in DD/MM/JJJJ-formaat. Als leeg, wordt vandaag gebruikt."
         },
         "objectif_mm": {
           "name": "Toegepaste hoeveelheid (optioneel)",

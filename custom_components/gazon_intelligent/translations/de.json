@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Grundlegende Einstellungen",
-        "description": "Trage hier die Zonen, Durchflüsse, Wettersensoren und die verpflichtende Wetterentität ein. Die ergänzenden Sensoren befinden sich danach in den erweiterten UI-Optionen.",
+        "description": "Trage hier die Zonen, die Durchflüsse und den Bodentyp ein.",
         "data": {
           "zone_1": "Zone 1",
           "zone_2": "Zone 2",
@@ -12,17 +12,11 @@
           "zone_4": "Zone 4",
           "zone_5": "Zone 5",
           "debit_zone_1": "Durchfluss Zone 1 (mm/h, Standard 60)",
-          "debit_zone_2": "Durchfluss Zone 2 (mm/h)",
-          "debit_zone_3": "Durchfluss Zone 3 (mm/h)",
-          "debit_zone_4": "Durchfluss Zone 4 (mm/h)",
-          "debit_zone_5": "Durchfluss Zone 5 (mm/h)",
-          "capteur_pluie_24h": "Regen 24 h (mm)",
-          "capteur_pluie_demain": "Regen morgen (mm)",
-          "capteur_temperature": "Temperatur",
-          "capteur_etp": "ETP des Tages",
-          "capteur_humidite": "Feuchtigkeit",
-          "entite_meteo": "Verpflichtendes Wetter",
-          "type_sol": "Bodentyp"
+          "debit_zone_2": "Durchfluss Zone 2 (mm/h, 0 wenn ungenutzt)",
+          "debit_zone_3": "Durchfluss Zone 3 (mm/h, 0 wenn ungenutzt)",
+          "debit_zone_4": "Durchfluss Zone 4 (mm/h, 0 wenn ungenutzt)",
+          "debit_zone_5": "Durchfluss Zone 5 (mm/h, 0 wenn ungenutzt)",
+          "type_sol": "Bodentyp (erforderlich)"
         }
       }
     },
@@ -33,13 +27,17 @@
   "options": {
     "step": {
       "user": {
-        "title": "Erweiterte Optionen",
-        "description": "Trage hier die ergänzenden Sensoren ein, die in der UI angezeigt werden.",
+        "title": "Erweiterte Optionen in der UI",
+        "description": "Trage hier die Wetterentität und zusätzliche Sensoren ein, falls du sie hast. Wenn ETP nicht angegeben ist, wird sie automatisch aus dem Wetter berechnet.",
         "data": {
+          "entite_meteo": "Wetter (erforderlich)",
+          "capteur_pluie_24h": "Regen 24 h (optional, sonst Wetter)",
+          "capteur_pluie_demain": "Regen morgen (optional, sonst Wetter)",
+          "capteur_temperature": "Temperatur (optional, sonst Wetter)",
+          "capteur_etp": "ETP des Tages (optional, automatisch wenn leer)",
+          "capteur_humidite": "Feuchtigkeit (optional, sonst Wetter)",
           "capteur_hauteur_gazon": "Rasenhöhe (empfohlen)",
           "capteur_humidite_sol": "Bodenfeuchte (%) (optional)",
-          "capteur_retour_arrosage": "Tatsächliche Bewässerung (mm, optional)",
-          "capteur_pluie_fine": "Leichter Regen (optional)",
           "capteur_vent": "Wind (optional, wenn Wetter verfügbar ist)",
           "capteur_rosee": "Tau / Blattnässe (optional)"
         }
@@ -87,11 +85,11 @@
     },
     "set_date_action": {
       "name": "Datum speichern",
-      "description": "Legt das tatsächliche Datum der Maßnahme fest (JJJJ-MM-TT). Wenn leer, wird heute verwendet.",
+      "description": "Legt das tatsächliche Datum der Maßnahme fest (TT/MM/JJJJ). Wenn leer, wird heute verwendet.",
       "fields": {
         "date_action": {
           "name": "Datum",
-          "description": "Datum im Format JJJJ-MM-TT."
+          "description": "Datum im Format TT/MM/JJJJ."
         }
       }
     },
@@ -121,7 +119,7 @@
     },
     "declare_intervention": {
       "name": "Maßnahme melden",
-      "description": "Erfasst eine echte Maßnahme, um die Entscheidungslogik zu füttern.",
+      "description": "Erfasst eine echte Maßnahme und kann Produkt, Dosis und nächste Wiederanwendung merken.",
       "fields": {
         "intervention": {
           "name": "Maßnahme",
@@ -129,7 +127,79 @@
         },
         "date_action": {
           "name": "Datum der Maßnahme (optional)",
-          "description": "Datum im Format JJJJ-MM-TT. Wenn leer, wird heute verwendet."
+          "description": "Datum im Format TT/MM/JJJJ. Wenn leer, wird heute verwendet."
+        },
+        "produit_id": {
+          "name": "Produkt-ID (optional)",
+          "description": "Kennung eines lokal gespeicherten Produkts."
+        },
+        "produit": {
+          "name": "Produkt (optional)",
+          "description": "Name des Produkts oder der angewendeten Referenz."
+        },
+        "dose": {
+          "name": "Dosis (optional)",
+          "description": "Angewendete Dosis, bei Bedarf als Freitext."
+        },
+        "zone": {
+          "name": "Zone (optional)",
+          "description": "Von der Maßnahme betroffene Zone."
+        },
+        "reapplication_after_days": {
+          "name": "In X Tagen erneut anwenden (optional)",
+          "description": "Frist bis zur Neubewertung oder erneuten Anwendung."
+        },
+        "note": {
+          "name": "Notiz (optional)",
+          "description": "Freier Kommentar."
+        }
+      }
+    },
+    "register_product": {
+      "name": "Produkt registrieren",
+      "description": "Fügt ein benutzerdefiniertes Produkt zur lokalen Datenbank hinzu oder aktualisiert es.",
+      "fields": {
+        "product_id": {
+          "name": "Produkt-ID",
+          "description": "Kurze und eindeutige Kennung."
+        },
+        "nom": {
+          "name": "Name",
+          "description": "Lesbarer Produktname."
+        },
+        "type": {
+          "name": "Typ",
+          "description": "Produktkategorie."
+        },
+        "dose_conseillee": {
+          "name": "Empfohlene Dosis (optional)",
+          "description": "Standarddosis, die vorgeschlagen wird."
+        },
+        "reapplication_after_days": {
+          "name": "In X Tagen erneut anwenden (optional)",
+          "description": "Empfohlene Frist bis zur erneuten Anwendung."
+        },
+        "delai_avant_tonte_jours": {
+          "name": "Zeit bis zum Mähen (optional)",
+          "description": "Wartezeit bis zum nächsten Mähen."
+        },
+        "phase_compatible": {
+          "name": "Kompatible Phasen (optional)",
+          "description": "Durch Kommas getrennte Liste."
+        },
+        "note": {
+          "name": "Notiz (optional)",
+          "description": "Freier Kommentar."
+        }
+      }
+    },
+    "remove_product": {
+      "name": "Produkt entfernen",
+      "description": "Entfernt ein Produkt aus der lokalen Datenbank.",
+      "fields": {
+        "product_id": {
+          "name": "Produkt-ID",
+          "description": "Kennung des zu löschenden Produkts."
         }
       }
     },
@@ -139,7 +209,7 @@
       "fields": {
         "date_action": {
           "name": "Mähdatum (optional)",
-          "description": "Datum im Format JJJJ-MM-TT. Wenn leer, wird heute verwendet."
+          "description": "Datum im Format TT/MM/JJJJ. Wenn leer, wird heute verwendet."
         }
       }
     },
@@ -149,7 +219,7 @@
       "fields": {
         "date_action": {
           "name": "Bewässerungsdatum (optional)",
-          "description": "Datum im Format JJJJ-MM-TT. Wenn leer, wird heute verwendet."
+          "description": "Datum im Format TT/MM/JJJJ. Wenn leer, wird heute verwendet."
         },
         "objectif_mm": {
           "name": "Ausgebrachte Menge (optional)",

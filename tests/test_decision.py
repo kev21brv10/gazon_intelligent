@@ -108,14 +108,17 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertEqual(balance["deficit_3j"], 19.9)
         self.assertEqual(balance["deficit_7j"], 48.5)
 
-    def test_compute_advanced_context_marks_fine_rain(self) -> None:
+    def test_compute_advanced_context_uses_weather_probability(self) -> None:
         context = decision.compute_advanced_context(
             humidite_sol=22,
             vent=18,
             rosee=1.0,
             hauteur_gazon=11.5,
             retour_arrosage=0.7,
-            pluie_fine=1.2,
+            weather_profile={
+                "weather_precipitation_probability": 70,
+                "weather_condition": "cloudy",
+            },
         )
 
         self.assertEqual(context["humidite_sol"], 22.0)
@@ -123,8 +126,7 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertEqual(context["rosee"], 1.0)
         self.assertEqual(context["hauteur_gazon"], 11.5)
         self.assertEqual(context["retour_arrosage"], 0.7)
-        self.assertEqual(context["pluie_fine"], 1.2)
-        self.assertEqual(context["pluie_source"], "capteur_pluie_fine")
+        self.assertEqual(context["weather_precipitation_probability"], 70.0)
         self.assertGreater(context["soil_factor"], 1.0)
         self.assertGreater(context["wind_factor"], 1.0)
         self.assertLess(context["dew_factor"], 1.0)
@@ -136,6 +138,16 @@ class DecisionEngineTests(unittest.TestCase):
             {"type": "arrosage", "date": "2026-03-13", "objectif_mm": 1.0},
             {"type": "arrosage", "date": "2026-03-16", "objectif_mm": 3.0},
             {"type": "Sursemis", "date": "2026-03-10"},
+            {
+                "type": "Fertilisation",
+                "date": "2026-03-17",
+                "produit": "Engrais printemps",
+                "dose": "12.5",
+                "zone": "zone_1",
+                "reapplication_after_days": 21,
+                "note": "Test",
+                "source": "service",
+            },
         ]
 
         memory = decision.compute_memory(
@@ -160,6 +172,10 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertEqual(memory["dernier_arrosage"]["date"], "2026-03-16")
         self.assertEqual(memory["dernier_arrosage_significatif"]["date"], "2026-03-16")
         self.assertEqual(memory["derniere_phase_active"], "Sursemis")
+        self.assertEqual(memory["derniere_application"]["libelle"], "Engrais printemps")
+        self.assertEqual(memory["derniere_application"]["type"], "Fertilisation")
+        self.assertEqual(memory["derniere_application"]["dose"], "12.5")
+        self.assertEqual(memory["prochaine_reapplication"], "2026-04-07")
         self.assertEqual(memory["dernier_conseil"]["conseil_principal"], "Arroser ce matin")
         self.assertEqual(memory["dernier_conseil"]["prochaine_reevaluation"], "dans 24 h")
 
@@ -216,6 +232,23 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertEqual(snapshot["prochaine_reevaluation"], "dans 24 h")
         self.assertEqual(snapshot["objectif_mm"], 0.0)
 
+    def test_build_decision_snapshot_sursemis_mentions_passage_interval(self) -> None:
+        snapshot = decision.build_decision_snapshot(
+            history=[{"type": "Sursemis", "date": "2026-03-17"}],
+            today=date(2026, 3, 17),
+            hour_of_day=10,
+            temperature=18,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=50,
+            type_sol="limoneux",
+            etp_capteur=2.0,
+        )
+
+        self.assertEqual(snapshot["phase_active"], "Sursemis")
+        self.assertIn("20 à 30 min", snapshot["conseil_principal"])
+        self.assertIn("20 à 30 min", snapshot["action_recommandee"])
+
     def test_build_decision_snapshot_uses_advanced_sensors(self) -> None:
         base_snapshot = decision.build_decision_snapshot(
             history=[],
@@ -243,11 +276,17 @@ class DecisionEngineTests(unittest.TestCase):
             rosee=1.0,
             hauteur_gazon=11.5,
             retour_arrosage=0.7,
-            pluie_fine=1.2,
+            weather_profile={
+                "weather_temperature": 24,
+                "weather_humidity": 55,
+                "weather_wind_speed": 18,
+                "weather_cloud_coverage": 20,
+                "weather_precipitation_probability": 70,
+            },
         )
 
-        self.assertEqual(advanced_snapshot["advanced_context"]["pluie_source"], "capteur_pluie_fine")
-        self.assertEqual(advanced_snapshot["pluie_fine"], 1.2)
+        self.assertEqual(advanced_snapshot["advanced_context"]["pluie_source"], "capteur_pluie_24h")
+        self.assertEqual(advanced_snapshot["advanced_context"]["weather_precipitation_probability"], 70.0)
         self.assertEqual(advanced_snapshot["humidite_sol"], 22.0)
         self.assertEqual(advanced_snapshot["vent"], 18.0)
         self.assertEqual(advanced_snapshot["rosee"], 1.0)
@@ -259,6 +298,23 @@ class DecisionEngineTests(unittest.TestCase):
 
     def test_compute_etp_prefers_sensor_value(self) -> None:
         self.assertEqual(decision.compute_etp(temperature=24, pluie_24h=2, etp_capteur=4.2), 4.2)
+
+    def test_compute_etp_can_fall_back_to_weather_profile(self) -> None:
+        etp = decision.compute_etp(
+            temperature=None,
+            pluie_24h=1.0,
+            etp_capteur=None,
+            weather_profile={
+                "weather_temperature": 24,
+                "weather_humidity": 55,
+                "weather_wind_speed": 18,
+                "weather_cloud_coverage": 20,
+                "weather_precipitation_probability": 30,
+            },
+        )
+
+        self.assertIsNotNone(etp)
+        self.assertGreater(etp, 0.0)
 
 
 if __name__ == "__main__":

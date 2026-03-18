@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Base settings",
-        "description": "Fill in the zones, flow rates, weather sensors and mandatory weather entity here. The complementary sensors are then in the advanced UI options.",
+        "description": "Fill in the zones, flow rates and soil type here.",
         "data": {
           "zone_1": "Zone 1",
           "zone_2": "Zone 2",
@@ -12,17 +12,11 @@
           "zone_4": "Zone 4",
           "zone_5": "Zone 5",
           "debit_zone_1": "Zone 1 flow (mm/h, 60 by default)",
-          "debit_zone_2": "Zone 2 flow (mm/h)",
-          "debit_zone_3": "Zone 3 flow (mm/h)",
-          "debit_zone_4": "Zone 4 flow (mm/h)",
-          "debit_zone_5": "Zone 5 flow (mm/h)",
-          "capteur_pluie_24h": "24h rain (mm)",
-          "capteur_pluie_demain": "Tomorrow rain (mm)",
-          "capteur_temperature": "Temperature",
-          "capteur_etp": "Daily ETP",
-          "capteur_humidite": "Humidity",
-          "entite_meteo": "Mandatory weather",
-          "type_sol": "Soil type"
+          "debit_zone_2": "Zone 2 flow (mm/h, 0 if unused)",
+          "debit_zone_3": "Zone 3 flow (mm/h, 0 if unused)",
+          "debit_zone_4": "Zone 4 flow (mm/h, 0 if unused)",
+          "debit_zone_5": "Zone 5 flow (mm/h, 0 if unused)",
+          "type_sol": "Soil type (required)"
         }
       }
     },
@@ -33,13 +27,17 @@
   "options": {
     "step": {
       "user": {
-        "title": "Advanced options",
-        "description": "Fill in the complementary sensors shown in the UI here.",
+        "title": "Advanced options in the UI",
+        "description": "Fill in the weather entity and extra sensors if you have them. If ETP is not provided, it is calculated automatically from weather.",
         "data": {
+          "entite_meteo": "Weather (required)",
+          "capteur_pluie_24h": "24h rain (optional, otherwise weather)",
+          "capteur_pluie_demain": "Tomorrow rain (optional, otherwise weather)",
+          "capteur_temperature": "Temperature (optional, otherwise weather)",
+          "capteur_etp": "Daily ETP (optional, auto if empty)",
+          "capteur_humidite": "Humidity (optional, otherwise weather)",
           "capteur_hauteur_gazon": "Grass height (recommended)",
           "capteur_humidite_sol": "Soil humidity (%) (optional)",
-          "capteur_retour_arrosage": "Actual watering (mm, optional)",
-          "capteur_pluie_fine": "Light rain (optional)",
           "capteur_vent": "Wind (optional if weather is provided)",
           "capteur_rosee": "Dew / leaf wetness (optional)"
         }
@@ -87,11 +85,11 @@
     },
     "set_date_action": {
       "name": "Record date",
-      "description": "Sets the real date of the intervention (YYYY-MM-DD). If empty, today is used.",
+      "description": "Sets the real date of the intervention (DD/MM/YYYY). If empty, today is used.",
       "fields": {
         "date_action": {
           "name": "Date",
-          "description": "Date in YYYY-MM-DD format."
+          "description": "Date in DD/MM/YYYY format."
         }
       }
     },
@@ -121,7 +119,7 @@
     },
     "declare_intervention": {
       "name": "Declare an intervention",
-      "description": "Logs a real intervention to feed the decision engine.",
+      "description": "Logs a real intervention and can remember the product, dose, and next reapplication.",
       "fields": {
         "intervention": {
           "name": "Intervention",
@@ -129,7 +127,79 @@
         },
         "date_action": {
           "name": "Action date (optional)",
-          "description": "Date in YYYY-MM-DD format. If empty, today is used."
+          "description": "Date in DD/MM/YYYY format. If empty, today is used."
+        },
+        "produit_id": {
+          "name": "Product ID (optional)",
+          "description": "Identifier of a product saved in the local database."
+        },
+        "produit": {
+          "name": "Product (optional)",
+          "description": "Name of the product or reference applied."
+        },
+        "dose": {
+          "name": "Dose (optional)",
+          "description": "Applied dose, free text if needed."
+        },
+        "zone": {
+          "name": "Zone (optional)",
+          "description": "Zone affected by the intervention."
+        },
+        "reapplication_after_days": {
+          "name": "Reapply in X days (optional)",
+          "description": "Delay before re-evaluating or reapplying."
+        },
+        "note": {
+          "name": "Note (optional)",
+          "description": "Free comment."
+        }
+      }
+    },
+    "register_product": {
+      "name": "Register a product",
+      "description": "Adds or updates a custom product in the local database.",
+      "fields": {
+        "product_id": {
+          "name": "Product ID",
+          "description": "Short and unique identifier."
+        },
+        "nom": {
+          "name": "Name",
+          "description": "Readable product name."
+        },
+        "type": {
+          "name": "Type",
+          "description": "Product category."
+        },
+        "dose_conseillee": {
+          "name": "Recommended dose (optional)",
+          "description": "Default dose to suggest."
+        },
+        "reapplication_after_days": {
+          "name": "Reapply in X days (optional)",
+          "description": "Recommended delay before using it again."
+        },
+        "delai_avant_tonte_jours": {
+          "name": "Delay before mowing (optional)",
+          "description": "Time to wait before the next mow."
+        },
+        "phase_compatible": {
+          "name": "Compatible phases (optional)",
+          "description": "Comma-separated list."
+        },
+        "note": {
+          "name": "Note (optional)",
+          "description": "Free comment."
+        }
+      }
+    },
+    "remove_product": {
+      "name": "Remove a product",
+      "description": "Removes a product from the local database.",
+      "fields": {
+        "product_id": {
+          "name": "Product ID",
+          "description": "Identifier of the product to delete."
         }
       }
     },
@@ -139,7 +209,7 @@
       "fields": {
         "date_action": {
           "name": "Mowing date (optional)",
-          "description": "Date in YYYY-MM-DD format. If empty, today is used."
+          "description": "Date in DD/MM/YYYY format. If empty, today is used."
         }
       }
     },
@@ -149,7 +219,7 @@
       "fields": {
         "date_action": {
           "name": "Watering date (optional)",
-          "description": "Date in YYYY-MM-DD format. If empty, today is used."
+          "description": "Date in DD/MM/YYYY format. If empty, today is used."
         },
         "objectif_mm": {
           "name": "Applied amount (optional)",

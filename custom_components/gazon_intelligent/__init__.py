@@ -14,6 +14,7 @@ from .const import (
     MODES_GAZON,
 )
 from .coordinator import GazonIntelligentCoordinator
+from .date_utils import parse_optional_date
 
 PLATFORMS = ["select", "number", "sensor", "binary_sensor", "button"]
 
@@ -25,6 +26,8 @@ SERVICE_START_AUTO_IRRIGATION = "start_auto_irrigation"
 SERVICE_DECLARE_INTERVENTION = "declare_intervention"
 SERVICE_DECLARE_MOWING = "declare_mowing"
 SERVICE_DECLARE_WATERING = "declare_watering"
+SERVICE_REGISTER_PRODUCT = "register_product"
+SERVICE_REMOVE_PRODUCT = "remove_product"
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -104,8 +107,50 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 {
                     vol.Required("intervention"): vol.In(INTERVENTIONS_ACTIONS),
                     vol.Optional("date_action"): str,
+                    vol.Optional("produit_id"): vol.Coerce(str),
+                    vol.Optional("produit"): vol.Coerce(str),
+                    vol.Optional("dose"): vol.Coerce(str),
+                    vol.Optional("zone"): vol.Coerce(str),
+                    vol.Optional("reapplication_after_days"): vol.All(
+                        vol.Coerce(int),
+                        vol.Range(min=0, max=365),
+                    ),
+                    vol.Optional("note"): vol.Coerce(str),
                 }
             ),
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_REGISTER_PRODUCT):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_REGISTER_PRODUCT,
+            _handle_register_product,
+            schema=vol.Schema(
+                {
+                    vol.Required("product_id"): vol.Coerce(str),
+                    vol.Required("nom"): vol.Coerce(str),
+                    vol.Required("type"): vol.Coerce(str),
+                    vol.Optional("dose_conseillee"): vol.Coerce(str),
+                    vol.Optional("reapplication_after_days"): vol.All(
+                        vol.Coerce(int),
+                        vol.Range(min=0, max=3650),
+                    ),
+                    vol.Optional("delai_avant_tonte_jours"): vol.All(
+                        vol.Coerce(int),
+                        vol.Range(min=0, max=3650),
+                    ),
+                    vol.Optional("phase_compatible"): vol.Coerce(str),
+                    vol.Optional("note"): vol.Coerce(str),
+                }
+            ),
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_REMOVE_PRODUCT):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_REMOVE_PRODUCT,
+            _handle_remove_product,
+            schema=vol.Schema({vol.Required("product_id"): vol.Coerce(str)}),
         )
 
     if not hass.services.has_service(DOMAIN, SERVICE_DECLARE_MOWING):
@@ -152,6 +197,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             SERVICE_DECLARE_INTERVENTION,
             SERVICE_DECLARE_MOWING,
             SERVICE_DECLARE_WATERING,
+            SERVICE_REGISTER_PRODUCT,
+            SERVICE_REMOVE_PRODUCT,
         ):
             if hass.services.has_service(DOMAIN, service):
                 hass.services.async_remove(DOMAIN, service)
@@ -183,12 +230,14 @@ async def _handle_set_date_action(call: ServiceCall) -> None:
     try:
         date_str = call.data.get("date_action")
         if date_str:
-            date_action = datetime.strptime(date_str, "%Y-%m-%d").date()
+            date_action = parse_optional_date(date_str)
+            if date_action is None:
+                raise ValueError("La date doit être au format JJ/MM/AAAA.")
         else:
             date_action = None  # aujourd'hui par défaut
         await coordinator.async_set_date_action(date_action)
     except ValueError as err:
-        raise HomeAssistantError("La date doit être au format AAAA-MM-JJ.") from err
+        raise HomeAssistantError("La date doit être au format JJ/MM/AAAA.") from err
     except Exception as err:  # pragma: no cover
         raise HomeAssistantError(f"Echec set_date_action: {err}") from err
 
@@ -211,31 +260,33 @@ async def _handle_start_auto_irrigation(call: ServiceCall) -> None:
     await coordinator.async_start_auto_irrigation(call.data.get("objectif_mm"))
 
 
-def _parse_optional_date(date_str: str | None) -> date | None:
-    if not date_str:
-        return None
-    return datetime.strptime(date_str, "%Y-%m-%d").date()
-
-
 async def _handle_declare_intervention(call: ServiceCall) -> None:
     hass = call.hass
     coordinator = _get_first_coordinator(hass)
     try:
         await coordinator.async_declare_intervention(
             call.data["intervention"],
-            _parse_optional_date(call.data.get("date_action")),
+            parse_optional_date(call.data.get("date_action")),
+            call.data.get("produit_id"),
+            call.data.get("produit"),
+            call.data.get("dose"),
+            call.data.get("zone"),
+            call.data.get("reapplication_after_days"),
+            call.data.get("note"),
         )
     except ValueError as err:
-        raise HomeAssistantError("La date doit être au format AAAA-MM-JJ.") from err
+        raise HomeAssistantError(str(err) or "La date doit être au format JJ/MM/AAAA.") from err
+    except Exception as err:  # pragma: no cover
+        raise HomeAssistantError(f"Echec declare_intervention: {err}") from err
 
 
 async def _handle_declare_mowing(call: ServiceCall) -> None:
     hass = call.hass
     coordinator = _get_first_coordinator(hass)
     try:
-        await coordinator.async_record_mowing(_parse_optional_date(call.data.get("date_action")))
+        await coordinator.async_record_mowing(parse_optional_date(call.data.get("date_action")))
     except ValueError as err:
-        raise HomeAssistantError("La date doit être au format AAAA-MM-JJ.") from err
+        raise HomeAssistantError("La date doit être au format JJ/MM/AAAA.") from err
 
 
 async def _handle_declare_watering(call: ServiceCall) -> None:
@@ -243,8 +294,35 @@ async def _handle_declare_watering(call: ServiceCall) -> None:
     coordinator = _get_first_coordinator(hass)
     try:
         await coordinator.async_record_watering(
-            _parse_optional_date(call.data.get("date_action")),
+            parse_optional_date(call.data.get("date_action")),
             call.data.get("objectif_mm"),
         )
     except ValueError as err:
-        raise HomeAssistantError("La date doit être au format AAAA-MM-JJ.") from err
+        raise HomeAssistantError("La date doit être au format JJ/MM/AAAA.") from err
+
+
+async def _handle_register_product(call: ServiceCall) -> None:
+    hass = call.hass
+    coordinator = _get_first_coordinator(hass)
+    try:
+        await coordinator.async_register_product(
+            call.data["product_id"],
+            call.data["nom"],
+            call.data["type"],
+            call.data.get("dose_conseillee"),
+            call.data.get("reapplication_after_days"),
+            call.data.get("delai_avant_tonte_jours"),
+            call.data.get("phase_compatible"),
+            call.data.get("note"),
+        )
+    except Exception as err:  # pragma: no cover
+        raise HomeAssistantError(f"Echec register_product: {err}") from err
+
+
+async def _handle_remove_product(call: ServiceCall) -> None:
+    hass = call.hass
+    coordinator = _get_first_coordinator(hass)
+    try:
+        await coordinator.async_remove_product(call.data["product_id"])
+    except Exception as err:  # pragma: no cover
+        raise HomeAssistantError(f"Echec remove_product: {err}") from err

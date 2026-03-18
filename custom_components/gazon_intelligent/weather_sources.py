@@ -54,3 +54,28 @@ def extract_weather_profile(attributes: Mapping[str, Any] | None) -> dict[str, A
         ),
         "weather_condition": attributes.get("condition"),
     }
+
+
+def extract_weather_forecast_summary(forecasts: list[Mapping[str, Any]] | None) -> dict[str, Any]:
+    """Extrait la pluie et la température prévues pour aujourd'hui et demain."""
+    if not forecasts:
+        return {}
+
+    def _read_float(forecast: Mapping[str, Any] | None, *keys: str) -> float | None:
+        if not forecast:
+            return None
+        for key in keys:
+            parsed = _to_float(forecast.get(key))
+            if parsed is not None:
+                return parsed
+        return None
+
+    today = forecasts[0] if len(forecasts) > 0 and isinstance(forecasts[0], Mapping) else None
+    tomorrow = forecasts[1] if len(forecasts) > 1 and isinstance(forecasts[1], Mapping) else None
+
+    return {
+        "forecast_pluie_24h": _read_float(today, "precipitation"),
+        "forecast_pluie_demain": _read_float(tomorrow, "precipitation", "precipitation_probability"),
+        "forecast_temperature_today": _read_float(today, "temperature", "apparent_temperature"),
+        "forecast_condition_today": today.get("condition") if today else None,
+    }
