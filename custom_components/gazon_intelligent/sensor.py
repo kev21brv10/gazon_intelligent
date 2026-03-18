@@ -1,28 +1,8 @@
 from homeassistant.components.sensor import SensorEntity, SensorStateClass, SensorDeviceClass
 from homeassistant.const import UnitOfTemperature
-from homeassistant.helpers.entity import DeviceInfo
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .entity_base import GazonEntityBase
 from .const import DOMAIN
-
-
-class _GazonBaseEntity(CoordinatorEntity):
-    """Base entity to share device metadata."""
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        entry_id = self.coordinator.entry.entry_id
-        return DeviceInfo(
-            identifiers={(DOMAIN, entry_id)},
-            name="Gazon Intelligent",
-            manufacturer="Custom",
-            model="Gestion gazon",
-        )
-
-    def _attrs_from_data(self, *keys: str):
-        attrs = {key: self.coordinator.data.get(key) for key in keys}
-        clean = {k: v for k, v in attrs.items() if v is not None}
-        return clean or None
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -30,6 +10,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
     async_add_entities(
         [
             GazonPhaseActiveSensor(coordinator),
+            GazonSousPhaseSensor(coordinator),
             GazonObjectifMmSensor(coordinator),
             GazonBilanHydriqueSensor(coordinator),
             GazonJoursRestantsSensor(coordinator),
@@ -49,13 +30,16 @@ async def async_setup_entry(hass, entry, async_add_entities):
             GazonConseilPrincipalSensor(coordinator),
             GazonActionRecommandeeSensor(coordinator),
             GazonActionAEviterSensor(coordinator),
-            GazonUrgenceSensor(coordinator),
+            GazonNiveauActionSensor(coordinator),
+            GazonFenetreOptimaleSensor(coordinator),
+            GazonRisqueGazonSensor(coordinator),
+            GazonProchaineReevaluationSensor(coordinator),
         ]
     )
 
 
-class GazonPhaseActiveSensor(_GazonBaseEntity, SensorEntity):
-    _attr_name = "Phase active"
+class GazonPhaseActiveSensor(GazonEntityBase, SensorEntity):
+    _attr_name = "Phase dominante"
     _attr_has_entity_name = True
 
     def __init__(self, coordinator):
@@ -71,7 +55,30 @@ class GazonPhaseActiveSensor(_GazonBaseEntity, SensorEntity):
         return self.coordinator.get_used_entities_attributes()
 
 
-class GazonObjectifMmSensor(_GazonBaseEntity, SensorEntity):
+class GazonSousPhaseSensor(GazonEntityBase, SensorEntity):
+    _attr_name = "Sous-phase"
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_sous_phase"
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("sous_phase")
+
+    @property
+    def extra_state_attributes(self):
+        return self._attrs_from_data(
+            "phase_dominante",
+            "phase_dominante_source",
+            "sous_phase_detail",
+            "sous_phase_age_days",
+            "sous_phase_progression",
+        )
+
+
+class GazonObjectifMmSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Objectif d'arrosage"
     _attr_native_unit_of_measurement = "mm"
     _attr_has_entity_name = True
@@ -87,10 +94,17 @@ class GazonObjectifMmSensor(_GazonBaseEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self):
-        return self._attrs_from_data("phase_active", "type_arrosage", "score_hydrique", "score_stress")
+        return self._attrs_from_data(
+            "phase_active",
+            "phase_dominante",
+            "sous_phase",
+            "type_arrosage",
+            "score_hydrique",
+            "score_stress",
+        )
 
 
-class GazonBilanHydriqueSensor(_GazonBaseEntity, SensorEntity):
+class GazonBilanHydriqueSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Manque d'eau estimé"
     _attr_native_unit_of_measurement = "mm"
     _attr_has_entity_name = True
@@ -106,10 +120,23 @@ class GazonBilanHydriqueSensor(_GazonBaseEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self):
-        return self._attrs_from_data("etp", "pluie_24h", "pluie_demain", "type_sol")
+        return self._attrs_from_data(
+            "etp",
+            "pluie_24h",
+            "pluie_demain",
+            "pluie_efficace",
+            "arrosage_recent",
+            "arrosage_recent_jour",
+            "arrosage_recent_3j",
+            "arrosage_recent_7j",
+            "deficit_jour",
+            "deficit_3j",
+            "deficit_7j",
+            "type_sol",
+        )
 
 
-class GazonJoursRestantsSensor(_GazonBaseEntity, SensorEntity):
+class GazonJoursRestantsSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Jours restants de la phase"
     _attr_native_unit_of_measurement = "j"
     _attr_has_entity_name = True
@@ -125,10 +152,10 @@ class GazonJoursRestantsSensor(_GazonBaseEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self):
-        return self._attrs_from_data("phase_active", "date_fin")
+        return self._attrs_from_data("phase_active", "phase_dominante", "sous_phase", "date_fin")
 
 
-class GazonEtpSensor(_GazonBaseEntity, SensorEntity):
+class GazonEtpSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Besoin en eau du jour (ETP)"
     _attr_native_unit_of_measurement = "mm/j"
     _attr_has_entity_name = True
@@ -147,7 +174,7 @@ class GazonEtpSensor(_GazonBaseEntity, SensorEntity):
         return self._attrs_from_data("temperature", "pluie_24h")
 
 
-class GazonHumiditeSensor(_GazonBaseEntity, SensorEntity):
+class GazonHumiditeSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Humidité extérieure"
     _attr_native_unit_of_measurement = "%"
     _attr_has_entity_name = True
@@ -162,7 +189,7 @@ class GazonHumiditeSensor(_GazonBaseEntity, SensorEntity):
         return self.coordinator.data.get("humidite")
 
 
-class GazonDateActionSensor(_GazonBaseEntity, SensorEntity):
+class GazonDateActionSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Date de l'action"
     _attr_has_entity_name = True
     _attr_device_class = SensorDeviceClass.DATE
@@ -180,7 +207,7 @@ class GazonDateActionSensor(_GazonBaseEntity, SensorEntity):
         return self._attrs_from_data("phase_active")
 
 
-class GazonDateFinSensor(_GazonBaseEntity, SensorEntity):
+class GazonDateFinSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Date de fin de phase"
     _attr_has_entity_name = True
     _attr_device_class = SensorDeviceClass.DATE
@@ -198,7 +225,7 @@ class GazonDateFinSensor(_GazonBaseEntity, SensorEntity):
         return self._attrs_from_data("phase_active", "jours_restants")
 
 
-class GazonPluie24hSensor(_GazonBaseEntity, SensorEntity):
+class GazonPluie24hSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Pluie 24h"
     _attr_native_unit_of_measurement = "mm"
     _attr_has_entity_name = True
@@ -214,7 +241,7 @@ class GazonPluie24hSensor(_GazonBaseEntity, SensorEntity):
         return self.coordinator.data.get("pluie_24h")
 
 
-class GazonPluieDemainSensor(_GazonBaseEntity, SensorEntity):
+class GazonPluieDemainSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Pluie prévue demain"
     _attr_native_unit_of_measurement = "mm"
     _attr_has_entity_name = True
@@ -234,7 +261,7 @@ class GazonPluieDemainSensor(_GazonBaseEntity, SensorEntity):
         return self._attrs_from_data("pluie_demain_source")
 
 
-class GazonTemperatureSensor(_GazonBaseEntity, SensorEntity):
+class GazonTemperatureSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Température extérieure"
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
     _attr_has_entity_name = True
@@ -250,7 +277,7 @@ class GazonTemperatureSensor(_GazonBaseEntity, SensorEntity):
         return self.coordinator.data.get("temperature")
 
 
-class GazonArrosageConseilleSensor(_GazonBaseEntity, SensorEntity):
+class GazonArrosageConseilleSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Arrosage conseillé"
     _attr_has_entity_name = True
 
@@ -265,10 +292,10 @@ class GazonArrosageConseilleSensor(_GazonBaseEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self):
-        return self._attrs_from_data("type_arrosage", "phase_active")
+        return self._attrs_from_data("type_arrosage", "phase_active", "phase_dominante", "sous_phase")
 
 
-class GazonTypeArrosageSensor(_GazonBaseEntity, SensorEntity):
+class GazonTypeArrosageSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Mode d'arrosage"
     _attr_has_entity_name = True
 
@@ -285,7 +312,7 @@ class GazonTypeArrosageSensor(_GazonBaseEntity, SensorEntity):
         return self._attrs_from_data("phase_active", "objectif_mm")
 
 
-class GazonScoreHydriqueSensor(_GazonBaseEntity, SensorEntity):
+class GazonScoreHydriqueSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Niveau de manque d'eau"
     _attr_has_entity_name = True
 
@@ -302,7 +329,7 @@ class GazonScoreHydriqueSensor(_GazonBaseEntity, SensorEntity):
         return self._attrs_from_data("bilan_hydrique_mm", "objectif_mm")
 
 
-class GazonScoreStressSensor(_GazonBaseEntity, SensorEntity):
+class GazonScoreStressSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Niveau de stress du gazon"
     _attr_has_entity_name = True
 
@@ -319,7 +346,7 @@ class GazonScoreStressSensor(_GazonBaseEntity, SensorEntity):
         return self._attrs_from_data("temperature", "humidite", "etp")
 
 
-class GazonScoreTonteSensor(_GazonBaseEntity, SensorEntity):
+class GazonScoreTonteSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Risque de tonte"
     _attr_has_entity_name = True
 
@@ -336,7 +363,7 @@ class GazonScoreTonteSensor(_GazonBaseEntity, SensorEntity):
         return self._attrs_from_data("phase_active", "tonte_autorisee")
 
 
-class GazonRaisonDecisionSensor(_GazonBaseEntity, SensorEntity):
+class GazonRaisonDecisionSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Pourquoi ce choix"
     _attr_has_entity_name = True
 
@@ -350,10 +377,10 @@ class GazonRaisonDecisionSensor(_GazonBaseEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self):
-        return self._attrs_from_data("urgence")
+        return self._attrs_from_data("niveau_action", "fenetre_optimale", "risque_gazon", "prochaine_reevaluation")
 
 
-class GazonConseilPrincipalSensor(_GazonBaseEntity, SensorEntity):
+class GazonConseilPrincipalSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Conseil principal"
     _attr_has_entity_name = True
 
@@ -367,10 +394,16 @@ class GazonConseilPrincipalSensor(_GazonBaseEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self):
-        return self._attrs_from_data("action_recommandee", "action_a_eviter")
+        return self._attrs_from_data(
+            "phase_dominante",
+            "sous_phase",
+            "action_recommandee",
+            "action_a_eviter",
+            "prochaine_reevaluation",
+        )
 
 
-class GazonActionRecommandeeSensor(_GazonBaseEntity, SensorEntity):
+class GazonActionRecommandeeSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Action recommandée"
     _attr_has_entity_name = True
 
@@ -384,10 +417,10 @@ class GazonActionRecommandeeSensor(_GazonBaseEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self):
-        return self._attrs_from_data("objectif_mm", "type_arrosage")
+        return self._attrs_from_data("objectif_mm", "type_arrosage", "phase_dominante", "sous_phase")
 
 
-class GazonActionAEviterSensor(_GazonBaseEntity, SensorEntity):
+class GazonActionAEviterSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Action à éviter"
     _attr_has_entity_name = True
 
@@ -400,14 +433,76 @@ class GazonActionAEviterSensor(_GazonBaseEntity, SensorEntity):
         return self.coordinator.data.get("action_a_eviter")
 
 
-class GazonUrgenceSensor(_GazonBaseEntity, SensorEntity):
-    _attr_name = "Niveau d'urgence"
+class GazonNiveauActionSensor(GazonEntityBase, SensorEntity):
+    _attr_name = "Niveau d'action"
     _attr_has_entity_name = True
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_urgence"
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_niveau_action"
 
     @property
     def native_value(self):
-        return self.coordinator.data.get("urgence")
+        return self.coordinator.data.get("niveau_action")
+
+    @property
+    def extra_state_attributes(self):
+        return self._attrs_from_data("phase_dominante", "sous_phase", "risque_gazon")
+
+
+class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
+    _attr_name = "Fenêtre optimale"
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_fenetre_optimale"
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("fenetre_optimale")
+
+    @property
+    def extra_state_attributes(self):
+        return self._attrs_from_data("niveau_action", "phase_dominante", "sous_phase")
+
+
+class GazonRisqueGazonSensor(GazonEntityBase, SensorEntity):
+    _attr_name = "Risque gazon"
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_risque_gazon"
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("risque_gazon")
+
+    @property
+    def extra_state_attributes(self):
+        return self._attrs_from_data(
+            "phase_dominante",
+            "sous_phase",
+            "score_hydrique",
+            "score_stress",
+            "score_tonte",
+            "prochaine_reevaluation",
+        )
+
+
+class GazonProchaineReevaluationSensor(GazonEntityBase, SensorEntity):
+    _attr_name = "Prochaine réévaluation"
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_prochaine_reevaluation"
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("prochaine_reevaluation")
+
+    @property
+    def extra_state_attributes(self):
+        return self._attrs_from_data("niveau_action", "fenetre_optimale", "risque_gazon", "raison_decision")

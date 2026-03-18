@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Configuration du système gazon",
-        "description": "Choisissez vos zones (switchs), vos capteurs météo, votre type de sol et le débit approximatif de chaque zone (mm/h = millimètres d'eau apportés en 1 heure). Si vous ne connaissez pas le débit, laissez 60.",
+        "description": "Choisissez vos zones (switchs), vos capteurs météo, votre type de sol et le débit approximatif de chaque zone (mm/h = millimètres d'eau apportés en 1 heure). Les capteurs avancés sont optionnels et pourront enrichir le moteur sans être obligatoires. Si vous ne connaissez pas le débit, laissez 60.",
         "data": {
           "zone_1": "Zone d'arrosage 1",
           "zone_2": "Zone d'arrosage 2",
@@ -15,13 +15,18 @@
           "debit_zone_3": "Débit zone 3 (mm/h)",
           "debit_zone_4": "Débit zone 4 (mm/h)",
           "debit_zone_5": "Débit zone 5 (mm/h)",
-          "tondeuse": "Robot tondeuse (entité lawn_mower)",
           "entite_meteo": "Entité météo (weather, optionnel pour pluie J+1 auto)",
           "capteur_pluie_24h": "Pluie des dernières 24h (mm)",
           "capteur_pluie_demain": "Pluie prévue demain (J+1, mm)",
           "capteur_temperature": "Capteur température",
           "capteur_etp": "Capteur évapotranspiration (optionnel, sinon calculé)",
           "capteur_humidite": "Capteur humidité extérieure (%) (optionnel)",
+          "capteur_humidite_sol": "Capteur humidité du sol (%) (optionnel)",
+          "capteur_vent": "Capteur vent (optionnel)",
+          "capteur_rosee": "Capteur rosée / humidité foliaire (optionnel)",
+          "capteur_hauteur_gazon": "Capteur hauteur du gazon (optionnel)",
+          "capteur_retour_arrosage": "Retour réel d'arrosage (mm, optionnel)",
+          "capteur_pluie_fine": "Capteur pluie fine / plus précise (optionnel)",
           "type_sol": "Type de sol (sableux/limoneux/argileux)"
         }
       }

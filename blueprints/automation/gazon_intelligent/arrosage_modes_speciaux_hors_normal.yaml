@@ -98,12 +98,29 @@ variables:
   seuil_pluie_stop_24h_value: !input seuil_pluie_stop_24h
   seuil_pluie_stop_demain_value: !input seuil_pluie_stop_demain
 
-  mode_gazon: "{{ states(mode_select_entity) }}"
-  obj_mode: "{{ states(sensor_objectif_entity) | float(0) }}"
-  pluie24: "{{ states(sensor_pluie_24h_entity) | float(0) }}"
-  pluie_demain: "{{ states(sensor_pluie_demain_entity) | float(0) }}"
-  etp: "{{ states(sensor_etp_entity) | float(0) }}"
-  hum: "{{ states(sensor_humidite_entity) | float(0) }}"
+  mode_gazon_raw: "{{ states(mode_select_entity) }}"
+  obj_mode_raw: "{{ states(sensor_objectif_entity) }}"
+  pluie24_raw: "{{ states(sensor_pluie_24h_entity) }}"
+  pluie_demain_raw: "{{ states(sensor_pluie_demain_entity) }}"
+  etp_raw: "{{ states(sensor_etp_entity) }}"
+  hum_raw: "{{ states(sensor_humidite_entity) }}"
+
+  mode_gazon: "{{ mode_gazon_raw }}"
+  obj_mode: "{{ obj_mode_raw | float(0) }}"
+  pluie24: "{{ pluie24_raw | float(0) }}"
+  pluie_demain: "{{ pluie_demain_raw | float(0) }}"
+  etp: "{{ etp_raw | float(0) }}"
+  hum: "{{ hum_raw | float(0) }}"
+
+  capteurs_ok: >
+    {{
+      mode_gazon_raw not in ['unknown', 'unavailable', 'none', '']
+      and obj_mode_raw not in ['unknown', 'unavailable', 'none', '']
+      and pluie24_raw not in ['unknown', 'unavailable', 'none', '']
+      and pluie_demain_raw not in ['unknown', 'unavailable', 'none', '']
+      and etp_raw not in ['unknown', 'unavailable', 'none', '']
+      and hum_raw not in ['unknown', 'unavailable', 'none', '']
+    }}
 
   pluie_stop: >
     {{
@@ -120,14 +137,14 @@ variables:
 
 condition:
   - condition: template
-    value_template: "{{ mode_gazon not in ['unknown','unavailable','Normal'] }}"
+    value_template: "{{ capteurs_ok and mode_gazon != 'Normal' }}"
 
 action:
   - choose:
       - conditions:
           - condition: template
             value_template: >
-              {{ mode_gazon == 'Sursemis' and trigger.id in ['matin','midi','soir'] and not pluie_stop }}
+              {{ mode_gazon == 'Sursemis' and obj_mode > 0 and trigger.id in ['matin','midi','soir'] and not pluie_stop }}
         sequence:
           - service: gazon_intelligent.start_auto_irrigation
             data:
@@ -139,6 +156,7 @@ action:
             value_template: >
               {{
                 mode_gazon in ['Fertilisation','Biostimulant','Agent Mouillant','Scarification']
+                and obj_mode > 0
                 and (
                   trigger.id == 'matin'
                   or (trigger.id == 'soir' and etp >= 4 and hum <= 55)
@@ -158,4 +176,20 @@ action:
       - conditions:
           - condition: template
             value_template: "{{ mode_gazon in ['Traitement','Hivernage'] }}"
-        sequence: []
+        sequence:
+          - service: persistent_notification.create
+            data:
+              notification_id: gazon_intelligent_arrosage_blueprint
+              title: "Gazon Intelligent: arrosage non lancé"
+              message: >
+                Mode {{ mode_gazon }} actif: l'arrosage automatique est volontairement bloqué.
+
+      default:
+        - service: persistent_notification.create
+          data:
+            notification_id: gazon_intelligent_arrosage_blueprint
+            title: "Gazon Intelligent: aucune action lancée"
+            message: >
+              Aucun arrosage n'a été lancé pour le trigger {{ trigger.id }}.
+              Mode={{ mode_gazon }}, objectif={{ obj_mode | round(2) }} mm, pluie_stop={{ pluie_stop }},
+              capteurs_ok={{ capteurs_ok }}.

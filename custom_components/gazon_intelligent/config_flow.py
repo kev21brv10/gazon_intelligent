@@ -15,13 +15,18 @@ from .const import (
     CONF_DEBIT_ZONE_3,
     CONF_DEBIT_ZONE_4,
     CONF_DEBIT_ZONE_5,
-    CONF_TONDEUSE,
     CONF_ENTITE_METEO,
     CONF_CAPTEUR_PLUIE_24H,
     CONF_CAPTEUR_PLUIE_DEMAIN,
     CONF_CAPTEUR_TEMPERATURE,
     CONF_CAPTEUR_ETP,
     CONF_CAPTEUR_HUMIDITE,
+    CONF_CAPTEUR_HUMIDITE_SOL,
+    CONF_CAPTEUR_VENT,
+    CONF_CAPTEUR_ROSEE,
+    CONF_CAPTEUR_HAUTEUR_GAZON,
+    CONF_CAPTEUR_RETOUR_ARROSAGE,
+    CONF_CAPTEUR_PLUIE_FINE,
     CONF_TYPE_SOL,
     DEFAULT_TYPE_SOL,
     TYPES_SOL,
@@ -64,9 +69,6 @@ def build_schema(current: dict | None = None):
             vol.Optional(CONF_DEBIT_ZONE_5, default=_d(current.get(CONF_DEBIT_ZONE_5))): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=1, max=200, step=1, unit_of_measurement="mm/h")
             ),
-            vol.Optional(CONF_TONDEUSE, default=_d(current.get(CONF_TONDEUSE))): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="lawn_mower")
-            ),
             vol.Optional(CONF_ENTITE_METEO, default=_d(current.get(CONF_ENTITE_METEO))): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="weather")
             ),
@@ -83,6 +85,24 @@ def build_schema(current: dict | None = None):
                 selector.EntitySelectorConfig(domain="sensor")
             ),
             vol.Optional(CONF_CAPTEUR_HUMIDITE, default=_d(current.get(CONF_CAPTEUR_HUMIDITE))): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_CAPTEUR_HUMIDITE_SOL, default=_d(current.get(CONF_CAPTEUR_HUMIDITE_SOL))): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_CAPTEUR_VENT, default=_d(current.get(CONF_CAPTEUR_VENT))): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_CAPTEUR_ROSEE, default=_d(current.get(CONF_CAPTEUR_ROSEE))): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_CAPTEUR_HAUTEUR_GAZON, default=_d(current.get(CONF_CAPTEUR_HAUTEUR_GAZON))): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_CAPTEUR_RETOUR_ARROSAGE, default=_d(current.get(CONF_CAPTEUR_RETOUR_ARROSAGE))): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_CAPTEUR_PLUIE_FINE, default=_d(current.get(CONF_CAPTEUR_PLUIE_FINE))): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="sensor")
             ),
             vol.Optional(CONF_TYPE_SOL, default=_d(current.get(CONF_TYPE_SOL, DEFAULT_TYPE_SOL))): selector.SelectSelector(

@@ -21,12 +21,18 @@ from .const import (
     CONF_ENTITE_METEO,
     CONF_CAPTEUR_TEMPERATURE,
     CONF_CAPTEUR_HUMIDITE,
+    CONF_CAPTEUR_HUMIDITE_SOL,
+    CONF_CAPTEUR_VENT,
+    CONF_CAPTEUR_ROSEE,
+    CONF_CAPTEUR_HAUTEUR_GAZON,
+    CONF_CAPTEUR_RETOUR_ARROSAGE,
+    CONF_CAPTEUR_PLUIE_FINE,
     CONF_TYPE_SOL,
     DEFAULT_MODE,
     DEFAULT_TYPE_SOL,
     INTERVENTIONS_ACTIONS,
 )
-from .decision import build_decision_snapshot, phase_duration_days
+from .decision import build_decision_snapshot, compute_memory, phase_duration_days
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -48,6 +54,15 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.mode: str = DEFAULT_MODE
         self.date_action: date | None = None
         self.history: list[dict[str, Any]] = []
+        self.memory: dict[str, Any] = {
+            "historique_total": 0,
+            "derniere_tonte": None,
+            "dernier_arrosage": None,
+            "dernier_arrosage_significatif": None,
+            "derniere_phase_active": DEFAULT_MODE,
+            "dernier_conseil": None,
+            "date_derniere_mise_a_jour": None,
+        }
         self._auto_irrigation_task: asyncio.Task | None = None
         self._unsub_start_listener: CALLBACK_TYPE | None = None
         self._unsub_delayed_refresh: CALLBACK_TYPE | None = None
@@ -68,6 +83,12 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         temperature = self._get_float_state(self._get_conf(CONF_CAPTEUR_TEMPERATURE))
         etp_capteur = self._get_float_state(self._get_conf(CONF_CAPTEUR_ETP))
         humidite = self._get_float_state(self._get_conf(CONF_CAPTEUR_HUMIDITE))
+        humidite_sol = self._get_float_state(self._get_conf(CONF_CAPTEUR_HUMIDITE_SOL))
+        vent = self._get_float_state(self._get_conf(CONF_CAPTEUR_VENT))
+        rosee = self._get_float_state(self._get_conf(CONF_CAPTEUR_ROSEE))
+        hauteur_gazon = self._get_float_state(self._get_conf(CONF_CAPTEUR_HAUTEUR_GAZON))
+        retour_arrosage = self._get_float_state(self._get_conf(CONF_CAPTEUR_RETOUR_ARROSAGE))
+        pluie_fine = self._get_float_state(self._get_conf(CONF_CAPTEUR_PLUIE_FINE))
         type_sol = self._get_conf(CONF_TYPE_SOL) or DEFAULT_TYPE_SOL
         snapshot = build_decision_snapshot(
             history=self.history,
@@ -78,15 +99,29 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             humidite=humidite,
             type_sol=type_sol,
             etp_capteur=etp_capteur,
+            humidite_sol=humidite_sol,
+            vent=vent,
+            rosee=rosee,
+            hauteur_gazon=hauteur_gazon,
+            retour_arrosage=retour_arrosage,
+            pluie_fine=pluie_fine,
         )
         self.mode = snapshot["phase_active"]
         self.date_action = snapshot["date_action"]
+        self.memory = compute_memory(
+            history=self.history,
+            current_phase=snapshot["phase_active"],
+            decision=snapshot,
+            previous_memory=self.memory,
+            today=date.today(),
+        )
 
         return {
             "mode": snapshot["mode"],
             "phase_active": snapshot["phase_active"],
             "date_action": snapshot["date_action"],
             "date_fin": snapshot["date_fin"],
+            "advanced_context": snapshot["advanced_context"],
             "pluie_24h": pluie_24h,
             "pluie_demain": pluie_demain,
             "pluie_demain_source": pluie_demain_source,
@@ -94,6 +129,13 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "etp": snapshot["etp"],
             "humidite": humidite,
             "type_sol": type_sol,
+            "humidite_sol": snapshot["humidite_sol"],
+            "vent": snapshot["vent"],
+            "rosee": snapshot["rosee"],
+            "hauteur_gazon": snapshot["hauteur_gazon"],
+            "retour_arrosage": snapshot["retour_arrosage"],
+            "pluie_fine": snapshot["pluie_fine"],
+            "pluie_source": snapshot["pluie_source"],
             "bilan_hydrique_mm": snapshot["bilan_hydrique_mm"],
             "objectif_mm": snapshot["objectif_mm"],
             "score_hydrique": snapshot["score_hydrique"],
@@ -107,9 +149,13 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "conseil_principal": snapshot["conseil_principal"],
             "action_recommandee": snapshot["action_recommandee"],
             "action_a_eviter": snapshot["action_a_eviter"],
-            "urgence": snapshot["urgence"],
+            "niveau_action": snapshot["niveau_action"],
+            "fenetre_optimale": snapshot["fenetre_optimale"],
+            "risque_gazon": snapshot["risque_gazon"],
+            "prochaine_reevaluation": snapshot["prochaine_reevaluation"],
             "score_tonte": snapshot["score_tonte"],
             "jours_restants": snapshot["jours_restants"],
+            "memoire": self.memory,
             "historique_total": len(self.history),
         }
 
@@ -188,8 +234,14 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.history[idx]["date"] = target_date.isoformat()
                 updated = True
                 break
-        if updated:
-            self.date_action = target_date
+        if not updated and self.mode in INTERVENTIONS_ACTIONS:
+            self._append_history(
+                {
+                    "type": self.mode,
+                    "date": target_date.isoformat(),
+                }
+            )
+        self.date_action = target_date
         await self._async_save_state()
         await self.async_request_refresh()
 
@@ -394,11 +446,44 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "capteur_temperature": self._get_conf(CONF_CAPTEUR_TEMPERATURE),
                 "capteur_etp": self._get_conf(CONF_CAPTEUR_ETP),
                 "capteur_humidite": self._get_conf(CONF_CAPTEUR_HUMIDITE),
+                "capteur_humidite_sol": self._get_conf(CONF_CAPTEUR_HUMIDITE_SOL),
+                "capteur_vent": self._get_conf(CONF_CAPTEUR_VENT),
+                "capteur_rosee": self._get_conf(CONF_CAPTEUR_ROSEE),
+                "capteur_hauteur_gazon": self._get_conf(CONF_CAPTEUR_HAUTEUR_GAZON),
+                "capteur_retour_arrosage": self._get_conf(CONF_CAPTEUR_RETOUR_ARROSAGE),
+                "capteur_pluie_fine": self._get_conf(CONF_CAPTEUR_PLUIE_FINE),
             },
             "configuration": {
                 "type_sol": self._get_conf(CONF_TYPE_SOL) or DEFAULT_TYPE_SOL,
             },
             "pluie_demain_source": self.data.get("pluie_demain_source") if self.data else None,
+            "advanced_context": self.data.get("advanced_context") if self.data else None,
+            "phase_dominante": self.data.get("phase_dominante") if self.data else None,
+            "phase_dominante_source": self.data.get("phase_dominante_source") if self.data else None,
+            "sous_phase": self.data.get("sous_phase") if self.data else None,
+            "sous_phase_detail": self.data.get("sous_phase_detail") if self.data else None,
+            "sous_phase_age_days": self.data.get("sous_phase_age_days") if self.data else None,
+            "sous_phase_progression": self.data.get("sous_phase_progression") if self.data else None,
+            "humidite_sol": self.data.get("humidite_sol") if self.data else None,
+            "vent": self.data.get("vent") if self.data else None,
+            "rosee": self.data.get("rosee") if self.data else None,
+            "hauteur_gazon": self.data.get("hauteur_gazon") if self.data else None,
+            "retour_arrosage": self.data.get("retour_arrosage") if self.data else None,
+            "pluie_fine": self.data.get("pluie_fine") if self.data else None,
+            "pluie_source": self.data.get("pluie_source") if self.data else None,
+            "deficit_jour": self.data.get("deficit_jour") if self.data else None,
+            "deficit_3j": self.data.get("deficit_3j") if self.data else None,
+            "deficit_7j": self.data.get("deficit_7j") if self.data else None,
+            "pluie_efficace": self.data.get("pluie_efficace") if self.data else None,
+            "arrosage_recent": self.data.get("arrosage_recent") if self.data else None,
+            "arrosage_recent_jour": self.data.get("arrosage_recent_jour") if self.data else None,
+            "arrosage_recent_3j": self.data.get("arrosage_recent_3j") if self.data else None,
+            "arrosage_recent_7j": self.data.get("arrosage_recent_7j") if self.data else None,
+            "niveau_action": self.data.get("niveau_action") if self.data else None,
+            "fenetre_optimale": self.data.get("fenetre_optimale") if self.data else None,
+            "risque_gazon": self.data.get("risque_gazon") if self.data else None,
+            "prochaine_reevaluation": self.data.get("prochaine_reevaluation") if self.data else None,
+            "memoire": self.memory,
             "historique_resume": {
                 "total": len(self.history),
                 "derniere_intervention": self.history[-1] if self.history else None,
@@ -423,6 +508,19 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.history = [item for item in history if isinstance(item, dict)]
         else:
             self.history = []
+        memory = data.get("memory")
+        if isinstance(memory, dict):
+            self.memory = memory
+        else:
+            self.memory = {
+                "historique_total": len(self.history),
+                "derniere_tonte": None,
+                "dernier_arrosage": None,
+                "dernier_arrosage_significatif": None,
+                "derniere_phase_active": self.mode,
+                "dernier_conseil": None,
+                "date_derniere_mise_a_jour": None,
+            }
 
     async def _async_save_state(self) -> None:
         """Sauvegarde l'état persistant (mode, date_action)."""
@@ -431,5 +529,6 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "mode": self.mode,
                 "date_action": self.date_action.isoformat() if self.date_action else None,
                 "history": self.history[-300:],
+                "memory": self.memory,
             }
         )

@@ -1,106 +1,102 @@
 # Gazon Intelligent 🌱
 
-Intégration Home Assistant pour piloter l'entretien du gazon avec un moteur de décision basé sur:
-- la météo,
-- le type de sol,
-- l'historique réel des actions,
-- des scores internes (hydrique, stress, tonte).
+Intégration Home Assistant pour piloter l'entretien du gazon avec un moteur autonome.
+Elle utilise la météo, le type de sol, l'historique réel et, si présents, des capteurs avancés.
 
-Objectif: configurer une fois, déclarer les actions terrain, laisser le système décider.
+Objectif: installer, sélectionner les entités, déclarer les interventions réelles si besoin, puis laisser le système décider.
 
-## Version actuelle 🏷️
+## Installation
 
-- Version `manifest`: `0.3.11`
-- Compatibilité HACS indiquée: Home Assistant `2026.3.2`
+### Via HACS
 
-## Installation 🚀
-
-### 1) Via HACS (recommandé) 🧩
-
-1. Ajouter ce dépôt comme dépôt personnalisé HACS (catégorie `Integration`).
+1. Ajouter ce dépôt comme dépôt personnalisé HACS, catégorie `Integration`.
 2. Installer **Gazon Intelligent**.
 3. Redémarrer Home Assistant.
-4. Aller dans `Paramètres > Appareils et services > Ajouter une intégration` puis choisir **Gazon Intelligent**.
+4. Ajouter l'intégration depuis `Paramètres > Appareils et services`.
 
-### 2) Installation manuelle 🛠️
+### Manuelle
 
-1. Copier `custom_components/gazon_intelligent` dans votre dossier `config/custom_components`.
+1. Copier `custom_components/gazon_intelligent` dans `config/custom_components`.
 2. Redémarrer Home Assistant.
 3. Ajouter l'intégration depuis `Paramètres > Appareils et services`.
 
-## Configuration initiale (UI) ⚙️
+## Configuration
 
-L'intégration se configure entièrement via formulaire:
+L'intégration se configure via formulaire.
 
-- Zones d'arrosage `switch` 💧:
+- Zones d'arrosage `switch`:
   - `zone_1` obligatoire
   - `zone_2` à `zone_5` optionnelles
-- Débit par zone (mm/h):
-  - `debit_zone_1` obligatoire (défaut conseillé: `60`)
+- Débit par zone:
+  - `debit_zone_1` obligatoire, défaut conseillé `60`
   - autres débits optionnels
-- Capteurs météo 🌦️:
+- Capteurs météo:
   - `capteur_pluie_24h` obligatoire
   - `capteur_pluie_demain` optionnel
   - `capteur_temperature`, `capteur_etp`, `capteur_humidite` optionnels
 - `entite_meteo` (`weather`) optionnelle:
-  - utilisée pour récupérer automatiquement la pluie J+1 via `weather.get_forecasts` si `capteur_pluie_demain` n'est pas défini
+  - utilisée pour récupérer la pluie J+1 automatiquement si `capteur_pluie_demain` est absent
 - `type_sol`:
   - `sableux`, `limoneux`, `argileux`
-- `tondeuse` (`lawn_mower`) optionnelle:
-  - aujourd'hui stockée dans la config (préparation des évolutions), sans pilotage direct automatique dans cette version
+- Capteurs avancés optionnels:
+  - humidité du sol, vent, rosée, hauteur du gazon, retour réel d'arrosage, pluie plus fine
+  - ils améliorent le moteur sans être obligatoires
 
-Vous pouvez modifier cette configuration plus tard via les **Options** de l'intégration, sans suppression/recréation.
+## Usage réel
 
-## Moteur de décision 🧠
+Le chemin normal est simple:
 
-Le moteur décide à chaque rafraîchissement (toutes les 5 minutes) avec:
+1. l'intégration calcule la phase dominante et le conseil,
+2. tu déclares les interventions réelles avec les boutons,
+3. le moteur ajuste ensuite ses décisions.
 
-- phase active dominante issue de l'historique (`Sursemis`, `Traitement`, `Fertilisation`, `Biostimulant`, `Agent Mouillant`, `Scarification`, `Hivernage`, sinon `Normal`),
-- bilan hydrique basé sur `ETP`, pluie 24h, pluie J+1 et arrosages récents,
-- scores internes 📊:
-  - `score_hydrique` (besoin en eau),
-  - `score_stress` (stress global gazon),
-  - `score_tonte` (risque tonte),
-- décisions finales ✅:
-  - `tonte_autorisee`,
-  - `arrosage_auto_autorise`,
-  - `arrosage_recommande`,
-  - objectif d'arrosage en mm,
-  - conseil principal + action recommandée + action à éviter + urgence.
+### Boutons
 
-Les phases restent des contraintes métier, mais la décision s'appuie désormais sur les scores.
+- `J'ai sursemé`
+- `J'ai fertilisé`
+- `J'ai traité`
+- `J'ai scarifié`
+- `Repasser en mode normal`
+- `Date action = aujourd'hui` met à jour la dernière intervention active avec la date du jour
 
-## Entités créées 📡
+### Mode expert
+
+- `Mode expert` reste disponible pour les cas de maintenance ou d'override.
+- Il n'est pas nécessaire à l'usage courant.
+
+## Entités créées
 
 ### Select
 
-- `Mode gazon`
+- `Mode expert`
 
 ### Sensors
 
-- `Phase active`
-- `Objectif d'arrosage` (mm)
-- `Manque d'eau estimé` (mm)
-- `Besoin en eau du jour (ETP)` (mm/j)
+- `Phase dominante`
+- `Sous-phase`
+- `Objectif d'arrosage`
+- `Manque d'eau estimé`
+- `Besoin en eau du jour (ETP)`
 - `Niveau de manque d'eau`
 - `Niveau de stress du gazon`
 - `Risque de tonte`
-- `Jours restants de la phase` (j)
-- `Humidité extérieure` (%)
+- `Jours restants de la phase`
+- `Humidité extérieure`
 - `Date de l'action`
 - `Date de fin de phase`
-- `Pluie 24h` (mm)
-- `Pluie prévue demain` (mm)
-- `Température extérieure` (°C)
+- `Pluie 24h`
+- `Pluie prévue demain`
+- `Température extérieure`
 - `Arrosage conseillé`
 - `Mode d'arrosage`
 - `Pourquoi ce choix`
 - `Conseil principal`
 - `Action recommandée`
 - `Action à éviter`
-- `Niveau d'urgence`
-
-Le capteur `Arrosage conseillé` expose une valeur technique `auto` ou `personnalise`.
+- `Niveau d'action`
+- `Fenêtre optimale`
+- `Risque gazon`
+- `Prochaine réévaluation`
 
 ### Binary sensors
 
@@ -108,28 +104,24 @@ Le capteur `Arrosage conseillé` expose une valeur technique `auto` ou `personna
 - `Arrosage auto autorisé`
 - `Arrosage recommandé`
 
-### Buttons
+## Attributs utiles
 
-- `Repasser en mode normal`
-- `Date action = aujourd'hui`
+Les attributs sont ciblés selon l'entité.
 
-## Attributs utiles exposés 📝
+- `Phase dominante`:
+  - contexte de décision complet: entités utilisées, configuration, source de la pluie J+1, contexte avancé et état de la phase
+- `Sous-phase`:
+  - détail, âge et progression de la phase
+- `Pluie prévue demain`:
+  - source de la valeur (`capteur`, `meteo_forecast`, `indisponible`)
+- `Objectif d'arrosage` et `Manque d'eau estimé`:
+  - métriques hydriques détaillées
+- `Pourquoi ce choix`, `Conseil principal`, `Action recommandée`, `Risque gazon`:
+  - contexte de décision et prochaine réévaluation
+- `Mode expert`:
+  - vue système rapide pour diagnostic et pilotage
 
-Les entités de l'intégration exposent des attributs communs:
-
-- `entites_utilisees`:
-  - zones configurées,
-  - capteurs météo utilisés,
-  - entité météo utilisée
-- `configuration`:
-  - `type_sol`
-- `pluie_demain_source`:
-  - `capteur`, `meteo_forecast`, ou `indisponible`
-- `historique_resume`:
-  - total d'actions mémorisées,
-  - dernière intervention
-
-## Services disponibles 🧰
+## Services disponibles
 
 - `gazon_intelligent.set_mode`
 - `gazon_intelligent.set_date_action`
@@ -140,63 +132,36 @@ Les entités de l'intégration exposent des attributs communs:
 - `gazon_intelligent.declare_mowing`
 - `gazon_intelligent.declare_watering`
 
-Détails des champs: voir `custom_components/gazon_intelligent/services.yaml`.
+Les champs détaillés sont dans `custom_components/gazon_intelligent/services.yaml`.
 
-## Événement Home Assistant 🔔
+## Événement Home Assistant
 
 - `gazon_intelligent_manual_irrigation_requested`
 
-Émis à l'appel de `start_manual_irrigation` avec:
+Émis par `start_manual_irrigation` avec:
 - `objectif_mm`
 - `mode`
 - `date_action`
 
-## Blueprint d'arrosage (modes spéciaux hors Normal) 📘
+## Blueprint
 
 - Fichier:
   - `blueprints/automation/gazon_intelligent/arrosage_modes_speciaux_hors_normal.yaml`
 - Nom:
   - `Gazon Intelligent - Arrosage intelligent (modes spéciaux hors Normal)`
-- Import direct:
 
-[![Importer ce blueprint dans Home Assistant](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https://github.com/kev21brv10/gazon_intelligent/blob/main/blueprints/automation/gazon_intelligent/arrosage_modes_speciaux_hors_normal.yaml)
+[Importer le blueprint dans Home Assistant](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https://github.com/kev21brv10/gazon_intelligent/blob/main/blueprints/automation/gazon_intelligent/arrosage_modes_speciaux_hors_normal.yaml)
 
-Ce blueprint utilise les entités créées par l'intégration pour automatiser l'arrosage hors mode `Normal`.
+## Glossaire rapide
 
-## Exemple d'automatisation (événement -> arrosage auto) 🤖
-
-```yaml
-alias: Gazon - Arrosage manuel relayé en auto
-mode: single
-trigger:
-  - platform: event
-    event_type: gazon_intelligent_manual_irrigation_requested
-action:
-  - service: gazon_intelligent.start_auto_irrigation
-    data: {}
-```
-
-## Structure du dépôt 📁
-
-- `custom_components/gazon_intelligent/`:
-  - code de l'intégration
-- `blueprints/automation/gazon_intelligent/`:
-  - blueprint prêt à importer
-- `logo.png`, `icon.png`:
-  - branding HACS
-- `CHANGELOG.md`:
-  - historique des versions
-
-## Notes ℹ️
-
-- Les données de mode, date d'action et historique sont persistées.
-- L'historique est limité aux 300 derniers enregistrements.
-- En cas de capteur absent/inconnu, le moteur applique des valeurs de repli pour rester opérationnel.
-
-## Glossaire simple 👇
-
-- `ETP`: besoin en eau estimé de la pelouse pour la journée.
-- `Manque d'eau estimé`: quantité d'eau qu'il manque actuellement (en mm).
-- `Niveau de manque d'eau`: indicateur 0-100, plus il est haut, plus la pelouse a soif.
-- `Niveau de stress du gazon`: indicateur 0-100, plus il est haut, plus le gazon est fragile.
-- `Risque de tonte`: indicateur 0-100, plus il est haut, moins il faut tondre.
+- `ETP`: besoin en eau estimé pour la journée.
+- `Phase dominante`: phase qui gouverne réellement le gazon.
+- `Sous-phase`: étape fine à l'intérieur d'une phase dominante.
+- `Manque d'eau estimé`: quantité d'eau manquante en mm.
+- `deficit_jour`, `deficit_3j`, `deficit_7j`: bilan hydrique court et moyen terme.
+- `pluie_efficace`: pluie réellement retenue par le calcul.
+- `arrosage_recent`: arrosage cumulé récent pris en compte par le moteur.
+- `Niveau d'action`: priorité du moteur, de `aucune_action` à `critique`.
+- `Fenêtre optimale`: meilleur moment pour agir.
+- `Risque gazon`: risque synthétique si l'action est retardée.
+- `Prochaine réévaluation`: quand relancer le calcul du moteur.

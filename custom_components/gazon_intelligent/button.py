@@ -1,22 +1,7 @@
 from homeassistant.components.button import ButtonEntity
-from homeassistant.helpers.entity import DeviceInfo
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-
-
-class _GazonBaseEntity(CoordinatorEntity):
-    """Base entity to share device metadata."""
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        entry_id = self.coordinator.entry.entry_id
-        return DeviceInfo(
-            identifiers={(DOMAIN, entry_id)},
-            name="Gazon Intelligent",
-            manufacturer="Custom",
-            model="Gestion gazon",
-        )
+from .entity_base import GazonEntityBase
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -25,11 +10,15 @@ async def async_setup_entry(hass, entry, async_add_entities):
         [
             RetourModeNormalButton(coordinator),
             DateActionAujourdhuiButton(coordinator),
+            JAiSursemeButton(coordinator),
+            JAiFertiliseButton(coordinator),
+            JAiTraiteButton(coordinator),
+            JAiScarifieButton(coordinator),
         ]
     )
 
 
-class RetourModeNormalButton(_GazonBaseEntity, ButtonEntity):
+class RetourModeNormalButton(GazonEntityBase, ButtonEntity):
     _attr_name = "Repasser en mode normal"
     _attr_has_entity_name = True
 
@@ -41,7 +30,7 @@ class RetourModeNormalButton(_GazonBaseEntity, ButtonEntity):
         await self.coordinator.async_set_normal()
 
 
-class DateActionAujourdhuiButton(_GazonBaseEntity, ButtonEntity):
+class DateActionAujourdhuiButton(GazonEntityBase, ButtonEntity):
     _attr_name = "Date action = aujourd'hui"
     _attr_has_entity_name = True
 
@@ -51,3 +40,39 @@ class DateActionAujourdhuiButton(_GazonBaseEntity, ButtonEntity):
 
     async def async_press(self):
         await self.coordinator.async_set_date_action()
+
+
+class _InterventionButton(GazonEntityBase, ButtonEntity):
+    _intervention_name: str = ""
+    _attr_name = ""
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_{self._intervention_name.lower().replace(' ', '_')}"
+
+    async def async_press(self):
+        await self.coordinator.async_declare_intervention(self._intervention_name)
+
+
+class JAiSursemeButton(_InterventionButton):
+    _intervention_name = "Sursemis"
+    _attr_name = "J'ai sursemé"
+    _attr_has_entity_name = True
+
+
+class JAiFertiliseButton(_InterventionButton):
+    _intervention_name = "Fertilisation"
+    _attr_name = "J'ai fertilisé"
+    _attr_has_entity_name = True
+
+
+class JAiTraiteButton(_InterventionButton):
+    _intervention_name = "Traitement"
+    _attr_name = "J'ai traité"
+    _attr_has_entity_name = True
+
+
+class JAiScarifieButton(_InterventionButton):
+    _intervention_name = "Scarification"
+    _attr_name = "J'ai scarifié"
+    _attr_has_entity_name = True

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.12
+- Corrige le bouton `Date action = aujourd'hui` pour enregistrer une date même sans intervention déjà présente.
+- Harmonise le `Mode expert` avec le device commun de l'intégration.
+- Durcit le blueprint d'arrosage pour ignorer les capteurs `unknown` / `unavailable` et éviter les déclenchements sur objectif nul.
+- Ajoute des notifications persistantes quand le blueprint bloque volontairement l'arrosage ou n'exécute aucune branche.
+- Nettoie le README et ajoute `tests/__init__.py` pour rendre la découverte automatique des tests fonctionnelle.
+
 ## 0.3.11
 - Extraction du moteur de décision dans un module pur pour le rendre testable sans Home Assistant.
 - Ajout d'une base de tests unitaires sur les règles métier principales.
