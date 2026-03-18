@@ -1,112 +1,49 @@
 from __future__ import annotations
 
-from datetime import date, datetime
-from importlib import util
-from pathlib import Path
+"""Orchestrateur du moteur de décision.
+
+Ce module garde l'API historique utilisée par le reste de l'intégration,
+mais délègue la logique métier aux modules spécialisés:
+- decision_phase.py
+- decision_watering.py
+- decision_risk.py
+- decision_mowing.py
+"""
+
+from datetime import date
 from typing import Any
 
-_MODULE_DIR = Path(__file__).resolve().parent
-
-
-def _load_local_module(module_name: str, filename: str):
-    spec = util.spec_from_file_location(module_name, _MODULE_DIR / filename)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Impossible de charger {filename}")
-    module = util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-_phases = _load_local_module("_gazon_intelligent_phases", "phases.py")
-_water = _load_local_module("_gazon_intelligent_water", "water.py")
-_scores = _load_local_module("_gazon_intelligent_scores", "scores.py")
-_memory = _load_local_module("_gazon_intelligent_memory", "memory.py")
-_guidance = _load_local_module("_gazon_intelligent_guidance", "guidance.py")
-
-_memory.PHASE_DURATIONS_DAYS = _phases.PHASE_DURATIONS_DAYS
-_memory.SIGNIFICANT_WATERING_THRESHOLD_MM = _phases.SIGNIFICANT_WATERING_THRESHOLD_MM
-
-PHASE_DURATIONS_DAYS = _phases.PHASE_DURATIONS_DAYS
-PHASE_PRIORITIES = _phases.PHASE_PRIORITIES
-SIGNIFICANT_WATERING_THRESHOLD_MM = _phases.SIGNIFICANT_WATERING_THRESHOLD_MM
-SUBPHASE_RULES = _phases.SUBPHASE_RULES
-compute_dominant_phase = _phases.compute_dominant_phase
-compute_phase_active = _phases.compute_phase_active
-compute_subphase = _phases.compute_subphase
-is_hivernage = _phases.is_hivernage
-phase_duration_days = _phases.phase_duration_days
-
-compute_advanced_context = _water.compute_advanced_context
-compute_etp = _water.compute_etp
-compute_recent_watering_mm = _water.compute_recent_watering_mm
-compute_water_balance = _water.compute_water_balance
-
-compute_internal_scores = _scores.compute_internal_scores
-
-compute_memory = _memory.compute_memory
-
-compute_action_guidance = _guidance.compute_action_guidance
-compute_jours_restants_for = _guidance.compute_jours_restants_for
-compute_next_reevaluation = _guidance.compute_next_reevaluation
-compute_objectif_mm = _guidance.compute_objectif_mm
-compute_tonte_statut = _guidance.compute_tonte_statut
-
-
-def _passage_spacing_text(passages: int) -> str:
-    if passages <= 1:
-        return "en un passage"
-    if passages == 2:
-        return "en 2 passages courts espacés de 20 à 30 min"
-    return f"en {passages} passages courts espacés de 20 min"
-
-
-def _decision_urgence(
-    phase_dominante: str,
-    arrosage_recommande: bool,
-    niveau_action: str,
-    risque_gazon: str,
-    bilan_hydrique_mm: float,
-    pluie_demain: float,
-) -> str:
-    if phase_dominante in {"Traitement", "Hivernage"}:
-        return "faible"
-    if not arrosage_recommande:
-        if pluie_demain >= 2.0 or bilan_hydrique_mm >= 0.0:
-            return "faible"
-        return "moyenne" if niveau_action == "surveiller" or bilan_hydrique_mm < 0 else "faible"
-    if bilan_hydrique_mm <= -2.5 or niveau_action == "critique" or risque_gazon == "eleve":
-        return "haute"
-    if phase_dominante == "Sursemis" and (bilan_hydrique_mm <= -1.0 or niveau_action == "a_faire"):
-        return "moyenne"
-    if niveau_action in {"a_faire", "surveiller"} or bilan_hydrique_mm <= -0.5:
-        return "moyenne"
-    return "faible"
-
-
-def _decision_resume(
-    arrosage_recommande: bool,
-    tonte_autorisee: bool,
-    objectif_mm: float,
-    type_arrosage: str,
-    niveau_action: str,
-    fenetre_optimale: str,
-    risque_gazon: str,
-) -> dict[str, Any]:
-    if arrosage_recommande:
-        action = "arrosage"
-    elif tonte_autorisee:
-        action = "aucune_action"
-    else:
-        action = "surveillance"
-    return {
-        "faire": arrosage_recommande,
-        "action": action,
-        "moment": fenetre_optimale,
-        "objectif_mm": objectif_mm,
-        "type_arrosage": type_arrosage,
-        "niveau_action": niveau_action,
-        "risque_gazon": risque_gazon,
-    }
+from .decision_models import DecisionContext, DecisionResult
+from .decision_mowing import build_mowing_bundle
+from .decision_phase import build_phase_bundle
+from .decision_risk import build_risk_bundle
+from .decision_watering import build_water_bundle, build_watering_bundle
+from .guidance import (
+    compute_action_guidance,
+    compute_jours_restants_for,
+    compute_next_reevaluation,
+    compute_objectif_mm,
+    compute_tonte_statut,
+)
+from .memory import compute_memory
+from .phases import (
+    PHASE_DURATIONS_DAYS,
+    PHASE_PRIORITIES,
+    SIGNIFICANT_WATERING_THRESHOLD_MM,
+    SUBPHASE_RULES,
+    compute_dominant_phase,
+    compute_phase_active,
+    compute_subphase,
+    is_hivernage,
+    phase_duration_days,
+)
+from .scores import compute_internal_scores
+from .water import (
+    compute_advanced_context,
+    compute_etp,
+    compute_recent_watering_mm,
+    compute_water_balance,
+)
 
 
 def compute_decision(
@@ -127,307 +64,98 @@ def compute_decision(
     history: list[dict[str, Any]],
     today: date | None = None,
     hour_of_day: int | None = None,
-) -> dict[str, Any]:
+) -> DecisionResult:
+    """Retourne un résultat typé, compatible avec le snapshot historique."""
     today = today or date.today()
-    advanced_context = advanced_context or {}
-    pluie_24h = pluie_24h or 0.0
-    pluie_demain = pluie_demain or 0.0
-    humidite = humidite or 0.0
-    temperature = temperature or 0.0
-    etp = etp or 0.0
-    arrosage_recent = water_balance.get("arrosage_recent", 0.0)
-    deficit_jour = water_balance.get("deficit_jour", 0.0)
-    deficit_3j = water_balance.get("deficit_3j", 0.0)
-    deficit_7j = water_balance.get("deficit_7j", 0.0)
-    pluie_efficace = water_balance.get("pluie_efficace", 0.0)
-    bilan_hydrique_mm = water_balance.get("bilan_hydrique_mm", 0.0)
-    bilan_hydrique_3j = water_balance.get("bilan_hydrique_3j", 0.0)
-    bilan_hydrique_7j = water_balance.get("bilan_hydrique_7j", 0.0)
-    now_hour = hour_of_day if hour_of_day is not None else datetime.now().hour
-    prochain_creneau = "ce matin" if now_hour < 9 else "demain matin"
-    action_guidance = compute_action_guidance(
-        phase_dominante=phase_dominante,
-        sous_phase=sous_phase,
-        water_balance=water_balance,
-        advanced_context=advanced_context,
+    context = DecisionContext(
+        history=[item for item in history if isinstance(item, dict)],
+        today=today,
+        hour_of_day=hour_of_day,
+        temperature=temperature,
         pluie_24h=pluie_24h,
         pluie_demain=pluie_demain,
         humidite=humidite,
-        temperature=temperature,
-        etp=etp,
-        objectif_mm=objectif_mm,
-        hour_of_day=hour_of_day,
+        weather_profile={},
+        config={},
     )
-    prochaine_reevaluation = compute_next_reevaluation(
-        phase_dominante=phase_dominante,
-        niveau_action=action_guidance["niveau_action"],
-        fenetre_optimale=action_guidance["fenetre_optimale"],
-        risque_gazon=action_guidance["risque_gazon"],
-        pluie_demain=pluie_demain,
-    )
-
-    if phase_dominante == "Traitement":
-        return {
-            "tonte_autorisee": False,
-            "tonte_statut": "interdite",
-            "arrosage_auto_autorise": False,
-            "arrosage_recommande": False,
-            "type_arrosage": "bloque",
-            "arrosage_conseille": "personnalise",
-            "raison_decision": "Traitement actif: tonte et arrosage bloqués.",
-            "conseil_principal": f"Laisser agir le traitement encore {jours_restants} jour(s).",
-            "action_recommandee": "Surveiller l'état du gazon sans intervention hydrique.",
-            "action_a_eviter": "Tondre ou arroser.",
-            "niveau_action": action_guidance["niveau_action"],
-            "fenetre_optimale": action_guidance["fenetre_optimale"],
-            "risque_gazon": action_guidance["risque_gazon"],
-            "urgence": _decision_urgence(
-                phase_dominante,
-                False,
-                action_guidance["niveau_action"],
-                action_guidance["risque_gazon"],
-                bilan_hydrique_mm,
-                pluie_demain,
-            ),
-            "prochaine_reevaluation": prochaine_reevaluation,
-            "score_tonte": score_tonte,
-            "decision_resume": _decision_resume(
-                False,
-                False,
-                objectif_mm,
-                "bloque",
-                action_guidance["niveau_action"],
-                action_guidance["fenetre_optimale"],
-                action_guidance["risque_gazon"],
-            ),
-        }
-    if phase_dominante == "Hivernage":
-        return {
-            "tonte_autorisee": False,
-            "tonte_statut": "interdite",
-            "arrosage_auto_autorise": False,
-            "arrosage_recommande": False,
-            "type_arrosage": "bloque",
-            "arrosage_conseille": "personnalise",
-            "raison_decision": "Hivernage actif: repos végétatif.",
-            "conseil_principal": "N'arrose pas et limite les interventions.",
-            "action_recommandee": "Surveille uniquement.",
-            "action_a_eviter": "Arroser fréquemment.",
-            "niveau_action": action_guidance["niveau_action"],
-            "fenetre_optimale": action_guidance["fenetre_optimale"],
-            "risque_gazon": action_guidance["risque_gazon"],
-            "urgence": _decision_urgence(
-                phase_dominante,
-                False,
-                action_guidance["niveau_action"],
-                action_guidance["risque_gazon"],
-                bilan_hydrique_mm,
-                pluie_demain,
-            ),
-            "prochaine_reevaluation": prochaine_reevaluation,
-            "score_tonte": score_tonte,
-            "decision_resume": _decision_resume(
-                False,
-                False,
-                objectif_mm,
-                "bloque",
-                action_guidance["niveau_action"],
-                action_guidance["fenetre_optimale"],
-                action_guidance["risque_gazon"],
-            ),
-        }
-    if phase_dominante == "Sursemis":
-        passages = 3 if objectif_mm >= 2 else 2
-        passage_spacing = _passage_spacing_text(passages)
-        urgence_sursemis = _decision_urgence(
-            phase_dominante,
-            True,
-            action_guidance["niveau_action"],
-            action_guidance["risque_gazon"],
-            bilan_hydrique_mm,
-            pluie_demain,
-        )
-        return {
-            "tonte_autorisee": False,
-            "tonte_statut": "interdite",
-            "arrosage_auto_autorise": False,
-            "arrosage_recommande": objectif_mm > 0,
-            "type_arrosage": "manuel_frequent",
-            "arrosage_conseille": "personnalise",
-            "raison_decision": (
-                f"Sursemis / {sous_phase}: bilan={bilan_hydrique_mm:.1f} mm, tendance 3j={bilan_hydrique_3j:.1f} mm, 7j={bilan_hydrique_7j:.1f} mm. "
-                f"Pluie efficace={pluie_efficace:.1f} mm."
-            ),
-            "conseil_principal": f"Arroser {prochain_creneau} {passage_spacing}.",
-            "action_recommandee": f"Appliquer {objectif_mm} mm fractionnés ({passages}x, 20 à 30 min entre les passages).",
-            "action_a_eviter": "Tondre avant levée complète.",
-            "niveau_action": action_guidance["niveau_action"],
-            "fenetre_optimale": action_guidance["fenetre_optimale"],
-            "risque_gazon": action_guidance["risque_gazon"],
-            "urgence": urgence_sursemis,
-            "prochaine_reevaluation": prochaine_reevaluation,
-            "score_tonte": score_tonte,
-            "decision_resume": _decision_resume(
-                True,
-                False,
-                objectif_mm,
-                "manuel_frequent",
-                action_guidance["niveau_action"],
-                action_guidance["fenetre_optimale"],
-                action_guidance["risque_gazon"],
-            ),
-        }
-
-    tonte_ok = score_tonte < 45 and score_stress < 70
-    auto_ok = phase_dominante in {"Normal", "Fertilisation", "Biostimulant", "Agent Mouillant", "Scarification"}
-    besoin_eau = (
-        bilan_hydrique_mm <= -0.2
-        or deficit_3j > 0.8
-        or deficit_7j > 1.5
-    )
-    recommande = objectif_mm > 0 and besoin_eau
-    if not tonte_ok:
-        if humidite >= 85:
-            tonte_reason = "Humidité trop élevée: pelouse humide."
-        elif pluie_24h >= 3:
-            tonte_reason = "Pluie récente: sol encore humide."
-        elif arrosage_recent > 0:
-            tonte_reason = "Arrosage récent: attendre un ressuyage."
-        elif temperature >= 30 and etp >= 4:
-            tonte_reason = "Stress thermique élevé: limiter la tonte."
-        else:
-            tonte_reason = "Conditions défavorables à la tonte."
-    else:
-        tonte_reason = "Fenêtre tonte acceptable."
-
-    pluie_significative = pluie_24h >= 4 or pluie_demain >= 4
-    pluie_compensatrice = recommande and pluie_demain >= max(2.0, objectif_mm * 0.8)
-    stress_thermique = temperature >= 30 and etp >= 4
-    humidite_haute = humidite >= 85
-
-    if phase_dominante == "Normal":
-        if not recommande:
-            if pluie_demain >= 2:
-                conseil_principal = "N'arrose pas aujourd'hui: la pluie prévue couvre le besoin court terme."
-                action_recommandee = "Laisse la pluie agir puis réévalue demain."
-                action_a_eviter = "Cumuler pluie et arrosage."
-            else:
-                conseil_principal = "N'arrose pas pour le moment."
-                action_recommandee = "Réévalue au prochain cycle météo."
-                action_a_eviter = "Arroser par réflexe."
-        else:
-            if pluie_compensatrice:
-                conseil_principal = (
-                    "Réduis ou reporte l'arrosage: la pluie de demain peut compenser une grande partie du déficit."
-                )
-                action_recommandee = (
-                    f"Réduis l'apport à {max(0.0, round(objectif_mm * 0.4, 1))} mm maximum aujourd'hui."
-                )
-                action_a_eviter = "Lancer un cycle complet avant la pluie."
-            elif stress_thermique:
-                conseil_principal = f"Arrose {prochain_creneau} en 2 passages courts espacés de 20 à 30 min."
-                action_recommandee = f"Appliquer {objectif_mm} mm fractionnés (2x, 20 à 30 min entre les passages)."
-                action_a_eviter = "Arroser entre 11h et 18h."
-            elif humidite_haute:
-                conseil_principal = "Attends un léger ressuyage avant d'arroser."
-                action_recommandee = f"Programme {objectif_mm} mm en fin de nuit si l'humidité baisse."
-                action_a_eviter = "Arroser immédiatement sur pelouse saturée."
-            else:
-                conseil_principal = f"Arrose {prochain_creneau}: manque d'eau estimé à {objectif_mm} mm."
-                action_recommandee = f"Applique {objectif_mm} mm sur les zones actives."
-                action_a_eviter = "Arroser en pleine journée."
-    else:
-        if not recommande:
-            conseil_principal = f"Phase {phase_dominante}: n'arrose pas pour l'instant."
-            action_recommandee = "Surveille les capteurs et l'évolution météo."
-        elif phase_dominante == "Fertilisation":
-            conseil_principal = "Fertilisation active: arrose légèrement pour activer l'apport."
-            action_recommandee = f"Applique {objectif_mm} mm en 1 à 2 passages."
-        elif phase_dominante == "Scarification":
-            conseil_principal = "Scarification: garde une humidité stable sans détremper."
-            action_recommandee = f"Applique {objectif_mm} mm en apports courts."
-        elif phase_dominante == "Agent Mouillant":
-            conseil_principal = "Agent mouillant: fais pénétrer l'eau plus en profondeur."
-            action_recommandee = f"Applique {objectif_mm} mm en cycle allongé."
-        elif phase_dominante == "Biostimulant":
-            conseil_principal = "Biostimulant: garde un niveau hydrique modéré."
-            action_recommandee = f"Applique {objectif_mm} mm en un passage."
-        else:
-            conseil_principal = f"Phase {phase_dominante}: arrose de façon maîtrisée {prochain_creneau}."
-            action_recommandee = f"Applique {objectif_mm} mm en tenant compte de l'humidité actuelle."
-        action_a_eviter = "Tondre sur sol humide." if not tonte_ok else "Intervention agressive inutile."
-
-    facteurs = [
-        f"bilan_hydrique={bilan_hydrique_mm:.1f}",
-        f"bilan_hydrique_3j={bilan_hydrique_3j:.1f}",
-        f"bilan_hydrique_7j={bilan_hydrique_7j:.1f}",
-        f"pluie_efficace={pluie_efficace:.1f}",
-        f"arrosage_recent={arrosage_recent:.1f}",
-    ]
-    if pluie_significative:
-        facteurs.append("risque d'humidité élevé")
-    if stress_thermique:
-        facteurs.append("stress thermique")
-    if humidite_haute:
-        facteurs.append("humidité air élevée")
-    if advanced_context.get("humidite_sol") is not None:
-        facteurs.append(f"humidite_sol={advanced_context['humidite_sol']:.1f}")
-    if advanced_context.get("vent") is not None:
-        facteurs.append(f"vent={advanced_context['vent']:.1f}")
-    if advanced_context.get("rosee") is not None and advanced_context.get("rosee") > 0:
-        facteurs.append("rosée présente")
-    if advanced_context.get("hauteur_gazon") is not None:
-        facteurs.append(f"hauteur_gazon={advanced_context['hauteur_gazon']:.1f}")
-    if advanced_context.get("retour_arrosage") is not None:
-        facteurs.append(f"retour_arrosage={advanced_context['retour_arrosage']:.1f}")
-    facteurs_txt = ", ".join(facteurs)
-    tonte_statut = compute_tonte_statut(
-        phase_dominante=phase_dominante,
-        tonte_autorisee=tonte_ok,
-        score_tonte=score_tonte,
-        risque_gazon=action_guidance["risque_gazon"],
-    )
-    urgence = _decision_urgence(
-        phase_dominante=phase_dominante,
-        arrosage_recommande=recommande,
-        niveau_action=action_guidance["niveau_action"],
-        risque_gazon=action_guidance["risque_gazon"],
-        bilan_hydrique_mm=bilan_hydrique_mm,
-        pluie_demain=pluie_demain,
-    )
-    decision_resume = _decision_resume(
-        recommande,
-        tonte_ok,
-        objectif_mm,
-        "auto" if auto_ok else "personnalise",
-        action_guidance["niveau_action"],
-        action_guidance["fenetre_optimale"],
-        action_guidance["risque_gazon"],
-    )
-
-    return {
-        "tonte_autorisee": tonte_ok,
-        "tonte_statut": tonte_statut,
-        "arrosage_auto_autorise": auto_ok,
-        "arrosage_recommande": recommande,
-        "type_arrosage": "auto" if auto_ok else "personnalise",
-        "arrosage_conseille": "auto" if phase_dominante == "Normal" else "personnalise",
-        "raison_decision": (
-            f"Mode {phase_dominante} / {sous_phase} en cours ({jours_restants} jour(s) restants). "
-            f"Bilan hydrique={bilan_hydrique_mm:.1f} mm, tendance 3j={bilan_hydrique_3j:.1f} mm, "
-            f"7j={bilan_hydrique_7j:.1f} mm. {facteurs_txt}. {tonte_reason}"
-        ),
-        "conseil_principal": conseil_principal,
-        "action_recommandee": action_recommandee,
-        "action_a_eviter": action_a_eviter,
-        "niveau_action": action_guidance["niveau_action"],
-        "fenetre_optimale": action_guidance["fenetre_optimale"],
-        "risque_gazon": action_guidance["risque_gazon"],
-        "urgence": urgence,
-        "prochaine_reevaluation": prochaine_reevaluation,
-        "score_tonte": score_tonte,
-        "decision_resume": decision_resume,
+    phase_bundle = {
+        "phase_dominante": phase_dominante,
+        "phase_dominante_source": "historique_actif",
+        "date_action": None,
+        "date_fin": None,
+        "phase_age_days": 0,
+        "sous_phase": sous_phase,
+        "sous_phase_detail": f"{phase_dominante} / {sous_phase}",
+        "sous_phase_age_days": 0,
+        "sous_phase_progression": 0,
+        "jours_restants": jours_restants,
     }
+    water_bundle = {
+        "etp": etp,
+        "advanced_context": advanced_context or {},
+        "water_balance": water_balance,
+        "objectif_mm": objectif_mm,
+    }
+    risk_bundle = {
+        "scores": {
+            "score_hydrique": score_hydrique,
+            "score_stress": score_stress,
+            "score_tonte": score_tonte,
+        },
+        "niveau_action": advanced_context.get("niveau_action") if advanced_context else "a_faire",
+        "fenetre_optimale": advanced_context.get("fenetre_optimale") if advanced_context else "maintenant",
+        "risque_gazon": advanced_context.get("risque_gazon") if advanced_context else "modere",
+        "prochaine_reevaluation": advanced_context.get("prochaine_reevaluation") if advanced_context else "dans 24 h",
+        "urgence": advanced_context.get("urgence") if advanced_context else "moyenne",
+    }
+    mowing_bundle = {
+        "tonte_autorisee": True,
+        "tonte_statut": "autorisee",
+        "tonte_reason": "Fenêtre tonte acceptable.",
+        "score_tonte": score_tonte,
+        "score_stress": score_stress,
+    }
+    watering_bundle = build_watering_bundle(
+        context=context,
+        phase_bundle=phase_bundle,
+        water_bundle=water_bundle,
+        risk_bundle=risk_bundle,
+        mowing_bundle=mowing_bundle,
+    )
+    return DecisionResult(
+        phase_dominante=phase_dominante,
+        sous_phase=sous_phase,
+        action_recommandee=watering_bundle["action_recommandee"],
+        action_a_eviter=watering_bundle["action_a_eviter"],
+        niveau_action=risk_bundle["niveau_action"],
+        fenetre_optimale=risk_bundle["fenetre_optimale"],
+        risque_gazon=risk_bundle["risque_gazon"],
+        objectif_arrosage=objectif_mm,
+        tonte_autorisee=watering_bundle["tonte_autorisee"],
+        conseil_principal=watering_bundle["conseil_principal"],
+        tonte_statut=watering_bundle["tonte_statut"],
+        arrosage_recommande=watering_bundle["arrosage_recommande"],
+        arrosage_auto_autorise=watering_bundle["arrosage_auto_autorise"],
+        type_arrosage=watering_bundle["type_arrosage"],
+        arrosage_conseille=watering_bundle["arrosage_conseille"],
+        phase_dominante_source=phase_bundle["phase_dominante_source"],
+        sous_phase_detail=phase_bundle["sous_phase_detail"],
+        sous_phase_age_days=phase_bundle["sous_phase_age_days"],
+        sous_phase_progression=phase_bundle["sous_phase_progression"],
+        prochaine_reevaluation=risk_bundle["prochaine_reevaluation"],
+        urgence=risk_bundle["urgence"],
+        raison_decision=watering_bundle["raison_decision"],
+        score_hydrique=score_hydrique,
+        score_stress=score_stress,
+        score_tonte=score_tonte,
+        decision_resume=watering_bundle["decision_resume"],
+        advanced_context=advanced_context,
+        water_balance=water_balance,
+        phase_context=phase_bundle,
+        extra={
+            "jours_restants": jours_restants,
+        },
+    )
 
 
 def build_decision_snapshot(
@@ -449,14 +177,17 @@ def build_decision_snapshot(
     weather_profile: dict[str, Any] | None = None,
     soil_balance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    today = today or date.today()
-    etp = compute_etp(
+    """Construit le snapshot historique complet utilisé par les entités HA."""
+    context = DecisionContext.from_legacy_args(
+        history=history,
+        today=today,
+        hour_of_day=hour_of_day,
         temperature=temperature,
         pluie_24h=pluie_24h,
+        pluie_demain=pluie_demain,
+        humidite=humidite,
+        type_sol=type_sol,
         etp_capteur=etp_capteur,
-        weather_profile=weather_profile,
-    )
-    advanced_context = compute_advanced_context(
         humidite_sol=humidite_sol,
         vent=vent,
         rosee=rosee,
@@ -464,141 +195,133 @@ def build_decision_snapshot(
         retour_arrosage=retour_arrosage,
         pluie_source=pluie_source,
         weather_profile=weather_profile,
+        soil_balance=soil_balance,
     )
-    dominant = compute_dominant_phase(history, today=today, temperature=temperature)
-    phase_dominante = dominant["phase_dominante"]
-    date_action = dominant["date_debut"]
-    date_fin = dominant["date_fin"]
-    sous_phase = compute_subphase(
-        phase_dominante=phase_dominante,
-        date_debut=date_action,
-        date_fin=date_fin,
-        today=today,
+    phase_bundle = build_phase_bundle(context)
+    water_bundle = build_water_bundle(context, phase_bundle)
+    risk_bundle = build_risk_bundle(context, phase_bundle, water_bundle)
+    mowing_bundle = build_mowing_bundle(context, phase_bundle, water_bundle, risk_bundle)
+    watering_bundle = build_watering_bundle(context, phase_bundle, water_bundle, risk_bundle, mowing_bundle)
+
+    result = DecisionResult(
+        phase_dominante=phase_bundle["phase_dominante"],
+        sous_phase=phase_bundle["sous_phase"],
+        action_recommandee=watering_bundle["action_recommandee"],
+        action_a_eviter=watering_bundle["action_a_eviter"],
+        niveau_action=risk_bundle["niveau_action"],
+        fenetre_optimale=risk_bundle["fenetre_optimale"],
+        risque_gazon=risk_bundle["risque_gazon"],
+        objectif_arrosage=water_bundle["objectif_mm"],
+        tonte_autorisee=mowing_bundle["tonte_autorisee"],
+        conseil_principal=watering_bundle["conseil_principal"],
+        tonte_statut=mowing_bundle["tonte_statut"],
+        arrosage_recommande=watering_bundle["arrosage_recommande"],
+        arrosage_auto_autorise=watering_bundle["arrosage_auto_autorise"],
+        type_arrosage=watering_bundle["type_arrosage"],
+        arrosage_conseille=watering_bundle["arrosage_conseille"],
+        phase_dominante_source=phase_bundle["phase_dominante_source"],
+        sous_phase_detail=phase_bundle["sous_phase_detail"],
+        sous_phase_age_days=phase_bundle["sous_phase_age_days"],
+        sous_phase_progression=phase_bundle["sous_phase_progression"],
+        prochaine_reevaluation=risk_bundle["prochaine_reevaluation"],
+        urgence=risk_bundle["urgence"],
+        raison_decision=watering_bundle["raison_decision"],
+        score_hydrique=risk_bundle["scores"]["score_hydrique"],
+        score_stress=risk_bundle["scores"]["score_stress"],
+        score_tonte=risk_bundle["scores"]["score_tonte"],
+        decision_resume=watering_bundle["decision_resume"],
+        advanced_context=water_bundle["advanced_context"],
+        water_balance=water_bundle["water_balance"],
+        phase_context=phase_bundle,
+        extra={
+            "mode": phase_bundle["phase_dominante"],
+            "phase_active": phase_bundle["phase_dominante"],
+            "date_action": phase_bundle["date_action"],
+            "date_fin": phase_bundle["date_fin"],
+            "phase_age_days": phase_bundle["phase_age_days"],
+            "jours_restants": phase_bundle["jours_restants"],
+            "etp": water_bundle["etp"],
+            "humidite_sol": water_bundle["advanced_context"]["humidite_sol"],
+            "vent": water_bundle["advanced_context"]["vent"],
+            "rosee": water_bundle["advanced_context"]["rosee"],
+            "hauteur_gazon": water_bundle["advanced_context"]["hauteur_gazon"],
+            "retour_arrosage": water_bundle["advanced_context"]["retour_arrosage"],
+            "pluie_source": water_bundle["advanced_context"]["pluie_source"],
+            "water_balance": water_bundle["water_balance"],
+            "deficit_jour": water_bundle["water_balance"]["deficit_jour"],
+            "deficit_3j": water_bundle["water_balance"]["deficit_3j"],
+            "deficit_7j": water_bundle["water_balance"]["deficit_7j"],
+            "bilan_hydrique_journalier_mm": water_bundle["water_balance"].get("bilan_hydrique_journalier_mm"),
+            "bilan_hydrique_precedent_mm": water_bundle["water_balance"].get("bilan_hydrique_precedent_mm"),
+            "soil_balance": water_bundle["water_balance"].get("soil_balance"),
+            "pluie_efficace": water_bundle["water_balance"]["pluie_efficace"],
+            "arrosage_recent": water_bundle["water_balance"]["arrosage_recent"],
+            "arrosage_recent_jour": water_bundle["water_balance"]["arrosage_recent_jour"],
+            "arrosage_recent_3j": water_bundle["water_balance"]["arrosage_recent_3j"],
+            "arrosage_recent_7j": water_bundle["water_balance"]["arrosage_recent_7j"],
+            "bilan_hydrique_mm": water_bundle["water_balance"]["bilan_hydrique_mm"],
+            "bilan_hydrique_3j": water_bundle["water_balance"]["bilan_hydrique_3j"],
+            "bilan_hydrique_7j": water_bundle["water_balance"]["bilan_hydrique_7j"],
+            "objectif_mm": water_bundle["objectif_mm"],
+            "score_hydrique": risk_bundle["scores"]["score_hydrique"],
+            "score_stress": risk_bundle["scores"]["score_stress"],
+            "score_tonte": risk_bundle["scores"]["score_tonte"],
+            "tonte_autorisee": mowing_bundle["tonte_autorisee"],
+            "tonte_statut": mowing_bundle["tonte_statut"],
+            "arrosage_auto_autorise": watering_bundle["arrosage_auto_autorise"],
+            "arrosage_recommande": watering_bundle["arrosage_recommande"],
+            "type_arrosage": watering_bundle["type_arrosage"],
+            "arrosage_conseille": watering_bundle["arrosage_conseille"],
+            "raison_decision": watering_bundle["raison_decision"],
+            "conseil_principal": watering_bundle["conseil_principal"],
+            "action_recommandee": watering_bundle["action_recommandee"],
+            "action_a_eviter": watering_bundle["action_a_eviter"],
+            "niveau_action": risk_bundle["niveau_action"],
+            "fenetre_optimale": risk_bundle["fenetre_optimale"],
+            "risque_gazon": risk_bundle["risque_gazon"],
+            "urgence": risk_bundle["urgence"],
+            "prochaine_reevaluation": risk_bundle["prochaine_reevaluation"],
+            "decision_resume": watering_bundle["decision_resume"],
+        },
     )
-    jours_restants = compute_jours_restants_for(
-        phase_dominante=phase_dominante,
-        date_fin=date_fin,
-        today=today,
+    return result.to_snapshot()
+
+
+def build_decision_result(context: DecisionContext) -> DecisionResult:
+    """Construit un résultat typé à partir d'un contexte déjà normalisé."""
+    phase_bundle = build_phase_bundle(context)
+    water_bundle = build_water_bundle(context, phase_bundle)
+    risk_bundle = build_risk_bundle(context, phase_bundle, water_bundle)
+    mowing_bundle = build_mowing_bundle(context, phase_bundle, water_bundle, risk_bundle)
+    watering_bundle = build_watering_bundle(context, phase_bundle, water_bundle, risk_bundle, mowing_bundle)
+    return DecisionResult(
+        phase_dominante=phase_bundle["phase_dominante"],
+        sous_phase=phase_bundle["sous_phase"],
+        action_recommandee=watering_bundle["action_recommandee"],
+        action_a_eviter=watering_bundle["action_a_eviter"],
+        niveau_action=risk_bundle["niveau_action"],
+        fenetre_optimale=risk_bundle["fenetre_optimale"],
+        risque_gazon=risk_bundle["risque_gazon"],
+        objectif_arrosage=water_bundle["objectif_mm"],
+        tonte_autorisee=mowing_bundle["tonte_autorisee"],
+        conseil_principal=watering_bundle["conseil_principal"],
+        tonte_statut=mowing_bundle["tonte_statut"],
+        arrosage_recommande=watering_bundle["arrosage_recommande"],
+        arrosage_auto_autorise=watering_bundle["arrosage_auto_autorise"],
+        type_arrosage=watering_bundle["type_arrosage"],
+        arrosage_conseille=watering_bundle["arrosage_conseille"],
+        phase_dominante_source=phase_bundle["phase_dominante_source"],
+        sous_phase_detail=phase_bundle["sous_phase_detail"],
+        sous_phase_age_days=phase_bundle["sous_phase_age_days"],
+        sous_phase_progression=phase_bundle["sous_phase_progression"],
+        prochaine_reevaluation=risk_bundle["prochaine_reevaluation"],
+        urgence=risk_bundle["urgence"],
+        raison_decision=watering_bundle["raison_decision"],
+        score_hydrique=risk_bundle["scores"]["score_hydrique"],
+        score_stress=risk_bundle["scores"]["score_stress"],
+        score_tonte=risk_bundle["scores"]["score_tonte"],
+        decision_resume=watering_bundle["decision_resume"],
+        advanced_context=water_bundle["advanced_context"],
+        water_balance=water_bundle["water_balance"],
+        phase_context=phase_bundle,
     )
-    water_balance = compute_water_balance(
-        history=history,
-        today=today,
-        etp=etp,
-        pluie_24h=pluie_24h,
-        pluie_demain=pluie_demain,
-        type_sol=type_sol,
-        recent_watering_mm_override=retour_arrosage,
-        advanced_context=advanced_context,
-        weather_profile=weather_profile,
-    )
-    balance_snapshot = dict(water_balance)
-    balance_snapshot["bilan_hydrique_journalier_mm"] = balance_snapshot.get("bilan_hydrique_mm", 0.0)
-    if soil_balance:
-        reserve_mm = soil_balance.get("reserve_mm")
-        if reserve_mm is not None:
-            balance_snapshot["bilan_hydrique_mm"] = reserve_mm
-        balance_snapshot["soil_balance"] = soil_balance
-        balance_snapshot["bilan_hydrique_precedent_mm"] = soil_balance.get("previous_reserve_mm")
-        balance_snapshot["pluie_jour_mm"] = soil_balance.get("pluie_mm")
-        balance_snapshot["arrosage_jour_mm"] = soil_balance.get("arrosage_mm")
-        balance_snapshot["etp_jour_mm"] = soil_balance.get("etp_mm")
-        balance_snapshot["delta_jour_mm"] = soil_balance.get("delta_mm")
-    water_balance = balance_snapshot
-    scores = compute_internal_scores(
-        history=history,
-        today=today,
-        phase_dominante=phase_dominante,
-        sous_phase=sous_phase["sous_phase"],
-        water_balance=water_balance,
-        advanced_context=advanced_context,
-        pluie_24h=pluie_24h,
-        pluie_demain=pluie_demain,
-        humidite=humidite,
-        temperature=temperature,
-        etp=etp,
-    )
-    objectif_mm = compute_objectif_mm(
-        phase_dominante=phase_dominante,
-        sous_phase=sous_phase["sous_phase"],
-        water_balance=water_balance,
-        pluie_demain=pluie_demain,
-        humidite=humidite,
-        temperature=temperature,
-        etp=etp,
-    )
-    decision = compute_decision(
-        phase_dominante=phase_dominante,
-        sous_phase=sous_phase["sous_phase"],
-        water_balance=water_balance,
-        advanced_context=advanced_context,
-        pluie_24h=pluie_24h,
-        pluie_demain=pluie_demain,
-        humidite=humidite,
-        temperature=temperature,
-        etp=etp,
-        objectif_mm=objectif_mm,
-        jours_restants=jours_restants,
-        score_hydrique=scores["score_hydrique"],
-        score_stress=scores["score_stress"],
-        score_tonte=scores["score_tonte"],
-        history=history,
-        today=today,
-        hour_of_day=hour_of_day,
-    )
-    return {
-        "mode": phase_dominante,
-        "phase_active": phase_dominante,
-        "phase_dominante": phase_dominante,
-        "phase_dominante_source": dominant["source"],
-        "date_action": date_action,
-        "date_fin": date_fin,
-        "phase_age_days": dominant["age_jours"],
-        "sous_phase": sous_phase["sous_phase"],
-        "sous_phase_detail": sous_phase["detail"],
-        "sous_phase_age_days": sous_phase["age_jours"],
-        "sous_phase_progression": sous_phase["progression"],
-        "etp": etp,
-        "advanced_context": advanced_context,
-        "humidite_sol": advanced_context["humidite_sol"],
-        "vent": advanced_context["vent"],
-        "rosee": advanced_context["rosee"],
-        "hauteur_gazon": advanced_context["hauteur_gazon"],
-        "retour_arrosage": advanced_context["retour_arrosage"],
-        "pluie_source": advanced_context["pluie_source"],
-        "water_balance": water_balance,
-        "deficit_jour": water_balance["deficit_jour"],
-        "deficit_3j": water_balance["deficit_3j"],
-        "deficit_7j": water_balance["deficit_7j"],
-        "bilan_hydrique_journalier_mm": water_balance.get("bilan_hydrique_journalier_mm"),
-        "bilan_hydrique_precedent_mm": water_balance.get("bilan_hydrique_precedent_mm"),
-        "soil_balance": water_balance.get("soil_balance"),
-        "pluie_efficace": water_balance["pluie_efficace"],
-        "arrosage_recent": water_balance["arrosage_recent"],
-        "arrosage_recent_jour": water_balance["arrosage_recent_jour"],
-        "arrosage_recent_3j": water_balance["arrosage_recent_3j"],
-        "arrosage_recent_7j": water_balance["arrosage_recent_7j"],
-        "bilan_hydrique_mm": water_balance["bilan_hydrique_mm"],
-        "bilan_hydrique_3j": water_balance["bilan_hydrique_3j"],
-        "bilan_hydrique_7j": water_balance["bilan_hydrique_7j"],
-        "objectif_mm": objectif_mm,
-        "score_hydrique": scores["score_hydrique"],
-        "score_stress": scores["score_stress"],
-        "tonte_autorisee": decision["tonte_autorisee"],
-        "tonte_statut": decision["tonte_statut"],
-        "arrosage_auto_autorise": decision["arrosage_auto_autorise"],
-        "arrosage_recommande": decision["arrosage_recommande"],
-        "type_arrosage": decision["type_arrosage"],
-        "arrosage_conseille": decision["arrosage_conseille"],
-        "raison_decision": decision["raison_decision"],
-        "conseil_principal": decision["conseil_principal"],
-        "action_recommandee": decision["action_recommandee"],
-        "action_a_eviter": decision["action_a_eviter"],
-        "niveau_action": decision["niveau_action"],
-        "fenetre_optimale": decision["fenetre_optimale"],
-        "risque_gazon": decision["risque_gazon"],
-        "urgence": decision["urgence"],
-        "prochaine_reevaluation": decision["prochaine_reevaluation"],
-        "score_tonte": decision["score_tonte"],
-        "decision_resume": decision["decision_resume"],
-        "jours_restants": jours_restants,
-    }

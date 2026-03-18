@@ -17,6 +17,7 @@ from .entity_migration import (
 )
 from .coordinator import GazonIntelligentCoordinator
 from .date_utils import parse_optional_date
+from .migration import async_migrate_entry
 
 PLATFORMS = ["select", "number", "sensor", "binary_sensor", "button"]
 
@@ -207,19 +208,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 hass.services.async_remove(DOMAIN, service)
 
     return unload_ok
-
-
-async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Migre les anciennes versions et nettoie les entités obsolètes."""
-    if entry.version > CURRENT_CONFIG_ENTRY_VERSION:
-        return False
-
-    await async_cleanup_obsolete_entities(hass, entry.entry_id)
-
-    if entry.version < CURRENT_CONFIG_ENTRY_VERSION:
-        hass.config_entries.async_update_entry(entry, version=CURRENT_CONFIG_ENTRY_VERSION)
-
-    return True
 
 
 def _get_first_coordinator(hass: HomeAssistant) -> GazonIntelligentCoordinator:

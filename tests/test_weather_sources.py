@@ -2,28 +2,31 @@ from __future__ import annotations
 
 import unittest
 from datetime import date, timedelta
-from importlib import util
+import importlib
 from pathlib import Path
 import sys
+import types
 
 
-def _load_weather_sources_module():
-    module_path = (
-        Path(__file__).resolve().parents[1]
-        / "custom_components"
-        / "gazon_intelligent"
-        / "weather_sources.py"
-    )
-    spec = util.spec_from_file_location("gazon_intelligent_weather_sources", module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Impossible de charger {module_path}")
-    module = util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+
+ROOT = Path(__file__).resolve().parents[1]
+PACKAGE_DIR = ROOT / "custom_components" / "gazon_intelligent"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
-weather_sources = _load_weather_sources_module()
+def _ensure_package(name: str, path: Path) -> None:
+    if name in sys.modules:
+        return
+    module = types.ModuleType(name)
+    module.__path__ = [str(path)]  # type: ignore[attr-defined]
+    sys.modules[name] = module
+
+
+_ensure_package("custom_components", PACKAGE_DIR.parent)
+_ensure_package("custom_components.gazon_intelligent", PACKAGE_DIR)
+
+weather_sources = importlib.import_module("custom_components.gazon_intelligent.weather_sources")
 
 
 class WeatherSourcesTests(unittest.TestCase):
@@ -87,14 +90,15 @@ class WeatherSourcesTests(unittest.TestCase):
         self.assertEqual(profile["weather_condition"], "sunny")
 
     def test_extract_weather_forecast_summary_collects_day_values(self) -> None:
+        today = date.today()
         forecasts = [
             {
-                "datetime": "2026-03-19",
+                "datetime": (today + timedelta(days=1)).isoformat(),
                 "temperature": "16.2",
                 "precipitation": "3.1",
             },
             {
-                "datetime": "2026-03-18",
+                "datetime": today.isoformat(),
                 "temperature": "19.4",
                 "apparent_temperature": "18.0",
                 "precipitation": "0.8",
@@ -108,7 +112,6 @@ class WeatherSourcesTests(unittest.TestCase):
         self.assertEqual(summary["forecast_pluie_24h"], 0.8)
         self.assertEqual(summary["forecast_pluie_demain"], 3.1)
         self.assertEqual(summary["forecast_condition_today"], "cloudy")
-        today = date.today()
         self.assertEqual(summary["forecast_date_today"], today.isoformat())
         self.assertEqual(summary["forecast_date_tomorrow"], (today + timedelta(days=1)).isoformat())
 

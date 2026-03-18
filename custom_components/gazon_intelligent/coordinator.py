@@ -34,7 +34,7 @@ from .decision import (
     compute_recent_watering_mm,
 )
 from .gazon_brain import GazonBrain
-from .weather_sources import extract_weather_profile, extract_weather_forecast_summary
+from .weather_adapter import WeatherAdapter
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -237,7 +237,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if state is None:
             return {}
 
-        return extract_weather_profile(state.attributes)
+        return WeatherAdapter.profile_from_attributes(state.attributes)
 
     def _estimate_rosee(
         self,
@@ -286,7 +286,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not isinstance(forecasts, list) or not forecasts:
             return {}
 
-        return extract_weather_forecast_summary(forecasts)
+        return WeatherAdapter.forecast_summary(forecasts)
 
     async def async_set_mode(self, mode: str) -> None:
         """Définit le mode gazon."""

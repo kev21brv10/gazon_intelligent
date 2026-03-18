@@ -2,28 +2,31 @@ from __future__ import annotations
 
 import unittest
 from datetime import date
-from importlib import util
+import importlib
 from pathlib import Path
 import sys
+import types
 
 
-def _load_memory_module():
-    module_path = (
-        Path(__file__).resolve().parents[1]
-        / "custom_components"
-        / "gazon_intelligent"
-        / "memory.py"
-    )
-    spec = util.spec_from_file_location("gazon_intelligent_memory", module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Impossible de charger {module_path}")
-    module = util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+
+ROOT = Path(__file__).resolve().parents[1]
+PACKAGE_DIR = ROOT / "custom_components" / "gazon_intelligent"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
-memory = _load_memory_module()
+def _ensure_package(name: str, path: Path) -> None:
+    if name in sys.modules:
+        return
+    module = types.ModuleType(name)
+    module.__path__ = [str(path)]  # type: ignore[attr-defined]
+    sys.modules[name] = module
+
+
+_ensure_package("custom_components", PACKAGE_DIR.parent)
+_ensure_package("custom_components.gazon_intelligent", PACKAGE_DIR)
+
+memory = importlib.import_module("custom_components.gazon_intelligent.memory")
 
 
 class MemoryCatalogTests(unittest.TestCase):

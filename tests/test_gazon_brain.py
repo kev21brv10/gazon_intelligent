@@ -19,7 +19,7 @@ def _ensure_package(name: str) -> None:
     if name in sys.modules:
         return
     module = types.ModuleType(name)
-    module.__path__ = []  # type: ignore[attr-defined]
+    module.__path__ = [str(MODULE_DIR if name.endswith("gazon_intelligent") else MODULE_DIR.parent)]  # type: ignore[attr-defined]
     sys.modules[name] = module
 
 

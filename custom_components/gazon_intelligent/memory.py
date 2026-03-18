@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any
 
+from .water import _watering_item_mm
+
 PHASE_DURATIONS_DAYS: dict[str, int] = {
     "Normal": 0,
     "Sursemis": 21,
@@ -43,38 +45,6 @@ def _to_int(value: Any) -> int | None:
         return int(float(value))
     except (TypeError, ValueError):
         return None
-
-
-def _watering_item_mm(item: dict[str, Any] | None) -> float | None:
-    if not isinstance(item, dict):
-        return None
-    for key in ("total_mm", "session_total_mm", "objectif_mm", "mm"):
-        amount = _to_float(item.get(key))
-        if amount is not None:
-            return amount
-    zones = item.get("zones")
-    if not isinstance(zones, list):
-        return None
-    total = 0.0
-    found = False
-    for zone in zones:
-        if not isinstance(zone, dict):
-            continue
-        amount = _to_float(zone.get("mm"))
-        if amount is None:
-            amount = _to_float(zone.get("objectif_mm"))
-        if amount is None:
-            rate_mm_h = _to_float(zone.get("rate_mm_h"))
-            duration_min = _to_float(zone.get("duration_min"))
-            if rate_mm_h is not None and duration_min is not None:
-                amount = (rate_mm_h * duration_min) / 60.0
-        if amount is None:
-            continue
-        total += amount
-        found = True
-    if not found:
-        return None
-    return total
 
 
 def _split_csv_values(value: Any) -> list[str]:

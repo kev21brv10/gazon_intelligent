@@ -338,7 +338,7 @@ class GazonBrain:
             soil_balance=self.soil_balance,
         )
         self.mode = snapshot["phase_active"]
-        self.date_action = snapshot["date_action"]
+        self.date_action = snapshot.get("date_action")
         self.memory = compute_memory(
             history=self.history,
             current_phase=snapshot["phase_active"],

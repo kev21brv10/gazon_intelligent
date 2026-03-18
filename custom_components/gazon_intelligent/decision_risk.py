@@ -1,0 +1,91 @@
+from __future__ import annotations
+
+"""Logique pure de risque et de fenêtre optimale."""
+
+from typing import Any
+
+from .decision_models import DecisionContext
+from .guidance import compute_action_guidance, compute_next_reevaluation
+from .scores import compute_internal_scores
+
+
+def build_risk_bundle(
+    context: DecisionContext,
+    phase_bundle: dict[str, Any],
+    water_bundle: dict[str, Any],
+) -> dict[str, Any]:
+    scores = compute_internal_scores(
+        history=context.history,
+        today=context.today,
+        phase_dominante=phase_bundle["phase_dominante"],
+        sous_phase=phase_bundle["sous_phase"],
+        water_balance=water_bundle["water_balance"],
+        advanced_context=water_bundle["advanced_context"],
+        pluie_24h=context.pluie_24h,
+        pluie_demain=context.pluie_demain,
+        humidite=context.humidite,
+        temperature=context.temperature,
+        etp=water_bundle["etp"],
+    )
+    action_guidance = compute_action_guidance(
+        phase_dominante=phase_bundle["phase_dominante"],
+        sous_phase=phase_bundle["sous_phase"],
+        water_balance=water_bundle["water_balance"],
+        advanced_context=water_bundle["advanced_context"],
+        pluie_24h=context.pluie_24h,
+        pluie_demain=context.pluie_demain,
+        humidite=context.humidite,
+        temperature=context.temperature,
+        etp=water_bundle["etp"],
+        objectif_mm=water_bundle["objectif_mm"],
+        hour_of_day=context.hour_of_day,
+    )
+    prochaine_reevaluation = compute_next_reevaluation(
+        phase_dominante=phase_bundle["phase_dominante"],
+        niveau_action=action_guidance["niveau_action"],
+        fenetre_optimale=action_guidance["fenetre_optimale"],
+        risque_gazon=action_guidance["risque_gazon"],
+        pluie_demain=context.pluie_demain,
+    )
+    urgence = _decision_urgence(
+        phase_bundle["phase_dominante"],
+        water_bundle["objectif_mm"] > 0,
+        action_guidance["niveau_action"],
+        action_guidance["risque_gazon"],
+        water_bundle["water_balance"].get("bilan_hydrique_mm", 0.0),
+        context.pluie_demain,
+    )
+    return {
+        "scores": scores,
+        "action_guidance": action_guidance,
+        "niveau_action": action_guidance["niveau_action"],
+        "fenetre_optimale": action_guidance["fenetre_optimale"],
+        "risque_gazon": action_guidance["risque_gazon"],
+        "prochaine_reevaluation": prochaine_reevaluation,
+        "urgence": urgence,
+    }
+
+
+def _decision_urgence(
+    phase_dominante: str,
+    arrosage_recommande: bool,
+    niveau_action: str,
+    risque_gazon: str,
+    bilan_hydrique_mm: float,
+    pluie_demain: float | None,
+) -> str:
+    pluie_demain = pluie_demain or 0.0
+    if phase_dominante in {"Traitement", "Hivernage"}:
+        return "faible"
+    if not arrosage_recommande:
+        if pluie_demain >= 2.0 or bilan_hydrique_mm >= 0.0:
+            return "faible"
+        return "moyenne" if niveau_action == "surveiller" or bilan_hydrique_mm < 0 else "faible"
+    if bilan_hydrique_mm <= -2.5 or niveau_action == "critique" or risque_gazon == "eleve":
+        return "haute"
+    if phase_dominante == "Sursemis" and (bilan_hydrique_mm <= -1.0 or niveau_action == "a_faire"):
+        return "moyenne"
+    if niveau_action in {"a_faire", "surveiller"} or bilan_hydrique_mm <= -0.5:
+        return "moyenne"
+    return "faible"
+
