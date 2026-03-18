@@ -4,27 +4,7 @@
     "step": {
       "user": {
         "title": "Grundlegende Einstellungen",
-        "description": "Trage hier die ergänzenden Sensoren und allgemeinen Einstellungen ein. Die Bewässerungszonen, die Wetterentität und die wichtigsten Wettersensoren befinden sich danach in den erweiterten Optionen.",
-        "data": {
-          "capteur_hauteur_gazon": "Rasenhöhe (empfohlen)",
-          "capteur_humidite_sol": "Bodenfeuchte (%) (optional)",
-          "capteur_retour_arrosage": "Tatsächliche Bewässerung (mm, optional)",
-          "capteur_pluie_fine": "Leichter Regen (optional)",
-          "capteur_vent": "Wind (optional, wenn Wetter verfügbar ist)",
-          "capteur_rosee": "Tau / Blattnässe (optional)",
-          "type_sol": "Bodentyp"
-        }
-      }
-    },
-    "abort": {
-      "already_configured": "Gazon Intelligent ist bereits konfiguriert."
-    }
-  },
-  "options": {
-    "step": {
-      "user": {
-        "title": "Erweiterte Optionen",
-        "description": "Trage hier die Bewässerungszonen und die wichtigsten Wettersensoren ein. Die Wetterentität kann auch als Ersatz für Temperatur, gefühlte Temperatur, Luftfeuchtigkeit, Wind, Druck und Regen morgen dienen. Wenn du den Durchfluss nicht kennst, lasse 60 stehen.",
+        "description": "Trage hier die Zonen, Durchflüsse, Wettersensoren und die verpflichtende Wetterentität ein. Die ergänzenden Sensoren befinden sich danach in den erweiterten UI-Optionen.",
         "data": {
           "zone_1": "Zone 1",
           "zone_2": "Zone 2",
@@ -38,10 +18,30 @@
           "debit_zone_5": "Durchfluss Zone 5 (mm/h)",
           "capteur_pluie_24h": "Regen 24 h (mm)",
           "capteur_pluie_demain": "Regen morgen (mm)",
-          "capteur_temperature": "Temperatur (optional, wenn Wetter verfügbar ist)",
-          "capteur_etp": "ETP des Tages (optional, sonst berechnet)",
-          "capteur_humidite": "Luftfeuchtigkeit (%) (optional, wenn Wetter verfügbar ist)",
-          "entite_meteo": "Wetter"
+          "capteur_temperature": "Temperatur",
+          "capteur_etp": "ETP des Tages",
+          "capteur_humidite": "Feuchtigkeit",
+          "entite_meteo": "Verpflichtendes Wetter",
+          "type_sol": "Bodentyp"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Gazon Intelligent ist bereits konfiguriert."
+    }
+  },
+  "options": {
+    "step": {
+      "user": {
+        "title": "Erweiterte Optionen",
+        "description": "Trage hier die ergänzenden Sensoren ein, die in der UI angezeigt werden.",
+        "data": {
+          "capteur_hauteur_gazon": "Rasenhöhe (empfohlen)",
+          "capteur_humidite_sol": "Bodenfeuchte (%) (optional)",
+          "capteur_retour_arrosage": "Tatsächliche Bewässerung (mm, optional)",
+          "capteur_pluie_fine": "Leichter Regen (optional)",
+          "capteur_vent": "Wind (optional, wenn Wetter verfügbar ist)",
+          "capteur_rosee": "Tau / Blattnässe (optional)"
         }
       }
     },

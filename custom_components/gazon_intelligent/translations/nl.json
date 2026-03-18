@@ -4,27 +4,7 @@
     "step": {
       "user": {
         "title": "Basisinstellingen",
-        "description": "Vul hier de aanvullende sensoren en algemene instellingen in. De irrigatiezones, de weerentiteit en de belangrijkste weersensoren staan daarna in Geavanceerde opties.",
-        "data": {
-          "capteur_hauteur_gazon": "Grashoogte (aanbevolen)",
-          "capteur_humidite_sol": "Bodemvocht (%) (optioneel)",
-          "capteur_retour_arrosage": "Werkelijke beregening (mm, optioneel)",
-          "capteur_pluie_fine": "Lichte regen (optioneel)",
-          "capteur_vent": "Wind (optioneel als weer beschikbaar is)",
-          "capteur_rosee": "Dauw / bladnat (optioneel)",
-          "type_sol": "Bodemtype"
-        }
-      }
-    },
-    "abort": {
-      "already_configured": "Gazon Intelligent is al geconfigureerd."
-    }
-  },
-  "options": {
-    "step": {
-      "user": {
-        "title": "Geavanceerde opties",
-        "description": "Vul hier de irrigatiezones en de belangrijkste weersensoren in. De weerentiteit kan ook als fallback dienen voor temperatuur, gevoelstemperatuur, luchtvochtigheid, wind, druk en regen morgen. Als je de doorstroom niet weet, laat 60 staan.",
+        "description": "Vul hier de zones, doorstroomwaarden, weersensoren en de verplichte weerentiteit in. De aanvullende sensoren staan daarna in de geavanceerde UI-opties.",
         "data": {
           "zone_1": "Zone 1",
           "zone_2": "Zone 2",
@@ -38,10 +18,30 @@
           "debit_zone_5": "Doorstroom zone 5 (mm/h)",
           "capteur_pluie_24h": "Regen 24 uur (mm)",
           "capteur_pluie_demain": "Regen morgen (mm)",
-          "capteur_temperature": "Temperatuur (optioneel als weer beschikbaar is)",
-          "capteur_etp": "Dagelijkse ETP (optioneel, anders berekend)",
-          "capteur_humidite": "Luchtvochtigheid (%) (optioneel als weer beschikbaar is)",
-          "entite_meteo": "Weer"
+          "capteur_temperature": "Temperatuur",
+          "capteur_etp": "Dagelijkse ETP",
+          "capteur_humidite": "Vochtigheid",
+          "entite_meteo": "Verplichte weerentiteit",
+          "type_sol": "Bodemtype"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Gazon Intelligent is al geconfigureerd."
+    }
+  },
+  "options": {
+    "step": {
+      "user": {
+        "title": "Geavanceerde opties",
+        "description": "Vul hier de aanvullende sensoren in die in de UI worden getoond.",
+        "data": {
+          "capteur_hauteur_gazon": "Grashoogte (aanbevolen)",
+          "capteur_humidite_sol": "Bodemvocht (%) (optioneel)",
+          "capteur_retour_arrosage": "Werkelijke beregening (mm, optioneel)",
+          "capteur_pluie_fine": "Lichte regen (optioneel)",
+          "capteur_vent": "Wind (optioneel als weer beschikbaar is)",
+          "capteur_rosee": "Dauw / bladnat (optioneel)"
         }
       }
     },

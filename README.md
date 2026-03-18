@@ -48,23 +48,24 @@ HACS s'appuie sur `hacs.json` à la racine du dépôt.
 
 L'intégration se configure via formulaire.
 
-- Paramètres de base:
-  - `capteur_hauteur_gazon`
-  - `capteur_humidite_sol`
-  - `capteur_retour_arrosage`
-  - `capteur_pluie_fine`
-  - `capteur_vent`
-  - `capteur_rosee`
-  - `type_sol` optionnel
-- Options avancées:
-  - zones d'arrosage `zone_1` à `zone_5`
-  - débit par zone `debit_zone_1` à `debit_zone_5`
-  - `capteur_pluie_24h`
-  - `capteur_pluie_demain`
-  - `capteur_temperature`
-  - `capteur_etp`
-  - `capteur_humidite`
-  - `entite_meteo` obligatoire
+Paramètres de base:
+zones d'arrosage `zone_1` à `zone_5`
+débit par zone `debit_zone_1` à `debit_zone_5`
+`capteur_pluie_24h`
+`capteur_pluie_demain`
+`capteur_temperature`
+`capteur_etp`
+`capteur_humidite`
+`entite_meteo` obligatoire
+
+`type_sol` optionnel
+Options avancées dans l'UI:
+`capteur_hauteur_gazon`
+`capteur_humidite_sol`
+`capteur_retour_arrosage`
+`capteur_pluie_fine`
+`capteur_vent`
+`capteur_rosee`
 
 L'entité météo est obligatoire et peut servir de secours pour la température, la température ressentie, l'humidité, le vent, la pression et la pluie de demain.
 `capteur_hauteur_gazon` est recommandé si la hauteur change souvent.
