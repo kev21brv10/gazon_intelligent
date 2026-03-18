@@ -33,73 +33,74 @@ from .const import (
 )
 
 
+def _d(val):
+    return val if val is not None else vol.UNDEFINED
+
+
+def _build_base_fields(current: dict) -> dict:
+    return {
+        vol.Required(CONF_ZONE_1, default=_d(current.get(CONF_ZONE_1))): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="switch")
+        ),
+        vol.Optional(CONF_ZONE_2, default=_d(current.get(CONF_ZONE_2))): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="switch")
+        ),
+        vol.Optional(CONF_ZONE_3, default=_d(current.get(CONF_ZONE_3))): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="switch")
+        ),
+        vol.Optional(CONF_ZONE_4, default=_d(current.get(CONF_ZONE_4))): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="switch")
+        ),
+        vol.Optional(CONF_ZONE_5, default=_d(current.get(CONF_ZONE_5))): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="switch")
+        ),
+        vol.Required(CONF_DEBIT_ZONE_1, default=_d(current.get(CONF_DEBIT_ZONE_1, 60.0))): selector.NumberSelector(
+            selector.NumberSelectorConfig(min=1, max=200, step=1, unit_of_measurement="mm/h")
+        ),
+        vol.Optional(CONF_DEBIT_ZONE_2, default=_d(current.get(CONF_DEBIT_ZONE_2, 0.0))): selector.NumberSelector(
+            selector.NumberSelectorConfig(min=0, max=200, step=1, unit_of_measurement="mm/h")
+        ),
+        vol.Optional(CONF_DEBIT_ZONE_3, default=_d(current.get(CONF_DEBIT_ZONE_3, 0.0))): selector.NumberSelector(
+            selector.NumberSelectorConfig(min=0, max=200, step=1, unit_of_measurement="mm/h")
+        ),
+        vol.Optional(CONF_DEBIT_ZONE_4, default=_d(current.get(CONF_DEBIT_ZONE_4, 0.0))): selector.NumberSelector(
+            selector.NumberSelectorConfig(min=0, max=200, step=1, unit_of_measurement="mm/h")
+        ),
+        vol.Optional(CONF_DEBIT_ZONE_5, default=_d(current.get(CONF_DEBIT_ZONE_5, 0.0))): selector.NumberSelector(
+            selector.NumberSelectorConfig(min=0, max=200, step=1, unit_of_measurement="mm/h")
+        ),
+        vol.Required(CONF_CAPTEUR_PLUIE_24H, default=_d(current.get(CONF_CAPTEUR_PLUIE_24H))): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor")
+        ),
+        vol.Optional(CONF_CAPTEUR_PLUIE_DEMAIN, default=_d(current.get(CONF_CAPTEUR_PLUIE_DEMAIN))): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor")
+        ),
+        vol.Optional(CONF_CAPTEUR_TEMPERATURE, default=_d(current.get(CONF_CAPTEUR_TEMPERATURE))): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor")
+        ),
+        vol.Optional(CONF_CAPTEUR_ETP, default=_d(current.get(CONF_CAPTEUR_ETP))): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor")
+        ),
+        vol.Optional(CONF_CAPTEUR_HUMIDITE, default=_d(current.get(CONF_CAPTEUR_HUMIDITE))): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor")
+        ),
+        vol.Required(CONF_ENTITE_METEO, default=_d(current.get(CONF_ENTITE_METEO))): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="weather")
+        ),
+        vol.Optional(CONF_TYPE_SOL, default=_d(current.get(CONF_TYPE_SOL, DEFAULT_TYPE_SOL))): selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=TYPES_SOL,
+            )
+        ),
+    }
+
+
 def build_schema(current: dict | None = None):
-    current = current or {}
-    def _d(val):
-        return val if val is not None else vol.UNDEFINED
-    return vol.Schema(
-        {
-            vol.Required(CONF_ZONE_1, default=_d(current.get(CONF_ZONE_1))): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="switch")
-            ),
-            vol.Optional(CONF_ZONE_2, default=_d(current.get(CONF_ZONE_2))): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="switch")
-            ),
-            vol.Optional(CONF_ZONE_3, default=_d(current.get(CONF_ZONE_3))): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="switch")
-            ),
-            vol.Optional(CONF_ZONE_4, default=_d(current.get(CONF_ZONE_4))): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="switch")
-            ),
-            vol.Optional(CONF_ZONE_5, default=_d(current.get(CONF_ZONE_5))): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="switch")
-            ),
-            vol.Required(CONF_DEBIT_ZONE_1, default=_d(current.get(CONF_DEBIT_ZONE_1, 60.0))): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=1, max=200, step=1, unit_of_measurement="mm/h")
-            ),
-            vol.Optional(CONF_DEBIT_ZONE_2, default=_d(current.get(CONF_DEBIT_ZONE_2))): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=1, max=200, step=1, unit_of_measurement="mm/h")
-            ),
-            vol.Optional(CONF_DEBIT_ZONE_3, default=_d(current.get(CONF_DEBIT_ZONE_3))): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=1, max=200, step=1, unit_of_measurement="mm/h")
-            ),
-            vol.Optional(CONF_DEBIT_ZONE_4, default=_d(current.get(CONF_DEBIT_ZONE_4))): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=1, max=200, step=1, unit_of_measurement="mm/h")
-            ),
-            vol.Optional(CONF_DEBIT_ZONE_5, default=_d(current.get(CONF_DEBIT_ZONE_5))): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=1, max=200, step=1, unit_of_measurement="mm/h")
-            ),
-            vol.Required(CONF_CAPTEUR_PLUIE_24H, default=_d(current.get(CONF_CAPTEUR_PLUIE_24H))): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="sensor")
-            ),
-            vol.Optional(CONF_CAPTEUR_PLUIE_DEMAIN, default=_d(current.get(CONF_CAPTEUR_PLUIE_DEMAIN))): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="sensor")
-            ),
-            vol.Optional(CONF_CAPTEUR_TEMPERATURE, default=_d(current.get(CONF_CAPTEUR_TEMPERATURE))): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="sensor")
-            ),
-            vol.Optional(CONF_CAPTEUR_ETP, default=_d(current.get(CONF_CAPTEUR_ETP))): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="sensor")
-            ),
-            vol.Optional(CONF_CAPTEUR_HUMIDITE, default=_d(current.get(CONF_CAPTEUR_HUMIDITE))): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="sensor")
-            ),
-            vol.Required(CONF_ENTITE_METEO, default=_d(current.get(CONF_ENTITE_METEO))): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="weather")
-            ),
-            vol.Optional(CONF_TYPE_SOL, default=_d(current.get(CONF_TYPE_SOL, DEFAULT_TYPE_SOL))): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=TYPES_SOL,
-                )
-            ),
-        }
-    )
+    return vol.Schema(_build_base_fields(current))
 
 
 def build_advanced_schema(current: dict | None = None):
     current = current or {}
-    def _d(val):
-        return val if val is not None else vol.UNDEFINED
     return vol.Schema(
         {
             vol.Optional(CONF_CAPTEUR_HAUTEUR_GAZON, default=_d(current.get(CONF_CAPTEUR_HAUTEUR_GAZON))): selector.EntitySelector(

@@ -184,12 +184,12 @@ action:
               message: >
                 Mode {{ mode_gazon }} actif: l'arrosage automatique est volontairement bloqué.
 
-      default:
-        - service: persistent_notification.create
-          data:
-            notification_id: gazon_intelligent_arrosage_blueprint
-            title: "Gazon Intelligent: aucune action lancée"
-            message: >
-              Aucun arrosage n'a été lancé pour le trigger {{ trigger.id }}.
-              Mode={{ mode_gazon }}, objectif={{ obj_mode | round(2) }} mm, pluie_stop={{ pluie_stop }},
-              capteurs_ok={{ capteurs_ok }}.
+    default:
+      - service: persistent_notification.create
+        data:
+          notification_id: gazon_intelligent_arrosage_blueprint
+          title: "Gazon Intelligent: aucune action lancée"
+          message: >
+            Aucun arrosage n'a été lancé pour le trigger {{ trigger.id }}.
+            Mode={{ mode_gazon }}, objectif={{ obj_mode | round(2) }} mm, pluie_stop={{ pluie_stop }},
+            capteurs_ok={{ capteurs_ok }}.

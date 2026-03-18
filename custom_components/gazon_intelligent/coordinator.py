@@ -9,7 +9,7 @@ from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.event import async_call_later
+from homeassistant.helpers.event import async_call_later, async_track_state_change_event
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.helpers.storage import Store
 
@@ -67,6 +67,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._auto_irrigation_task: asyncio.Task | None = None
         self._unsub_start_listener: CALLBACK_TYPE | None = None
         self._unsub_delayed_refresh: CALLBACK_TYPE | None = None
+        self._unsub_zone_listeners: list[CALLBACK_TYPE] = []
+        self._zone_start_times: dict[str, Any] = {}
+        self._zone_tracking_suspended = 0
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Récupère et calcule les données exposées par l'intégration."""
@@ -95,6 +98,8 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if vent is None:
             vent = weather_profile.get("weather_wind_speed")
         rosee = self._get_float_state(self._get_conf(CONF_CAPTEUR_ROSEE))
+        if rosee is None:
+            rosee = self._estimate_rosee(weather_profile, temperature, humidite)
         hauteur_gazon = self._get_float_state(self._get_conf(CONF_CAPTEUR_HAUTEUR_GAZON))
         retour_arrosage = self._get_float_state(self._get_conf(CONF_CAPTEUR_RETOUR_ARROSAGE))
         pluie_fine = self._get_float_state(self._get_conf(CONF_CAPTEUR_PLUIE_FINE))
@@ -197,6 +202,25 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return {}
 
         return extract_weather_profile(state.attributes)
+
+    def _estimate_rosee(
+        self,
+        weather_profile: dict[str, Any],
+        temperature: float | None,
+        humidite: float | None,
+    ) -> float | None:
+        dew_point = weather_profile.get("weather_dew_point")
+        if dew_point is not None and temperature is not None:
+            try:
+                if float(temperature) - float(dew_point) <= 2.0:
+                    return 1.0
+            except (TypeError, ValueError):
+                pass
+        if humidite is not None and humidite >= 88:
+            return 0.8
+        if weather_profile.get("weather_condition") in {"fog", "rainy", "pouring"}:
+            return 1.0
+        return None
 
     async def _get_forecast_pluie_demain(self, weather_entity_id: str | None) -> float | None:
         """Récupère la pluie prévue demain (mm) via weather.get_forecasts."""
@@ -332,6 +356,66 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._async_save_state()
         await self.async_request_refresh()
 
+    async def async_start_zone_monitoring(self) -> None:
+        """Surveille les switches de zones pour reconstruire l'arrosage réel."""
+        self._cancel_zone_monitoring()
+        zone_ids = [entity_id for entity_id, _ in self._iter_zones_with_rate()]
+        if not zone_ids:
+            return
+        self._unsub_zone_listeners = [
+            async_track_state_change_event(self.hass, zone_ids, self._handle_zone_state_change)
+        ]
+
+    @callback
+    def _handle_zone_state_change(self, event: Event) -> None:
+        if self._zone_tracking_suspended > 0:
+            return
+
+        entity_id = event.data.get("entity_id")
+        old_state = event.data.get("old_state")
+        new_state = event.data.get("new_state")
+        if not entity_id or new_state is None:
+            return
+
+        new_is_on = str(new_state.state).lower() == "on"
+        old_is_on = old_state is not None and str(old_state.state).lower() == "on"
+
+        if new_is_on:
+            self._zone_start_times[entity_id] = new_state.last_changed
+            return
+
+        start = self._zone_start_times.pop(entity_id, None)
+        if start is None and old_is_on and old_state is not None:
+            start = old_state.last_changed
+        if start is None:
+            return
+
+        rate_mm_min = self._get_zone_rate_mm_min(entity_id)
+        if rate_mm_min <= 0:
+            return
+
+        duration_minutes = max((new_state.last_changed - start).total_seconds() / 60.0, 0.0)
+        objectif_mm = round(duration_minutes * rate_mm_min, 1)
+        if objectif_mm <= 0:
+            return
+
+        self.hass.async_create_task(
+            self._async_record_switch_watering(entity_id, objectif_mm, new_state.last_changed)
+        )
+
+    async def _async_record_switch_watering(self, entity_id: str, objectif_mm: float, ended_at) -> None:
+        self._append_history(
+            {
+                "type": "arrosage",
+                "date": ended_at.date().isoformat(),
+                "objectif_mm": float(objectif_mm),
+                "source": "zone_switch",
+                "zone": entity_id,
+            }
+        )
+        await self._async_save_state()
+        await self.async_request_refresh()
+
     def _append_history(self, item: dict[str, Any]) -> None:
         self.history.append(item)
         self.history = self.history[-300:]
@@ -355,13 +439,22 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for idx in range(1, 6):
             entity_id = opts.get(f"zone_{idx}", data.get(f"zone_{idx}"))
             rate_h = opts.get(f"debit_zone_{idx}", data.get(f"debit_zone_{idx}"))
-            if entity_id and rate_h:
-                try:
-                    rate_h_float = float(rate_h)
-                    rate_mm_min = rate_h_float / 60.0
-                    yield entity_id, rate_mm_min
-                except (TypeError, ValueError):
-                    continue
+            rate_mm_min = self._get_zone_rate_mm_min(entity_id, rate_h)
+            if entity_id and rate_mm_min > 0:
+                yield entity_id, rate_mm_min
+
+    def _get_zone_rate_mm_min(self, entity_id: str | None, rate_h: Any | None = None) -> float:
+        if not entity_id:
+            return 0.0
+        if rate_h is None:
+            for idx in range(1, 6):
+                if entity_id == self._get_conf(f"zone_{idx}"):
+                    rate_h = self._get_conf(f"debit_zone_{idx}")
+                    break
+        try:
+            return float(rate_h) / 60.0
+        except (TypeError, ValueError):
+            return 0.0
 
     async def async_start_auto_irrigation(self, objectif_mm: float | None) -> None:
         """Arrose automatiquement chaque zone en séquence selon le débit renseigné."""
@@ -392,6 +485,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         async def _sequence():
             try:
+                self._zone_tracking_suspended += 1
                 for entity_id, rate in zones:
                     if rate <= 0:
                         continue
@@ -401,6 +495,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     await _run_zone(entity_id, duration)
                 await self.async_record_watering(objectif_mm=objectif)
             finally:
+                self._zone_tracking_suspended = max(0, self._zone_tracking_suspended - 1)
                 self._auto_irrigation_task = None
 
         self._auto_irrigation_task = self.hass.async_create_task(
@@ -439,9 +534,16 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._unsub_delayed_refresh()
             self._unsub_delayed_refresh = None
 
+    def _cancel_zone_monitoring(self) -> None:
+        for unsub in self._unsub_zone_listeners:
+            unsub()
+        self._unsub_zone_listeners.clear()
+        self._zone_start_times.clear()
+
     async def async_shutdown(self) -> None:
         """Nettoie les tâches en cours à la fermeture de l'intégration."""
         self._cancel_post_start_refresh()
+        self._cancel_zone_monitoring()
         if self._auto_irrigation_task and not self._auto_irrigation_task.done():
             self._auto_irrigation_task.cancel()
             try:
@@ -454,58 +556,30 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Récupère la valeur de configuration (options > data)."""
         return self.entry.options.get(key, self.entry.data.get(key))
 
+    async def async_update_config(self, updates: dict[str, Any]) -> None:
+        """Met à jour les options de config en gardant la valeur courante comme base."""
+        new_options = dict(self.entry.options)
+        new_options.update(updates)
+        self.hass.config_entries.async_update_entry(self.entry, options=new_options)
+        await self.async_start_zone_monitoring()
+        await self.async_request_refresh()
+
     def get_used_entities_attributes(self) -> dict[str, Any]:
-        """Expose les entités/config utilisées dans les attributs des entités."""
+        """Expose un contexte compact pour les attributs visibles."""
         attrs = {
-            "entites_utilisees": {
-                "zone_1": self._get_conf("zone_1"),
-                "zone_2": self._get_conf("zone_2"),
-                "zone_3": self._get_conf("zone_3"),
-                "zone_4": self._get_conf("zone_4"),
-                "zone_5": self._get_conf("zone_5"),
-                "capteur_pluie_24h": self._get_conf(CONF_CAPTEUR_PLUIE_24H),
-                "capteur_pluie_demain": self._get_conf(CONF_CAPTEUR_PLUIE_DEMAIN),
-                "entite_meteo": self._get_conf(CONF_ENTITE_METEO),
-                "capteur_temperature": self._get_conf(CONF_CAPTEUR_TEMPERATURE),
-                "capteur_etp": self._get_conf(CONF_CAPTEUR_ETP),
-                "capteur_humidite": self._get_conf(CONF_CAPTEUR_HUMIDITE),
-                "capteur_humidite_sol": self._get_conf(CONF_CAPTEUR_HUMIDITE_SOL),
-                "capteur_vent": self._get_conf(CONF_CAPTEUR_VENT),
-                "capteur_rosee": self._get_conf(CONF_CAPTEUR_ROSEE),
-                "capteur_hauteur_gazon": self._get_conf(CONF_CAPTEUR_HAUTEUR_GAZON),
-                "capteur_retour_arrosage": self._get_conf(CONF_CAPTEUR_RETOUR_ARROSAGE),
-                "capteur_pluie_fine": self._get_conf(CONF_CAPTEUR_PLUIE_FINE),
-            },
             "configuration": {
                 "type_sol": self._get_conf(CONF_TYPE_SOL) or DEFAULT_TYPE_SOL,
             },
             "pluie_demain_source": self.data.get("pluie_demain_source") if self.data else None,
-            "advanced_context": self.data.get("advanced_context") if self.data else None,
             "phase_dominante": self.data.get("phase_dominante") if self.data else None,
             "phase_dominante_source": self.data.get("phase_dominante_source") if self.data else None,
             "sous_phase": self.data.get("sous_phase") if self.data else None,
             "sous_phase_detail": self.data.get("sous_phase_detail") if self.data else None,
             "sous_phase_age_days": self.data.get("sous_phase_age_days") if self.data else None,
             "sous_phase_progression": self.data.get("sous_phase_progression") if self.data else None,
-            "humidite_sol": self.data.get("humidite_sol") if self.data else None,
-            "vent": self.data.get("vent") if self.data else None,
-            "rosee": self.data.get("rosee") if self.data else None,
-            "hauteur_gazon": self.data.get("hauteur_gazon") if self.data else None,
-            "retour_arrosage": self.data.get("retour_arrosage") if self.data else None,
-            "pluie_fine": self.data.get("pluie_fine") if self.data else None,
-            "pluie_source": self.data.get("pluie_source") if self.data else None,
-            "deficit_jour": self.data.get("deficit_jour") if self.data else None,
-            "deficit_3j": self.data.get("deficit_3j") if self.data else None,
-            "deficit_7j": self.data.get("deficit_7j") if self.data else None,
-            "pluie_efficace": self.data.get("pluie_efficace") if self.data else None,
-            "arrosage_recent": self.data.get("arrosage_recent") if self.data else None,
-            "arrosage_recent_jour": self.data.get("arrosage_recent_jour") if self.data else None,
-            "arrosage_recent_3j": self.data.get("arrosage_recent_3j") if self.data else None,
-            "arrosage_recent_7j": self.data.get("arrosage_recent_7j") if self.data else None,
             "niveau_action": self.data.get("niveau_action") if self.data else None,
             "fenetre_optimale": self.data.get("fenetre_optimale") if self.data else None,
             "risque_gazon": self.data.get("risque_gazon") if self.data else None,
-            "urgence": self.data.get("urgence") if self.data else None,
             "tonte_autorisee": self.data.get("tonte_autorisee") if self.data else None,
             "tonte_statut": self.data.get("tonte_statut") if self.data else None,
             "prochaine_reevaluation": self.data.get("prochaine_reevaluation") if self.data else None,

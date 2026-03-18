@@ -15,7 +15,7 @@ from .const import (
 )
 from .coordinator import GazonIntelligentCoordinator
 
-PLATFORMS = ["select", "sensor", "binary_sensor", "button"]
+PLATFORMS = ["select", "number", "sensor", "binary_sensor", "button"]
 
 SERVICE_SET_MODE = "set_mode"
 SERVICE_SET_DATE_ACTION = "set_date_action"
@@ -34,6 +34,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
+    await coordinator.async_start_zone_monitoring()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     coordinator.schedule_post_start_refresh(delay_seconds=30)
 

@@ -162,7 +162,7 @@ Les attributs sont ciblés selon l'entité.
 - `Décision principale`:
   - vue synthétique pour agir sans entrer dans la mécanique interne
 - `Phase dominante`:
-  - contexte de décision complet: entités utilisées, configuration, source de la pluie J+1, contexte avancé, état de la phase et état de tonte
+  - contexte de décision compact: phase active, sous-phase, source de la pluie J+1, priorité et fenêtre optimale
 - `État de tonte`:
   - statut lisible de la tonte: autorisée, à surveiller, déconseillée ou interdite
 - `Arrosage recommandé` et `Arrosage auto autorisé`:

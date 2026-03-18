@@ -70,7 +70,56 @@ class GazonSousPhaseSensor(GazonEntityBase, SensorEntity):
 
     @property
     def native_value(self):
-        return self.coordinator.data.get("sous_phase")
+        value = self.coordinator.data.get("sous_phase")
+        if value not in (None, "", "unknown", "unavailable"):
+            return value
+
+        phase = self.coordinator.data.get("phase_dominante") or self.coordinator.data.get("phase_active")
+        age = self.coordinator.data.get("sous_phase_age_days")
+        try:
+            age_days = int(age) if age is not None else 0
+        except (TypeError, ValueError):
+            age_days = 0
+
+        if phase == "Sursemis":
+            if age_days <= 7:
+                return "Germination"
+            if age_days <= 14:
+                return "Enracinement"
+            return "Reprise"
+        if phase == "Traitement":
+            if age_days <= 1:
+                return "Application"
+            if age_days <= 2:
+                return "Rémanence"
+            return "Suivi"
+        if phase == "Fertilisation":
+            if age_days <= 1:
+                return "Réponse"
+            if age_days <= 3:
+                return "Assimilation"
+            return "Stabilisation"
+        if phase == "Biostimulant":
+            if age_days <= 1:
+                return "Réponse"
+            if age_days <= 2:
+                return "Consolidation"
+            return "Stabilisation"
+        if phase == "Agent Mouillant":
+            if age_days <= 1:
+                return "Pénétration"
+            if age_days <= 3:
+                return "Répartition"
+            return "Stabilisation"
+        if phase == "Scarification":
+            if age_days <= 2:
+                return "Cicatrisation"
+            if age_days <= 5:
+                return "Reprise"
+            return "Stabilisation"
+        if phase == "Hivernage":
+            return "Repos"
+        return phase or "Inconnu"
 
     @property
     def extra_state_attributes(self):
