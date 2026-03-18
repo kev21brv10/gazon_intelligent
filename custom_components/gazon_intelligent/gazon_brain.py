@@ -5,12 +5,14 @@ from typing import Any
 
 from .const import DEFAULT_MODE, DEFAULT_TYPE_SOL, INTERVENTIONS_ACTIONS
 from .decision import (
-    build_decision_snapshot,
+    DecisionContext,
+    build_decision_result,
     compute_etp,
     compute_memory,
     compute_recent_watering_mm,
     phase_duration_days,
 )
+from .decision_models import DecisionResult
 from .memory import normalize_product_id, normalize_product_record
 from .soil_balance import normalize_soil_balance_state, update_soil_balance
 from .water import build_watering_session_summary
@@ -37,6 +39,7 @@ class GazonBrain:
         }
         self.products: dict[str, dict[str, Any]] = {}
         self.soil_balance: dict[str, Any] = {}
+        self.last_result: DecisionResult | None = None
 
     def load_state(self, data: dict[str, Any] | None) -> None:
         state = data or {}
@@ -70,6 +73,7 @@ class GazonBrain:
             self.soil_balance = normalize_soil_balance_state(soil_balance)
         else:
             self.soil_balance = {}
+        self.last_result = None
         memory = state.get("memory")
         if isinstance(memory, dict):
             self.memory = memory
@@ -299,6 +303,7 @@ class GazonBrain:
         hauteur_gazon: float | None,
         retour_arrosage: float | None,
         pluie_source: str,
+        pluie_demain_source: str | None,
         weather_profile: dict[str, Any] | None,
         hour_of_day: int | None = None,
     ) -> dict[str, Any]:
@@ -318,7 +323,7 @@ class GazonBrain:
             etp_mm=etp,
             type_sol=type_sol,
         )
-        snapshot = build_decision_snapshot(
+        context = DecisionContext.from_legacy_args(
             history=self.history,
             today=today,
             hour_of_day=hour_of_day,
@@ -336,6 +341,73 @@ class GazonBrain:
             pluie_source=pluie_source,
             weather_profile=weather_profile,
             soil_balance=self.soil_balance,
+        )
+        result = build_decision_result(context)
+        result.extra.setdefault(
+            "configuration",
+            {
+                "type_sol": type_sol,
+            },
+        )
+        if pluie_demain_source is not None:
+            result.extra.setdefault("pluie_demain_source", pluie_demain_source)
+        self.last_result = result
+        snapshot = result.to_snapshot()
+        advanced_context = result.advanced_context or {}
+        water_balance = result.water_balance or {}
+        phase_context = result.phase_context or {}
+        snapshot.update(
+            {
+                "mode": snapshot["phase_active"],
+                "phase_active": snapshot["phase_active"],
+                "date_action": phase_context.get("date_action"),
+                "date_fin": phase_context.get("date_fin"),
+                "phase_age_days": phase_context.get("phase_age_days"),
+                "jours_restants": phase_context.get("jours_restants"),
+                "etp": etp,
+                "humidite_sol": advanced_context.get("humidite_sol"),
+                "vent": advanced_context.get("vent"),
+                "rosee": advanced_context.get("rosee"),
+                "hauteur_gazon": advanced_context.get("hauteur_gazon"),
+                "retour_arrosage": advanced_context.get("retour_arrosage"),
+                "pluie_source": advanced_context.get("pluie_source"),
+                "water_balance": water_balance,
+                "deficit_jour": water_balance.get("deficit_jour"),
+                "deficit_3j": water_balance.get("deficit_3j"),
+                "deficit_7j": water_balance.get("deficit_7j"),
+                "bilan_hydrique_journalier_mm": water_balance.get("bilan_hydrique_journalier_mm"),
+                "bilan_hydrique_precedent_mm": water_balance.get("bilan_hydrique_precedent_mm"),
+                "soil_balance": water_balance.get("soil_balance"),
+                "pluie_efficace": water_balance.get("pluie_efficace"),
+                "arrosage_recent": water_balance.get("arrosage_recent"),
+                "arrosage_recent_jour": water_balance.get("arrosage_recent_jour"),
+                "arrosage_recent_3j": water_balance.get("arrosage_recent_3j"),
+                "arrosage_recent_7j": water_balance.get("arrosage_recent_7j"),
+                "bilan_hydrique_mm": water_balance.get("bilan_hydrique_mm"),
+                "bilan_hydrique_3j": water_balance.get("bilan_hydrique_3j"),
+                "bilan_hydrique_7j": water_balance.get("bilan_hydrique_7j"),
+                "objectif_mm": water_balance.get("objectif_mm", snapshot.get("objectif_mm")),
+                "score_hydrique": snapshot.get("score_hydrique"),
+                "score_stress": snapshot.get("score_stress"),
+                "score_tonte": snapshot.get("score_tonte"),
+                "tonte_autorisee": snapshot.get("tonte_autorisee"),
+                "tonte_statut": snapshot.get("tonte_statut"),
+                "arrosage_auto_autorise": snapshot.get("arrosage_auto_autorise"),
+                "arrosage_recommande": snapshot.get("arrosage_recommande"),
+                "type_arrosage": snapshot.get("type_arrosage"),
+                "arrosage_conseille": snapshot.get("arrosage_conseille"),
+                "raison_decision": snapshot.get("raison_decision"),
+                "conseil_principal": snapshot.get("conseil_principal"),
+                "action_recommandee": snapshot.get("action_recommandee"),
+                "action_a_eviter": snapshot.get("action_a_eviter"),
+                "niveau_action": snapshot.get("niveau_action"),
+                "fenetre_optimale": snapshot.get("fenetre_optimale"),
+                "risque_gazon": snapshot.get("risque_gazon"),
+                "urgence": snapshot.get("urgence"),
+                "prochaine_reevaluation": snapshot.get("prochaine_reevaluation"),
+                "decision_resume": snapshot.get("decision_resume"),
+                "pluie_demain_source": pluie_demain_source,
+            }
         )
         self.mode = snapshot["phase_active"]
         self.date_action = snapshot.get("date_action")

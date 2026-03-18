@@ -133,6 +133,7 @@ class GazonBrainTests(unittest.TestCase):
             hauteur_gazon=None,
             retour_arrosage=None,
             pluie_source="capteur_pluie_24h",
+            pluie_demain_source="meteo_forecast",
             weather_profile={},
         )
         reloaded = GazonBrain()
@@ -141,3 +142,7 @@ class GazonBrainTests(unittest.TestCase):
         self.assertGreater(snapshot["bilan_hydrique_mm"], 12.0)
         self.assertEqual(snapshot["soil_balance"]["reserve_mm"], reloaded.soil_balance["reserve_mm"])
         self.assertEqual(reloaded.soil_balance["reserve_mm"], brain.soil_balance["reserve_mm"])
+        self.assertIsNotNone(brain.last_result)
+        self.assertEqual(brain.last_result.phase_active, snapshot["phase_active"])
+        self.assertEqual(brain.last_result.extra["configuration"]["type_sol"], "limoneux")
+        self.assertEqual(brain.last_result.extra["pluie_demain_source"], "meteo_forecast")

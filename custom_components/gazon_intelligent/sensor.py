@@ -33,10 +33,26 @@ class GazonPhaseActiveSensor(GazonEntityBase, SensorEntity):
 
     @property
     def native_value(self):
-        return self.coordinator.data.get("phase_active")
+        return self._decision_value("phase_active")
 
     @property
     def extra_state_attributes(self):
+        attrs = {}
+        result_attrs = self._attrs_from_result("phase_dominante_source")
+        if result_attrs:
+            attrs.update(result_attrs)
+        result = self.decision_result
+        if result is not None:
+            extra = getattr(result, "extra", None)
+            if isinstance(extra, dict):
+                configuration = extra.get("configuration")
+                if isinstance(configuration, dict) and configuration:
+                    attrs["configuration"] = configuration
+                pluie_demain_source = extra.get("pluie_demain_source")
+                if pluie_demain_source is not None:
+                    attrs["pluie_demain_source"] = pluie_demain_source
+        if attrs:
+            return attrs
         return self.coordinator.get_used_entities_attributes()
 
 
@@ -50,60 +66,11 @@ class GazonSousPhaseSensor(GazonEntityBase, SensorEntity):
 
     @property
     def native_value(self):
-        value = self.coordinator.data.get("sous_phase")
-        if value not in (None, "", "unknown", "unavailable"):
-            return value
-
-        phase = self.coordinator.data.get("phase_dominante") or self.coordinator.data.get("phase_active")
-        age = self.coordinator.data.get("sous_phase_age_days")
-        try:
-            age_days = int(age) if age is not None else 0
-        except (TypeError, ValueError):
-            age_days = 0
-
-        if phase == "Sursemis":
-            if age_days <= 7:
-                return "Germination"
-            if age_days <= 14:
-                return "Enracinement"
-            return "Reprise"
-        if phase == "Traitement":
-            if age_days <= 1:
-                return "Application"
-            if age_days <= 2:
-                return "Rémanence"
-            return "Suivi"
-        if phase == "Fertilisation":
-            if age_days <= 1:
-                return "Réponse"
-            if age_days <= 3:
-                return "Assimilation"
-            return "Stabilisation"
-        if phase == "Biostimulant":
-            if age_days <= 1:
-                return "Réponse"
-            if age_days <= 2:
-                return "Consolidation"
-            return "Stabilisation"
-        if phase == "Agent Mouillant":
-            if age_days <= 1:
-                return "Pénétration"
-            if age_days <= 3:
-                return "Répartition"
-            return "Stabilisation"
-        if phase == "Scarification":
-            if age_days <= 2:
-                return "Cicatrisation"
-            if age_days <= 5:
-                return "Reprise"
-            return "Stabilisation"
-        if phase == "Hivernage":
-            return "Repos"
-        return phase or "Inconnu"
+        return self._decision_value("sous_phase")
 
     @property
     def extra_state_attributes(self):
-        return self._attrs_from_data(
+        return self._attrs_from_result(
             "phase_dominante",
             "phase_dominante_source",
             "sous_phase_detail",
@@ -124,11 +91,11 @@ class GazonObjectifMmSensor(GazonEntityBase, SensorEntity):
 
     @property
     def native_value(self):
-        return self.coordinator.data.get("objectif_mm")
+        return self._decision_value("objectif_mm")
 
     @property
     def extra_state_attributes(self):
-        return self._attrs_from_data("phase_active", "phase_dominante", "sous_phase")
+        return self._attrs_from_result("phase_active", "phase_dominante", "sous_phase")
 
 
 class GazonTypeArrosageSensor(GazonEntityBase, SensorEntity):
@@ -141,7 +108,7 @@ class GazonTypeArrosageSensor(GazonEntityBase, SensorEntity):
 
     @property
     def native_value(self):
-        return self.coordinator.data.get("type_arrosage")
+        return self._decision_value("type_arrosage")
 
 
 class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):
@@ -154,7 +121,7 @@ class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):
 
     @property
     def native_value(self):
-        return self.coordinator.data.get("tonte_statut")
+        return self._decision_value("tonte_statut")
 
 
 class GazonConseilPrincipalSensor(GazonEntityBase, SensorEntity):
@@ -167,7 +134,7 @@ class GazonConseilPrincipalSensor(GazonEntityBase, SensorEntity):
 
     @property
     def native_value(self):
-        return self.coordinator.data.get("conseil_principal")
+        return self._decision_value("conseil_principal")
 
 
 class GazonActionRecommandeeSensor(GazonEntityBase, SensorEntity):
@@ -180,7 +147,7 @@ class GazonActionRecommandeeSensor(GazonEntityBase, SensorEntity):
 
     @property
     def native_value(self):
-        return self.coordinator.data.get("action_recommandee")
+        return self._decision_value("action_recommandee")
 
 
 class GazonActionAEviterSensor(GazonEntityBase, SensorEntity):
@@ -193,7 +160,7 @@ class GazonActionAEviterSensor(GazonEntityBase, SensorEntity):
 
     @property
     def native_value(self):
-        return self.coordinator.data.get("action_a_eviter")
+        return self._decision_value("action_a_eviter")
 
 
 class GazonNiveauActionSensor(GazonEntityBase, SensorEntity):
@@ -206,7 +173,7 @@ class GazonNiveauActionSensor(GazonEntityBase, SensorEntity):
 
     @property
     def native_value(self):
-        return self.coordinator.data.get("niveau_action")
+        return self._decision_value("niveau_action")
 
 
 class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
@@ -219,7 +186,7 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
 
     @property
     def native_value(self):
-        return self.coordinator.data.get("fenetre_optimale")
+        return self._decision_value("fenetre_optimale")
 
 
 class GazonRisqueGazonSensor(GazonEntityBase, SensorEntity):
@@ -232,4 +199,4 @@ class GazonRisqueGazonSensor(GazonEntityBase, SensorEntity):
 
     @property
     def native_value(self):
-        return self.coordinator.data.get("risque_gazon")
+        return self._decision_value("risque_gazon")

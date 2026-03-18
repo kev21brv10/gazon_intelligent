@@ -33,6 +33,7 @@ from .decision import (
     build_decision_snapshot,
     compute_recent_watering_mm,
 )
+from .decision_models import DecisionResult
 from .gazon_brain import GazonBrain
 from .weather_adapter import WeatherAdapter
 
@@ -137,6 +138,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             hauteur_gazon=hauteur_gazon,
             retour_arrosage=retour_arrosage,
             pluie_source=pluie_24h_source,
+            pluie_demain_source=pluie_demain_source,
             weather_profile=weather_profile,
         )
         await self._async_save_state()
@@ -163,6 +165,16 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "sous_phase_age_days": snapshot["sous_phase_age_days"],
             "sous_phase_progression": snapshot["sous_phase_progression"],
         }
+
+    @property
+    def result(self) -> DecisionResult | None:
+        """Retourne le résultat métier courant."""
+        return self.brain.last_result
+
+    @property
+    def last_result(self) -> DecisionResult | None:
+        """Alias de compatibilité pour le résultat métier courant."""
+        return self.brain.last_result
 
     @property
     def mode(self) -> str:

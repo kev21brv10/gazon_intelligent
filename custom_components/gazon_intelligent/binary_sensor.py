@@ -24,11 +24,11 @@ class GazonTonteAutoriseeBinarySensor(GazonEntityBase, BinarySensorEntity):
 
     @property
     def is_on(self):
-        return self.coordinator.data.get("tonte_autorisee", False)
+        return bool(self._decision_value("tonte_autorisee", False))
 
     @property
     def extra_state_attributes(self):
-        return self._attrs_from_data("phase_active", "tonte_statut", "niveau_action", "fenetre_optimale", "risque_gazon")
+        return self._attrs_from_result("phase_active", "tonte_statut", "niveau_action", "fenetre_optimale", "risque_gazon")
 
 
 class GazonArrosageRecommandeBinarySensor(GazonEntityBase, BinarySensorEntity):
@@ -41,8 +41,8 @@ class GazonArrosageRecommandeBinarySensor(GazonEntityBase, BinarySensorEntity):
 
     @property
     def is_on(self):
-        return self.coordinator.data.get("arrosage_recommande", False)
+        return bool(self._decision_value("arrosage_recommande", False))
 
     @property
     def extra_state_attributes(self):
-        return self._attrs_from_data("objectif_mm", "type_arrosage")
+        return self._attrs_from_result("objectif_mm", "type_arrosage")

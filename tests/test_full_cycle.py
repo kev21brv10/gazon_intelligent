@@ -72,6 +72,7 @@ class FullCycleTests(unittest.TestCase):
             hauteur_gazon=None,
             retour_arrosage=None,
             pluie_source="capteur_pluie_24h",
+            pluie_demain_source="meteo_forecast",
             weather_profile={},
         )
 
@@ -91,6 +92,7 @@ class FullCycleTests(unittest.TestCase):
             hauteur_gazon=None,
             retour_arrosage=None,
             pluie_source="capteur_pluie_24h",
+            pluie_demain_source="meteo_forecast",
             weather_profile={},
         )
 

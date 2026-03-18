@@ -126,6 +126,21 @@ class DecisionResult:
     phase_context: dict[str, Any] | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def mode(self) -> str:
+        """Alias de compatibilité pour l'ancien snapshot."""
+        return self.phase_dominante
+
+    @property
+    def phase_active(self) -> str:
+        """Alias de compatibilité pour l'ancien snapshot."""
+        return self.phase_dominante
+
+    @property
+    def objectif_mm(self) -> float:
+        """Alias de compatibilité pour l'ancien snapshot."""
+        return self.objectif_arrosage
+
     def to_snapshot(self) -> dict[str, Any]:
         """Sérialise le résultat au format attendu par les entités."""
         payload: dict[str, Any] = {
