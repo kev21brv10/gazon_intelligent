@@ -10,7 +10,6 @@ async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
         [
-            GazonPhaseActiveSensor(coordinator),
             GazonTonteEtatSensor(coordinator),
             GazonRaisonDecisionSensor(coordinator),
             GazonConseilPrincipalSensor(coordinator),
@@ -20,6 +19,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
             GazonFenetreOptimaleSensor(coordinator),
             GazonRisqueGazonSensor(coordinator),
             GazonProchaineReevaluationSensor(coordinator),
+            GazonPhaseActiveSensor(coordinator),
             GazonSousPhaseSensor(coordinator),
             GazonObjectifMmSensor(coordinator),
             GazonJoursRestantsSensor(coordinator),
@@ -61,6 +61,8 @@ class GazonPhaseActiveSensor(GazonEntityBase, SensorEntity):
 class GazonSousPhaseSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Sous-phase"
     _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -85,6 +87,8 @@ class GazonObjectifMmSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Objectif d'arrosage"
     _attr_native_unit_of_measurement = "mm"
     _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -138,6 +142,8 @@ class GazonJoursRestantsSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Jours restants de la phase"
     _attr_native_unit_of_measurement = "j"
     _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -195,6 +201,8 @@ class GazonDateActionSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Date de l'action"
     _attr_has_entity_name = True
     _attr_device_class = SensorDeviceClass.DATE
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -213,6 +221,8 @@ class GazonDateFinSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Date de fin de phase"
     _attr_has_entity_name = True
     _attr_device_class = SensorDeviceClass.DATE
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator):
         super().__init__(coordinator)

@@ -3,8 +3,28 @@
   "config": {
     "step": {
       "user": {
-        "title": "Ajustes de riego del césped",
-        "description": "El formulario inicial pide las zonas principales y los campos meteorológicos básicos. Después puedes completar los sensores especializados en Opciones. La entidad meteorológica también puede servir como respaldo para la temperatura, la temperatura percibida, la humedad, el viento, la presión y la lluvia de mañana. Si no conoces el caudal, deja 60.",
+        "title": "Ajustes básicos",
+        "description": "Rellena aquí los sensores complementarios y los ajustes generales. Las zonas de riego, la entidad meteorológica y los sensores meteorológicos principales están después en Opciones avanzadas.",
+        "data": {
+          "capteur_hauteur_gazon": "Altura del césped (recomendado)",
+          "capteur_humidite_sol": "Humedad del suelo (%) (opcional)",
+          "capteur_retour_arrosage": "Riego real (mm, opcional)",
+          "capteur_pluie_fine": "Lluvia fina (opcional)",
+          "capteur_vent": "Viento (opcional si se usa meteorología)",
+          "capteur_rosee": "Rocío / humedad foliar (opcional)",
+          "type_sol": "Tipo de suelo"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Gazon Intelligent ya está configurado."
+    }
+  },
+  "options": {
+    "step": {
+      "user": {
+        "title": "Opciones avanzadas",
+        "description": "Rellena aquí las zonas de riego y los sensores meteorológicos principales. La entidad meteorológica también puede servir como respaldo para la temperatura, la temperatura percibida, la humedad, el viento, la presión y la lluvia de mañana. Si no conoces el caudal, deja 60.",
         "data": {
           "zone_1": "Zona 1",
           "zone_2": "Zona 2",
@@ -16,19 +36,12 @@
           "debit_zone_3": "Caudal zona 3 (mm/h)",
           "debit_zone_4": "Caudal zona 4 (mm/h)",
           "debit_zone_5": "Caudal zona 5 (mm/h)",
-          "entite_meteo": "Meteorología (opcional)",
           "capteur_pluie_24h": "Lluvia 24 h (mm)",
           "capteur_pluie_demain": "Lluvia mañana (mm)",
           "capteur_temperature": "Temperatura (opcional si se usa meteorología)",
           "capteur_etp": "ETP diario (opcional, si no se calcula)",
           "capteur_humidite": "Humedad del aire (%) (opcional si se usa meteorología)",
-          "capteur_humidite_sol": "Humedad del suelo (%) (opcional)",
-          "capteur_vent": "Viento (opcional si se usa meteorología)",
-          "capteur_rosee": "Rocío / humedad foliar (opcional)",
-          "capteur_hauteur_gazon": "Altura del césped (recomendado)",
-          "capteur_retour_arrosage": "Riego real (mm, opcional)",
-          "capteur_pluie_fine": "Lluvia fina (opcional)",
-          "type_sol": "Tipo de suelo"
+          "entite_meteo": "Meteorología"
         }
       }
     },

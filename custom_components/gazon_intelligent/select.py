@@ -10,7 +10,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
 
 class GazonModeSelect(GazonEntityBase, SelectEntity):
-    _attr_name = "Mode expert"
+    _attr_name = "Mode du gazon"
     _attr_options = MODES_GAZON
     _attr_has_entity_name = True
 

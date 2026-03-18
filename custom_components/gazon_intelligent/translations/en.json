@@ -3,8 +3,28 @@
   "config": {
     "step": {
       "user": {
-        "title": "Lawn irrigation settings",
-        "description": "The initial form asks for the main zones and weather fields first. You can then complete the specialized sensors in Options. The weather entity can also serve as a fallback for temperature, apparent temperature, humidity, wind, pressure, and tomorrow's rain. If you do not know the flow rate, leave 60.",
+        "title": "Base settings",
+        "description": "Fill in the complementary sensors and general settings here. The irrigation zones, weather entity and main weather sensors are then in Advanced Options.",
+        "data": {
+          "capteur_hauteur_gazon": "Grass height (recommended)",
+          "capteur_humidite_sol": "Soil humidity (%) (optional)",
+          "capteur_retour_arrosage": "Actual watering (mm, optional)",
+          "capteur_pluie_fine": "Light rain (optional)",
+          "capteur_vent": "Wind (optional if weather is provided)",
+          "capteur_rosee": "Dew / leaf wetness (optional)",
+          "type_sol": "Soil type"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Gazon Intelligent is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "user": {
+        "title": "Advanced options",
+        "description": "Fill in the irrigation zones and the main weather sensors here. The weather entity can also serve as a fallback for temperature, apparent temperature, humidity, wind, pressure, and tomorrow's rain. If you do not know the flow rate, leave 60.",
         "data": {
           "zone_1": "Zone 1",
           "zone_2": "Zone 2",
@@ -16,19 +36,12 @@
           "debit_zone_3": "Zone 3 flow (mm/h)",
           "debit_zone_4": "Zone 4 flow (mm/h)",
           "debit_zone_5": "Zone 5 flow (mm/h)",
-          "entite_meteo": "Weather (optional)",
           "capteur_pluie_24h": "24h rain (mm)",
           "capteur_pluie_demain": "Tomorrow rain (mm)",
           "capteur_temperature": "Temperature (optional if weather is provided)",
           "capteur_etp": "Daily ETP (optional, otherwise calculated)",
           "capteur_humidite": "Air humidity (%) (optional if weather is provided)",
-          "capteur_humidite_sol": "Soil humidity (%) (optional)",
-          "capteur_vent": "Wind (optional if weather is provided)",
-          "capteur_rosee": "Dew / leaf wetness (optional)",
-          "capteur_hauteur_gazon": "Grass height (recommended)",
-          "capteur_retour_arrosage": "Actual watering (mm, optional)",
-          "capteur_pluie_fine": "Light rain (optional)",
-          "type_sol": "Soil type"
+          "entite_meteo": "Weather"
         }
       }
     },

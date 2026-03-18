@@ -3,8 +3,28 @@
   "config": {
     "step": {
       "user": {
-        "title": "Gazonbewatering",
-        "description": "Het eerste formulier vraagt naar de hoofdzones en de basisweerwaarden. Daarna kun je de gespecialiseerde sensoren in Opties aanvullen. De weerentiteit kan ook als fallback dienen voor temperatuur, gevoelstemperatuur, luchtvochtigheid, wind, druk en regen morgen. Als je de doorstroom niet weet, laat 60 staan.",
+        "title": "Basisinstellingen",
+        "description": "Vul hier de aanvullende sensoren en algemene instellingen in. De irrigatiezones, de weerentiteit en de belangrijkste weersensoren staan daarna in Geavanceerde opties.",
+        "data": {
+          "capteur_hauteur_gazon": "Grashoogte (aanbevolen)",
+          "capteur_humidite_sol": "Bodemvocht (%) (optioneel)",
+          "capteur_retour_arrosage": "Werkelijke beregening (mm, optioneel)",
+          "capteur_pluie_fine": "Lichte regen (optioneel)",
+          "capteur_vent": "Wind (optioneel als weer beschikbaar is)",
+          "capteur_rosee": "Dauw / bladnat (optioneel)",
+          "type_sol": "Bodemtype"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Gazon Intelligent is al geconfigureerd."
+    }
+  },
+  "options": {
+    "step": {
+      "user": {
+        "title": "Geavanceerde opties",
+        "description": "Vul hier de irrigatiezones en de belangrijkste weersensoren in. De weerentiteit kan ook als fallback dienen voor temperatuur, gevoelstemperatuur, luchtvochtigheid, wind, druk en regen morgen. Als je de doorstroom niet weet, laat 60 staan.",
         "data": {
           "zone_1": "Zone 1",
           "zone_2": "Zone 2",
@@ -16,19 +36,12 @@
           "debit_zone_3": "Doorstroom zone 3 (mm/h)",
           "debit_zone_4": "Doorstroom zone 4 (mm/h)",
           "debit_zone_5": "Doorstroom zone 5 (mm/h)",
-          "entite_meteo": "Weer (optioneel)",
           "capteur_pluie_24h": "Regen 24 uur (mm)",
           "capteur_pluie_demain": "Regen morgen (mm)",
           "capteur_temperature": "Temperatuur (optioneel als weer beschikbaar is)",
           "capteur_etp": "Dagelijkse ETP (optioneel, anders berekend)",
           "capteur_humidite": "Luchtvochtigheid (%) (optioneel als weer beschikbaar is)",
-          "capteur_humidite_sol": "Bodemvocht (%) (optioneel)",
-          "capteur_vent": "Wind (optioneel als weer beschikbaar is)",
-          "capteur_rosee": "Dauw / bladnat (optioneel)",
-          "capteur_hauteur_gazon": "Grashoogte (aanbevolen)",
-          "capteur_retour_arrosage": "Werkelijke beregening (mm, optioneel)",
-          "capteur_pluie_fine": "Lichte regen (optioneel)",
-          "type_sol": "Bodemtype"
+          "entite_meteo": "Weer"
         }
       }
     },

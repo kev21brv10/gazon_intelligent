@@ -3,8 +3,28 @@
   "config": {
     "step": {
       "user": {
-        "title": "Réglages du gazon",
-        "description": "Le formulaire initial demande les zones principales et les champs météo de base. Ensuite, vous pouvez compléter les capteurs spécialisés dans Options. L'entité météo peut servir de secours pour la température, la température ressentie, l'humidité, le vent, la pression et la pluie de demain. Si vous ne connaissez pas le débit, laissez 60.",
+        "title": "Paramètres de base",
+        "description": "Renseignez ici les capteurs complémentaires et les réglages généraux. Les zones d'arrosage, l'entité météo et les capteurs météo principaux sont ensuite dans Options avancées.",
+        "data": {
+          "capteur_hauteur_gazon": "Hauteur du gazon (recommandé)",
+          "capteur_humidite_sol": "Humidité sol (%) (optionnel)",
+          "capteur_retour_arrosage": "Arrosage réel (mm, optionnel)",
+          "capteur_pluie_fine": "Pluie fine (optionnel)",
+          "capteur_vent": "Vent (optionnel si météo fournie)",
+          "capteur_rosee": "Rosée / humidité foliaire (optionnel)",
+          "type_sol": "Type de sol"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Gazon Intelligent est déjà configuré."
+    }
+  },
+  "options": {
+    "step": {
+      "user": {
+        "title": "Options avancées",
+        "description": "Renseignez ici les zones d'arrosage et les capteurs météo principaux. L'entité météo peut servir de secours pour la température, la température ressentie, l'humidité, le vent, la pression et la pluie de demain. Si vous ne connaissez pas le débit, laissez 60.",
         "data": {
           "zone_1": "Zone 1",
           "zone_2": "Zone 2",
@@ -16,19 +36,12 @@
           "debit_zone_3": "Débit zone 3 (mm/h)",
           "debit_zone_4": "Débit zone 4 (mm/h)",
           "debit_zone_5": "Débit zone 5 (mm/h)",
-          "entite_meteo": "Météo (optionnel)",
           "capteur_pluie_24h": "Pluie 24h (mm)",
           "capteur_pluie_demain": "Pluie demain (mm)",
           "capteur_temperature": "Température (optionnel si météo fournie)",
           "capteur_etp": "ETP du jour (optionnel, sinon calculé)",
           "capteur_humidite": "Humidité air (%) (optionnel si météo fournie)",
-          "capteur_humidite_sol": "Humidité sol (%) (optionnel)",
-          "capteur_vent": "Vent (optionnel si météo fournie)",
-          "capteur_rosee": "Rosée / humidité foliaire (optionnel)",
-          "capteur_hauteur_gazon": "Hauteur du gazon (recommandé)",
-          "capteur_retour_arrosage": "Arrosage réel (mm, optionnel)",
-          "capteur_pluie_fine": "Pluie fine (optionnel)",
-          "type_sol": "Type de sol"
+          "entite_meteo": "Météo"
         }
       }
     },
