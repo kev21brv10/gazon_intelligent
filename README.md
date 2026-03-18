@@ -1,7 +1,7 @@
 # Gazon Intelligent
 
 Statut: projet en test. L'intégration peut encore évoluer et certains comportements peuvent changer.
-Version: `0.3.14`
+Version: `0.3.15`
 
 Gazon Intelligent est une intégration Home Assistant qui transforme les capteurs du jardin en décisions lisibles.
 Elle analyse la météo, le sol, l'historique et les interventions déclarées, puis dit clairement quoi faire, quand agir, pourquoi et quoi éviter.
