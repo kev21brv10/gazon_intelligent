@@ -178,6 +178,11 @@ Un blueprint d'arrosage intelligent est inclus pour automatiser les modes spéci
 
 - `blueprints/automation/gazon_intelligent/arrosage_modes_speciaux_hors_normal.yaml`
 
+[![Ouvrir le blueprint dans Home Assistant](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https://github.com/kev21brv10/gazon_intelligent/blob/main/blueprints/automation/gazon_intelligent/arrosage_modes_speciaux_hors_normal.yaml)
+
+Lien direct:
+https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https://github.com/kev21brv10/gazon_intelligent/blob/main/blueprints/automation/gazon_intelligent/arrosage_modes_speciaux_hors_normal.yaml
+
 ### À quoi il sert
 
 - lancer un arrosage automatique quand le mode du gazon l'autorise
