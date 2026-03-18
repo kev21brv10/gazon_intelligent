@@ -63,12 +63,4 @@ class GazonArrosageRecommandeBinarySensor(GazonEntityBase, BinarySensorEntity):
 
     @property
     def extra_state_attributes(self):
-        return self._attrs_from_data(
-            "objectif_mm",
-            "score_hydrique",
-            "conseil_principal",
-            "niveau_action",
-            "fenetre_optimale",
-            "risque_gazon",
-            "prochaine_reevaluation",
-        )
+        return self._attrs_from_data("objectif_mm", "conseil_principal", "niveau_action", "fenetre_optimale", "risque_gazon", "prochaine_reevaluation")
