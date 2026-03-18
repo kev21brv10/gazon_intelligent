@@ -33,6 +33,7 @@ from .const import (
     INTERVENTIONS_ACTIONS,
 )
 from .decision import build_decision_snapshot, compute_memory, phase_duration_days
+from .weather_sources import extract_weather_profile
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -77,14 +78,22 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         pluie_demain_entity = self._get_conf(CONF_CAPTEUR_PLUIE_DEMAIN)
         pluie_demain = self._get_float_state(pluie_demain_entity)
         pluie_demain_source = "capteur"
+        weather_entity_id = self._get_conf(CONF_ENTITE_METEO)
+        weather_profile = self._get_weather_profile(weather_entity_id)
         if pluie_demain is None:
-            pluie_demain = await self._get_forecast_pluie_demain(self._get_conf(CONF_ENTITE_METEO))
+            pluie_demain = await self._get_forecast_pluie_demain(weather_entity_id)
             pluie_demain_source = "meteo_forecast" if pluie_demain is not None else "indisponible"
         temperature = self._get_float_state(self._get_conf(CONF_CAPTEUR_TEMPERATURE))
+        if temperature is None:
+            temperature = weather_profile.get("weather_temperature") or weather_profile.get("weather_apparent_temperature")
         etp_capteur = self._get_float_state(self._get_conf(CONF_CAPTEUR_ETP))
         humidite = self._get_float_state(self._get_conf(CONF_CAPTEUR_HUMIDITE))
+        if humidite is None:
+            humidite = weather_profile.get("weather_humidity")
         humidite_sol = self._get_float_state(self._get_conf(CONF_CAPTEUR_HUMIDITE_SOL))
         vent = self._get_float_state(self._get_conf(CONF_CAPTEUR_VENT))
+        if vent is None:
+            vent = weather_profile.get("weather_wind_speed")
         rosee = self._get_float_state(self._get_conf(CONF_CAPTEUR_ROSEE))
         hauteur_gazon = self._get_float_state(self._get_conf(CONF_CAPTEUR_HAUTEUR_GAZON))
         retour_arrosage = self._get_float_state(self._get_conf(CONF_CAPTEUR_RETOUR_ARROSAGE))
@@ -105,6 +114,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             hauteur_gazon=hauteur_gazon,
             retour_arrosage=retour_arrosage,
             pluie_fine=pluie_fine,
+            weather_profile=weather_profile,
         )
         self.mode = snapshot["phase_active"]
         self.date_action = snapshot["date_action"]
@@ -153,6 +163,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "niveau_action": snapshot["niveau_action"],
             "fenetre_optimale": snapshot["fenetre_optimale"],
             "risque_gazon": snapshot["risque_gazon"],
+            "urgence": snapshot["urgence"],
             "prochaine_reevaluation": snapshot["prochaine_reevaluation"],
             "score_tonte": snapshot["score_tonte"],
             "jours_restants": snapshot["jours_restants"],
@@ -175,6 +186,17 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except (TypeError, ValueError):
             _LOGGER.debug("Impossible de convertir l'état de %s en float: %s", entity_id, state.state)
             return None
+
+    def _get_weather_profile(self, weather_entity_id: str | None) -> dict[str, Any]:
+        """Retourne les principaux attributs météo disponibles pour l'entité fournie."""
+        if not weather_entity_id:
+            return {}
+
+        state = self.hass.states.get(weather_entity_id)
+        if state is None:
+            return {}
+
+        return extract_weather_profile(state.attributes)
 
     async def _get_forecast_pluie_demain(self, weather_entity_id: str | None) -> float | None:
         """Récupère la pluie prévue demain (mm) via weather.get_forecasts."""
@@ -483,6 +505,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "niveau_action": self.data.get("niveau_action") if self.data else None,
             "fenetre_optimale": self.data.get("fenetre_optimale") if self.data else None,
             "risque_gazon": self.data.get("risque_gazon") if self.data else None,
+            "urgence": self.data.get("urgence") if self.data else None,
             "tonte_autorisee": self.data.get("tonte_autorisee") if self.data else None,
             "tonte_statut": self.data.get("tonte_statut") if self.data else None,
             "prochaine_reevaluation": self.data.get("prochaine_reevaluation") if self.data else None,

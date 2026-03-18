@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Ajustes de riego del césped",
-        "description": "Elige tus zonas, los sensores meteorológicos, el tipo de suelo y el caudal de cada zona. Si no conoces el caudal, deja 60.",
+        "description": "El formulario inicial pide las zonas principales y los campos meteorológicos básicos. Después puedes completar los sensores especializados en Opciones. La entidad meteorológica también puede servir como respaldo para la temperatura, la temperatura percibida, la humedad, el viento, la presión y la lluvia de mañana. Si no conoces el caudal, deja 60.",
         "data": {
           "zone_1": "Zona 1",
           "zone_2": "Zona 2",
@@ -19,13 +19,13 @@
           "entite_meteo": "Meteorología (opcional)",
           "capteur_pluie_24h": "Lluvia 24 h (mm)",
           "capteur_pluie_demain": "Lluvia mañana (mm)",
-          "capteur_temperature": "Temperatura",
+          "capteur_temperature": "Temperatura (opcional si se usa meteorología)",
           "capteur_etp": "ETP diario (opcional, si no se calcula)",
-          "capteur_humidite": "Humedad del aire (%) (opcional)",
+          "capteur_humidite": "Humedad del aire (%) (opcional si se usa meteorología)",
           "capteur_humidite_sol": "Humedad del suelo (%) (opcional)",
-          "capteur_vent": "Viento (opcional)",
+          "capteur_vent": "Viento (opcional si se usa meteorología)",
           "capteur_rosee": "Rocío / humedad foliar (opcional)",
-          "capteur_hauteur_gazon": "Altura del césped (opcional)",
+          "capteur_hauteur_gazon": "Altura del césped (recomendado)",
           "capteur_retour_arrosage": "Riego real (mm, opcional)",
           "capteur_pluie_fine": "Lluvia fina (opcional)",
           "type_sol": "Tipo de suelo"

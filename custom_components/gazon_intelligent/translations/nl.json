@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Gazonbewatering",
-        "description": "Kies je zones, weersensoren, bodemtype en doorstroom per zone. Als je de doorstroom niet weet, laat 60 staan.",
+        "description": "Het eerste formulier vraagt naar de hoofdzones en de basisweerwaarden. Daarna kun je de gespecialiseerde sensoren in Opties aanvullen. De weerentiteit kan ook als fallback dienen voor temperatuur, gevoelstemperatuur, luchtvochtigheid, wind, druk en regen morgen. Als je de doorstroom niet weet, laat 60 staan.",
         "data": {
           "zone_1": "Zone 1",
           "zone_2": "Zone 2",
@@ -19,13 +19,13 @@
           "entite_meteo": "Weer (optioneel)",
           "capteur_pluie_24h": "Regen 24 uur (mm)",
           "capteur_pluie_demain": "Regen morgen (mm)",
-          "capteur_temperature": "Temperatuur",
+          "capteur_temperature": "Temperatuur (optioneel als weer beschikbaar is)",
           "capteur_etp": "Dagelijkse ETP (optioneel, anders berekend)",
-          "capteur_humidite": "Luchtvochtigheid (%) (optioneel)",
+          "capteur_humidite": "Luchtvochtigheid (%) (optioneel als weer beschikbaar is)",
           "capteur_humidite_sol": "Bodemvocht (%) (optioneel)",
-          "capteur_vent": "Wind (optioneel)",
+          "capteur_vent": "Wind (optioneel als weer beschikbaar is)",
           "capteur_rosee": "Dauw / bladnat (optioneel)",
-          "capteur_hauteur_gazon": "Grashoogte (optioneel)",
+          "capteur_hauteur_gazon": "Grashoogte (aanbevolen)",
           "capteur_retour_arrosage": "Werkelijke beregening (mm, optioneel)",
           "capteur_pluie_fine": "Lichte regen (optioneel)",
           "type_sol": "Bodemtype"

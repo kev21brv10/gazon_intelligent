@@ -48,6 +48,7 @@ compute_memory = _memory.compute_memory
 compute_action_guidance = _guidance.compute_action_guidance
 compute_jours_restants_for = _guidance.compute_jours_restants_for
 compute_next_reevaluation = _guidance.compute_next_reevaluation
+compute_legacy_urgence = _guidance.compute_legacy_urgence
 compute_objectif_mm = _guidance.compute_objectif_mm
 compute_tonte_statut = _guidance.compute_tonte_statut
 
@@ -124,6 +125,7 @@ def compute_decision(
             "niveau_action": action_guidance["niveau_action"],
             "fenetre_optimale": action_guidance["fenetre_optimale"],
             "risque_gazon": action_guidance["risque_gazon"],
+            "urgence": "faible",
             "prochaine_reevaluation": prochaine_reevaluation,
             "score_tonte": score_tonte,
         }
@@ -142,11 +144,13 @@ def compute_decision(
             "niveau_action": action_guidance["niveau_action"],
             "fenetre_optimale": action_guidance["fenetre_optimale"],
             "risque_gazon": action_guidance["risque_gazon"],
+            "urgence": "faible",
             "prochaine_reevaluation": prochaine_reevaluation,
             "score_tonte": score_tonte,
         }
     if phase_dominante == "Sursemis":
         passages = 3 if objectif_mm >= 2 else 2
+        urgence_sursemis = "haute" if score_hydrique >= 45 or action_guidance["risque_gazon"] == "eleve" else "moyenne"
         return {
             "tonte_autorisee": False,
             "tonte_statut": "interdite",
@@ -164,6 +168,7 @@ def compute_decision(
             "niveau_action": action_guidance["niveau_action"],
             "fenetre_optimale": action_guidance["fenetre_optimale"],
             "risque_gazon": action_guidance["risque_gazon"],
+            "urgence": urgence_sursemis,
             "prochaine_reevaluation": prochaine_reevaluation,
             "score_tonte": score_tonte,
         }
@@ -272,6 +277,14 @@ def compute_decision(
         score_tonte=score_tonte,
         risque_gazon=action_guidance["risque_gazon"],
     )
+    urgence = compute_legacy_urgence(
+        phase_dominante=phase_dominante,
+        arrosage_recommande=recommande,
+        niveau_action=action_guidance["niveau_action"],
+        risque_gazon=action_guidance["risque_gazon"],
+        score_hydrique=score_hydrique,
+        score_stress=score_stress,
+    )
 
     return {
         "tonte_autorisee": tonte_ok,
@@ -290,6 +303,7 @@ def compute_decision(
         "niveau_action": action_guidance["niveau_action"],
         "fenetre_optimale": action_guidance["fenetre_optimale"],
         "risque_gazon": action_guidance["risque_gazon"],
+        "urgence": urgence,
         "prochaine_reevaluation": prochaine_reevaluation,
         "score_tonte": score_tonte,
     }
@@ -311,6 +325,7 @@ def build_decision_snapshot(
     hauteur_gazon: float | None = None,
     retour_arrosage: float | None = None,
     pluie_fine: float | None = None,
+    weather_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     today = today or date.today()
     etp = compute_etp(temperature=temperature, pluie_24h=pluie_24h, etp_capteur=etp_capteur)
@@ -321,6 +336,7 @@ def build_decision_snapshot(
         hauteur_gazon=hauteur_gazon,
         retour_arrosage=retour_arrosage,
         pluie_fine=pluie_fine,
+        weather_profile=weather_profile,
     )
     dominant = compute_dominant_phase(history, today=today, temperature=temperature)
     phase_dominante = dominant["phase_dominante"]
@@ -433,6 +449,7 @@ def build_decision_snapshot(
         "niveau_action": decision["niveau_action"],
         "fenetre_optimale": decision["fenetre_optimale"],
         "risque_gazon": decision["risque_gazon"],
+        "urgence": decision["urgence"],
         "prochaine_reevaluation": decision["prochaine_reevaluation"],
         "score_tonte": decision["score_tonte"],
         "jours_restants": jours_restants,

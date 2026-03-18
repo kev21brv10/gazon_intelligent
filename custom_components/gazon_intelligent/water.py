@@ -54,7 +54,9 @@ def compute_advanced_context(
     hauteur_gazon: float | None = None,
     retour_arrosage: float | None = None,
     pluie_fine: float | None = None,
+    weather_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    weather_profile = weather_profile or {}
     humidite_sol = _to_float(humidite_sol)
     vent = _to_float(vent)
     rosee = _to_float(rosee)
@@ -98,6 +100,16 @@ def compute_advanced_context(
         "wind_factor": wind_factor,
         "dew_factor": dew_factor,
         "rain_factor": rain_factor,
+        "weather_temperature": weather_profile.get("weather_temperature"),
+        "weather_apparent_temperature": weather_profile.get("weather_apparent_temperature"),
+        "weather_humidity": weather_profile.get("weather_humidity"),
+        "weather_wind_speed": weather_profile.get("weather_wind_speed"),
+        "weather_pressure": weather_profile.get("weather_pressure"),
+        "weather_cloud_coverage": weather_profile.get("weather_cloud_coverage"),
+        "weather_dew_point": weather_profile.get("weather_dew_point"),
+        "weather_uv_index": weather_profile.get("weather_uv_index"),
+        "weather_precipitation_probability": weather_profile.get("weather_precipitation_probability"),
+        "weather_condition": weather_profile.get("weather_condition"),
     }
 
 

@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Rasenbewässerung",
-        "description": "Wähle deine Zonen, Wettersensoren, den Bodentyp und den Durchfluss jeder Zone. Wenn du den Durchfluss nicht kennst, lasse 60 stehen.",
+        "description": "Das erste Formular fragt nach den Hauptzonen und den Wettergrundwerten. Danach kannst du die spezialisierten Sensoren in den Optionen ergänzen. Die Wetterentität kann auch als Ersatz für Temperatur, gefühlte Temperatur, Luftfeuchtigkeit, Wind, Druck und Regen morgen dienen. Wenn du den Durchfluss nicht kennst, lasse 60 stehen.",
         "data": {
           "zone_1": "Zone 1",
           "zone_2": "Zone 2",
@@ -19,13 +19,13 @@
           "entite_meteo": "Wetter (optional)",
           "capteur_pluie_24h": "Regen 24 h (mm)",
           "capteur_pluie_demain": "Regen morgen (mm)",
-          "capteur_temperature": "Temperatur",
+          "capteur_temperature": "Temperatur (optional, wenn Wetter verfügbar ist)",
           "capteur_etp": "ETP des Tages (optional, sonst berechnet)",
-          "capteur_humidite": "Luftfeuchtigkeit (%) (optional)",
+          "capteur_humidite": "Luftfeuchtigkeit (%) (optional, wenn Wetter verfügbar ist)",
           "capteur_humidite_sol": "Bodenfeuchte (%) (optional)",
-          "capteur_vent": "Wind (optional)",
+          "capteur_vent": "Wind (optional, wenn Wetter verfügbar ist)",
           "capteur_rosee": "Tau / Blattnässe (optional)",
-          "capteur_hauteur_gazon": "Rasenhöhe (optional)",
+          "capteur_hauteur_gazon": "Rasenhöhe (empfohlen)",
           "capteur_retour_arrosage": "Tatsächliche Bewässerung (mm, optional)",
           "capteur_pluie_fine": "Leichter Regen (optional)",
           "type_sol": "Bodentyp"

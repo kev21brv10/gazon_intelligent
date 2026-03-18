@@ -36,6 +36,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
             GazonScoreHydriqueSensor(coordinator),
             GazonScoreStressSensor(coordinator),
             GazonScoreTonteSensor(coordinator),
+            GazonUrgenceSensor(coordinator),
         ]
     )
 
@@ -386,6 +387,25 @@ class GazonScoreTonteSensor(GazonEntityBase, SensorEntity):
             "fenetre_optimale",
             "risque_gazon",
         )
+
+
+class GazonUrgenceSensor(GazonEntityBase, SensorEntity):
+    _attr_name = "Niveau d'urgence"
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_urgence"
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("urgence")
+
+    @property
+    def extra_state_attributes(self):
+        return self._attrs_from_data("niveau_action", "fenetre_optimale", "risque_gazon", "tonte_statut")
 
 
 class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):

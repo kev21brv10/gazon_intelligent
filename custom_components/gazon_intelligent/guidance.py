@@ -230,3 +230,27 @@ def compute_tonte_statut(
     if score_tonte >= 45 or risque_gazon == "modere":
         return "autorisee_avec_precaution"
     return "autorisee"
+
+
+def compute_legacy_urgence(
+    phase_dominante: str,
+    arrosage_recommande: bool,
+    niveau_action: str,
+    risque_gazon: str,
+    score_hydrique: int,
+    score_stress: int,
+) -> str:
+    """Retourne l'ancien niveau d'urgence pour compatibilité Home Assistant."""
+    if phase_dominante in {"Traitement", "Hivernage"}:
+        return "faible"
+    if not arrosage_recommande:
+        return "faible"
+    if phase_dominante == "Sursemis":
+        if niveau_action == "critique" or risque_gazon == "eleve" or score_hydrique >= 45:
+            return "haute"
+        return "moyenne"
+    if niveau_action == "critique" or score_hydrique >= 75 or score_stress >= 80 or risque_gazon == "eleve":
+        return "haute"
+    if niveau_action in {"a_faire", "surveiller"} or score_hydrique >= 40 or score_stress >= 55 or risque_gazon == "modere":
+        return "moyenne"
+    return "faible"
