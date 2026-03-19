@@ -1,7 +1,7 @@
 # 🌱 Gazon Intelligent
 
 <p align="center">
-  <img src="https://brands.home-assistant.io/_/gazon_intelligent/icon.png" width="120">
+  <img src="https://raw.githubusercontent.com/kev21brv10/gazon_intelligent/main/logo.png" width="120">
 </p>
 
 ![Version](https://img.shields.io/github/v/release/kev21brv10/gazon_intelligent?color=green)
