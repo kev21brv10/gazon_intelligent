@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.3.23
+- Bump de version pour la nouvelle release.
+
 ## 0.3.20
 - Ajout de l'attribut `possible_values` sur certaines entités métier pour aider à comprendre les valeurs possibles dans Home Assistant.
 
