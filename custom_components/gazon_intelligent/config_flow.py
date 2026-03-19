@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import voluptuous as vol
 
 from homeassistant import config_entries
@@ -77,6 +79,7 @@ def _build_base_fields(current: dict) -> dict:
 
 
 def build_schema(current: dict | None = None):
+    current = current or {}
     return vol.Schema(_build_base_fields(current))
 
 
