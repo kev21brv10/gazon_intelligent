@@ -134,6 +134,11 @@ class ConfigFlowTests(unittest.TestCase):
 
         self.assertIsNotNone(schema)
 
+    def test_build_schema_handles_explicit_none_current_data(self) -> None:
+        schema = config_flow_mod.build_schema(None)
+
+        self.assertIsNotNone(schema)
+
     def test_build_advanced_schema_handles_empty_current_data(self) -> None:
         schema = config_flow_mod.build_advanced_schema()
 

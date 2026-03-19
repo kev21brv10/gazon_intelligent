@@ -38,7 +38,8 @@ def _d(val):
     return val if val is not None else vol.UNDEFINED
 
 
-def _build_base_fields(current: dict) -> dict:
+def _build_base_fields(current: dict | None) -> dict:
+    current = current or {}
     return {
         vol.Required(CONF_ZONE_1, default=_d(current.get(CONF_ZONE_1))): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="switch")
