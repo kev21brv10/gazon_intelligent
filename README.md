@@ -49,6 +49,17 @@ Le but est simple :
 - `Objectif d'arrosage`
 - `Type d'arrosage`
 
+### Tonte
+
+L'entité `État de tonte` expose aussi une recommandation de hauteur de coupe adaptée à ta tondeuse :
+
+- `hauteur_tonte_recommandee_cm`
+- `hauteur_tonte_min_cm`
+- `hauteur_tonte_max_cm`
+- `pas_hauteur_tondeuse_cm`
+
+Le moteur calcule cette hauteur pour rester compatible avec la machine configurée et avec l'état réel du gazon.
+
 ### Boutons
 
 - `Retour au mode normal`
@@ -98,11 +109,15 @@ Aucune configuration YAML obligatoire.
 - `capteur_vent`
 - `capteur_rosee`
 - `capteur_retour_arrosage`
+- `hauteur_min_tondeuse_cm`
+- `hauteur_max_tondeuse_cm`
+- `pas_hauteur_tondeuse_cm`
 
 Règles simples :
 - si un capteur est vide → la météo prend le relais
 - si `capteur_etp` est vide → estimation automatique
 - si `capteur_retour_arrosage` est vide → historique du jour utilisé
+- si la tondeuse est configurée → le moteur propose une hauteur de coupe recommandée
 
 ---
 
@@ -120,6 +135,7 @@ Le fonctionnement est volontairement simple :
 - `Action à éviter`
 - `État de tonte`
 - `Arrosage recommandé`
+- `hauteur_tonte_recommandee_cm` dans `État de tonte`
 
 👉 Tu ne calcules rien. Tu suis.
 
