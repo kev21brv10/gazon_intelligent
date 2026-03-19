@@ -54,6 +54,8 @@ class GazonPhaseActiveSensor(GazonEntityBase, SensorEntity):
                     attrs["configuration"] = configuration
                 pluie_demain_source = extra.get("pluie_demain_source")
                 if pluie_demain_source is not None:
+                    if pluie_demain_source == "indisponible":
+                        pluie_demain_source = "non disponible"
                     attrs["pluie_demain_source"] = pluie_demain_source
         if attrs:
             return attrs
@@ -119,11 +121,20 @@ class GazonTypeArrosageSensor(GazonEntityBase, SensorEntity):
 
     @property
     def native_value(self):
+        result = self.decision_result
+        if result is not None:
+            return result.display_label_for("type_arrosage")
         return self._decision_value("type_arrosage")
 
     @property
     def extra_state_attributes(self):
-        return self._possible_values_attr("type_arrosage")
+        result = self.decision_result
+        if result is None:
+            return self._possible_values_attr("type_arrosage")
+        possible_values = result.possible_display_values_for("type_arrosage")
+        if not possible_values:
+            return None
+        return {"possible_values": list(possible_values)}
 
 
 class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):
@@ -141,7 +152,29 @@ class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):
 
     @property
     def extra_state_attributes(self):
-        return self._possible_values_attr("tonte_statut")
+        attrs = {}
+        result = self.decision_result
+        if result is not None:
+            for key in (
+                "hauteur_tonte_recommandee_cm",
+                "hauteur_tonte_min_cm",
+                "hauteur_tonte_max_cm",
+                "pas_hauteur_tondeuse_cm",
+            ):
+                value = getattr(result, key, None)
+                if value is not None:
+                    attrs[key] = value
+        if not attrs:
+            attrs = self._attrs_from_data(
+                "hauteur_tonte_recommandee_cm",
+                "hauteur_tonte_min_cm",
+                "hauteur_tonte_max_cm",
+                "pas_hauteur_tondeuse_cm",
+            ) or {}
+        possible_values = self._possible_values_attr("tonte_statut")
+        if possible_values:
+            attrs.update(possible_values)
+        return attrs or None
 
 
 class GazonConseilPrincipalSensor(GazonEntityBase, SensorEntity):

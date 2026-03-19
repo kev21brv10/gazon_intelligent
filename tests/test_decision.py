@@ -271,6 +271,44 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertEqual(snapshot["decision_resume"]["action"], "arrosage")
         self.assertTrue(snapshot["tonte_autorisee"])
 
+    def test_build_decision_snapshot_normal_suppresses_micro_watering(self) -> None:
+        snapshot = decision.build_decision_snapshot(
+            history=[],
+            today=date(2026, 6, 15),
+            hour_of_day=8,
+            temperature=20,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=60,
+            type_sol="limoneux",
+            etp_capteur=1.0,
+        )
+
+        self.assertEqual(snapshot["phase_active"], "Normal")
+        self.assertEqual(snapshot["objectif_mm"], 0.0)
+        self.assertFalse(snapshot["arrosage_recommande"])
+        self.assertEqual(snapshot["niveau_action"], "aucune_action")
+        self.assertNotIn("0.0 mm", snapshot["conseil_principal"])
+        self.assertNotIn("0.0 mm", snapshot["action_recommandee"])
+        self.assertEqual(snapshot["action_a_eviter"], "Éviter tout arrosage inutile.")
+
+    def test_build_decision_snapshot_normal_uses_soil_fractionation(self) -> None:
+        snapshot = decision.build_decision_snapshot(
+            history=[],
+            today=date(2026, 6, 15),
+            hour_of_day=8,
+            temperature=30,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=45,
+            type_sol="argileux",
+            etp_capteur=4.5,
+        )
+
+        self.assertEqual(snapshot["phase_active"], "Normal")
+        self.assertTrue(snapshot["arrosage_recommande"])
+        self.assertIn("2 passages", snapshot["action_recommandee"])
+
     def test_build_decision_snapshot_treatment_blocks_actions(self) -> None:
         snapshot = decision.build_decision_snapshot(
             history=[{"type": "Traitement", "date": "2026-03-17"}],
@@ -333,6 +371,28 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertEqual(snapshot["decision_resume"]["action"], "surveillance")
         self.assertNotIn("0.0 mm", snapshot["action_recommandee"])
         self.assertNotIn("0.0 mm", snapshot["conseil_principal"])
+        self.assertEqual(snapshot["action_a_eviter"], "Éviter tout arrosage inutile.")
+
+    def test_build_decision_snapshot_fertilisation_blocks_heat_stress(self) -> None:
+        snapshot = decision.build_decision_snapshot(
+            history=[{"type": "Fertilisation", "date": "2026-06-15"}],
+            today=date(2026, 6, 15),
+            hour_of_day=8,
+            temperature=33,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=30,
+            type_sol="argileux",
+            etp_capteur=5.0,
+        )
+
+        self.assertEqual(snapshot["phase_active"], "Fertilisation")
+        self.assertEqual(snapshot["objectif_mm"], 0.0)
+        self.assertFalse(snapshot["arrosage_recommande"])
+        self.assertEqual(snapshot["niveau_action"], "surveiller")
+        self.assertEqual(snapshot["fenetre_optimale"], "attendre")
+        self.assertIn("reporte", snapshot["conseil_principal"])
+        self.assertIn("Attends", snapshot["action_recommandee"])
 
     def test_build_decision_snapshot_uses_advanced_sensors(self) -> None:
         base_snapshot = decision.build_decision_snapshot(
@@ -380,6 +440,68 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertGreater(advanced_snapshot["score_hydrique"], base_snapshot["score_hydrique"])
         self.assertGreaterEqual(advanced_snapshot["score_stress"], base_snapshot["score_stress"])
         self.assertIn(advanced_snapshot["niveau_action"], {"a_faire", "surveiller", "critique"})
+
+    def test_build_decision_snapshot_blocks_mowing_on_third_rule(self) -> None:
+        snapshot = decision.build_decision_snapshot(
+            history=[],
+            today=date(2026, 6, 15),
+            hour_of_day=8,
+            temperature=25,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=50,
+            type_sol="limoneux",
+            etp_capteur=4.0,
+            hauteur_gazon=12.0,
+            hauteur_min_tondeuse_cm=3.0,
+            hauteur_max_tondeuse_cm=6.0,
+            pas_hauteur_tondeuse_cm=0.5,
+        )
+
+        self.assertFalse(snapshot["tonte_autorisee"])
+        self.assertEqual(snapshot["tonte_statut"], "deconseillee")
+        self.assertIn("Règle du tiers", snapshot["raison_decision"])
+        self.assertEqual(snapshot["hauteur_tonte_recommandee_cm"], 6.0)
+
+    def test_build_decision_snapshot_exposes_mowing_height_recommendation(self) -> None:
+        snapshot = decision.build_decision_snapshot(
+            history=[],
+            today=date(2026, 6, 15),
+            hour_of_day=8,
+            temperature=25,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=50,
+            type_sol="limoneux",
+            etp_capteur=4.0,
+            hauteur_gazon=12.0,
+            hauteur_min_tondeuse_cm=3.0,
+            hauteur_max_tondeuse_cm=8.0,
+            pas_hauteur_tondeuse_cm=0.5,
+        )
+
+        self.assertEqual(snapshot["hauteur_tonte_recommandee_cm"], 8.0)
+        self.assertEqual(snapshot["hauteur_tonte_min_cm"], 3.0)
+        self.assertEqual(snapshot["hauteur_tonte_max_cm"], 8.0)
+        self.assertEqual(snapshot["pas_hauteur_tondeuse_cm"], 0.5)
+
+    def test_build_decision_snapshot_blocks_mowing_on_dew(self) -> None:
+        snapshot = decision.build_decision_snapshot(
+            history=[],
+            today=date(2026, 6, 15),
+            hour_of_day=8,
+            temperature=25,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=60,
+            type_sol="limoneux",
+            etp_capteur=4.0,
+            hauteur_gazon=8.0,
+            rosee=1.0,
+        )
+
+        self.assertFalse(snapshot["tonte_autorisee"])
+        self.assertIn("Rosée", snapshot["raison_decision"])
 
     def test_compute_etp_prefers_sensor_value(self) -> None:
         self.assertEqual(decision.compute_etp(temperature=24, pluie_24h=2, etp_capteur=4.2), 4.2)

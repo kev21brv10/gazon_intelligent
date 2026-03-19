@@ -26,6 +26,12 @@ from .const import (
     CONF_CAPTEUR_ROSEE,
     CONF_CAPTEUR_HAUTEUR_GAZON,
     CONF_CAPTEUR_RETOUR_ARROSAGE,
+    CONF_HAUTEUR_MAX_TONDEUSE_CM,
+    CONF_HAUTEUR_MIN_TONDEUSE_CM,
+    CONF_PAS_HAUTEUR_TONDEUSE_CM,
+    DEFAULT_HAUTEUR_MAX_TONDEUSE_CM,
+    DEFAULT_HAUTEUR_MIN_TONDEUSE_CM,
+    DEFAULT_PAS_HAUTEUR_TONDEUSE_CM,
     CONF_TYPE_SOL,
     DEFAULT_TYPE_SOL,
 )
@@ -81,13 +87,13 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             pluie_24h_source = "capteur"
         else:
             pluie_24h = forecast_pluie_24h
-            pluie_24h_source = "meteo_forecast" if pluie_24h is not None else "indisponible"
+            pluie_24h_source = "meteo_forecast" if pluie_24h is not None else "non disponible"
         if pluie_demain_sensor is not None:
             pluie_demain = pluie_demain_sensor
             pluie_demain_source = "capteur"
         else:
             pluie_demain = forecast_pluie_demain
-            pluie_demain_source = "meteo_forecast" if pluie_demain is not None else "indisponible"
+            pluie_demain_source = "meteo_forecast" if pluie_demain is not None else "non disponible"
 
         temperature = self._get_float_state(self._get_conf(CONF_CAPTEUR_TEMPERATURE))
         if temperature is None:
@@ -124,6 +130,18 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             retour_arrosage_today = compute_recent_watering_mm(self.history, today=date.today(), days=0)
             retour_arrosage = retour_arrosage_today if retour_arrosage_today > 0 else None
         type_sol = self._get_conf(CONF_TYPE_SOL) or DEFAULT_TYPE_SOL
+        hauteur_min_tondeuse_cm = self._get_float_conf(
+            CONF_HAUTEUR_MIN_TONDEUSE_CM,
+            DEFAULT_HAUTEUR_MIN_TONDEUSE_CM,
+        )
+        hauteur_max_tondeuse_cm = self._get_float_conf(
+            CONF_HAUTEUR_MAX_TONDEUSE_CM,
+            DEFAULT_HAUTEUR_MAX_TONDEUSE_CM,
+        )
+        pas_hauteur_tondeuse_cm = self._get_float_conf(
+            CONF_PAS_HAUTEUR_TONDEUSE_CM,
+            DEFAULT_PAS_HAUTEUR_TONDEUSE_CM,
+        )
         snapshot = self.brain.compute_snapshot(
             today=date.today(),
             temperature=temperature,
@@ -140,6 +158,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             pluie_source=pluie_24h_source,
             pluie_demain_source=pluie_demain_source,
             weather_profile=weather_profile,
+            hauteur_min_tondeuse_cm=hauteur_min_tondeuse_cm,
+            hauteur_max_tondeuse_cm=hauteur_max_tondeuse_cm,
+            pas_hauteur_tondeuse_cm=pas_hauteur_tondeuse_cm,
         )
         await self._async_save_state()
 
@@ -164,6 +185,10 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "sous_phase_detail": snapshot["sous_phase_detail"],
             "sous_phase_age_days": snapshot["sous_phase_age_days"],
             "sous_phase_progression": snapshot["sous_phase_progression"],
+            "hauteur_tonte_recommandee_cm": snapshot.get("hauteur_tonte_recommandee_cm"),
+            "hauteur_tonte_min_cm": snapshot.get("hauteur_tonte_min_cm"),
+            "hauteur_tonte_max_cm": snapshot.get("hauteur_tonte_max_cm"),
+            "pas_hauteur_tondeuse_cm": snapshot.get("pas_hauteur_tondeuse_cm"),
         }
 
     @property
@@ -239,6 +264,17 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except (TypeError, ValueError):
             _LOGGER.debug("Impossible de convertir l'état de %s en float: %s", entity_id, state.state)
             return None
+
+    def _get_float_conf(self, key: str, default: float | None = None) -> float | None:
+        """Retourne une valeur de configuration numérique normalisée."""
+        value = self._get_conf(key)
+        if value is None:
+            return default
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            _LOGGER.debug("Impossible de convertir la configuration %s en float: %s", key, value)
+            return default
 
     def _get_weather_profile(self, weather_entity_id: str | None) -> dict[str, Any]:
         """Retourne les principaux attributs météo disponibles pour l'entité fournie."""
@@ -636,12 +672,20 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def get_used_entities_attributes(self) -> dict[str, Any] | None:
         """Expose un contexte compact pour les attributs visibles."""
+        pluie_demain_source = None
+        if self.data:
+            pluie_demain_source = self.data.get("pluie_demain_source")
+            if pluie_demain_source == "indisponible":
+                pluie_demain_source = "non disponible"
+        phase_dominante_source = None
+        if self.data:
+            phase_dominante_source = self.data.get("phase_dominante_source")
         attrs = {
             "configuration": {
                 "type_sol": self._get_conf(CONF_TYPE_SOL) or DEFAULT_TYPE_SOL,
             },
-            "pluie_demain_source": self.data.get("pluie_demain_source") if self.data else None,
-            "phase_dominante_source": self.data.get("phase_dominante_source") if self.data else None,
+            "pluie_demain_source": pluie_demain_source,
+            "phase_dominante_source": phase_dominante_source,
         }
         clean = {key: value for key, value in attrs.items() if value not in (None, "", {}, [])}
         configuration = clean.get("configuration")

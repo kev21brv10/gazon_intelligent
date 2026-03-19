@@ -4,6 +4,42 @@ from datetime import date
 from typing import Any
 
 
+def classify_stress_level(
+    score_hydrique: int,
+    score_stress: int,
+    water_balance: dict[str, float] | None = None,
+    temperature: float | None = None,
+    etp: float | None = None,
+) -> str:
+    """Classe le stress en niveau lisible pour piloter les garde-fous."""
+    water_balance = water_balance or {}
+    deficit_jour = water_balance.get("deficit_jour", 0.0)
+    deficit_3j = water_balance.get("deficit_3j", 0.0)
+    deficit_7j = water_balance.get("deficit_7j", 0.0)
+    temperature = temperature or 0.0
+    etp = etp or 0.0
+
+    if (
+        score_stress >= 75
+        or score_hydrique >= 80
+        or deficit_jour >= 3.0
+        or deficit_7j >= 7.0
+        or (temperature >= 34 and etp >= 5)
+    ):
+        return "fort"
+    if (
+        score_stress >= 45
+        or score_hydrique >= 50
+        or deficit_jour >= 1.5
+        or deficit_3j >= 2.5
+        or deficit_7j >= 3.5
+        or temperature >= 30
+        or etp >= 4
+    ):
+        return "modere"
+    return "leger"
+
+
 def compute_internal_scores(
     history: list[dict[str, Any]],
     today: date | None,

@@ -4,11 +4,17 @@ from homeassistant.components.number import NumberEntity
 from homeassistant.helpers.entity import EntityCategory
 
 from .const import (
+    CONF_HAUTEUR_MAX_TONDEUSE_CM,
+    CONF_HAUTEUR_MIN_TONDEUSE_CM,
+    CONF_PAS_HAUTEUR_TONDEUSE_CM,
     CONF_DEBIT_ZONE_1,
     CONF_DEBIT_ZONE_2,
     CONF_DEBIT_ZONE_3,
     CONF_DEBIT_ZONE_4,
     CONF_DEBIT_ZONE_5,
+    DEFAULT_HAUTEUR_MAX_TONDEUSE_CM,
+    DEFAULT_HAUTEUR_MIN_TONDEUSE_CM,
+    DEFAULT_PAS_HAUTEUR_TONDEUSE_CM,
     DOMAIN,
 )
 from .entity_base import GazonEntityBase
@@ -23,6 +29,33 @@ async def async_setup_entry(hass, entry, async_add_entities):
             GazonDebitZoneNumber(coordinator, 3, CONF_DEBIT_ZONE_3),
             GazonDebitZoneNumber(coordinator, 4, CONF_DEBIT_ZONE_4),
             GazonDebitZoneNumber(coordinator, 5, CONF_DEBIT_ZONE_5),
+            GazonMowerSettingNumber(
+                coordinator,
+                "Hauteur min tondeuse",
+                "hauteur_min_tondeuse_cm",
+                CONF_HAUTEUR_MIN_TONDEUSE_CM,
+                0.5,
+                15.0,
+                DEFAULT_HAUTEUR_MIN_TONDEUSE_CM,
+            ),
+            GazonMowerSettingNumber(
+                coordinator,
+                "Hauteur max tondeuse",
+                "hauteur_max_tondeuse_cm",
+                CONF_HAUTEUR_MAX_TONDEUSE_CM,
+                0.5,
+                15.0,
+                DEFAULT_HAUTEUR_MAX_TONDEUSE_CM,
+            ),
+            GazonMowerSettingNumber(
+                coordinator,
+                "Pas hauteur tondeuse",
+                "pas_hauteur_tondeuse_cm",
+                CONF_PAS_HAUTEUR_TONDEUSE_CM,
+                0.1,
+                2.0,
+                DEFAULT_PAS_HAUTEUR_TONDEUSE_CM,
+            ),
         ]
     )
 
@@ -52,6 +85,45 @@ class GazonDebitZoneNumber(GazonEntityBase, NumberEntity):
             return float(value)
         except (TypeError, ValueError):
             return 0.0
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self.coordinator.async_update_config({self._config_key: float(value)})
+
+
+class GazonMowerSettingNumber(GazonEntityBase, NumberEntity):
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_native_step = 0.1
+    _attr_native_unit_of_measurement = "cm"
+    _attr_icon = "mdi:content-cut"
+
+    def __init__(
+        self,
+        coordinator,
+        label: str,
+        suffix: str,
+        config_key: str,
+        native_min: float,
+        native_max: float,
+        default_value: float,
+    ) -> None:
+        super().__init__(coordinator)
+        self._config_key = config_key
+        self._default_value = default_value
+        self._attr_name = label
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_{suffix}"
+        self._attr_native_min_value = native_min
+        self._attr_native_max_value = native_max
+
+    @property
+    def native_value(self):
+        value = self.coordinator._get_conf(self._config_key)
+        if value is None:
+            return float(self._default_value)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(self._default_value)
 
     async def async_set_native_value(self, value: float) -> None:
         await self.coordinator.async_update_config({self._config_key: float(value)})

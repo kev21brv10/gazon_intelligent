@@ -60,6 +60,12 @@ L'entité `État de tonte` expose aussi une recommandation de hauteur de coupe a
 
 Le moteur calcule cette hauteur pour rester compatible avec la machine configurée et avec l'état réel du gazon.
 
+Les trois réglages de tondeuse sont aussi disponibles dans Home Assistant:
+
+- `Hauteur min tondeuse`
+- `Hauteur max tondeuse`
+- `Pas hauteur tondeuse`
+
 ### Boutons
 
 - `Retour au mode normal`

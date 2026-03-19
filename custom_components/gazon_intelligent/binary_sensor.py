@@ -29,7 +29,17 @@ class GazonTonteAutoriseeBinarySensor(GazonEntityBase, BinarySensorEntity):
 
     @property
     def extra_state_attributes(self):
-        return self._attrs_from_result("phase_active", "tonte_statut", "niveau_action", "fenetre_optimale", "risque_gazon")
+        return self._attrs_from_result(
+            "phase_active",
+            "tonte_statut",
+            "niveau_action",
+            "fenetre_optimale",
+            "risque_gazon",
+            "hauteur_tonte_recommandee_cm",
+            "hauteur_tonte_min_cm",
+            "hauteur_tonte_max_cm",
+            "pas_hauteur_tondeuse_cm",
+        )
 
 
 class GazonArrosageRecommandeBinarySensor(GazonEntityBase, BinarySensorEntity):

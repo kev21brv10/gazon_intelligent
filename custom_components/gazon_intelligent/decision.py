@@ -64,6 +64,9 @@ def compute_decision(
     history: list[dict[str, Any]],
     today: date | None = None,
     hour_of_day: int | None = None,
+    hauteur_min_tondeuse_cm: float | None = None,
+    hauteur_max_tondeuse_cm: float | None = None,
+    pas_hauteur_tondeuse_cm: float | None = None,
 ) -> DecisionResult:
     """Retourne un résultat typé, compatible avec le snapshot historique."""
     today = today or date.today()
@@ -75,6 +78,9 @@ def compute_decision(
         pluie_24h=pluie_24h,
         pluie_demain=pluie_demain,
         humidite=humidite,
+        hauteur_min_tondeuse_cm=hauteur_min_tondeuse_cm,
+        hauteur_max_tondeuse_cm=hauteur_max_tondeuse_cm,
+        pas_hauteur_tondeuse_cm=pas_hauteur_tondeuse_cm,
         weather_profile={},
         config={},
     )
@@ -132,6 +138,10 @@ def compute_decision(
         risque_gazon=risk_bundle["risque_gazon"],
         objectif_arrosage=objectif_mm,
         tonte_autorisee=watering_bundle["tonte_autorisee"],
+        hauteur_tonte_recommandee_cm=watering_bundle["hauteur_tonte_recommandee_cm"],
+        hauteur_tonte_min_cm=watering_bundle["hauteur_tonte_min_cm"],
+        hauteur_tonte_max_cm=watering_bundle["hauteur_tonte_max_cm"],
+        pas_hauteur_tondeuse_cm=watering_bundle["pas_hauteur_tondeuse_cm"],
         conseil_principal=watering_bundle["conseil_principal"],
         tonte_statut=watering_bundle["tonte_statut"],
         arrosage_recommande=watering_bundle["arrosage_recommande"],
@@ -176,6 +186,9 @@ def build_decision_snapshot(
     pluie_source: str = "capteur_pluie_24h",
     weather_profile: dict[str, Any] | None = None,
     soil_balance: dict[str, Any] | None = None,
+    hauteur_min_tondeuse_cm: float | None = None,
+    hauteur_max_tondeuse_cm: float | None = None,
+    pas_hauteur_tondeuse_cm: float | None = None,
 ) -> dict[str, Any]:
     """Construit le snapshot historique complet utilisé par les entités HA."""
     context = DecisionContext.from_legacy_args(
@@ -196,6 +209,9 @@ def build_decision_snapshot(
         pluie_source=pluie_source,
         weather_profile=weather_profile,
         soil_balance=soil_balance,
+        hauteur_min_tondeuse_cm=hauteur_min_tondeuse_cm,
+        hauteur_max_tondeuse_cm=hauteur_max_tondeuse_cm,
+        pas_hauteur_tondeuse_cm=pas_hauteur_tondeuse_cm,
     )
     phase_bundle = build_phase_bundle(context)
     water_bundle = build_water_bundle(context, phase_bundle)
@@ -267,6 +283,10 @@ def build_decision_snapshot(
             "score_stress": risk_bundle["scores"]["score_stress"],
             "score_tonte": risk_bundle["scores"]["score_tonte"],
             "tonte_autorisee": mowing_bundle["tonte_autorisee"],
+            "hauteur_tonte_recommandee_cm": mowing_bundle["hauteur_tonte_recommandee_cm"],
+            "hauteur_tonte_min_cm": mowing_bundle["hauteur_tonte_min_cm"],
+            "hauteur_tonte_max_cm": mowing_bundle["hauteur_tonte_max_cm"],
+            "pas_hauteur_tondeuse_cm": mowing_bundle["pas_hauteur_tondeuse_cm"],
             "tonte_statut": mowing_bundle["tonte_statut"],
             "arrosage_auto_autorise": watering_bundle["arrosage_auto_autorise"],
             "arrosage_recommande": watering_bundle["arrosage_recommande"],
@@ -304,6 +324,10 @@ def build_decision_result(context: DecisionContext) -> DecisionResult:
         risque_gazon=risk_bundle["risque_gazon"],
         objectif_arrosage=water_bundle["objectif_mm"],
         tonte_autorisee=mowing_bundle["tonte_autorisee"],
+        hauteur_tonte_recommandee_cm=mowing_bundle["hauteur_tonte_recommandee_cm"],
+        hauteur_tonte_min_cm=mowing_bundle["hauteur_tonte_min_cm"],
+        hauteur_tonte_max_cm=mowing_bundle["hauteur_tonte_max_cm"],
+        pas_hauteur_tondeuse_cm=mowing_bundle["pas_hauteur_tondeuse_cm"],
         conseil_principal=watering_bundle["conseil_principal"],
         tonte_statut=mowing_bundle["tonte_statut"],
         arrosage_recommande=watering_bundle["arrosage_recommande"],

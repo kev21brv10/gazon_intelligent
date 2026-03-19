@@ -34,8 +34,17 @@ POSSIBLE_TYPE_ARROSAGE_VALUES: tuple[str, ...] = (
     "bloque",
     "personnalise",
     "manuel_frequent",
+    "fractionne",
     "auto",
 )
+
+TYPE_ARROSAGE_DISPLAY_LABELS: dict[str, str] = {
+    "bloque": "Arrosage bloqué",
+    "personnalise": "Réglage personnalisé",
+    "manuel_frequent": "Arrosage manuel fréquent",
+    "fractionne": "Arrosage fractionné",
+    "auto": "Arrosage automatique",
+}
 
 
 @dataclass
@@ -50,6 +59,9 @@ class DecisionContext:
     pluie_demain: float | None = None
     humidite: float | None = None
     type_sol: str = DEFAULT_TYPE_SOL
+    hauteur_min_tondeuse_cm: float | None = None
+    hauteur_max_tondeuse_cm: float | None = None
+    pas_hauteur_tondeuse_cm: float | None = None
     etp_capteur: float | None = None
     humidite_sol: float | None = None
     vent: float | None = None
@@ -75,6 +87,9 @@ class DecisionContext:
         pluie_demain: float | None = None,
         humidite: float | None = None,
         type_sol: str = DEFAULT_TYPE_SOL,
+        hauteur_min_tondeuse_cm: float | None = None,
+        hauteur_max_tondeuse_cm: float | None = None,
+        pas_hauteur_tondeuse_cm: float | None = None,
         etp_capteur: float | None = None,
         humidite_sol: float | None = None,
         vent: float | None = None,
@@ -96,6 +111,9 @@ class DecisionContext:
             pluie_demain=pluie_demain,
             humidite=humidite,
             type_sol=type_sol,
+            hauteur_min_tondeuse_cm=hauteur_min_tondeuse_cm,
+            hauteur_max_tondeuse_cm=hauteur_max_tondeuse_cm,
+            pas_hauteur_tondeuse_cm=pas_hauteur_tondeuse_cm,
             etp_capteur=etp_capteur,
             humidite_sol=humidite_sol,
             vent=vent,
@@ -133,6 +151,10 @@ class DecisionResult:
     risque_gazon: str
     objectif_arrosage: float
     tonte_autorisee: bool
+    hauteur_tonte_recommandee_cm: float | None = None
+    hauteur_tonte_min_cm: float | None = None
+    hauteur_tonte_max_cm: float | None = None
+    pas_hauteur_tondeuse_cm: float | None = None
     conseil_principal: str = ""
     tonte_statut: str = "a_surveiller"
     arrosage_recommande: bool = False
@@ -185,6 +207,25 @@ class DecisionResult:
         """Retourne les valeurs possibles pour un attribut métier donné."""
         return self.possible_values.get(key)
 
+    def display_label_for(self, key: str) -> str:
+        """Retourne un libellé utilisateur lisible pour une valeur métier."""
+        value = getattr(self, key, None)
+        if value is None:
+            extra = getattr(self, "extra", None)
+            if isinstance(extra, dict):
+                value = extra.get(key)
+        if key == "type_arrosage" and value is not None:
+            return TYPE_ARROSAGE_DISPLAY_LABELS.get(str(value), str(value))
+        if value is None:
+            return ""
+        return str(value)
+
+    def possible_display_values_for(self, key: str) -> tuple[str, ...] | None:
+        """Retourne les valeurs possibles sous forme lisible par l'utilisateur."""
+        if key == "type_arrosage":
+            return tuple(TYPE_ARROSAGE_DISPLAY_LABELS.get(value, value) for value in POSSIBLE_TYPE_ARROSAGE_VALUES)
+        return self.possible_values_for(key)
+
     def to_snapshot(self) -> dict[str, Any]:
         """Sérialise le résultat au format attendu par les entités."""
         payload: dict[str, Any] = {
@@ -199,6 +240,10 @@ class DecisionResult:
             "objectif_mm": self.objectif_arrosage,
             "objectif_arrosage": self.objectif_arrosage,
             "tonte_autorisee": self.tonte_autorisee,
+            "hauteur_tonte_recommandee_cm": self.hauteur_tonte_recommandee_cm,
+            "hauteur_tonte_min_cm": self.hauteur_tonte_min_cm,
+            "hauteur_tonte_max_cm": self.hauteur_tonte_max_cm,
+            "pas_hauteur_tondeuse_cm": self.pas_hauteur_tondeuse_cm,
             "tonte_statut": self.tonte_statut,
             "arrosage_recommande": self.arrosage_recommande,
             "arrosage_auto_autorise": self.arrosage_auto_autorise,

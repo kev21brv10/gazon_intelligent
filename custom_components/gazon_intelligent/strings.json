@@ -19,8 +19,8 @@
         }
       },
       "sensors": {
-        "title": "Capteurs météo",
-        "description": "Renseignez ici l'entité météo et les capteurs complémentaires si vous les avez. Certaines données peuvent venir d'une entité weather.* si elle les expose, d'autres sont calculées automatiquement si vous ne les renseignez pas.",
+        "title": "Options avancées",
+        "description": "Renseignez ici l'entité météo, les capteurs complémentaires et les réglages de tondeuse si vous les avez. Certaines données peuvent venir d'une entité weather.* si elle les expose, d'autres sont calculées automatiquement si vous ne les renseignez pas.",
         "data": {
           "entite_meteo": "Météo (obligatoire)",
           "capteur_pluie_24h": "Pluie 24h (optionnel, la météo peut ne pas fournir la donnée)",
@@ -29,6 +29,9 @@
           "capteur_etp": "ETP du jour (optionnel, calcul automatique si non renseigné)",
           "capteur_humidite": "Humidité (optionnel si la météo expose la donnée)",
           "capteur_hauteur_gazon": "Hauteur du gazon (recommandé si disponible)",
+          "hauteur_min_tondeuse_cm": "Hauteur minimale tondeuse (cm)",
+          "hauteur_max_tondeuse_cm": "Hauteur maximale tondeuse (cm)",
+          "pas_hauteur_tondeuse_cm": "Pas de réglage tondeuse (cm)",
           "capteur_retour_arrosage": "Retour arrosage (optionnel, calcul automatique ou estimation via l'historique des zones)",
           "capteur_humidite_sol": "Humidité sol (%) (recommandé si disponible)",
           "capteur_vent": "Vent (optionnel si la météo expose la donnée)",
@@ -43,8 +46,8 @@
   "options": {
     "step": {
       "user": {
-        "title": "Options avancées dans l'UI",
-        "description": "Renseignez ici l'entité météo et les capteurs complémentaires si vous les avez. Certaines données peuvent venir d'une entité weather.* si elle les expose, d'autres sont calculées automatiquement si vous ne les renseignez pas.",
+        "title": "Options avancées",
+        "description": "Renseignez ici l'entité météo, les capteurs complémentaires et les réglages de tondeuse si vous les avez. Certaines données peuvent venir d'une entité weather.* si elle les expose, d'autres sont calculées automatiquement si vous ne les renseignez pas.",
         "data": {
           "entite_meteo": "Météo (obligatoire)",
           "capteur_pluie_24h": "Pluie 24h (optionnel, la météo peut ne pas fournir la donnée)",
@@ -53,6 +56,9 @@
           "capteur_etp": "ETP du jour (optionnel, calcul automatique si non renseigné)",
           "capteur_humidite": "Humidité (optionnel si la météo expose la donnée)",
           "capteur_hauteur_gazon": "Hauteur du gazon (recommandé si disponible)",
+          "hauteur_min_tondeuse_cm": "Hauteur minimale tondeuse (cm)",
+          "hauteur_max_tondeuse_cm": "Hauteur maximale tondeuse (cm)",
+          "pas_hauteur_tondeuse_cm": "Pas de réglage tondeuse (cm)",
           "capteur_retour_arrosage": "Retour arrosage (optionnel, calcul automatique ou estimation via l'historique des zones)",
           "capteur_humidite_sol": "Humidité sol (%) (recommandé si disponible)",
           "capteur_vent": "Vent (optionnel si la météo expose la donnée)",

@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from .decision_models import DecisionContext
-from .guidance import compute_objectif_mm
+from .guidance import compute_objectif_mm, is_fertilization_window_open
+from .scores import classify_stress_level
 from .water import compute_advanced_context, compute_etp, compute_water_balance
 
 
@@ -55,10 +56,12 @@ def build_water_bundle(
         phase_dominante=phase_bundle["phase_dominante"],
         sous_phase=phase_bundle["sous_phase"],
         water_balance=balance_snapshot,
+        today=context.today,
         pluie_demain=context.pluie_demain,
         humidite=context.humidite,
         temperature=context.temperature,
         etp=etp,
+        type_sol=context.type_sol,
     )
     return {
         "etp": etp,
@@ -74,6 +77,54 @@ def _passage_spacing_text(passages: int) -> str:
     if passages == 2:
         return "en 2 passages courts espacés de 20 à 30 min"
     return f"en {passages} passages courts espacés de 20 min"
+
+
+def _watering_needed_text() -> str:
+    return "Éviter tout arrosage inutile."
+
+
+def _soil_fractionation_passages(
+    phase_dominante: str,
+    type_sol: str,
+    objectif_mm: float,
+    stress_level: str,
+) -> int:
+    soil_profile = (type_sol or "limoneux").strip().lower()
+    if phase_dominante == "Sursemis":
+        return 3 if objectif_mm >= 2.0 else 2
+    if phase_dominante in {"Fertilisation", "Biostimulant"}:
+        if soil_profile == "argileux" or stress_level == "fort" or objectif_mm >= 1.5:
+            return 2
+        return 1
+    if soil_profile == "argileux" and objectif_mm >= 2.5:
+        return 2
+    if stress_level == "fort" and objectif_mm >= 2.0:
+        return 2
+    return 1
+
+
+def _watering_style_text(
+    phase_dominante: str,
+    type_sol: str,
+    objectif_mm: float,
+    stress_level: str,
+    passage_count: int | None = None,
+) -> str:
+    passages = passage_count or _soil_fractionation_passages(phase_dominante, type_sol, objectif_mm, stress_level)
+    soil_profile = (type_sol or "limoneux").strip().lower()
+    if passages <= 1:
+        if soil_profile == "sableux":
+            return "en un passage profond tôt le matin"
+        return "en un passage profond tôt le matin"
+    if passages == 2:
+        return "en 2 passages courts espacés de 20 à 30 min"
+    return "en 3 passages courts espacés de 20 à 30 min"
+
+
+def _watering_amount_text(mm: float) -> str:
+    if mm <= 0:
+        return "Aucun arrosage nécessaire."
+    return f"{mm:.1f} mm"
 
 
 def build_watering_bundle(
@@ -111,6 +162,21 @@ def build_watering_bundle(
     humidite = context.humidite or 0.0
     temperature = context.temperature or 0.0
     etp = water_bundle["etp"] or 0.0
+    stress_level = classify_stress_level(
+        score_hydrique=int(risk_bundle["scores"]["score_hydrique"]),
+        score_stress=int(score_stress),
+        water_balance=water_balance,
+        temperature=temperature,
+        etp=etp,
+    )
+    fertilization_allowed = is_fertilization_window_open(
+        today=context.today,
+        temperature=temperature,
+        humidite=humidite,
+        etp=etp,
+        water_balance=water_balance,
+    )
+    soil_style = context.type_sol
 
     pluie_significative = pluie_24h >= 4 or pluie_demain >= 4
     pluie_compensatrice = objectif_mm > 0 and pluie_demain >= max(2.0, objectif_mm * 0.8)
@@ -170,13 +236,45 @@ def build_watering_bundle(
             },
         }
 
+    if phase_dominante in {"Fertilisation", "Biostimulant"} and not fertilization_allowed:
+        return {
+            "tonte_autorisee": tonte_ok,
+            "tonte_statut": mowing_bundle["tonte_statut"],
+            "arrosage_auto_autorise": False,
+            "arrosage_recommande": False,
+            "type_arrosage": "bloque",
+            "arrosage_conseille": "personnalise",
+            "conseil_principal": (
+                f"{phase_dominante}: reporte l'application, la fenêtre est trop chaude ou trop sèche."
+            ),
+            "action_recommandee": "Attends un créneau plus frais et moins stressant.",
+            "action_a_eviter": "Fertiliser sous chaleur ou stress hydrique.",
+            "raison_decision": (
+                f"{phase_dominante} bloqué: bilan={bilan_hydrique_mm:.1f} mm, "
+                f"stress={stress_level}, température={temperature:.1f}°C, ETP={etp:.1f} mm."
+            ),
+            "decision_resume": {
+                "faire": False,
+                "action": "surveillance",
+                "moment": "attendre",
+                "objectif_mm": 0.0,
+                "type_arrosage": "bloque",
+                "niveau_action": "surveiller",
+                "risque_gazon": risque_gazon,
+            },
+            "niveau_action": "surveiller",
+            "fenetre_optimale": "attendre",
+            "risque_gazon": risque_gazon,
+            "prochaine_reevaluation": prochaine_reevaluation,
+        }
+
     if phase_dominante == "Sursemis":
         passages = 3 if objectif_mm >= 2 else 2
         passage_spacing = _passage_spacing_text(passages)
         if objectif_mm <= 0:
-            conseil_principal = "Le sursemis n'a pas besoin d'arrosage immédiat."
+            conseil_principal = "Aucun arrosage nécessaire pour le sursemis."
             action_recommandee = "Surveille l'humidité et réévalue au prochain créneau."
-            action_a_eviter = "Appliquer 0.0 mm."
+            action_a_eviter = _watering_needed_text()
             return {
                 "tonte_autorisee": False,
                 "tonte_statut": "interdite",
@@ -209,15 +307,19 @@ def build_watering_bundle(
             }
         if pluie_demain >= 2 and bilan_hydrique_mm >= -0.5:
             conseil_principal = "Réduis ou reporte l'arrosage: la pluie de demain peut compenser une grande partie du déficit."
-            action_recommandee = f"Réduis l'apport à {max(0.0, round(objectif_mm * 0.4, 1))} mm maximum aujourd'hui."
+            reduction_mm = round(objectif_mm * 0.4, 1)
+            if reduction_mm > 0:
+                action_recommandee = f"Réduis l'apport à {reduction_mm:.1f} mm maximum aujourd'hui."
+            else:
+                action_recommandee = _watering_needed_text()
             action_a_eviter = "Lancer un cycle complet avant la pluie."
         elif humidite_haute:
             conseil_principal = "Attends un léger ressuyage avant d'arroser."
-            action_recommandee = f"Programme {objectif_mm} mm en fin de nuit si l'humidité baisse."
+            action_recommandee = f"Programme {objectif_mm:.1f} mm en fin de nuit si l'humidité baisse."
             action_a_eviter = "Arroser immédiatement sur pelouse saturée."
         else:
             conseil_principal = f"Arroser {prochain_creneau} {passage_spacing}."
-            action_recommandee = f"Appliquer {objectif_mm} mm fractionnés ({passages}x, 20 à 30 min entre les passages)."
+            action_recommandee = f"Appliquer {objectif_mm:.1f} mm fractionnés ({passages}x, 20 à 30 min entre les passages)."
             action_a_eviter = "Tondre avant levée complète."
         return {
             "tonte_autorisee": False,
@@ -247,46 +349,56 @@ def build_watering_bundle(
     if not recommande:
         conseil_principal = f"Phase {phase_dominante}: n'arrose pas pour l'instant."
         action_recommandee = "Surveille les capteurs et l'évolution météo."
-        action_a_eviter = "Arroser ou tondre sans besoin."
+        action_a_eviter = "Éviter tout arrosage inutile."
         type_arrosage = "personnalise"
         arrosage_recommande = False
         arrosage_auto_autorise = False
         arrosage_conseille = "personnalise"
     elif phase_dominante == "Fertilisation":
-        conseil_principal = "Fertilisation active: arrose légèrement pour activer l'apport."
-        action_recommandee = f"Applique {objectif_mm} mm en 1 à 2 passages."
+        passages = _soil_fractionation_passages(phase_dominante, soil_style, objectif_mm, stress_level)
+        style_text = _watering_style_text(phase_dominante, soil_style, objectif_mm, stress_level, passages)
+        conseil_principal = "Fertilisation active: arrose légèrement, de préférence le matin."
+        action_recommandee = f"Applique {objectif_mm:.1f} mm {style_text} pour activer l'apport."
         action_a_eviter = "Tondre sur sol humide."
         type_arrosage = "auto"
         arrosage_recommande = True
         arrosage_auto_autorise = auto_ok
         arrosage_conseille = "auto" if phase_dominante == "Normal" else "personnalise"
     elif phase_dominante == "Scarification":
+        passages = _soil_fractionation_passages(phase_dominante, soil_style, objectif_mm, stress_level)
+        style_text = _watering_style_text(phase_dominante, soil_style, objectif_mm, stress_level, passages)
         conseil_principal = "Scarification: garde une humidité stable sans détremper."
-        action_recommandee = f"Applique {objectif_mm} mm en apports courts."
+        action_recommandee = f"Applique {objectif_mm:.1f} mm {style_text}."
         action_a_eviter = "Saturer le sol."
         type_arrosage = "auto"
         arrosage_recommande = True
         arrosage_auto_autorise = auto_ok
         arrosage_conseille = "personnalise"
     elif phase_dominante == "Agent Mouillant":
+        passages = _soil_fractionation_passages(phase_dominante, soil_style, objectif_mm, stress_level)
+        style_text = _watering_style_text(phase_dominante, soil_style, objectif_mm, stress_level, passages)
         conseil_principal = "Agent mouillant: fais pénétrer l'eau plus en profondeur."
-        action_recommandee = f"Applique {objectif_mm} mm en cycle allongé."
+        action_recommandee = f"Applique {objectif_mm:.1f} mm {style_text}."
         action_a_eviter = "Arroser trop vite."
         type_arrosage = "auto"
         arrosage_recommande = True
         arrosage_auto_autorise = auto_ok
         arrosage_conseille = "personnalise"
     elif phase_dominante == "Biostimulant":
+        passages = _soil_fractionation_passages(phase_dominante, soil_style, objectif_mm, stress_level)
+        style_text = _watering_style_text(phase_dominante, soil_style, objectif_mm, stress_level, passages)
         conseil_principal = "Biostimulant: garde un niveau hydrique modéré."
-        action_recommandee = f"Applique {objectif_mm} mm en un passage."
+        action_recommandee = f"Applique {objectif_mm:.1f} mm {style_text}."
         action_a_eviter = "Détremper le sol."
         type_arrosage = "auto"
         arrosage_recommande = True
         arrosage_auto_autorise = auto_ok
         arrosage_conseille = "personnalise"
     else:
+        passages = _soil_fractionation_passages(phase_dominante, soil_style, objectif_mm, stress_level)
+        style_text = _watering_style_text(phase_dominante, soil_style, objectif_mm, stress_level, passages)
         conseil_principal = f"Phase {phase_dominante}: arrose de façon maîtrisée {prochain_creneau}."
-        action_recommandee = f"Applique {objectif_mm} mm en tenant compte de l'humidité actuelle."
+        action_recommandee = f"Applique {objectif_mm:.1f} mm {style_text} en tenant compte de l'humidité actuelle."
         action_a_eviter = "Arroser en pleine journée."
         type_arrosage = "auto" if auto_ok else "personnalise"
         arrosage_recommande = True
@@ -302,24 +414,32 @@ def build_watering_bundle(
             else:
                 conseil_principal = "N'arrose pas pour le moment."
                 action_recommandee = "Réévalue au prochain cycle météo."
-                action_a_eviter = "Arroser par réflexe."
+                action_a_eviter = "Éviter tout arrosage inutile."
         else:
             if pluie_compensatrice:
+                reduction_mm = round(objectif_mm * 0.4, 1)
                 conseil_principal = "Réduis ou reporte l'arrosage: la pluie de demain peut compenser une grande partie du déficit."
-                action_recommandee = f"Réduis l'apport à {max(0.0, round(objectif_mm * 0.4, 1))} mm maximum aujourd'hui."
+                if reduction_mm >= 0.5:
+                    action_recommandee = f"Réduis l'apport à {reduction_mm:.1f} mm maximum aujourd'hui."
+                else:
+                    action_recommandee = _watering_needed_text()
                 action_a_eviter = "Lancer un cycle complet avant la pluie."
             elif stress_thermique:
-                conseil_principal = f"Arrose {prochain_creneau} en 2 passages courts espacés de 20 à 30 min."
-                action_recommandee = f"Appliquer {objectif_mm} mm fractionnés (2x, 20 à 30 min entre les passages)."
+                passages = _soil_fractionation_passages(phase_dominante, soil_style, objectif_mm, stress_level)
+                style_text = _watering_style_text(phase_dominante, soil_style, objectif_mm, stress_level, passages)
+                conseil_principal = f"Arrose {prochain_creneau} en privilégiant la recharge de la réserve."
+                action_recommandee = f"Applique {objectif_mm:.1f} mm {style_text}."
                 action_a_eviter = "Arroser entre 11h et 18h."
             elif humidite_haute:
                 conseil_principal = "Attends un léger ressuyage avant d'arroser."
-                action_recommandee = f"Programme {objectif_mm} mm en fin de nuit si l'humidité baisse."
+                action_recommandee = "Reporte l'arrosage au prochain créneau sec."
                 action_a_eviter = "Arroser immédiatement sur pelouse saturée."
             else:
-                conseil_principal = f"Arrose {prochain_creneau}: manque d'eau estimé à {objectif_mm} mm."
-                action_recommandee = f"Applique {objectif_mm} mm sur les zones actives."
-                action_a_eviter = "Arroser en pleine journée."
+                passages = _soil_fractionation_passages(phase_dominante, soil_style, objectif_mm, stress_level)
+                style_text = _watering_style_text(phase_dominante, soil_style, objectif_mm, stress_level, passages)
+                conseil_principal = f"Arrose {prochain_creneau}: recharge la réserve sans micro-apports."
+                action_recommandee = f"Applique {objectif_mm:.1f} mm {style_text}."
+                action_a_eviter = "Arroser en pleine journée ou multiplier les petits cycles."
 
     decision_resume = {
         "faire": arrosage_recommande,

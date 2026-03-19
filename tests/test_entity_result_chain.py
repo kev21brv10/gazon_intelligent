@@ -92,6 +92,10 @@ def _make_result():
         risque_gazon="eleve",
         objectif_arrosage=1.2,
         tonte_autorisee=True,
+        hauteur_tonte_recommandee_cm=7.0,
+        hauteur_tonte_min_cm=3.0,
+        hauteur_tonte_max_cm=8.0,
+        pas_hauteur_tondeuse_cm=0.5,
         conseil_principal="Arroser demain matin.",
         tonte_statut="autorisee",
         arrosage_recommande=True,
@@ -139,6 +143,7 @@ class DecisionResultChainTests(unittest.TestCase):
         phase_sensor = sensor.GazonPhaseActiveSensor(coordinator)
         sous_phase_sensor = sensor.GazonSousPhaseSensor(coordinator)
         objectif_sensor = sensor.GazonObjectifMmSensor(coordinator)
+        type_arrosage_sensor = sensor.GazonTypeArrosageSensor(coordinator)
         tonte_sensor = binary_sensor.GazonTonteAutoriseeBinarySensor(coordinator)
         arrosage_sensor = binary_sensor.GazonArrosageRecommandeBinarySensor(coordinator)
 
@@ -149,8 +154,26 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(sous_phase_sensor.native_value, "Enracinement")
         self.assertEqual(sous_phase_sensor.extra_state_attributes["sous_phase_age_days"], 12)
         self.assertEqual(objectif_sensor.native_value, 1.2)
+        self.assertEqual(type_arrosage_sensor.native_value, "Arrosage fractionné")
+        self.assertEqual(
+            type_arrosage_sensor.extra_state_attributes["possible_values"],
+            [
+                "Arrosage bloqué",
+                "Réglage personnalisé",
+                "Arrosage manuel fréquent",
+                "Arrosage fractionné",
+                "Arrosage automatique",
+            ],
+        )
         self.assertTrue(tonte_sensor.is_on)
         self.assertTrue(arrosage_sensor.is_on)
+        self.assertEqual(
+            tonte_sensor.extra_state_attributes["hauteur_tonte_recommandee_cm"],
+            7.0,
+        )
+        self.assertEqual(tonte_sensor.extra_state_attributes["hauteur_tonte_min_cm"], 3.0)
+        self.assertEqual(tonte_sensor.extra_state_attributes["hauteur_tonte_max_cm"], 8.0)
+        self.assertEqual(tonte_sensor.extra_state_attributes["pas_hauteur_tondeuse_cm"], 0.5)
         self.assertIn("possible_values", phase_sensor.extra_state_attributes)
         self.assertIn("possible_values", sous_phase_sensor.extra_state_attributes)
 
@@ -195,6 +218,19 @@ class DecisionResultChainTests(unittest.TestCase):
         result = sensor.GazonSousPhaseSensor(coordinator).native_value
 
         self.assertEqual(result, "Enracinement")
+
+    def test_pluie_demain_source_is_normalized_when_legacy_snapshot_uses_indisponible(self) -> None:
+        result = _make_result()
+        result.extra["pluie_demain_source"] = "indisponible"
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={"pluie_demain_source": "indisponible"},
+            result=result,
+        )
+
+        phase_sensor = sensor.GazonPhaseActiveSensor(coordinator)
+
+        self.assertEqual(phase_sensor.extra_state_attributes["pluie_demain_source"], "non disponible")
 
 
 if __name__ == "__main__":

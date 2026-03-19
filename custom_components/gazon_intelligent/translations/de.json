@@ -20,8 +20,8 @@
         }
       },
       "sensors": {
-        "title": "Wettersensoren",
-        "description": "Trage hier die Wetterentität und zusätzliche Sensoren ein, falls du sie hast. Einige Werte können von einer weather.*-Entität kommen, wenn sie sie bereitstellt, andere werden automatisch berechnet, wenn du sie leer lässt.",
+        "title": "Erweiterte Optionen",
+        "description": "Trage hier die Wetterentität, zusätzliche Sensoren und Mähereinstellungen ein, falls du sie hast. Einige Werte können von einer weather.*-Entität kommen, wenn sie sie bereitstellt, andere werden automatisch berechnet, wenn du sie leer lässt.",
         "data": {
           "entite_meteo": "Wetter (erforderlich)",
           "capteur_pluie_24h": "Regen 24 h (optional, Wetter liefert den Wert nicht immer)",
@@ -30,6 +30,9 @@
           "capteur_etp": "ETP des Tages (optional, automatische Berechnung wenn leer)",
           "capteur_humidite": "Feuchtigkeit (optional, wenn Wetter den Wert liefert)",
           "capteur_hauteur_gazon": "Rasenhöhe (empfohlen, wenn verfügbar)",
+          "hauteur_min_tondeuse_cm": "Minimale Mäherhöhe (cm)",
+          "hauteur_max_tondeuse_cm": "Maximale Mäherhöhe (cm)",
+          "pas_hauteur_tondeuse_cm": "Mäher-Schrittweite (cm)",
           "capteur_retour_arrosage": "Rücklaufbewässerung (optional, automatisch oder aus der Zonenhistorie geschätzt)",
           "capteur_humidite_sol": "Bodenfeuchte (%) (empfohlen, wenn verfügbar)",
           "capteur_vent": "Wind (optional, wenn Wetter den Wert liefert)",
@@ -44,8 +47,8 @@
   "options": {
     "step": {
       "user": {
-        "title": "Erweiterte Optionen in der UI",
-        "description": "Trage hier die Wetterentität und zusätzliche Sensoren ein, falls du sie hast. Einige Werte können von einer weather.*-Entität kommen, wenn sie sie bereitstellt, andere werden automatisch berechnet, wenn du sie leer lässt.",
+        "title": "Erweiterte Optionen",
+        "description": "Trage hier die Wetterentität, zusätzliche Sensoren und Mähereinstellungen ein, falls du sie hast. Einige Werte können von einer weather.*-Entität kommen, wenn sie sie bereitstellt, andere werden automatisch berechnet, wenn du sie leer lässt.",
         "data": {
           "entite_meteo": "Wetter (erforderlich)",
           "capteur_pluie_24h": "Regen 24 h (optional, Wetter liefert den Wert nicht immer)",
@@ -54,6 +57,9 @@
           "capteur_etp": "ETP des Tages (optional, automatische Berechnung wenn leer)",
           "capteur_humidite": "Feuchtigkeit (optional, wenn Wetter den Wert liefert)",
           "capteur_hauteur_gazon": "Rasenhöhe (empfohlen, wenn verfügbar)",
+          "hauteur_min_tondeuse_cm": "Minimale Mäherhöhe (cm)",
+          "hauteur_max_tondeuse_cm": "Maximale Mäherhöhe (cm)",
+          "pas_hauteur_tondeuse_cm": "Mäher-Schrittweite (cm)",
           "capteur_retour_arrosage": "Rücklaufbewässerung (optional, automatisch oder aus der Zonenhistorie geschätzt)",
           "capteur_humidite_sol": "Bodenfeuchte (%) (empfohlen, wenn verfügbar)",
           "capteur_vent": "Wind (optional, wenn Wetter den Wert liefert)",

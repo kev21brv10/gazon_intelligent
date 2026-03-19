@@ -28,6 +28,12 @@ from .const import (
     CONF_CAPTEUR_ROSEE,
     CONF_CAPTEUR_HAUTEUR_GAZON,
     CONF_CAPTEUR_RETOUR_ARROSAGE,
+    CONF_HAUTEUR_MAX_TONDEUSE_CM,
+    CONF_HAUTEUR_MIN_TONDEUSE_CM,
+    CONF_PAS_HAUTEUR_TONDEUSE_CM,
+    DEFAULT_HAUTEUR_MAX_TONDEUSE_CM,
+    DEFAULT_HAUTEUR_MIN_TONDEUSE_CM,
+    DEFAULT_PAS_HAUTEUR_TONDEUSE_CM,
     CONF_TYPE_SOL,
     DEFAULT_TYPE_SOL,
     TYPES_SOL,
@@ -108,6 +114,24 @@ def build_advanced_schema(current: dict | None = None):
             ),
             vol.Optional(CONF_CAPTEUR_HAUTEUR_GAZON, default=_d(current.get(CONF_CAPTEUR_HAUTEUR_GAZON))): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(
+                CONF_HAUTEUR_MIN_TONDEUSE_CM,
+                default=_d(current.get(CONF_HAUTEUR_MIN_TONDEUSE_CM, DEFAULT_HAUTEUR_MIN_TONDEUSE_CM)),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0.5, max=15.0, step=0.1, unit_of_measurement="cm")
+            ),
+            vol.Optional(
+                CONF_HAUTEUR_MAX_TONDEUSE_CM,
+                default=_d(current.get(CONF_HAUTEUR_MAX_TONDEUSE_CM, DEFAULT_HAUTEUR_MAX_TONDEUSE_CM)),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0.5, max=15.0, step=0.1, unit_of_measurement="cm")
+            ),
+            vol.Optional(
+                CONF_PAS_HAUTEUR_TONDEUSE_CM,
+                default=_d(current.get(CONF_PAS_HAUTEUR_TONDEUSE_CM, DEFAULT_PAS_HAUTEUR_TONDEUSE_CM)),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0.1, max=2.0, step=0.1, unit_of_measurement="cm")
             ),
             vol.Optional(CONF_CAPTEUR_RETOUR_ARROSAGE, default=_d(current.get(CONF_CAPTEUR_RETOUR_ARROSAGE))): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="sensor")

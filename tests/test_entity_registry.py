@@ -130,6 +130,33 @@ class EntityRegistryTests(unittest.TestCase):
             number.GazonDebitZoneNumber(coordinator, 3, "debit_zone_3"),
             number.GazonDebitZoneNumber(coordinator, 4, "debit_zone_4"),
             number.GazonDebitZoneNumber(coordinator, 5, "debit_zone_5"),
+            number.GazonMowerSettingNumber(
+                coordinator,
+                "Hauteur min tondeuse",
+                "hauteur_min_tondeuse_cm",
+                "hauteur_min_tondeuse_cm",
+                0.5,
+                15.0,
+                3.0,
+            ),
+            number.GazonMowerSettingNumber(
+                coordinator,
+                "Hauteur max tondeuse",
+                "hauteur_max_tondeuse_cm",
+                "hauteur_max_tondeuse_cm",
+                0.5,
+                15.0,
+                8.0,
+            ),
+            number.GazonMowerSettingNumber(
+                coordinator,
+                "Pas hauteur tondeuse",
+                "pas_hauteur_tondeuse_cm",
+                "pas_hauteur_tondeuse_cm",
+                0.1,
+                2.0,
+                0.5,
+            ),
         ]
         suffixes = {
             entity._attr_unique_id.split("_", 1)[1]  # noqa: SLF001
@@ -140,6 +167,7 @@ class EntityRegistryTests(unittest.TestCase):
 
     def test_config_numbers_do_not_expose_decision_attributes(self) -> None:
         self.assertNotIn("extra_state_attributes", number.GazonDebitZoneNumber.__dict__)
+        self.assertNotIn("extra_state_attributes", number.GazonMowerSettingNumber.__dict__)
 
     def test_mode_select_remains_config_only(self) -> None:
         self.assertNotIn("extra_state_attributes", select.GazonModeSelect.__dict__)

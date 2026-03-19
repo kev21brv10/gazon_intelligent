@@ -20,8 +20,8 @@
         }
       },
       "sensors": {
-        "title": "Weather sensors",
-        "description": "Fill in the weather entity and extra sensors if you have them. Some values can come from a weather.* entity if it exposes them, while others are calculated automatically if you leave them empty.",
+        "title": "Advanced options",
+        "description": "Fill in the weather entity, extra sensors and mower settings if you have them. Some values can come from a weather.* entity if it exposes them, while others are calculated automatically if you leave them empty.",
         "data": {
           "entite_meteo": "Weather (required)",
           "capteur_pluie_24h": "24h rain (optional, weather may not provide the value)",
@@ -30,6 +30,9 @@
           "capteur_etp": "Daily ETP (optional, automatic if not provided)",
           "capteur_humidite": "Humidity (optional if weather exposes the value)",
           "capteur_hauteur_gazon": "Grass height (recommended if available)",
+          "hauteur_min_tondeuse_cm": "Minimum mower height (cm)",
+          "hauteur_max_tondeuse_cm": "Maximum mower height (cm)",
+          "pas_hauteur_tondeuse_cm": "Mower height step (cm)",
           "capteur_retour_arrosage": "Watering return (optional, automatic or estimated from zone history)",
           "capteur_humidite_sol": "Soil humidity (%) (recommended if available)",
           "capteur_vent": "Wind (optional if weather exposes the value)",
@@ -44,8 +47,8 @@
   "options": {
     "step": {
       "user": {
-        "title": "Advanced options in the UI",
-        "description": "Fill in the weather entity and extra sensors if you have them. Some values can come from a weather.* entity if it exposes them, while others are calculated automatically if you leave them empty.",
+        "title": "Advanced options",
+        "description": "Fill in the weather entity, extra sensors and mower settings if you have them. Some values can come from a weather.* entity if it exposes them, while others are calculated automatically if you leave them empty.",
         "data": {
           "entite_meteo": "Weather (required)",
           "capteur_pluie_24h": "24h rain (optional, weather may not provide the value)",
@@ -54,6 +57,9 @@
           "capteur_etp": "Daily ETP (optional, automatic if not provided)",
           "capteur_humidite": "Humidity (optional if weather exposes the value)",
           "capteur_hauteur_gazon": "Grass height (recommended if available)",
+          "hauteur_min_tondeuse_cm": "Minimum mower height (cm)",
+          "hauteur_max_tondeuse_cm": "Maximum mower height (cm)",
+          "pas_hauteur_tondeuse_cm": "Mower height step (cm)",
           "capteur_retour_arrosage": "Watering return (optional, automatic or estimated from zone history)",
           "capteur_humidite_sol": "Soil humidity (%) (recommended if available)",
           "capteur_vent": "Wind (optional if weather exposes the value)",

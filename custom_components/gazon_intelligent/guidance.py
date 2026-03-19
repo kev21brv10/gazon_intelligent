@@ -16,11 +16,14 @@ def compute_objectif_mm(
     phase_dominante: str,
     sous_phase: str,
     water_balance: dict[str, float],
+    today: date | None = None,
     pluie_demain: float | None = None,
     humidite: float | None = None,
     temperature: float | None = None,
     etp: float | None = None,
+    type_sol: str = "limoneux",
 ) -> float:
+    today = today or date.today()
     if phase_dominante in ("Traitement", "Hivernage"):
         return 0.0
 
@@ -28,6 +31,7 @@ def compute_objectif_mm(
     humidite = humidite or 0.0
     temperature = temperature or 0.0
     etp = etp or 0.0
+    soil_profile = (type_sol or "limoneux").strip().lower()
 
     bilan_hydrique_mm = water_balance.get("bilan_hydrique_mm", 0.0)
     deficit_jour = water_balance.get("deficit_jour", 0.0)
@@ -66,6 +70,19 @@ def compute_objectif_mm(
         objectif = (besoin_court * 0.85) + (besoin_tendance * 0.12)
         minimum, maximum = 0.0, 5.0
 
+    if phase_dominante in {"Fertilisation", "Biostimulant"} and not is_fertilization_window_open(
+        today=today,
+        temperature=temperature,
+        humidite=humidite,
+        etp=etp,
+        water_balance=water_balance,
+    ):
+        return 0.0
+
+    if phase_dominante not in {"Traitement", "Hivernage"}:
+        soil_factor = {"sableux": 1.08, "limoneux": 1.0, "argileux": 0.92}.get(soil_profile, 1.0)
+        objectif *= soil_factor
+
     if temperature >= 30 and etp >= 4:
         objectif += 0.4
     if humidite >= 85 and phase_dominante == "Normal":
@@ -75,9 +92,37 @@ def compute_objectif_mm(
 
     if bilan_hydrique_mm > 0.5 and phase_dominante == "Normal":
         return 0.0
+    if phase_dominante == "Normal" and objectif < 1.2:
+        return 0.0
 
     objectif = max(minimum, min(maximum, objectif))
     return round(max(0.0, objectif), 1)
+
+
+def is_fertilization_window_open(
+    today: date,
+    temperature: float | None,
+    humidite: float | None,
+    etp: float | None,
+    water_balance: dict[str, float] | None = None,
+) -> bool:
+    """Indique si la fertilisation peut raisonnablement être activée."""
+    water_balance = water_balance or {}
+    temperature = temperature or 0.0
+    humidite = humidite or 0.0
+    etp = etp or 0.0
+    bilan_hydrique_mm = water_balance.get("bilan_hydrique_mm", 0.0)
+    mois = today.month
+
+    if mois in {12, 1, 2}:
+        return False
+    if temperature >= 31 or etp >= 4.5 or humidite <= 35:
+        return False
+    if bilan_hydrique_mm <= -2.0:
+        return False
+    if mois in {6, 7, 8}:
+        return temperature < 27 and etp < 4.0 and humidite >= 40 and bilan_hydrique_mm >= -1.0
+    return mois in {3, 4, 5, 9, 10, 11}
 
 
 def compute_jours_restants_for(
