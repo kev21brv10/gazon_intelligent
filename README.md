@@ -7,7 +7,7 @@
 ![Version](https://img.shields.io/github/v/release/kev21brv10/gazon_intelligent?color=green)
 ![HACS](https://img.shields.io/badge/HACS-Custom-orange)
 ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2026.3.2+-blue)
-![License](https://img.shields.io/github/license/kev21brv10/gazon_intelligent)
+![License](https://img.shields.io/github/license/kev21brv10/gazon_intelligent?style=flat-square)
 
 > Un système autonome qui décide pour ton gazon à ta place.
 
