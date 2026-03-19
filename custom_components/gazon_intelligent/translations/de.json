@@ -18,6 +18,23 @@
           "debit_zone_5": "Durchfluss Zone 5 (mm/h, 0 wenn ungenutzt)",
           "type_sol": "Bodentyp (erforderlich)"
         }
+      },
+      "sensors": {
+        "title": "Wettersensoren",
+        "description": "Trage hier die Wetterentität und zusätzliche Sensoren ein, falls du sie hast. Einige Werte können von einer weather.*-Entität kommen, wenn sie sie bereitstellt, andere werden automatisch berechnet, wenn du sie leer lässt.",
+        "data": {
+          "entite_meteo": "Wetter (erforderlich)",
+          "capteur_pluie_24h": "Regen 24 h (optional, Wetter liefert den Wert nicht immer)",
+          "capteur_pluie_demain": "Regen morgen (optional, Wetter liefert den Wert nicht immer)",
+          "capteur_temperature": "Temperatur (optional, wenn Wetter den Wert liefert)",
+          "capteur_etp": "ETP des Tages (optional, automatische Berechnung wenn leer)",
+          "capteur_humidite": "Feuchtigkeit (optional, wenn Wetter den Wert liefert)",
+          "capteur_hauteur_gazon": "Rasenhöhe (empfohlen, wenn verfügbar)",
+          "capteur_retour_arrosage": "Rücklaufbewässerung (optional, automatisch oder aus der Zonenhistorie geschätzt)",
+          "capteur_humidite_sol": "Bodenfeuchte (%) (empfohlen, wenn verfügbar)",
+          "capteur_vent": "Wind (optional, wenn Wetter den Wert liefert)",
+          "capteur_rosee": "Tau / Blattnässe (optional, automatische Berechnung wenn nicht angegeben)"
+        }
       }
     },
     "abort": {
@@ -28,19 +45,19 @@
     "step": {
       "user": {
         "title": "Erweiterte Optionen in der UI",
-        "description": "Trage hier die Wetterentität und zusätzliche Sensoren ein, falls du sie hast. Wenn ETP nicht angegeben ist, wird sie automatisch aus dem Wetter berechnet.",
+        "description": "Trage hier die Wetterentität und zusätzliche Sensoren ein, falls du sie hast. Einige Werte können von einer weather.*-Entität kommen, wenn sie sie bereitstellt, andere werden automatisch berechnet, wenn du sie leer lässt.",
         "data": {
           "entite_meteo": "Wetter (erforderlich)",
-          "capteur_pluie_24h": "Regen 24 h (optional, sonst Wetter)",
-          "capteur_pluie_demain": "Regen morgen (optional, sonst Wetter)",
-          "capteur_temperature": "Temperatur (optional, sonst Wetter)",
-          "capteur_etp": "ETP des Tages (optional, automatisch wenn leer)",
-          "capteur_humidite": "Feuchtigkeit (optional, sonst Wetter)",
-          "capteur_hauteur_gazon": "Rasenhöhe (empfohlen)",
-          "capteur_retour_arrosage": "Rücklaufbewässerung (optional, sonst Verlauf)",
-          "capteur_humidite_sol": "Bodenfeuchte (%) (optional)",
-          "capteur_vent": "Wind (optional, wenn Wetter verfügbar ist)",
-          "capteur_rosee": "Tau / Blattnässe (optional)"
+          "capteur_pluie_24h": "Regen 24 h (optional, Wetter liefert den Wert nicht immer)",
+          "capteur_pluie_demain": "Regen morgen (optional, Wetter liefert den Wert nicht immer)",
+          "capteur_temperature": "Temperatur (optional, wenn Wetter den Wert liefert)",
+          "capteur_etp": "ETP des Tages (optional, automatische Berechnung wenn leer)",
+          "capteur_humidite": "Feuchtigkeit (optional, wenn Wetter den Wert liefert)",
+          "capteur_hauteur_gazon": "Rasenhöhe (empfohlen, wenn verfügbar)",
+          "capteur_retour_arrosage": "Rücklaufbewässerung (optional, automatisch oder aus der Zonenhistorie geschätzt)",
+          "capteur_humidite_sol": "Bodenfeuchte (%) (empfohlen, wenn verfügbar)",
+          "capteur_vent": "Wind (optional, wenn Wetter den Wert liefert)",
+          "capteur_rosee": "Tau / Blattnässe (optional, automatische Berechnung wenn nicht angegeben)"
         }
       }
     },

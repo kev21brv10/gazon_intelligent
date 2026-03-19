@@ -44,16 +44,16 @@ def _build_base_fields(current: dict | None) -> dict:
         vol.Required(CONF_ZONE_1, default=_d(current.get(CONF_ZONE_1))): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="switch")
         ),
-        vol.Required(CONF_ZONE_2, default=_d(current.get(CONF_ZONE_2))): selector.EntitySelector(
+        vol.Optional(CONF_ZONE_2, default=_d(current.get(CONF_ZONE_2))): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="switch")
         ),
-        vol.Required(CONF_ZONE_3, default=_d(current.get(CONF_ZONE_3))): selector.EntitySelector(
+        vol.Optional(CONF_ZONE_3, default=_d(current.get(CONF_ZONE_3))): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="switch")
         ),
-        vol.Required(CONF_ZONE_4, default=_d(current.get(CONF_ZONE_4))): selector.EntitySelector(
+        vol.Optional(CONF_ZONE_4, default=_d(current.get(CONF_ZONE_4))): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="switch")
         ),
-        vol.Required(CONF_ZONE_5, default=_d(current.get(CONF_ZONE_5))): selector.EntitySelector(
+        vol.Optional(CONF_ZONE_5, default=_d(current.get(CONF_ZONE_5))): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="switch")
         ),
         vol.Required(CONF_DEBIT_ZONE_1, default=_d(current.get(CONF_DEBIT_ZONE_1, 0.0))): selector.NumberSelector(
@@ -130,14 +130,22 @@ class GazonIntelligentConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_user(self, user_input=None):
         if user_input is not None:
-            await self.async_set_unique_id(DOMAIN)
-            self._abort_if_unique_id_configured()
-            return self.async_create_entry(
-                title="Gazon Intelligent",
-                data=user_input,
-            )
+            self._base_user_input = dict(user_input)
+            return self.async_show_form(step_id="sensors", data_schema=build_advanced_schema())
 
         return self.async_show_form(step_id="user", data_schema=build_schema())
+
+    async def async_step_sensors(self, user_input=None):
+        if user_input is not None:
+            await self.async_set_unique_id(DOMAIN)
+            self._abort_if_unique_id_configured()
+            data = {**getattr(self, "_base_user_input", {}), **user_input}
+            return self.async_create_entry(
+                title="Gazon Intelligent",
+                data=data,
+            )
+
+        return self.async_show_form(step_id="sensors", data_schema=build_advanced_schema())
 
     @staticmethod
     def async_get_options_flow(entry: config_entries.ConfigEntry):

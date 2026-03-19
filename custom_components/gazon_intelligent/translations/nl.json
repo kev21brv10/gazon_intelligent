@@ -18,6 +18,23 @@
           "debit_zone_5": "Doorstroom zone 5 (mm/h, 0 indien ongebruikt)",
           "type_sol": "Bodemtype (verplicht)"
         }
+      },
+      "sensors": {
+        "title": "Weersensoren",
+        "description": "Vul hier de weerentiteit en extra sensoren in als je ze hebt. Sommige waarden kunnen uit een weather.*-entiteit komen als die ze aanbiedt, andere worden automatisch berekend als je ze leeg laat.",
+        "data": {
+          "entite_meteo": "Weer (verplicht)",
+          "capteur_pluie_24h": "Regen 24u (optioneel, het weer geeft de waarde niet altijd)",
+          "capteur_pluie_demain": "Regen morgen (optioneel, het weer geeft de waarde niet altijd)",
+          "capteur_temperature": "Temperatuur (optioneel als het weer de waarde levert)",
+          "capteur_etp": "Dagelijkse ETP (optioneel, automatische berekening als niet ingevuld)",
+          "capteur_humidite": "Vochtigheid (optioneel als het weer de waarde levert)",
+          "capteur_hauteur_gazon": "Grashoogte (aanbevolen als beschikbaar)",
+          "capteur_retour_arrosage": "Terugkeer van besproeiing (optioneel, automatisch of geschat uit zonegeschiedenis)",
+          "capteur_humidite_sol": "Bodemvocht (%) (aanbevolen als beschikbaar)",
+          "capteur_vent": "Wind (optioneel als het weer de waarde levert)",
+          "capteur_rosee": "Dauw / bladnat (optioneel, automatische berekening als niet ingevuld)"
+        }
       }
     },
     "abort": {
@@ -28,19 +45,19 @@
     "step": {
       "user": {
         "title": "Geavanceerde opties in de UI",
-        "description": "Vul hier de weerentiteit en extra sensoren in als je ze hebt. Als ETP niet is opgegeven, wordt die automatisch uit het weer berekend.",
+        "description": "Vul hier de weerentiteit en extra sensoren in als je ze hebt. Sommige waarden kunnen uit een weather.*-entiteit komen als die ze aanbiedt, andere worden automatisch berekend als je ze leeg laat.",
         "data": {
           "entite_meteo": "Weer (verplicht)",
-          "capteur_pluie_24h": "Regen 24 uur (optioneel, anders weer)",
-          "capteur_pluie_demain": "Regen morgen (optioneel, anders weer)",
-          "capteur_temperature": "Temperatuur (optioneel, anders weer)",
-          "capteur_etp": "Dagelijkse ETP (optioneel, automatisch als leeg)",
-          "capteur_humidite": "Vochtigheid (optioneel, anders weer)",
-          "capteur_hauteur_gazon": "Grashoogte (aanbevolen)",
-          "capteur_retour_arrosage": "Terugkeer van besproeiing (optioneel, anders geschiedenis)",
-          "capteur_humidite_sol": "Bodemvocht (%) (optioneel)",
-          "capteur_vent": "Wind (optioneel als weer beschikbaar is)",
-          "capteur_rosee": "Dauw / bladnat (optioneel)"
+          "capteur_pluie_24h": "Regen 24 uur (optioneel, het weer geeft de waarde niet altijd)",
+          "capteur_pluie_demain": "Regen morgen (optioneel, het weer geeft de waarde niet altijd)",
+          "capteur_temperature": "Temperatuur (optioneel als het weer de waarde levert)",
+          "capteur_etp": "Dagelijkse ETP (optioneel, automatische berekening als niet ingevuld)",
+          "capteur_humidite": "Vochtigheid (optioneel als het weer de waarde levert)",
+          "capteur_hauteur_gazon": "Grashoogte (aanbevolen als beschikbaar)",
+          "capteur_retour_arrosage": "Terugkeer van besproeiing (optioneel, automatisch of geschat uit zonegeschiedenis)",
+          "capteur_humidite_sol": "Bodemvocht (%) (aanbevolen als beschikbaar)",
+          "capteur_vent": "Wind (optioneel als het weer de waarde levert)",
+          "capteur_rosee": "Dauw / bladnat (optioneel, automatische berekening als niet ingevuld)"
         }
       }
     },

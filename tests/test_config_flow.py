@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 from pathlib import Path
 import sys
@@ -34,7 +35,8 @@ def _install_stubs() -> None:
         voluptuous.UNDEFINED = object()
 
     class _Marker:
-        def __init__(self, *args, **kwargs):
+        def __init__(self, kind: str, *args, **kwargs):
+            self.kind = kind
             self.args = args
             self.kwargs = kwargs
 
@@ -48,9 +50,9 @@ def _install_stubs() -> None:
 
         voluptuous.Schema = Schema
     if not hasattr(voluptuous, "Required"):
-        voluptuous.Required = lambda *args, **kwargs: _Marker(*args, **kwargs)
+        voluptuous.Required = lambda *args, **kwargs: _Marker("required", *args, **kwargs)
     if not hasattr(voluptuous, "Optional"):
-        voluptuous.Optional = lambda *args, **kwargs: _Marker(*args, **kwargs)
+        voluptuous.Optional = lambda *args, **kwargs: _Marker("optional", *args, **kwargs)
     if not hasattr(voluptuous, "All"):
         voluptuous.All = lambda *args, **kwargs: ("All", args, kwargs)
     if not hasattr(voluptuous, "Coerce"):
@@ -74,6 +76,18 @@ def _install_stubs() -> None:
         class ConfigFlow:
             def __init_subclass__(cls, **kwargs):
                 return super().__init_subclass__()
+
+            def async_show_form(self, **kwargs):
+                return kwargs
+
+            def async_create_entry(self, **kwargs):
+                return kwargs
+
+            async def async_set_unique_id(self, *args, **kwargs):
+                return None
+
+            def _abort_if_unique_id_configured(self):
+                return None
 
         config_entries.ConfigFlow = ConfigFlow
     if not hasattr(config_entries, "OptionsFlow"):
@@ -129,6 +143,26 @@ config_flow_spec.loader.exec_module(config_flow_mod)
 
 
 class ConfigFlowTests(unittest.TestCase):
+    def test_base_schema_requires_only_primary_zone(self) -> None:
+        schema = config_flow_mod.build_schema(None)
+        required_fields = {
+            key.args[0]
+            for key in schema.schema
+            if getattr(key, "kind", None) == "required"
+        }
+        optional_fields = {
+            key.args[0]
+            for key in schema.schema
+            if getattr(key, "kind", None) == "optional"
+        }
+
+        self.assertIn(config_flow_mod.CONF_ZONE_1, required_fields)
+        self.assertNotIn(config_flow_mod.CONF_ZONE_2, required_fields)
+        self.assertIn(config_flow_mod.CONF_ZONE_2, optional_fields)
+        self.assertIn(config_flow_mod.CONF_ZONE_3, optional_fields)
+        self.assertIn(config_flow_mod.CONF_ZONE_4, optional_fields)
+        self.assertIn(config_flow_mod.CONF_ZONE_5, optional_fields)
+
     def test_build_schema_handles_first_install_without_current_data(self) -> None:
         schema = config_flow_mod.build_schema()
 
@@ -143,6 +177,22 @@ class ConfigFlowTests(unittest.TestCase):
         schema = config_flow_mod.build_advanced_schema()
 
         self.assertIsNotNone(schema)
+
+    def test_initial_flow_shows_sensors_second_page(self) -> None:
+        flow = config_flow_mod.GazonIntelligentConfigFlow()
+        base_input = {
+            config_flow_mod.CONF_ZONE_1: "switch.zone_1",
+            config_flow_mod.CONF_DEBIT_ZONE_1: 10,
+            config_flow_mod.CONF_DEBIT_ZONE_2: 0,
+            config_flow_mod.CONF_DEBIT_ZONE_3: 0,
+            config_flow_mod.CONF_DEBIT_ZONE_4: 0,
+            config_flow_mod.CONF_DEBIT_ZONE_5: 0,
+            config_flow_mod.CONF_TYPE_SOL: "limoneux",
+        }
+
+        result = asyncio.run(flow.async_step_user(base_input))
+
+        self.assertEqual(result["step_id"], "sensors")
 
 
 if __name__ == "__main__":
