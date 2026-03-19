@@ -1,16 +1,23 @@
 # 🌱 Gazon Intelligent
 
-Version `0.3.26`
+<p align="center">
+  <img src="https://brands.home-assistant.io/_/gazon_intelligent/icon.png" width="120">
+</p>
+
+![Version](https://img.shields.io/github/v/release/kev21brv10/gazon_intelligent?color=green)
+![HACS](https://img.shields.io/badge/HACS-Custom-orange)
+![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2026.3.2+-blue)
+![License](https://img.shields.io/github/license/kev21brv10/gazon_intelligent)
 
 > Un système autonome qui décide pour ton gazon à ta place.
 
-Gazon Intelligent est une intégration Home Assistant qui transforme les données du jardin en décisions simples, claires et actionnables.
+Gazon Intelligent est une intégration Home Assistant qui transforme les données du jardin en décisions simples, claires et directement actionnables.
 
 ---
 
 ## 🧠 Fonctionnement
 
-Elle analyse :
+Gazon Intelligent analyse en permanence :
 
 - la météo  
 - l’arrosage  
@@ -18,14 +25,16 @@ Elle analyse :
 - les phases du gazon  
 - l’historique des actions  
 
-Puis elle te dit :
+Puis il te donne une seule chose :
+
+👉 **une décision claire**
 
 - quoi faire  
 - quand le faire  
 - pourquoi  
 - quoi éviter  
 
-👉 Objectif : un gazon propre, dense et en forme… sans prise de tête.
+👉 Tu ne calcules rien. Tu suis.
 
 ---
 
@@ -37,6 +46,12 @@ Puis elle te dit :
 - 🌦️ Analyse météo + sol + historique  
 - 🧠 Évite les erreurs (tonte trop basse, arrosage inutile…)  
 - 📊 Simplifie les décisions dans Home Assistant  
+
+---
+
+## 📸 Aperçu
+
+*(Ajoute ici une capture de ton dashboard Lovelace pour booster l’impact)*
 
 ---
 
@@ -82,8 +97,8 @@ Configurables dans Home Assistant :
 Le système :
 
 - respecte les limites de ta machine  
-- applique un pas réel de 0.5 cm  
-- adapte la hauteur selon la saison et le stress du gazon  
+- applique un pas réel de **0.5 cm**  
+- adapte la hauteur selon la saison, la météo et le stress du gazon  
 
 ---
 
@@ -166,7 +181,7 @@ Aucune configuration YAML obligatoire.
 - État de tonte  
 - Arrosage recommandé  
 
-👉 Tu ne calcules rien. Tu suis.
+👉 Tu ne réfléchis pas. Tu appliques.
 
 ---
 
@@ -234,8 +249,18 @@ Flux recommandé :
 
 ---
 
+## ❤️ Support
+
+Si le projet t’aide :
+
+- ⭐ Mets une étoile  
+- 🐛 Remonte les bugs  
+- 💡 Propose des idées  
+
+---
+
 ## 🧾 Version
 
 - manifest : `0.3.26`  
 - README : `0.3.26`  
-- changelog : `0.3.26`  
+- changelog : `0.3.26`
