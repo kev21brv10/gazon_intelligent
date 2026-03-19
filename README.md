@@ -264,3 +264,8 @@ Si le projet t’aide :
 - manifest : `0.3.26`  
 - README : `0.3.26`  
 - changelog : `0.3.26`
+
+
+## 📄 Licence
+
+Ce projet est sous licence MIT.
