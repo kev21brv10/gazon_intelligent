@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.15
+## 0.3.16
 - Remet la configuration initiale sur les zones, les débits et le type de sol.
 - Déplace l'entité `weather` et les capteurs météo complémentaires dans les options avancées.
 - Exploite l'entité `weather` comme source de secours pour la pluie, la température, l'humidité, le vent et l'ETP.

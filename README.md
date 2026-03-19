@@ -1,6 +1,6 @@
 # 🌱 Gazon Intelligent
 
-Version `0.3.15`
+Version `0.3.16`
 
 > Un système autonome qui décide pour ton gazon à ta place.
 
@@ -243,6 +243,6 @@ Un blueprint est inclus pour automatiser l’arrosage en fonction du mode du gaz
 
 ## 🧾 Version
 
-- `manifest.json`: `0.3.15`
-- `README.md`: `0.3.15`
-- `CHANGELOG.md`: `0.3.15`
+- `manifest.json`: `0.3.16`
+- `README.md`: `0.3.16`
+- `CHANGELOG.md`: `0.3.16`
