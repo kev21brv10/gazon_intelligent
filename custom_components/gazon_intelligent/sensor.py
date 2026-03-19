@@ -26,6 +26,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 class GazonPhaseActiveSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Phase dominante"
     _attr_has_entity_name = True
+    _attr_icon = "mdi:grass"
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -59,6 +60,7 @@ class GazonPhaseActiveSensor(GazonEntityBase, SensorEntity):
 class GazonSousPhaseSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Sous-phase"
     _attr_has_entity_name = True
+    _attr_icon = "mdi:sprout"
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -83,6 +85,7 @@ class GazonObjectifMmSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Objectif d'arrosage"
     _attr_native_unit_of_measurement = "mm"
     _attr_has_entity_name = True
+    _attr_icon = "mdi:water"
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -101,6 +104,7 @@ class GazonObjectifMmSensor(GazonEntityBase, SensorEntity):
 class GazonTypeArrosageSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Type d'arrosage"
     _attr_has_entity_name = True
+    _attr_icon = "mdi:sprinkler"
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -114,6 +118,7 @@ class GazonTypeArrosageSensor(GazonEntityBase, SensorEntity):
 class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):
     _attr_name = "État de tonte"
     _attr_has_entity_name = True
+    _attr_icon = "mdi:content-cut"
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -127,6 +132,7 @@ class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):
 class GazonConseilPrincipalSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Conseil principal"
     _attr_has_entity_name = True
+    _attr_icon = "mdi:message-text-outline"
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -140,6 +146,7 @@ class GazonConseilPrincipalSensor(GazonEntityBase, SensorEntity):
 class GazonActionRecommandeeSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Action recommandée"
     _attr_has_entity_name = True
+    _attr_icon = "mdi:check-circle-outline"
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -153,6 +160,7 @@ class GazonActionRecommandeeSensor(GazonEntityBase, SensorEntity):
 class GazonActionAEviterSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Action à éviter"
     _attr_has_entity_name = True
+    _attr_icon = "mdi:alert-circle-outline"
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -166,6 +174,7 @@ class GazonActionAEviterSensor(GazonEntityBase, SensorEntity):
 class GazonNiveauActionSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Niveau d'action"
     _attr_has_entity_name = True
+    _attr_icon = "mdi:signal"
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -179,6 +188,7 @@ class GazonNiveauActionSensor(GazonEntityBase, SensorEntity):
 class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Fenêtre optimale"
     _attr_has_entity_name = True
+    _attr_icon = "mdi:clock-outline"
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -192,6 +202,7 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
 class GazonRisqueGazonSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Risque gazon"
     _attr_has_entity_name = True
+    _attr_icon = "mdi:shield-alert-outline"
 
     def __init__(self, coordinator):
         super().__init__(coordinator)

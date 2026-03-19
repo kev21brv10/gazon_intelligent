@@ -17,6 +17,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 class GazonTonteAutoriseeBinarySensor(GazonEntityBase, BinarySensorEntity):
     _attr_name = "Tonte autorisée"
     _attr_has_entity_name = True
+    _attr_icon = "mdi:content-cut"
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -34,6 +35,7 @@ class GazonTonteAutoriseeBinarySensor(GazonEntityBase, BinarySensorEntity):
 class GazonArrosageRecommandeBinarySensor(GazonEntityBase, BinarySensorEntity):
     _attr_name = "Arrosage recommandé"
     _attr_has_entity_name = True
+    _attr_icon = "mdi:water-check"
 
     def __init__(self, coordinator):
         super().__init__(coordinator)

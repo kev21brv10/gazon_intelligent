@@ -20,6 +20,7 @@ class GazonModeSelect(GazonEntityBase, SelectEntity):
     _attr_name = "Mode du gazon"
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.CONFIG
+    _attr_icon = "mdi:grass"
 
     def __init__(self, coordinator):
         super().__init__(coordinator)

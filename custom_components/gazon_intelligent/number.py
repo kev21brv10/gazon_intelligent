@@ -34,6 +34,7 @@ class GazonDebitZoneNumber(GazonEntityBase, NumberEntity):
     _attr_native_max_value = 200.0
     _attr_native_step = 1.0
     _attr_native_unit_of_measurement = "mm/h"
+    _attr_icon = "mdi:sprinkler"
 
     def __init__(self, coordinator, zone_index: int, config_key: str) -> None:
         super().__init__(coordinator)

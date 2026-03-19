@@ -17,6 +17,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 class RetourModeNormalButton(GazonEntityBase, ButtonEntity):
     _attr_name = "Retour au mode normal"
     _attr_has_entity_name = True
+    _attr_icon = "mdi:restart"
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -29,6 +30,7 @@ class RetourModeNormalButton(GazonEntityBase, ButtonEntity):
 class DateActionAujourdhuiButton(GazonEntityBase, ButtonEntity):
     _attr_name = "Noter la date du jour"
     _attr_has_entity_name = True
+    _attr_icon = "mdi:calendar-today"
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
