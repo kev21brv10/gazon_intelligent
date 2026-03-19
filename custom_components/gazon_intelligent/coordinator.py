@@ -28,10 +28,8 @@ from .const import (
     CONF_CAPTEUR_RETOUR_ARROSAGE,
     CONF_HAUTEUR_MAX_TONDEUSE_CM,
     CONF_HAUTEUR_MIN_TONDEUSE_CM,
-    CONF_PAS_HAUTEUR_TONDEUSE_CM,
     DEFAULT_HAUTEUR_MAX_TONDEUSE_CM,
     DEFAULT_HAUTEUR_MIN_TONDEUSE_CM,
-    DEFAULT_PAS_HAUTEUR_TONDEUSE_CM,
     CONF_TYPE_SOL,
     DEFAULT_TYPE_SOL,
 )
@@ -138,10 +136,6 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             CONF_HAUTEUR_MAX_TONDEUSE_CM,
             DEFAULT_HAUTEUR_MAX_TONDEUSE_CM,
         )
-        pas_hauteur_tondeuse_cm = self._get_float_conf(
-            CONF_PAS_HAUTEUR_TONDEUSE_CM,
-            DEFAULT_PAS_HAUTEUR_TONDEUSE_CM,
-        )
         snapshot = self.brain.compute_snapshot(
             today=date.today(),
             temperature=temperature,
@@ -160,7 +154,6 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             weather_profile=weather_profile,
             hauteur_min_tondeuse_cm=hauteur_min_tondeuse_cm,
             hauteur_max_tondeuse_cm=hauteur_max_tondeuse_cm,
-            pas_hauteur_tondeuse_cm=pas_hauteur_tondeuse_cm,
         )
         await self._async_save_state()
 
@@ -188,7 +181,6 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "hauteur_tonte_recommandee_cm": snapshot.get("hauteur_tonte_recommandee_cm"),
             "hauteur_tonte_min_cm": snapshot.get("hauteur_tonte_min_cm"),
             "hauteur_tonte_max_cm": snapshot.get("hauteur_tonte_max_cm"),
-            "pas_hauteur_tondeuse_cm": snapshot.get("pas_hauteur_tondeuse_cm"),
         }
 
     @property

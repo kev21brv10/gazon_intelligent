@@ -6,7 +6,6 @@ from homeassistant.helpers.entity import EntityCategory
 from .const import (
     CONF_HAUTEUR_MAX_TONDEUSE_CM,
     CONF_HAUTEUR_MIN_TONDEUSE_CM,
-    CONF_PAS_HAUTEUR_TONDEUSE_CM,
     CONF_DEBIT_ZONE_1,
     CONF_DEBIT_ZONE_2,
     CONF_DEBIT_ZONE_3,
@@ -14,10 +13,16 @@ from .const import (
     CONF_DEBIT_ZONE_5,
     DEFAULT_HAUTEUR_MAX_TONDEUSE_CM,
     DEFAULT_HAUTEUR_MIN_TONDEUSE_CM,
-    DEFAULT_PAS_HAUTEUR_TONDEUSE_CM,
     DOMAIN,
 )
 from .entity_base import GazonEntityBase
+
+
+_MOWER_HEIGHT_STEP_CM = 0.5
+
+
+def _round_to_mower_step(value: float) -> float:
+    return round(round(float(value) / _MOWER_HEIGHT_STEP_CM) * _MOWER_HEIGHT_STEP_CM, 2)
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -46,15 +51,6 @@ async def async_setup_entry(hass, entry, async_add_entities):
                 0.5,
                 15.0,
                 DEFAULT_HAUTEUR_MAX_TONDEUSE_CM,
-            ),
-            GazonMowerSettingNumber(
-                coordinator,
-                "Pas hauteur tondeuse",
-                "pas_hauteur_tondeuse_cm",
-                CONF_PAS_HAUTEUR_TONDEUSE_CM,
-                0.1,
-                2.0,
-                DEFAULT_PAS_HAUTEUR_TONDEUSE_CM,
             ),
         ]
     )
@@ -93,7 +89,7 @@ class GazonDebitZoneNumber(GazonEntityBase, NumberEntity):
 class GazonMowerSettingNumber(GazonEntityBase, NumberEntity):
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.CONFIG
-    _attr_native_step = 0.1
+    _attr_native_step = 0.5
     _attr_native_unit_of_measurement = "cm"
     _attr_icon = "mdi:content-cut"
 
@@ -119,11 +115,11 @@ class GazonMowerSettingNumber(GazonEntityBase, NumberEntity):
     def native_value(self):
         value = self.coordinator._get_conf(self._config_key)
         if value is None:
-            return float(self._default_value)
+            return _round_to_mower_step(self._default_value)
         try:
-            return float(value)
+            return _round_to_mower_step(value)
         except (TypeError, ValueError):
-            return float(self._default_value)
+            return _round_to_mower_step(self._default_value)
 
     async def async_set_native_value(self, value: float) -> None:
-        await self.coordinator.async_update_config({self._config_key: float(value)})
+        await self.coordinator.async_update_config({self._config_key: _round_to_mower_step(value)})

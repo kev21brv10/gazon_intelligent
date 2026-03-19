@@ -159,7 +159,6 @@ class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):
                 "hauteur_tonte_recommandee_cm",
                 "hauteur_tonte_min_cm",
                 "hauteur_tonte_max_cm",
-                "pas_hauteur_tondeuse_cm",
             ):
                 value = getattr(result, key, None)
                 if value is not None:
@@ -169,7 +168,6 @@ class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):
                 "hauteur_tonte_recommandee_cm",
                 "hauteur_tonte_min_cm",
                 "hauteur_tonte_max_cm",
-                "pas_hauteur_tondeuse_cm",
             ) or {}
         possible_values = self._possible_values_attr("tonte_statut")
         if possible_values:

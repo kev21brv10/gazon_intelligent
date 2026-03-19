@@ -38,7 +38,6 @@ class GazonTonteAutoriseeBinarySensor(GazonEntityBase, BinarySensorEntity):
             "hauteur_tonte_recommandee_cm",
             "hauteur_tonte_min_cm",
             "hauteur_tonte_max_cm",
-            "pas_hauteur_tondeuse_cm",
         )
 
 

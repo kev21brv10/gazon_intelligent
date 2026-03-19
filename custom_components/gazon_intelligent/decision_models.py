@@ -61,7 +61,6 @@ class DecisionContext:
     type_sol: str = DEFAULT_TYPE_SOL
     hauteur_min_tondeuse_cm: float | None = None
     hauteur_max_tondeuse_cm: float | None = None
-    pas_hauteur_tondeuse_cm: float | None = None
     etp_capteur: float | None = None
     humidite_sol: float | None = None
     vent: float | None = None
@@ -89,7 +88,6 @@ class DecisionContext:
         type_sol: str = DEFAULT_TYPE_SOL,
         hauteur_min_tondeuse_cm: float | None = None,
         hauteur_max_tondeuse_cm: float | None = None,
-        pas_hauteur_tondeuse_cm: float | None = None,
         etp_capteur: float | None = None,
         humidite_sol: float | None = None,
         vent: float | None = None,
@@ -99,6 +97,7 @@ class DecisionContext:
         pluie_source: str = "capteur_pluie_24h",
         weather_profile: dict[str, Any] | None = None,
         soil_balance: dict[str, Any] | None = None,
+        memory: dict[str, Any] | None = None,
     ) -> "DecisionContext":
         today = today or date.today()
         weather_profile = weather_profile or {}
@@ -113,7 +112,6 @@ class DecisionContext:
             type_sol=type_sol,
             hauteur_min_tondeuse_cm=hauteur_min_tondeuse_cm,
             hauteur_max_tondeuse_cm=hauteur_max_tondeuse_cm,
-            pas_hauteur_tondeuse_cm=pas_hauteur_tondeuse_cm,
             etp_capteur=etp_capteur,
             humidite_sol=humidite_sol,
             vent=vent,
@@ -123,6 +121,7 @@ class DecisionContext:
             pluie_source=pluie_source,
             weather_profile=weather_profile,
             soil_balance=soil_balance,
+            memory=memory,
             config={"type_sol": type_sol},
             weather_today={
                 "date": today.isoformat(),
@@ -154,7 +153,6 @@ class DecisionResult:
     hauteur_tonte_recommandee_cm: float | None = None
     hauteur_tonte_min_cm: float | None = None
     hauteur_tonte_max_cm: float | None = None
-    pas_hauteur_tondeuse_cm: float | None = None
     conseil_principal: str = ""
     tonte_statut: str = "a_surveiller"
     arrosage_recommande: bool = False
@@ -243,7 +241,6 @@ class DecisionResult:
             "hauteur_tonte_recommandee_cm": self.hauteur_tonte_recommandee_cm,
             "hauteur_tonte_min_cm": self.hauteur_tonte_min_cm,
             "hauteur_tonte_max_cm": self.hauteur_tonte_max_cm,
-            "pas_hauteur_tondeuse_cm": self.pas_hauteur_tondeuse_cm,
             "tonte_statut": self.tonte_statut,
             "arrosage_recommande": self.arrosage_recommande,
             "arrosage_auto_autorise": self.arrosage_auto_autorise,

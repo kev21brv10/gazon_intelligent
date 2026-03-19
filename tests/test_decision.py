@@ -455,13 +455,13 @@ class DecisionEngineTests(unittest.TestCase):
             hauteur_gazon=12.0,
             hauteur_min_tondeuse_cm=3.0,
             hauteur_max_tondeuse_cm=6.0,
-            pas_hauteur_tondeuse_cm=0.5,
         )
 
         self.assertFalse(snapshot["tonte_autorisee"])
         self.assertEqual(snapshot["tonte_statut"], "deconseillee")
         self.assertIn("Règle du tiers", snapshot["raison_decision"])
-        self.assertEqual(snapshot["hauteur_tonte_recommandee_cm"], 6.0)
+        self.assertGreaterEqual(snapshot["hauteur_tonte_recommandee_cm"], 5.5)
+        self.assertLessEqual(snapshot["hauteur_tonte_recommandee_cm"], 6.5)
 
     def test_build_decision_snapshot_exposes_mowing_height_recommendation(self) -> None:
         snapshot = decision.build_decision_snapshot(
@@ -477,13 +477,204 @@ class DecisionEngineTests(unittest.TestCase):
             hauteur_gazon=12.0,
             hauteur_min_tondeuse_cm=3.0,
             hauteur_max_tondeuse_cm=8.0,
-            pas_hauteur_tondeuse_cm=0.5,
         )
 
         self.assertEqual(snapshot["hauteur_tonte_recommandee_cm"], 8.0)
         self.assertEqual(snapshot["hauteur_tonte_min_cm"], 3.0)
         self.assertEqual(snapshot["hauteur_tonte_max_cm"], 8.0)
-        self.assertEqual(snapshot["pas_hauteur_tondeuse_cm"], 0.5)
+
+    def test_build_decision_snapshot_prefers_slightly_lower_height_in_active_spring(self) -> None:
+        snapshot = decision.build_decision_snapshot(
+            history=[],
+            today=date(2026, 4, 15),
+            hour_of_day=8,
+            temperature=19,
+            pluie_24h=5.0,
+            pluie_demain=0,
+            humidite=80,
+            type_sol="limoneux",
+            etp_capteur=0.5,
+            hauteur_min_tondeuse_cm=3.0,
+            hauteur_max_tondeuse_cm=8.0,
+        )
+
+        self.assertGreaterEqual(snapshot["hauteur_tonte_recommandee_cm"], 5.5)
+        self.assertLessEqual(snapshot["hauteur_tonte_recommandee_cm"], 6.5)
+
+    def test_build_decision_snapshot_raises_height_in_heat(self) -> None:
+        snapshot = decision.build_decision_snapshot(
+            history=[],
+            today=date(2026, 7, 20),
+            hour_of_day=8,
+            temperature=34,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=30,
+            type_sol="limoneux",
+            etp_capteur=5.0,
+            hauteur_min_tondeuse_cm=3.0,
+            hauteur_max_tondeuse_cm=9.0,
+        )
+
+        self.assertEqual(snapshot["hauteur_tonte_recommandee_cm"], 9.0)
+
+    def test_build_decision_snapshot_allows_light_reduction_in_favorable_autumn(self) -> None:
+        snapshot = decision.build_decision_snapshot(
+            history=[],
+            today=date(2026, 9, 20),
+            hour_of_day=8,
+            temperature=19,
+            pluie_24h=4.0,
+            pluie_demain=0,
+            humidite=78,
+            type_sol="limoneux",
+            etp_capteur=0.5,
+            hauteur_min_tondeuse_cm=3.0,
+            hauteur_max_tondeuse_cm=8.0,
+        )
+
+        self.assertGreaterEqual(snapshot["hauteur_tonte_recommandee_cm"], 6.5)
+        self.assertLessEqual(snapshot["hauteur_tonte_recommandee_cm"], 7.0)
+
+    def test_build_decision_snapshot_rounds_all_mowing_heights_to_half_cm(self) -> None:
+        snapshot = decision.build_decision_snapshot(
+            history=[],
+            today=date(2026, 6, 15),
+            hour_of_day=8,
+            temperature=25,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=50,
+            type_sol="limoneux",
+            etp_capteur=4.0,
+            hauteur_gazon=12.3,
+            hauteur_min_tondeuse_cm=3.1,
+            hauteur_max_tondeuse_cm=7.9,
+        )
+
+        for key in (
+            "hauteur_tonte_recommandee_cm",
+            "hauteur_tonte_min_cm",
+            "hauteur_tonte_max_cm",
+        ):
+            value = snapshot[key]
+            self.assertIsNotNone(value)
+            self.assertEqual(round(float(value) / 0.5) * 0.5, float(value))
+
+    def test_build_decision_snapshot_stays_stable_across_small_weather_changes(self) -> None:
+        baseline = decision.build_decision_snapshot(
+            history=[],
+            today=date(2026, 5, 20),
+            hour_of_day=8,
+            temperature=20,
+            pluie_24h=2.0,
+            pluie_demain=0,
+            humidite=65,
+            type_sol="limoneux",
+            etp_capteur=2.0,
+            hauteur_min_tondeuse_cm=3.0,
+            hauteur_max_tondeuse_cm=8.0,
+        )
+        follow_up = decision.build_decision_snapshot(
+            history=[],
+            today=date(2026, 5, 21),
+            hour_of_day=8,
+            temperature=20.5,
+            pluie_24h=2.2,
+            pluie_demain=0,
+            humidite=63,
+            type_sol="limoneux",
+            etp_capteur=2.1,
+            hauteur_min_tondeuse_cm=3.0,
+            hauteur_max_tondeuse_cm=8.0,
+            memory={"hauteur_tonte_recommandee_cm": baseline["hauteur_tonte_recommandee_cm"]},
+        )
+
+        self.assertLessEqual(
+            abs(follow_up["hauteur_tonte_recommandee_cm"] - baseline["hauteur_tonte_recommandee_cm"]),
+            0.5,
+        )
+
+    def test_build_decision_snapshot_moves_by_half_cm_max(self) -> None:
+        baseline = decision.build_decision_snapshot(
+            history=[],
+            today=date(2026, 5, 20),
+            hour_of_day=8,
+            temperature=19,
+            pluie_24h=2.0,
+            pluie_demain=0,
+            humidite=65,
+            type_sol="limoneux",
+            etp_capteur=2.0,
+            hauteur_min_tondeuse_cm=3.0,
+            hauteur_max_tondeuse_cm=8.0,
+        )
+        follow_up = decision.build_decision_snapshot(
+            history=[],
+            today=date(2026, 7, 20),
+            hour_of_day=8,
+            temperature=34,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=30,
+            type_sol="limoneux",
+            etp_capteur=5.0,
+            hauteur_min_tondeuse_cm=3.0,
+            hauteur_max_tondeuse_cm=9.0,
+            memory={"hauteur_tonte_recommandee_cm": baseline["hauteur_tonte_recommandee_cm"]},
+        )
+
+        self.assertLessEqual(
+            abs(follow_up["hauteur_tonte_recommandee_cm"] - baseline["hauteur_tonte_recommandee_cm"]),
+            0.5,
+        )
+
+    def test_build_decision_snapshot_sursemis_recovery_is_progressive(self) -> None:
+        germination = decision.build_decision_snapshot(
+            history=[{"type": "Sursemis", "date": "2026-03-10"}],
+            today=date(2026, 3, 12),
+            hour_of_day=8,
+            temperature=18,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=65,
+            type_sol="limoneux",
+            etp_capteur=2.0,
+            hauteur_min_tondeuse_cm=3.0,
+            hauteur_max_tondeuse_cm=8.0,
+        )
+        enracinement = decision.build_decision_snapshot(
+            history=[{"type": "Sursemis", "date": "2026-03-08"}],
+            today=date(2026, 3, 18),
+            hour_of_day=8,
+            temperature=18,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=65,
+            type_sol="limoneux",
+            etp_capteur=2.0,
+            hauteur_min_tondeuse_cm=3.0,
+            hauteur_max_tondeuse_cm=8.0,
+        )
+        reprise = decision.build_decision_snapshot(
+            history=[{"type": "Sursemis", "date": "2026-03-01"}],
+            today=date(2026, 3, 20),
+            hour_of_day=8,
+            temperature=18,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=65,
+            type_sol="limoneux",
+            etp_capteur=2.0,
+            hauteur_min_tondeuse_cm=3.0,
+            hauteur_max_tondeuse_cm=8.0,
+        )
+
+        self.assertFalse(germination["tonte_autorisee"])
+        self.assertFalse(enracinement["tonte_autorisee"])
+        self.assertFalse(reprise["tonte_autorisee"])
+        self.assertGreaterEqual(germination["hauteur_tonte_recommandee_cm"], enracinement["hauteur_tonte_recommandee_cm"])
+        self.assertGreaterEqual(enracinement["hauteur_tonte_recommandee_cm"], reprise["hauteur_tonte_recommandee_cm"])
 
     def test_build_decision_snapshot_blocks_mowing_on_dew(self) -> None:
         snapshot = decision.build_decision_snapshot(
@@ -501,7 +692,7 @@ class DecisionEngineTests(unittest.TestCase):
         )
 
         self.assertFalse(snapshot["tonte_autorisee"])
-        self.assertIn("Rosée", snapshot["raison_decision"])
+        self.assertIn("rosée", snapshot["raison_decision"].lower())
 
     def test_compute_etp_prefers_sensor_value(self) -> None:
         self.assertEqual(decision.compute_etp(temperature=24, pluie_24h=2, etp_capteur=4.2), 4.2)

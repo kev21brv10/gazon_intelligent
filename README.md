@@ -56,15 +56,13 @@ L'entité `État de tonte` expose aussi une recommandation de hauteur de coupe a
 - `hauteur_tonte_recommandee_cm`
 - `hauteur_tonte_min_cm`
 - `hauteur_tonte_max_cm`
-- `pas_hauteur_tondeuse_cm`
 
 Le moteur calcule cette hauteur pour rester compatible avec la machine configurée et avec l'état réel du gazon.
 
-Les trois réglages de tondeuse sont aussi disponibles dans Home Assistant:
+Les réglages de tondeuse sont aussi disponibles dans Home Assistant:
 
 - `Hauteur min tondeuse`
 - `Hauteur max tondeuse`
-- `Pas hauteur tondeuse`
 
 ### Boutons
 
@@ -117,13 +115,13 @@ Aucune configuration YAML obligatoire.
 - `capteur_retour_arrosage`
 - `hauteur_min_tondeuse_cm`
 - `hauteur_max_tondeuse_cm`
-- `pas_hauteur_tondeuse_cm`
 
 Règles simples :
 - si un capteur est vide → la météo prend le relais
 - si `capteur_etp` est vide → estimation automatique
 - si `capteur_retour_arrosage` est vide → historique du jour utilisé
 - si la tondeuse est configurée → le moteur propose une hauteur de coupe recommandée
+- le pas de réglage de la tondeuse est géré automatiquement par l'intégration
 
 ---
 

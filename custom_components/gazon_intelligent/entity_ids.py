@@ -16,7 +16,6 @@ ACTIVE_ENTITY_SUFFIXES: set[str] = {
     "debit_zone_5",
     "hauteur_min_tondeuse_cm",
     "hauteur_max_tondeuse_cm",
-    "pas_hauteur_tondeuse_cm",
     "tonte_autorisee",
     "arrosage_recommande",
     "retour_mode_normal",

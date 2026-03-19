@@ -184,7 +184,6 @@ class ConfigFlowTests(unittest.TestCase):
         }
         self.assertIn(config_flow_mod.CONF_HAUTEUR_MIN_TONDEUSE_CM, optional_fields)
         self.assertIn(config_flow_mod.CONF_HAUTEUR_MAX_TONDEUSE_CM, optional_fields)
-        self.assertIn(config_flow_mod.CONF_PAS_HAUTEUR_TONDEUSE_CM, optional_fields)
 
     def test_initial_flow_shows_sensors_second_page(self) -> None:
         flow = config_flow_mod.GazonIntelligentConfigFlow()

@@ -307,7 +307,6 @@ class GazonBrain:
         weather_profile: dict[str, Any] | None,
         hauteur_min_tondeuse_cm: float | None = None,
         hauteur_max_tondeuse_cm: float | None = None,
-        pas_hauteur_tondeuse_cm: float | None = None,
         hour_of_day: int | None = None,
     ) -> dict[str, Any]:
         weather_profile = weather_profile or {}
@@ -344,9 +343,9 @@ class GazonBrain:
             pluie_source=pluie_source,
             weather_profile=weather_profile,
             soil_balance=self.soil_balance,
+            memory=self.memory,
             hauteur_min_tondeuse_cm=hauteur_min_tondeuse_cm,
             hauteur_max_tondeuse_cm=hauteur_max_tondeuse_cm,
-            pas_hauteur_tondeuse_cm=pas_hauteur_tondeuse_cm,
         )
         result = build_decision_result(context)
         result.extra.setdefault(
@@ -424,5 +423,7 @@ class GazonBrain:
             previous_memory=self.memory,
             today=today,
         )
+        self.memory["hauteur_tonte_recommandee_cm"] = snapshot.get("hauteur_tonte_recommandee_cm")
+        self.memory["hauteur_tonte_recommandee_date"] = today.isoformat()
         self.memory["catalogue_produits"] = len(self.products)
         return snapshot

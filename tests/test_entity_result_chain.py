@@ -95,7 +95,6 @@ def _make_result():
         hauteur_tonte_recommandee_cm=7.0,
         hauteur_tonte_min_cm=3.0,
         hauteur_tonte_max_cm=8.0,
-        pas_hauteur_tondeuse_cm=0.5,
         conseil_principal="Arroser demain matin.",
         tonte_statut="autorisee",
         arrosage_recommande=True,
@@ -173,7 +172,7 @@ class DecisionResultChainTests(unittest.TestCase):
         )
         self.assertEqual(tonte_sensor.extra_state_attributes["hauteur_tonte_min_cm"], 3.0)
         self.assertEqual(tonte_sensor.extra_state_attributes["hauteur_tonte_max_cm"], 8.0)
-        self.assertEqual(tonte_sensor.extra_state_attributes["pas_hauteur_tondeuse_cm"], 0.5)
+        self.assertNotIn("pas_hauteur_tondeuse_cm", tonte_sensor.extra_state_attributes)
         self.assertIn("possible_values", phase_sensor.extra_state_attributes)
         self.assertIn("possible_values", sous_phase_sensor.extra_state_attributes)
 

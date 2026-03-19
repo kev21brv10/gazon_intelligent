@@ -23,14 +23,12 @@ CONF_CAPTEUR_TEMPERATURE = "capteur_temperature"
 CONF_CAPTEUR_ETP = "capteur_etp"
 CONF_HAUTEUR_MIN_TONDEUSE_CM = "hauteur_min_tondeuse_cm"
 CONF_HAUTEUR_MAX_TONDEUSE_CM = "hauteur_max_tondeuse_cm"
-CONF_PAS_HAUTEUR_TONDEUSE_CM = "pas_hauteur_tondeuse_cm"
 CONF_TYPE_SOL = "type_sol"
 
 DEFAULT_MODE = "Normal"
 DEFAULT_TYPE_SOL = "limoneux"
 DEFAULT_HAUTEUR_MIN_TONDEUSE_CM = 3.0
 DEFAULT_HAUTEUR_MAX_TONDEUSE_CM = 8.0
-DEFAULT_PAS_HAUTEUR_TONDEUSE_CM = 0.5
 
 TYPES_SOL = [
     "sableux",
