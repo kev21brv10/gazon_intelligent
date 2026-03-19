@@ -1,6 +1,6 @@
 # 🌱 Gazon Intelligent
 
-Version `0.3.17`
+Version `0.3.18`
 
 > Un système autonome qui décide pour ton gazon à ta place.
 

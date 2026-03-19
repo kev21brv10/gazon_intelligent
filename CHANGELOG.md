@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.3.18
+- Version bump to `0.3.18`.
+
 ## 0.3.17
 - Corrige le crash au premier chargement du `config_flow` quand `current` vaut `None`.
 - Sécurise le rendu initial du formulaire de configuration pour éviter l’erreur `500` sur une première installation.
