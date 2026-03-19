@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.17
+- Corrige le crash au premier chargement du `config_flow` quand `current` vaut `None`.
+- Sécurise le rendu initial du formulaire de configuration pour éviter l’erreur `500` sur une première installation.
+- Ajoute une couverture de test dédiée pour le premier affichage du flux de configuration.
+
 ## 0.3.16
 - Remet la configuration initiale sur les zones, les débits et le type de sol.
 - Déplace l'entité `weather` et les capteurs météo complémentaires dans les options avancées.
