@@ -36,7 +36,3 @@ class GazonModeSelect(GazonEntityBase, SelectEntity):
 
     async def async_select_option(self, option: str):
         await self.coordinator.async_set_mode(option)
-
-    @property
-    def extra_state_attributes(self):
-        return self._attrs_from_data("phase_active", "phase_dominante_source", "pluie_demain_source")

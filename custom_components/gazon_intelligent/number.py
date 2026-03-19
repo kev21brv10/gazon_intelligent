@@ -55,7 +55,3 @@ class GazonDebitZoneNumber(GazonEntityBase, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         await self.coordinator.async_update_config({self._config_key: float(value)})
-
-    @property
-    def extra_state_attributes(self):
-        return self._attrs_from_data("phase_active", "mode", "objectif_mm")

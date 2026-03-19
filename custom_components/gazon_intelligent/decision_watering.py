@@ -173,6 +173,40 @@ def build_watering_bundle(
     if phase_dominante == "Sursemis":
         passages = 3 if objectif_mm >= 2 else 2
         passage_spacing = _passage_spacing_text(passages)
+        if objectif_mm <= 0:
+            conseil_principal = "Le sursemis n'a pas besoin d'arrosage immédiat."
+            action_recommandee = "Surveille l'humidité et réévalue au prochain créneau."
+            action_a_eviter = "Appliquer 0.0 mm."
+            return {
+                "tonte_autorisee": False,
+                "tonte_statut": "interdite",
+                "arrosage_auto_autorise": False,
+                "arrosage_recommande": False,
+                "type_arrosage": "personnalise",
+                "arrosage_conseille": "personnalise",
+                "conseil_principal": conseil_principal,
+                "action_recommandee": action_recommandee,
+                "action_a_eviter": action_a_eviter,
+                "raison_decision": (
+                    f"Sursemis / {sous_phase}: objectif nul, bilan={bilan_hydrique_mm:.1f} mm, "
+                    f"tendance 3j={bilan_hydrique_3j:.1f} mm, 7j={bilan_hydrique_7j:.1f} mm."
+                ),
+                "decision_resume": {
+                    "faire": False,
+                    "action": "surveillance",
+                    "moment": "attendre",
+                    "objectif_mm": objectif_mm,
+                    "type_arrosage": "personnalise",
+                    "niveau_action": "surveiller",
+                    "risque_gazon": risque_gazon,
+                },
+                "niveau_action": "surveiller",
+                "fenetre_optimale": "attendre",
+                "risque_gazon": risque_gazon,
+                "prochaine_reevaluation": prochaine_reevaluation,
+                "tonte_autorisee": False,
+                "tonte_statut": "interdite",
+            }
         if pluie_demain >= 2 and bilan_hydrique_mm >= -0.5:
             conseil_principal = "Réduis ou reporte l'arrosage: la pluie de demain peut compenser une grande partie du déficit."
             action_recommandee = f"Réduis l'apport à {max(0.0, round(objectif_mm * 0.4, 1))} mm maximum aujourd'hui."

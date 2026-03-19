@@ -137,3 +137,9 @@ class EntityRegistryTests(unittest.TestCase):
         }
 
         self.assertEqual(suffixes, entity_ids.ACTIVE_ENTITY_SUFFIXES)
+
+    def test_config_numbers_do_not_expose_decision_attributes(self) -> None:
+        self.assertNotIn("extra_state_attributes", number.GazonDebitZoneNumber.__dict__)
+
+    def test_mode_select_remains_config_only(self) -> None:
+        self.assertNotIn("extra_state_attributes", select.GazonModeSelect.__dict__)

@@ -64,6 +64,15 @@ class GazonEntityBase(CoordinatorEntity):
                 return attrs
         return self._attrs_from_data(*keys)
 
+    def _possible_values_attr(self, key: str) -> dict[str, object] | None:
+        result = self.decision_result
+        if result is None:
+            return None
+        possible_values = result.possible_values_for(key)
+        if not possible_values:
+            return None
+        return {"possible_values": list(possible_values)}
+
     def _attrs_from_data(self, *keys: str) -> dict[str, object] | None:
         attrs = {key: self.coordinator.data.get(key) for key in keys}
         clean = {k: v for k, v in attrs.items() if v is not None}

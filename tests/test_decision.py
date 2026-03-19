@@ -313,6 +313,27 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertIn("20 à 30 min", snapshot["conseil_principal"])
         self.assertIn("20 à 30 min", snapshot["action_recommandee"])
 
+    def test_build_decision_snapshot_sursemis_objectif_zero_never_recommends_zero_mm(self) -> None:
+        snapshot = decision.build_decision_snapshot(
+            history=[{"type": "Sursemis", "date": "2026-03-17"}],
+            today=date(2026, 3, 17),
+            hour_of_day=10,
+            temperature=18,
+            pluie_24h=1.0,
+            pluie_demain=3.0,
+            humidite=60,
+            type_sol="limoneux",
+            etp_capteur=0.5,
+        )
+
+        self.assertEqual(snapshot["phase_active"], "Sursemis")
+        self.assertEqual(snapshot["objectif_mm"], 0.0)
+        self.assertFalse(snapshot["arrosage_recommande"])
+        self.assertEqual(snapshot["niveau_action"], "surveiller")
+        self.assertEqual(snapshot["decision_resume"]["action"], "surveillance")
+        self.assertNotIn("0.0 mm", snapshot["action_recommandee"])
+        self.assertNotIn("0.0 mm", snapshot["conseil_principal"])
+
     def test_build_decision_snapshot_uses_advanced_sensors(self) -> None:
         base_snapshot = decision.build_decision_snapshot(
             history=[],

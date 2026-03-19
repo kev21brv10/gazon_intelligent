@@ -42,6 +42,9 @@ class GazonPhaseActiveSensor(GazonEntityBase, SensorEntity):
         result_attrs = self._attrs_from_result("phase_dominante_source")
         if result_attrs:
             attrs.update(result_attrs)
+        possible_values = self._possible_values_attr("phase_dominante")
+        if possible_values:
+            attrs.update(possible_values)
         result = self.decision_result
         if result is not None:
             extra = getattr(result, "extra", None)
@@ -72,13 +75,17 @@ class GazonSousPhaseSensor(GazonEntityBase, SensorEntity):
 
     @property
     def extra_state_attributes(self):
-        return self._attrs_from_result(
+        attrs = self._attrs_from_result(
             "phase_dominante",
             "phase_dominante_source",
             "sous_phase_detail",
             "sous_phase_age_days",
             "sous_phase_progression",
-        )
+        ) or {}
+        possible_values = self._possible_values_attr("sous_phase")
+        if possible_values:
+            attrs.update(possible_values)
+        return attrs or None
 
 
 class GazonObjectifMmSensor(GazonEntityBase, SensorEntity):
@@ -114,6 +121,10 @@ class GazonTypeArrosageSensor(GazonEntityBase, SensorEntity):
     def native_value(self):
         return self._decision_value("type_arrosage")
 
+    @property
+    def extra_state_attributes(self):
+        return self._possible_values_attr("type_arrosage")
+
 
 class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):
     _attr_name = "État de tonte"
@@ -127,6 +138,10 @@ class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):
     @property
     def native_value(self):
         return self._decision_value("tonte_statut")
+
+    @property
+    def extra_state_attributes(self):
+        return self._possible_values_attr("tonte_statut")
 
 
 class GazonConseilPrincipalSensor(GazonEntityBase, SensorEntity):
@@ -183,6 +198,10 @@ class GazonNiveauActionSensor(GazonEntityBase, SensorEntity):
     @property
     def native_value(self):
         return self._decision_value("niveau_action")
+
+    @property
+    def extra_state_attributes(self):
+        return self._possible_values_attr("niveau_action")
 
 
 class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):

@@ -7,6 +7,35 @@ from datetime import date, timedelta
 from typing import Any
 
 from .const import DEFAULT_TYPE_SOL
+from .phases import PHASE_DURATIONS_DAYS, SUBPHASE_RULES
+
+POSSIBLE_PHASE_DOMINANTE_VALUES: tuple[str, ...] = tuple(PHASE_DURATIONS_DAYS.keys())
+POSSIBLE_SOUS_PHASE_VALUES: tuple[str, ...] = tuple(
+    dict.fromkeys(
+        label
+        for rules in SUBPHASE_RULES.values()
+        for _, label in rules
+    )
+)
+POSSIBLE_NIVEAU_ACTION_VALUES: tuple[str, ...] = (
+    "aucune_action",
+    "surveiller",
+    "a_faire",
+    "critique",
+)
+POSSIBLE_TONTE_STATUT_VALUES: tuple[str, ...] = (
+    "autorisee",
+    "autorisee_avec_precaution",
+    "a_surveiller",
+    "deconseillee",
+    "interdite",
+)
+POSSIBLE_TYPE_ARROSAGE_VALUES: tuple[str, ...] = (
+    "bloque",
+    "personnalise",
+    "manuel_frequent",
+    "auto",
+)
 
 
 @dataclass
@@ -140,6 +169,21 @@ class DecisionResult:
     def objectif_mm(self) -> float:
         """Alias de compatibilité pour l'ancien snapshot."""
         return self.objectif_arrosage
+
+    @property
+    def possible_values(self) -> dict[str, tuple[str, ...]]:
+        """Liste des valeurs possibles exposées à l'UI pour l'aide utilisateur."""
+        return {
+            "phase_dominante": POSSIBLE_PHASE_DOMINANTE_VALUES,
+            "sous_phase": POSSIBLE_SOUS_PHASE_VALUES,
+            "niveau_action": POSSIBLE_NIVEAU_ACTION_VALUES,
+            "tonte_statut": POSSIBLE_TONTE_STATUT_VALUES,
+            "type_arrosage": POSSIBLE_TYPE_ARROSAGE_VALUES,
+        }
+
+    def possible_values_for(self, key: str) -> tuple[str, ...] | None:
+        """Retourne les valeurs possibles pour un attribut métier donné."""
+        return self.possible_values.get(key)
 
     def to_snapshot(self) -> dict[str, Any]:
         """Sérialise le résultat au format attendu par les entités."""

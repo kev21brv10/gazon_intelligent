@@ -151,6 +151,37 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(objectif_sensor.native_value, 1.2)
         self.assertTrue(tonte_sensor.is_on)
         self.assertTrue(arrosage_sensor.is_on)
+        self.assertIn("possible_values", phase_sensor.extra_state_attributes)
+        self.assertIn("possible_values", sous_phase_sensor.extra_state_attributes)
+
+        self.assertEqual(
+            phase_sensor.extra_state_attributes["possible_values"],
+            [
+                "Normal",
+                "Sursemis",
+                "Traitement",
+                "Fertilisation",
+                "Biostimulant",
+                "Agent Mouillant",
+                "Scarification",
+                "Hivernage",
+            ],
+        )
+        self.assertIn("Germination", sous_phase_sensor.extra_state_attributes["possible_values"])
+        self.assertEqual(
+            decision_models.DecisionResult(
+                phase_dominante="Normal",
+                sous_phase="Normal",
+                action_recommandee="",
+                action_a_eviter="",
+                niveau_action="a_faire",
+                fenetre_optimale="maintenant",
+                risque_gazon="faible",
+                objectif_arrosage=0.0,
+                tonte_autorisee=True,
+            ).possible_values["niveau_action"],
+            ("aucune_action", "surveiller", "a_faire", "critique"),
+        )
 
     def test_sous_phase_is_not_recomputed_locally(self) -> None:
         coordinator = _FakeCoordinator(
