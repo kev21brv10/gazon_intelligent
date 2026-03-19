@@ -1,24 +1,29 @@
 # 🌱 Gazon Intelligent
 
-![Version](https://img.shields.io/badge/version-0.3.26-green)
-![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2026.3.2+-blue)
+Version `0.3.26`
 
 > Un système autonome qui décide pour ton gazon à ta place.
 
 Gazon Intelligent est une intégration Home Assistant qui transforme les données du jardin en décisions simples, claires et actionnables.
 
+---
+
+## 🧠 Fonctionnement
+
 Elle analyse :
-- la météo
-- l’arrosage
-- le type de sol
-- les phases du gazon
-- l’historique des actions
+
+- la météo  
+- l’arrosage  
+- le type de sol  
+- les phases du gazon  
+- l’historique des actions  
 
 Puis elle te dit :
-- quoi faire
-- quand le faire
-- pourquoi
-- quoi éviter
+
+- quoi faire  
+- quand le faire  
+- pourquoi  
+- quoi éviter  
 
 👉 Objectif : un gazon propre, dense et en forme… sans prise de tête.
 
@@ -26,12 +31,12 @@ Puis elle te dit :
 
 ## 🚀 Ce que fait Gazon Intelligent
 
-- 💧 Décide quand arroser (et combien)
-- ✂️ Recommande la hauteur de tonte idéale
-- 🌱 S’adapte aux phases du gazon (sursemis, reprise…)
-- 🌦️ Analyse météo + sol + historique
-- 🧠 Évite les erreurs (tonte trop basse, arrosage inutile…)
-- 📊 Simplifie les décisions dans Home Assistant
+- 💧 Décide quand arroser (et combien)  
+- ✂️ Recommande la hauteur de tonte idéale  
+- 🌱 S’adapte aux phases du gazon (sursemis, reprise…)  
+- 🌦️ Analyse météo + sol + historique  
+- 🧠 Évite les erreurs (tonte trop basse, arrosage inutile…)  
+- 📊 Simplifie les décisions dans Home Assistant  
 
 ---
 
@@ -39,54 +44,55 @@ Puis elle te dit :
 
 ### Entités principales
 
-- `Mode du gazon`
-- `Phase dominante`
-- `Sous-phase`
-- `Conseil principal`
-- `Action recommandée`
-- `Action à éviter`
-- `Niveau d'action`
-- `Fenêtre optimale`
-- `Risque gazon`
-- `État de tonte`
-- `Hauteur de tonte conseillée`
-- `Tonte autorisée`
-- `Arrosage recommandé`
-- `Objectif d'arrosage`
-- `Type d'arrosage`
+- Mode du gazon  
+- Phase dominante  
+- Sous-phase  
+- Conseil principal  
+- Action recommandée  
+- Action à éviter  
+- Niveau d'action  
+- Fenêtre optimale  
+- Risque gazon  
+- État de tonte  
+- Hauteur de tonte conseillée  
+- Tonte autorisée  
+- Arrosage recommandé  
+- Objectif d'arrosage  
+- Type d'arrosage  
 
 ---
 
 ## ✂️ Gestion de la tonte
 
-L'entité `État de tonte` expose :
+L'entité **État de tonte** expose :
 
-- `hauteur_tonte_recommandee_cm`
-- `hauteur_tonte_min_cm`
-- `hauteur_tonte_max_cm`
+- `hauteur_tonte_recommandee_cm`  
+- `hauteur_tonte_min_cm`  
+- `hauteur_tonte_max_cm`  
 
-L'entité `Hauteur de tonte conseillée` affiche directement la hauteur recommandée.
+L'entité **Hauteur de tonte conseillée** affiche directement la hauteur recommandée.
 
 ### ⚙️ Réglages tondeuse
 
 Configurables dans Home Assistant :
 
-- `Hauteur min tondeuse`
-- `Hauteur max tondeuse`
+- Hauteur min tondeuse  
+- Hauteur max tondeuse  
 
 Le système :
-- respecte les limites de ta machine
-- applique un pas réel de 0.5 cm
-- adapte la hauteur selon la saison et le stress du gazon
+
+- respecte les limites de ta machine  
+- applique un pas réel de 0.5 cm  
+- adapte la hauteur selon la saison et le stress du gazon  
 
 ---
 
 ## 💧 Gestion de l’arrosage
 
-- calcul du besoin réel en eau
-- prise en compte pluie / ETP / humidité
-- adaptation selon la phase du gazon
-- gestion automatique ou personnalisée
+- calcul du besoin réel en eau  
+- prise en compte pluie / ETP / humidité  
+- adaptation selon la phase du gazon  
+- gestion automatique ou personnalisée  
 
 ---
 
@@ -94,16 +100,16 @@ Le système :
 
 ### Via HACS (recommandé)
 
-1. Ajouter ce dépôt dans HACS (catégorie **Integration**)
-2. Installer **Gazon Intelligent**
-3. Redémarrer Home Assistant
-4. Ajouter l’intégration
+1. Ajouter ce dépôt dans HACS (catégorie **Integration**)  
+2. Installer **Gazon Intelligent**  
+3. Redémarrer Home Assistant  
+4. Ajouter l’intégration  
 
 ### Installation manuelle
 
-1. Copier `custom_components/gazon_intelligent` dans `config/custom_components`
-2. Redémarrer Home Assistant
-3. Ajouter l’intégration
+1. Copier `custom_components/gazon_intelligent` dans `config/custom_components`  
+2. Redémarrer Home Assistant  
+3. Ajouter l’intégration  
 
 ### Compatibilité
 
@@ -117,50 +123,48 @@ Aucune configuration YAML obligatoire.
 
 ### Configuration principale
 
-- `zone_1` à `zone_5`
-- `debit_zone_1` à `debit_zone_5`
-- `type_sol`
+- `zone_1` à `zone_5`  
+- `debit_zone_1` à `debit_zone_5`  
+- `type_sol`  
 
 ### Options avancées
 
-- `entite_meteo`
-- `capteur_pluie_24h`
-- `capteur_pluie_demain`
-- `capteur_temperature`
-- `capteur_etp`
-- `capteur_humidite`
-- `capteur_humidite_sol`
-- `capteur_hauteur_gazon`
-- `capteur_vent`
-- `capteur_rosee`
-- `capteur_retour_arrosage`
-- `hauteur_min_tondeuse_cm`
-- `hauteur_max_tondeuse_cm`
+- `entite_meteo`  
+- `capteur_pluie_24h`  
+- `capteur_pluie_demain`  
+- `capteur_temperature`  
+- `capteur_etp`  
+- `capteur_humidite`  
+- `capteur_humidite_sol`  
+- `capteur_hauteur_gazon`  
+- `capteur_vent`  
+- `capteur_rosee`  
+- `capteur_retour_arrosage`  
+- `hauteur_min_tondeuse_cm`  
+- `hauteur_max_tondeuse_cm`  
 
 ### Règles de fonctionnement
 
-- capteur absent → fallback météo
-- ETP absent → estimation automatique
-- retour arrosage absent → historique du jour
-- tondeuse configurée → recommandation active
+- capteur absent → fallback météo  
+- ETP absent → estimation automatique  
+- retour arrosage absent → historique du jour  
+- tondeuse configurée → recommandation active  
 
 ---
 
 ## 🧭 Utilisation au quotidien
 
-Le fonctionnement est volontairement simple :
-
-1. Home Assistant calcule
-2. Tu regardes
-3. Tu agis
+1. Home Assistant calcule  
+2. Tu regardes  
+3. Tu agis  
 
 ### À consulter en priorité
 
-- `Conseil principal`
-- `Action recommandée`
-- `Action à éviter`
-- `État de tonte`
-- `Arrosage recommandé`
+- Conseil principal  
+- Action recommandée  
+- Action à éviter  
+- État de tonte  
+- Arrosage recommandé  
 
 👉 Tu ne calcules rien. Tu suis.
 
@@ -170,10 +174,10 @@ Le fonctionnement est volontairement simple :
 
 Le matin :
 
-- `Phase dominante` = `Sursemis`
-- `Conseil principal` = `Arroser demain matin en 2 passages courts`
-- `Action recommandée` = `Appliquer 1.1 mm fractionnés`
-- `État de tonte` = `interdite`
+- Phase dominante = Sursemis  
+- Conseil principal = Arroser demain matin en 2 passages courts  
+- Action recommandée = Appliquer 1.1 mm fractionnés  
+- État de tonte = interdite  
 
 👉 Tu appliques. Le système s’adapte.
 
@@ -181,29 +185,27 @@ Le matin :
 
 ## 🤖 Ce que le système automatise
 
-- bilan hydrique complet
-- comparaison pluie / arrosage / ETP
-- gestion des phases et sous-phases
-- décisions arrosage / tonte
-- mémoire des actions
-- suivi des interventions
+- bilan hydrique complet  
+- comparaison pluie / arrosage / ETP  
+- gestion des phases et sous-phases  
+- décisions arrosage / tonte  
+- mémoire des actions  
+- suivi des interventions  
 
 ---
 
 ## 🛠️ Services avancés
 
-### Actions disponibles
-
-- `gazon_intelligent.set_mode`
-- `gazon_intelligent.set_date_action`
-- `gazon_intelligent.reset_mode`
-- `gazon_intelligent.start_manual_irrigation`
-- `gazon_intelligent.start_auto_irrigation`
-- `gazon_intelligent.declare_intervention`
-- `gazon_intelligent.declare_mowing`
-- `gazon_intelligent.declare_watering`
-- `gazon_intelligent.register_product`
-- `gazon_intelligent.remove_product`
+- `gazon_intelligent.set_mode`  
+- `gazon_intelligent.set_date_action`  
+- `gazon_intelligent.reset_mode`  
+- `gazon_intelligent.start_manual_irrigation`  
+- `gazon_intelligent.start_auto_irrigation`  
+- `gazon_intelligent.declare_intervention`  
+- `gazon_intelligent.declare_mowing`  
+- `gazon_intelligent.declare_watering`  
+- `gazon_intelligent.register_product`  
+- `gazon_intelligent.remove_product`  
 
 ---
 
@@ -211,8 +213,8 @@ Le matin :
 
 Flux recommandé :
 
-1. `register_product`
-2. `declare_intervention`
+1. `register_product`  
+2. `declare_intervention`  
 
 👉 Sinon : laisse le moteur décider.
 
@@ -220,18 +222,20 @@ Flux recommandé :
 
 ## 📦 Blueprint
 
-Blueprint fourni pour automatiser l’arrosage :
-
-## 📦 Blueprint
-
-Blueprint fourni pour automatiser l’arrosage :
+👉 Installation en un clic :
 
 [![Importer le blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https://github.com/kev21brv10/gazon_intelligent/blob/main/blueprints/automation/gazon_intelligent/arrosage_modes_speciaux_hors_normal.yaml)
 
----
-
 ### À quoi il sert
 
-- déclencher l’arrosage automatiquement
-- bloquer selon le mode (`Traitement`, `Hivernage`, etc.)
-- adapter le volume selon l’objectif calculé
+- déclencher l’arrosage automatiquement  
+- bloquer selon le mode (Traitement, Hivernage, etc.)  
+- adapter le volume selon l’objectif calculé  
+
+---
+
+## 🧾 Version
+
+- manifest : `0.3.26`  
+- README : `0.3.26`  
+- changelog : `0.3.26`  
