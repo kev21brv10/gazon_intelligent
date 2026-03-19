@@ -143,6 +143,7 @@ class DecisionResultChainTests(unittest.TestCase):
         sous_phase_sensor = sensor.GazonSousPhaseSensor(coordinator)
         objectif_sensor = sensor.GazonObjectifMmSensor(coordinator)
         type_arrosage_sensor = sensor.GazonTypeArrosageSensor(coordinator)
+        hauteur_sensor = sensor.GazonHauteurTonteSensor(coordinator)
         tonte_sensor = binary_sensor.GazonTonteAutoriseeBinarySensor(coordinator)
         arrosage_sensor = binary_sensor.GazonArrosageRecommandeBinarySensor(coordinator)
 
@@ -154,6 +155,11 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(sous_phase_sensor.extra_state_attributes["sous_phase_age_days"], 12)
         self.assertEqual(objectif_sensor.native_value, 1.2)
         self.assertEqual(type_arrosage_sensor.native_value, "Arrosage fractionné")
+        self.assertEqual(hauteur_sensor.native_value, 7.0)
+        self.assertEqual(hauteur_sensor.extra_state_attributes["hauteur_tonte_min_cm"], 3.0)
+        self.assertEqual(hauteur_sensor.extra_state_attributes["hauteur_tonte_max_cm"], 8.0)
+        self.assertEqual(hauteur_sensor.extra_state_attributes["tonte_statut"], "autorisee")
+        self.assertEqual(hauteur_sensor.extra_state_attributes["phase_active"], "Sursemis")
         self.assertEqual(
             type_arrosage_sensor.extra_state_attributes["possible_values"],
             [

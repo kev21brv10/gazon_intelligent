@@ -9,6 +9,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
     async_add_entities(
         [
             GazonTonteEtatSensor(coordinator),
+            GazonHauteurTonteSensor(coordinator),
             GazonConseilPrincipalSensor(coordinator),
             GazonActionRecommandeeSensor(coordinator),
             GazonActionAEviterSensor(coordinator),
@@ -60,6 +61,32 @@ class GazonPhaseActiveSensor(GazonEntityBase, SensorEntity):
         if attrs:
             return attrs
         return self.coordinator.get_used_entities_attributes()
+
+
+class GazonHauteurTonteSensor(GazonEntityBase, SensorEntity):
+    _attr_name = "Hauteur de tonte conseillée"
+    _attr_has_entity_name = True
+    _attr_native_unit_of_measurement = "cm"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:content-cut"
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_hauteur_tonte"
+
+    @property
+    def native_value(self):
+        return self._decision_value("hauteur_tonte_recommandee_cm")
+
+    @property
+    def extra_state_attributes(self):
+        attrs = self._attrs_from_result(
+            "hauteur_tonte_min_cm",
+            "hauteur_tonte_max_cm",
+            "tonte_statut",
+            "phase_active",
+        )
+        return attrs or None
 
 
 class GazonSousPhaseSensor(GazonEntityBase, SensorEntity):

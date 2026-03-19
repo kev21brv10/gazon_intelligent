@@ -1,6 +1,6 @@
 # 🌱 Gazon Intelligent
 
-Version `0.3.23`
+Version `0.3.26`
 
 > Un système autonome qui décide pour ton gazon à ta place.
 
@@ -44,6 +44,7 @@ Le but est simple :
 - `Fenêtre optimale`
 - `Risque gazon`
 - `État de tonte`
+- `Hauteur de tonte conseillée`
 - `Tonte autorisée`
 - `Arrosage recommandé`
 - `Objectif d'arrosage`
@@ -56,6 +57,8 @@ L'entité `État de tonte` expose aussi une recommandation de hauteur de coupe a
 - `hauteur_tonte_recommandee_cm`
 - `hauteur_tonte_min_cm`
 - `hauteur_tonte_max_cm`
+
+L'entité `Hauteur de tonte conseillée` affiche directement la hauteur recommandée, avec les détails utiles en attributs.
 
 Le moteur calcule cette hauteur pour rester compatible avec la machine configurée et avec l'état réel du gazon.
 
@@ -263,6 +266,6 @@ Un blueprint est inclus pour automatiser l’arrosage en fonction du mode du gaz
 
 ## 🧾 Version
 
-- `manifest.json`: `0.3.23`
-- `README.md`: `0.3.23`
-- `CHANGELOG.md`: `0.3.23`
+- `manifest.json`: `0.3.26`
+- `README.md`: `0.3.26`
+- `CHANGELOG.md`: `0.3.26`
