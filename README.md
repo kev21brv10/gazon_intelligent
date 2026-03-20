@@ -73,6 +73,8 @@ Puis il te donne une seule chose :
 - Tonte autorisée  
 - Arrosage recommandé  
 - Objectif d'arrosage  
+- Plan d'arrosage
+- Dernier arrosage détecté
 - Type d'arrosage  
 
 ---
@@ -107,7 +109,11 @@ Le système :
 - calcul du besoin réel en eau  
 - prise en compte pluie / ETP / humidité  
 - adaptation selon la phase du gazon  
-- gestion automatique ou personnalisée  
+- conversion automatique du besoin en mm vers une durée par zone
+- exécution séquentielle des zones configurées
+- fractionnement en plusieurs passages si nécessaire
+- détection automatique des sessions réelles d'arrosage
+- historique lisible via `Plan d'arrosage` et `Dernier arrosage détecté`
 
 ---
 
@@ -162,7 +168,7 @@ Aucune configuration YAML obligatoire.
 
 - capteur absent → fallback météo  
 - ETP absent → estimation automatique  
-- retour arrosage absent → historique du jour  
+- retour arrosage absent ou à `0.0` → historique du jour
 - tondeuse configurée → recommandation active  
 
 ---
@@ -247,6 +253,7 @@ Flux recommandé :
 - bloquer selon le mode (Traitement, Hivernage, etc.)  
 - s’appuyer sur le plan d’arrosage calculé par l’intégration
 - lancer les zones en séquentiel avec les durées calculées
+- gérer les passages multiples et la pause entre cycles
 - laisser l’intégration enregistrer automatiquement la session réelle
 
 ---
