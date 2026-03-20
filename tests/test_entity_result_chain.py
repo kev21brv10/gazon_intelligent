@@ -79,6 +79,7 @@ class _FakeCoordinator:
     data: dict[str, object]
     result: object | None = None
     last_result: object | None = None
+    history: list[dict[str, object]] | None = None
 
 
 def _make_result():
@@ -101,6 +102,8 @@ def _make_result():
         arrosage_auto_autorise=True,
         type_arrosage="fractionne",
         arrosage_conseille="fractionne",
+        watering_passages=2,
+        watering_pause_minutes=25,
         phase_dominante_source="historique_actif",
         sous_phase_detail="Sursemis / Enracinement",
         sous_phase_age_days=12,
@@ -135,14 +138,52 @@ class DecisionResultChainTests(unittest.TestCase):
                 "phase_dominante_source": "legacy",
                 "pluie_demain_source": "legacy",
                 "configuration": {"type_sol": "sableux"},
+                "zone_1": "switch.zone_1",
+                "zone_2": "switch.zone_2",
+                "debit_zone_1": 60.0,
+                "debit_zone_2": 30.0,
             },
             result=_make_result(),
+            history=[
+                {
+                    "type": "arrosage",
+                    "date": "2026-03-18",
+                    "source": "zone_session",
+                    "detected_at": "2026-03-18T06:14:00+00:00",
+                    "objectif_mm": 4.0,
+                    "total_mm": 4.0,
+                    "session_total_mm": 4.0,
+                    "zone_count": 2,
+                    "zones": [
+                        {
+                            "order": 1,
+                            "zone": "switch.zone_1",
+                            "entity_id": "switch.zone_1",
+                            "rate_mm_h": 60.0,
+                            "duration_min": 2.0,
+                            "duration_seconds": 120,
+                            "mm": 2.0,
+                        },
+                        {
+                            "order": 2,
+                            "zone": "switch.zone_2",
+                            "entity_id": "switch.zone_2",
+                            "rate_mm_h": 30.0,
+                            "duration_min": 4.0,
+                            "duration_seconds": 240,
+                            "mm": 2.0,
+                        },
+                    ],
+                }
+            ],
         )
 
         phase_sensor = sensor.GazonPhaseActiveSensor(coordinator)
         sous_phase_sensor = sensor.GazonSousPhaseSensor(coordinator)
         objectif_sensor = sensor.GazonObjectifMmSensor(coordinator)
         type_arrosage_sensor = sensor.GazonTypeArrosageSensor(coordinator)
+        plan_sensor = sensor.GazonPlanArrosageSensor(coordinator)
+        last_watering_sensor = sensor.GazonDernierArrosageDetecteSensor(coordinator)
         hauteur_sensor = sensor.GazonHauteurTonteSensor(coordinator)
         tonte_sensor = binary_sensor.GazonTonteAutoriseeBinarySensor(coordinator)
         arrosage_sensor = binary_sensor.GazonArrosageRecommandeBinarySensor(coordinator)
@@ -170,6 +211,25 @@ class DecisionResultChainTests(unittest.TestCase):
                 "Arrosage automatique",
             ],
         )
+        self.assertEqual(plan_sensor.native_value, 3.5)
+        self.assertEqual(plan_sensor.extra_state_attributes["objective_mm"], 1.2)
+        self.assertEqual(plan_sensor.extra_state_attributes["zone_count"], 2)
+        self.assertTrue(plan_sensor.extra_state_attributes["fractionation"])
+        self.assertEqual(plan_sensor.extra_state_attributes["source"], "calculated_from_objective")
+        self.assertEqual(plan_sensor.extra_state_attributes["total_duration_min"], 3.5)
+        self.assertEqual(plan_sensor.extra_state_attributes["passages"], 2)
+        self.assertEqual(plan_sensor.extra_state_attributes["pause_between_passages_minutes"], 25)
+        self.assertEqual(plan_sensor.extra_state_attributes["zones"][0]["zone"], "switch.zone_1")
+        self.assertEqual(plan_sensor.extra_state_attributes["zones"][0]["duration_min"], 1.0)
+        self.assertEqual(plan_sensor.extra_state_attributes["zones"][1]["duration_min"], 2.5)
+        self.assertEqual(last_watering_sensor.native_value, 4.0)
+        self.assertEqual(last_watering_sensor.extra_state_attributes["source"], "zone_session")
+        self.assertEqual(last_watering_sensor.extra_state_attributes["date_action"], "2026-03-18")
+        self.assertEqual(last_watering_sensor.extra_state_attributes["detected_at"], "2026-03-18T06:14:00+00:00")
+        self.assertEqual(last_watering_sensor.extra_state_attributes["zone_count"], 2)
+        self.assertEqual(last_watering_sensor.extra_state_attributes["zones_used"], ["switch.zone_1", "switch.zone_2"])
+        self.assertEqual(last_watering_sensor.extra_state_attributes["zones"][0]["order"], 1)
+        self.assertEqual(last_watering_sensor.extra_state_attributes["zones"][1]["order"], 2)
         self.assertTrue(tonte_sensor.is_on)
         self.assertTrue(arrosage_sensor.is_on)
         self.assertEqual(

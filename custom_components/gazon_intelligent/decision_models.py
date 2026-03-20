@@ -159,6 +159,8 @@ class DecisionResult:
     arrosage_auto_autorise: bool = False
     type_arrosage: str = "personnalise"
     arrosage_conseille: str = "personnalise"
+    watering_passages: int = 1
+    watering_pause_minutes: int = 25
     phase_dominante_source: str | None = None
     sous_phase_detail: str | None = None
     sous_phase_age_days: int | None = None
@@ -246,6 +248,8 @@ class DecisionResult:
             "arrosage_auto_autorise": self.arrosage_auto_autorise,
             "type_arrosage": self.type_arrosage,
             "arrosage_conseille": self.arrosage_conseille,
+            "watering_passages": self.watering_passages,
+            "watering_pause_minutes": self.watering_pause_minutes,
             "conseil_principal": self.conseil_principal,
             "action_recommandee": self.action_recommandee,
             "action_a_eviter": self.action_a_eviter,

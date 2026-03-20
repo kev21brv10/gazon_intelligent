@@ -127,6 +127,14 @@ def _watering_amount_text(mm: float) -> str:
     return f"{mm:.1f} mm"
 
 
+def _watering_pause_minutes(passages: int) -> int:
+    if passages <= 1:
+        return 0
+    if passages == 2:
+        return 25
+    return 20
+
+
 def build_watering_bundle(
     context: DecisionContext,
     phase_bundle: dict[str, Any],
@@ -138,7 +146,8 @@ def build_watering_bundle(
     sous_phase = phase_bundle["sous_phase"]
     water_balance = water_bundle["water_balance"]
     advanced_context = water_bundle["advanced_context"]
-    objectif_mm = water_bundle["objectif_mm"]
+    objectif_mm_brut = water_bundle["objectif_mm"]
+    objectif_mm = objectif_mm_brut
     niveau_action = risk_bundle["niveau_action"]
     fenetre_optimale = risk_bundle["fenetre_optimale"]
     risque_gazon = risk_bundle["risque_gazon"]
@@ -189,9 +198,14 @@ def build_watering_bundle(
     )
     recommande = objectif_mm > 0 and besoin_eau
     auto_ok = phase_dominante in {"Normal", "Fertilisation", "Biostimulant", "Agent Mouillant", "Scarification"}
+    watering_passages = 1
+    watering_pause_minutes = 0
 
     if phase_dominante == "Traitement":
+        objectif_mm = 0.0
         return {
+            "objectif_mm": 0.0,
+            "objectif_mm_brut": objectif_mm_brut,
             "tonte_autorisee": False,
             "tonte_statut": "interdite",
             "arrosage_auto_autorise": False,
@@ -211,10 +225,15 @@ def build_watering_bundle(
                 "niveau_action": niveau_action,
                 "risque_gazon": risque_gazon,
             },
+            "watering_passages": watering_passages,
+            "watering_pause_minutes": watering_pause_minutes,
         }
 
     if phase_dominante == "Hivernage":
+        objectif_mm = 0.0
         return {
+            "objectif_mm": 0.0,
+            "objectif_mm_brut": objectif_mm_brut,
             "tonte_autorisee": False,
             "tonte_statut": "interdite",
             "arrosage_auto_autorise": False,
@@ -234,10 +253,15 @@ def build_watering_bundle(
                 "niveau_action": niveau_action,
                 "risque_gazon": risque_gazon,
             },
+            "watering_passages": watering_passages,
+            "watering_pause_minutes": watering_pause_minutes,
         }
 
     if phase_dominante in {"Fertilisation", "Biostimulant"} and not fertilization_allowed:
+        objectif_mm = 0.0
         return {
+            "objectif_mm": 0.0,
+            "objectif_mm_brut": objectif_mm_brut,
             "tonte_autorisee": tonte_ok,
             "tonte_statut": mowing_bundle["tonte_statut"],
             "arrosage_auto_autorise": False,
@@ -266,6 +290,8 @@ def build_watering_bundle(
             "fenetre_optimale": "attendre",
             "risque_gazon": risque_gazon,
             "prochaine_reevaluation": prochaine_reevaluation,
+            "watering_passages": watering_passages,
+            "watering_pause_minutes": watering_pause_minutes,
         }
 
     if phase_dominante == "Sursemis":
@@ -276,6 +302,8 @@ def build_watering_bundle(
             action_recommandee = "Surveille l'humidité et réévalue au prochain créneau."
             action_a_eviter = _watering_needed_text()
             return {
+                "objectif_mm": 0.0,
+                "objectif_mm_brut": objectif_mm_brut,
                 "tonte_autorisee": False,
                 "tonte_statut": "interdite",
                 "arrosage_auto_autorise": False,
@@ -304,24 +332,39 @@ def build_watering_bundle(
                 "prochaine_reevaluation": prochaine_reevaluation,
                 "tonte_autorisee": False,
                 "tonte_statut": "interdite",
+                "watering_passages": watering_passages,
+                "watering_pause_minutes": watering_pause_minutes,
             }
         if pluie_demain >= 2 and bilan_hydrique_mm >= -0.5:
             conseil_principal = "Réduis ou reporte l'arrosage: la pluie de demain peut compenser une grande partie du déficit."
             reduction_mm = round(objectif_mm * 0.4, 1)
-            if reduction_mm > 0:
-                action_recommandee = f"Réduis l'apport à {reduction_mm:.1f} mm maximum aujourd'hui."
+            if reduction_mm >= 0.5:
+                objectif_mm = reduction_mm
+                action_recommandee = f"Réduis l'apport à {objectif_mm:.1f} mm maximum aujourd'hui."
             else:
+                objectif_mm = 0.0
+                arrosage_recommande = False
+                arrosage_auto_autorise = False
+                type_arrosage = "personnalise"
+                arrosage_conseille = "personnalise"
                 action_recommandee = _watering_needed_text()
             action_a_eviter = "Lancer un cycle complet avant la pluie."
         elif humidite_haute:
             conseil_principal = "Attends un léger ressuyage avant d'arroser."
-            action_recommandee = f"Programme {objectif_mm:.1f} mm en fin de nuit si l'humidité baisse."
+            objectif_mm = 0.0
+            arrosage_recommande = False
+            arrosage_auto_autorise = False
+            type_arrosage = "personnalise"
+            arrosage_conseille = "personnalise"
+            action_recommandee = "Reporte l'arrosage au prochain créneau sec."
             action_a_eviter = "Arroser immédiatement sur pelouse saturée."
         else:
             conseil_principal = f"Arroser {prochain_creneau} {passage_spacing}."
             action_recommandee = f"Appliquer {objectif_mm:.1f} mm fractionnés ({passages}x, 20 à 30 min entre les passages)."
             action_a_eviter = "Tondre avant levée complète."
         return {
+            "objectif_mm": objectif_mm,
+            "objectif_mm_brut": objectif_mm_brut,
             "tonte_autorisee": False,
             "tonte_statut": "interdite",
             "arrosage_auto_autorise": False,
@@ -344,12 +387,15 @@ def build_watering_bundle(
                 "niveau_action": niveau_action,
                 "risque_gazon": risque_gazon,
             },
+            "watering_passages": passages,
+            "watering_pause_minutes": _watering_pause_minutes(passages),
         }
 
     if not recommande:
         conseil_principal = f"Phase {phase_dominante}: n'arrose pas pour l'instant."
         action_recommandee = "Surveille les capteurs et l'évolution météo."
         action_a_eviter = "Éviter tout arrosage inutile."
+        objectif_mm = 0.0
         type_arrosage = "personnalise"
         arrosage_recommande = False
         arrosage_auto_autorise = False
@@ -364,6 +410,8 @@ def build_watering_bundle(
         arrosage_recommande = True
         arrosage_auto_autorise = auto_ok
         arrosage_conseille = "auto" if phase_dominante == "Normal" else "personnalise"
+        watering_passages = passages
+        watering_pause_minutes = _watering_pause_minutes(passages)
     elif phase_dominante == "Scarification":
         passages = _soil_fractionation_passages(phase_dominante, soil_style, objectif_mm, stress_level)
         style_text = _watering_style_text(phase_dominante, soil_style, objectif_mm, stress_level, passages)
@@ -374,6 +422,8 @@ def build_watering_bundle(
         arrosage_recommande = True
         arrosage_auto_autorise = auto_ok
         arrosage_conseille = "personnalise"
+        watering_passages = passages
+        watering_pause_minutes = _watering_pause_minutes(passages)
     elif phase_dominante == "Agent Mouillant":
         passages = _soil_fractionation_passages(phase_dominante, soil_style, objectif_mm, stress_level)
         style_text = _watering_style_text(phase_dominante, soil_style, objectif_mm, stress_level, passages)
@@ -384,6 +434,8 @@ def build_watering_bundle(
         arrosage_recommande = True
         arrosage_auto_autorise = auto_ok
         arrosage_conseille = "personnalise"
+        watering_passages = passages
+        watering_pause_minutes = _watering_pause_minutes(passages)
     elif phase_dominante == "Biostimulant":
         passages = _soil_fractionation_passages(phase_dominante, soil_style, objectif_mm, stress_level)
         style_text = _watering_style_text(phase_dominante, soil_style, objectif_mm, stress_level, passages)
@@ -394,6 +446,8 @@ def build_watering_bundle(
         arrosage_recommande = True
         arrosage_auto_autorise = auto_ok
         arrosage_conseille = "personnalise"
+        watering_passages = passages
+        watering_pause_minutes = _watering_pause_minutes(passages)
     else:
         passages = _soil_fractionation_passages(phase_dominante, soil_style, objectif_mm, stress_level)
         style_text = _watering_style_text(phase_dominante, soil_style, objectif_mm, stress_level, passages)
@@ -404,6 +458,8 @@ def build_watering_bundle(
         arrosage_recommande = True
         arrosage_auto_autorise = auto_ok
         arrosage_conseille = "auto" if phase_dominante == "Normal" else "personnalise"
+        watering_passages = passages
+        watering_pause_minutes = _watering_pause_minutes(passages)
 
     if phase_dominante == "Normal":
         if not recommande:
@@ -475,6 +531,8 @@ def build_watering_bundle(
     raison_parts.append(tonte_reason)
 
     return {
+        "objectif_mm": objectif_mm,
+        "objectif_mm_brut": objectif_mm_brut,
         "conseil_principal": conseil_principal,
         "action_recommandee": action_recommandee,
         "action_a_eviter": action_a_eviter,
@@ -490,4 +548,6 @@ def build_watering_bundle(
         "prochaine_reevaluation": prochaine_reevaluation,
         "tonte_autorisee": mowing_bundle["tonte_autorisee"],
         "tonte_statut": mowing_bundle["tonte_statut"],
+        "watering_passages": watering_passages,
+        "watering_pause_minutes": watering_pause_minutes,
     }
