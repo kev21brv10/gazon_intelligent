@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from .const import DEFAULT_MODE, DEFAULT_TYPE_SOL, INTERVENTIONS_ACTIONS
+from .const import DEFAULT_AUTO_IRRIGATION_ENABLED, DEFAULT_MODE, DEFAULT_TYPE_SOL, INTERVENTIONS_ACTIONS
 from .decision import (
     DecisionContext,
     build_decision_result,
@@ -13,7 +13,13 @@ from .decision import (
     phase_duration_days,
 )
 from .decision_models import DecisionResult
-from .memory import normalize_product_id, normalize_product_record
+from .memory import (
+    APPLICATION_DEFAULTS,
+    _normalize_user_action_summary,
+    compute_application_state,
+    normalize_product_id,
+    normalize_product_record,
+)
 from .soil_balance import normalize_soil_balance_state, update_soil_balance
 from .water import build_watering_session_summary
 
@@ -32,10 +38,12 @@ class GazonBrain:
             "dernier_arrosage_significatif": None,
             "derniere_phase_active": DEFAULT_MODE,
             "dernier_conseil": None,
+            "derniere_action_utilisateur": None,
             "derniere_application": None,
             "prochaine_reapplication": None,
             "catalogue_produits": 0,
             "date_derniere_mise_a_jour": None,
+            "auto_irrigation_enabled": DEFAULT_AUTO_IRRIGATION_ENABLED,
         }
         self.products: dict[str, dict[str, Any]] = {}
         self.soil_balance: dict[str, Any] = {}
@@ -85,14 +93,18 @@ class GazonBrain:
                 "dernier_arrosage_significatif": None,
                 "derniere_phase_active": self.mode,
                 "dernier_conseil": None,
+                "derniere_action_utilisateur": None,
                 "derniere_application": None,
                 "prochaine_reapplication": None,
                 "catalogue_produits": len(self.products),
                 "date_derniere_mise_a_jour": None,
+                "auto_irrigation_enabled": DEFAULT_AUTO_IRRIGATION_ENABLED,
             }
         self.memory.setdefault("historique_total", len(self.history))
         self.memory.setdefault("derniere_phase_active", self.mode)
         self.memory.setdefault("catalogue_produits", len(self.products))
+        self.memory.setdefault("derniere_action_utilisateur", None)
+        self.memory.setdefault("auto_irrigation_enabled", DEFAULT_AUTO_IRRIGATION_ENABLED)
         self.memory["historique_total"] = len(self.history)
         self.memory["catalogue_produits"] = len(self.products)
 
@@ -180,6 +192,13 @@ class GazonBrain:
         dose: str | None = None,
         zone: str | None = None,
         reapplication_after_days: int | None = None,
+        application_type: str | None = None,
+        application_requires_watering_after: bool | None = None,
+        application_post_watering_mm: float | None = None,
+        application_irrigation_block_hours: float | None = None,
+        application_irrigation_delay_minutes: float | None = None,
+        application_irrigation_mode: str | None = None,
+        application_label_notes: str | None = None,
         note: str | None = None,
     ) -> dict[str, Any]:
         if intervention not in INTERVENTIONS_ACTIONS:
@@ -194,10 +213,40 @@ class GazonBrain:
                     dose = str(dose_conseillee)
             if reapplication_after_days is None:
                 reapplication_after_days = product_record.get("reapplication_after_days")
+            if application_type is None:
+                application_type = product_record.get("application_type")
+            if application_requires_watering_after is None:
+                application_requires_watering_after = product_record.get("application_requires_watering_after")
+            if application_post_watering_mm is None:
+                application_post_watering_mm = product_record.get("application_post_watering_mm")
+            if application_irrigation_block_hours is None:
+                application_irrigation_block_hours = product_record.get("application_irrigation_block_hours")
+            if application_irrigation_delay_minutes is None:
+                application_irrigation_delay_minutes = product_record.get("application_irrigation_delay_minutes")
+            if application_irrigation_mode is None:
+                application_irrigation_mode = product_record.get("application_irrigation_mode")
+            if application_label_notes is None:
+                application_label_notes = product_record.get("application_label_notes")
+        defaults = APPLICATION_DEFAULTS.get(intervention, {})
+        if application_type is None:
+            application_type = defaults.get("application_type")
+        if application_requires_watering_after is None:
+            application_requires_watering_after = defaults.get("application_requires_watering_after")
+        if application_post_watering_mm is None:
+            application_post_watering_mm = defaults.get("application_post_watering_mm")
+        if application_irrigation_block_hours is None:
+            application_irrigation_block_hours = defaults.get("application_irrigation_block_hours")
+        if application_irrigation_delay_minutes is None:
+            application_irrigation_delay_minutes = defaults.get("application_irrigation_delay_minutes")
+        if application_irrigation_mode is None:
+            application_irrigation_mode = defaults.get("application_irrigation_mode")
+        if application_label_notes is None:
+            application_label_notes = defaults.get("application_label_notes")
         item: dict[str, Any] = {
             "type": intervention,
             "date": target_date.isoformat(),
             "source": "service",
+            "declared_at": datetime.now(timezone.utc).isoformat(),
         }
         if product_record:
             item["produit_id"] = product_record.get("id")
@@ -210,6 +259,20 @@ class GazonBrain:
             item["zone"] = zone
         if reapplication_after_days is not None:
             item["reapplication_after_days"] = int(reapplication_after_days)
+        if application_type not in (None, ""):
+            item["application_type"] = str(application_type)
+        if application_requires_watering_after is not None:
+            item["application_requires_watering_after"] = bool(application_requires_watering_after)
+        if application_post_watering_mm is not None:
+            item["application_post_watering_mm"] = float(application_post_watering_mm)
+        if application_irrigation_block_hours is not None:
+            item["application_irrigation_block_hours"] = float(application_irrigation_block_hours)
+        if application_irrigation_delay_minutes is not None:
+            item["application_irrigation_delay_minutes"] = float(application_irrigation_delay_minutes)
+        if application_irrigation_mode not in (None, ""):
+            item["application_irrigation_mode"] = str(application_irrigation_mode)
+        if application_label_notes not in (None, ""):
+            item["application_label_notes"] = str(application_label_notes)
         if note:
             item["note"] = note
         self._append_history(item)
@@ -237,6 +300,7 @@ class GazonBrain:
             "type": "arrosage",
             "date": (date_action or date.today()).isoformat(),
             "source": source,
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
         }
         if objectif_mm is not None:
             payload["objectif_mm"] = float(objectif_mm)
@@ -250,6 +314,38 @@ class GazonBrain:
         self._append_history(payload)
         return payload
 
+    def record_user_action(
+        self,
+        action: str,
+        state: str,
+        reason: str | None = None,
+        plan_type: str | None = None,
+        zone_count: int | None = None,
+        passages: int | None = None,
+        triggered_at: datetime | None = None,
+    ) -> dict[str, Any]:
+        summary = _normalize_user_action_summary(
+            {
+                "state": state,
+                "action": action,
+                "triggered_at": (triggered_at or datetime.now(timezone.utc)).isoformat(),
+                "reason": reason,
+                "plan_type": plan_type,
+                "zone_count": zone_count,
+                "passages": passages,
+            }
+        )
+        if summary is None:
+            summary = {
+                "state": "refuse",
+                "action": str(action),
+                "triggered_at": (triggered_at or datetime.now(timezone.utc)).isoformat(),
+            }
+            if reason not in (None, ""):
+                summary["reason"] = str(reason)
+        self.memory["derniere_action_utilisateur"] = summary
+        return summary
+
     def register_product(
         self,
         product_id: str,
@@ -259,6 +355,13 @@ class GazonBrain:
         reapplication_after_days: int | None = None,
         delai_avant_tonte_jours: int | None = None,
         phase_compatible: str | None = None,
+        application_type: str | None = None,
+        application_requires_watering_after: bool | None = None,
+        application_post_watering_mm: float | None = None,
+        application_irrigation_block_hours: float | None = None,
+        application_irrigation_delay_minutes: float | None = None,
+        application_irrigation_mode: str | None = None,
+        application_label_notes: str | None = None,
         note: str | None = None,
     ) -> dict[str, Any]:
         record = normalize_product_record(
@@ -270,6 +373,13 @@ class GazonBrain:
                 "reapplication_after_days": reapplication_after_days,
                 "delai_avant_tonte_jours": delai_avant_tonte_jours,
                 "phase_compatible": phase_compatible,
+                "application_type": application_type,
+                "application_requires_watering_after": application_requires_watering_after,
+                "application_post_watering_mm": application_post_watering_mm,
+                "application_irrigation_block_hours": application_irrigation_block_hours,
+                "application_irrigation_delay_minutes": application_irrigation_delay_minutes,
+                "application_irrigation_mode": application_irrigation_mode,
+                "application_label_notes": application_label_notes,
                 "note": note,
             },
         )

@@ -150,6 +150,7 @@ def _build_coordinator() -> object:
             "zone_5": None,
         }
         )
+    coord.brain = types.SimpleNamespace(memory={}, last_result=None)
     coord._watering_session = None
     coord._unsub_watering_session_finalize = None
     coord._zone_tracking_suspended = 0
@@ -254,6 +255,8 @@ class WateringSessionMonitoringTests(unittest.TestCase):
     def test_update_data_falls_back_to_history_when_return_sensor_is_zero(self) -> None:
         coordinator = _build_coordinator()
         coordinator._loaded = True
+        coordinator._auto_irrigation_task = None
+        coordinator._auto_irrigation_scheduler_task = None
         async def _load_state():
             return None
         coordinator._async_load_state = _load_state
@@ -261,6 +264,7 @@ class WateringSessionMonitoringTests(unittest.TestCase):
 
         class _Brain:
             last_result = None
+            memory = {}
 
             def compute_snapshot(self, **kwargs):
                 captured.update(kwargs)
@@ -340,3 +344,138 @@ class WateringSessionMonitoringTests(unittest.TestCase):
         self.assertEqual(captured["retour_arrosage"], 4.0)
         self.assertEqual(result["objectif_mm"], 1.2)
         self.assertEqual(result["phase_dominante"], "Normal")
+
+    def test_auto_irrigation_is_blocked_when_global_switch_is_off(self) -> None:
+        coordinator = _build_coordinator()
+        coordinator.memory = {"auto_irrigation_enabled": False}
+        coordinator._auto_irrigation_task = None
+        coordinator.hass = _FakeHass(states=_FakeStates({}))
+
+        with self.assertRaises(coordinator_mod.HomeAssistantError):
+            asyncio.run(
+                coordinator_mod.GazonIntelligentCoordinator.async_start_auto_irrigation(
+                    coordinator,
+                    1.0,
+                    source="auto_irrigation",
+                )
+            )
+
+    def test_current_plan_launch_uses_manual_source(self) -> None:
+        class _ManualPlanCoordinator:
+            def __init__(self) -> None:
+                self.entry = _FakeEntry()
+                self.memory = {"auto_irrigation_enabled": False}
+                self.data = {}
+                self.history = []
+                self.mode = "Sursemis"
+                self.date_action = None
+                self._auto_irrigation_task = None
+                self._recorded_actions: list[dict[str, object]] = []
+                self._calls: list[tuple[float | None, str | None, str]] = []
+
+            def _plan_arrosage_entity_id(self) -> str:
+                return "sensor.gazon_intelligent_plan_arrosage"
+
+            def _build_watering_plan_summary_for_user_action(
+                self,
+                objectif_mm: float | None = None,
+                plan: dict[str, object] | None = None,
+            ) -> dict[str, object]:
+                if plan is not None:
+                    return dict(plan)
+                return {
+                    "objective_mm": float(objectif_mm or 0.0),
+                    "zones": [{"zone": "switch.zone_1", "duration_seconds": 180}],
+                    "zone_count": 1,
+                    "fractionation": False,
+                    "passages": 1,
+                    "pause_between_passages_minutes": 0,
+                    "plan_type": "single_zone",
+                }
+
+            def _build_watering_plan_from_state(self, plan_arrosage_entity_id: str) -> dict[str, object] | None:
+                return {
+                    "objective_mm": 0.5,
+                    "zones": [{"zone": "switch.zone_1", "duration_seconds": 180}],
+                    "zone_count": 1,
+                    "fractionation": False,
+                    "passages": 1,
+                    "pause_between_passages_minutes": 0,
+                    "plan_type": "single_zone",
+                }
+
+            async def async_record_user_action(self, **kwargs):
+                self._recorded_actions.append(kwargs)
+                return kwargs
+
+            async def async_start_auto_irrigation(
+                self,
+                objectif_mm,
+                plan_arrosage_entity_id=None,
+                source="auto_irrigation",
+            ):
+                self._calls.append((objectif_mm, plan_arrosage_entity_id, source))
+
+        coordinator = _ManualPlanCoordinator()
+
+        asyncio.run(
+            coordinator_mod.GazonIntelligentCoordinator.async_start_current_watering_plan(coordinator)
+        )
+
+        self.assertEqual(
+            coordinator._calls,
+            [(None, "sensor.gazon_intelligent_plan_arrosage", "manual_plan")],
+        )
+        self.assertEqual(coordinator._recorded_actions[-1]["state"], "ok")
+
+    def test_application_irrigation_blocks_unknown_application_type(self) -> None:
+        class _UnknownApplicationCoordinator:
+            def __init__(self) -> None:
+                self.history = [
+                    {
+                        "type": "Traitement",
+                        "date": "2026-03-18",
+                        "declared_at": "2026-03-18T08:00:00+00:00",
+                        "produit": "Produit inconnu",
+                        "application_type": "autre",
+                        "application_requires_watering_after": True,
+                        "application_post_watering_mm": 1.0,
+                        "application_irrigation_block_hours": 12.0,
+                        "application_irrigation_delay_minutes": 0.0,
+                        "application_irrigation_mode": "auto",
+                    }
+                ]
+                self._recorded_actions: list[dict[str, object]] = []
+
+            def _build_watering_plan_summary_for_user_action(
+                self,
+                objectif_mm: float | None = None,
+                plan: dict[str, object] | None = None,
+            ) -> dict[str, object]:
+                if plan is not None:
+                    return dict(plan)
+                return {
+                    "objective_mm": float(objectif_mm or 0.0),
+                    "zones": [],
+                    "zone_count": 0,
+                    "fractionation": False,
+                    "passages": 1,
+                    "pause_between_passages_minutes": 0,
+                    "plan_type": "no_plan",
+                }
+
+            async def async_record_user_action(self, **kwargs):
+                self._recorded_actions.append(kwargs)
+                return kwargs
+
+        coordinator = _UnknownApplicationCoordinator()
+
+        with self.assertRaises(coordinator_mod.HomeAssistantError):
+            asyncio.run(
+                coordinator_mod.GazonIntelligentCoordinator.async_start_application_irrigation(
+                    coordinator
+                )
+            )
+
+        self.assertEqual(coordinator._recorded_actions[-1]["state"], "refuse")
+        self.assertIn("type d'application est inconnu", coordinator._recorded_actions[-1]["reason"])

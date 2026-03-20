@@ -136,6 +136,10 @@
         "objectif_mm": {
           "name": "Agua a aplicar (opcional)",
           "description": "Cantidad de agua en mm. Si se omite, usa el objetivo calculado por el modo actual."
+        },
+        "source": {
+          "name": "Origen de ejecución (opcional)",
+          "description": "auto_irrigation para la ejecución automática, manual_plan para el lanzamiento manual del plan."
         }
       }
     },
@@ -247,6 +251,13 @@
           "name": "Cantidad aplicada (opcional)",
           "description": "Cantidad de agua aplicada en mm."
         }
+      }
+    }
+  },
+  "entity": {
+    "switch": {
+      "auto_irrigation_enabled": {
+        "name": "Riego automático permitido"
       }
     }
   }

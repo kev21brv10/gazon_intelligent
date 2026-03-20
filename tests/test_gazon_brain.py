@@ -107,6 +107,84 @@ class GazonBrainTests(unittest.TestCase):
         self.assertEqual(len(payload["zones"]), 3)
         self.assertEqual(brain.history[-1]["total_mm"], 3.6)
 
+    def test_register_product_persists_application_fields(self) -> None:
+        brain = GazonBrain()
+        record = brain.register_product(
+            "bio-1",
+            "Bio Boost",
+            "Biostimulant",
+            dose_conseillee="3.0 ml / L",
+            reapplication_after_days=14,
+            delai_avant_tonte_jours=0,
+            phase_compatible="Sursemis, Reprise",
+            application_type="sol",
+            application_requires_watering_after=True,
+            application_post_watering_mm=1.2,
+            application_irrigation_block_hours=0.0,
+            application_irrigation_delay_minutes=30.0,
+            application_irrigation_mode="auto",
+            application_label_notes="Arrosage léger après application",
+            note="Produit test",
+        )
+
+        self.assertEqual(record["application_type"], "sol")
+        self.assertTrue(record["application_requires_watering_after"])
+        self.assertEqual(record["application_post_watering_mm"], 1.2)
+        self.assertEqual(record["application_irrigation_block_hours"], 0.0)
+        self.assertEqual(record["application_irrigation_delay_minutes"], 30.0)
+        self.assertEqual(record["application_irrigation_mode"], "auto")
+        self.assertEqual(record["application_label_notes"], "Arrosage léger après application")
+
+    def test_declare_intervention_persists_application_fields(self) -> None:
+        brain = GazonBrain()
+        item = brain.declare_intervention(
+            "Traitement",
+            date_action=date(2026, 3, 18),
+            produit_id="fungi-x",
+            produit="Fongicide X",
+            dose="12 ml",
+            zone="zone_1",
+            reapplication_after_days=21,
+            application_type="foliaire",
+            application_requires_watering_after=False,
+            application_post_watering_mm=0.0,
+            application_irrigation_block_hours=24.0,
+            application_irrigation_delay_minutes=0.0,
+            application_irrigation_mode="suggestion",
+            application_label_notes="Ne pas arroser pendant 24h",
+            note="Application test",
+        )
+
+        self.assertEqual(item["application_type"], "foliaire")
+        self.assertFalse(item["application_requires_watering_after"])
+        self.assertEqual(item["application_post_watering_mm"], 0.0)
+        self.assertEqual(item["application_irrigation_block_hours"], 24.0)
+        self.assertEqual(item["application_irrigation_delay_minutes"], 0.0)
+        self.assertEqual(item["application_irrigation_mode"], "suggestion")
+        self.assertEqual(item["application_label_notes"], "Ne pas arroser pendant 24h")
+        self.assertIn("declared_at", item)
+        self.assertIsNotNone(item["declared_at"])
+
+    def test_record_user_action_is_persisted(self) -> None:
+        brain = GazonBrain()
+        summary = brain.record_user_action(
+            action="Lancer le plan maintenant",
+            state="ok",
+            reason="Plan lancé immédiatement.",
+            plan_type="multi_zone",
+            zone_count=2,
+            passages=1,
+        )
+
+        self.assertEqual(summary["state"], "ok")
+        self.assertEqual(brain.memory["derniere_action_utilisateur"]["action"], "Lancer le plan maintenant")
+        self.assertEqual(brain.memory["derniere_action_utilisateur"]["plan_type"], "multi_zone")
+
+        reloaded = GazonBrain()
+        reloaded.load_state(brain.dump_state())
+        self.assertEqual(reloaded.memory["derniere_action_utilisateur"]["state"], "ok")
+        self.assertEqual(reloaded.memory["derniere_action_utilisateur"]["zone_count"], 2)
+
     def test_compute_snapshot_updates_and_persists_soil_balance(self) -> None:
         brain = GazonBrain()
         brain.record_watering(

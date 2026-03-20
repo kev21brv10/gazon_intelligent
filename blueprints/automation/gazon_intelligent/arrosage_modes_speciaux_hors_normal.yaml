@@ -1,12 +1,10 @@
 blueprint:
   name: Gazon Intelligent - Arrosage intelligent (modes spéciaux hors Normal)
   description: >
-    Automatise l'arrosage des modes spéciaux hors Normal.
-    Ce blueprint est réservé aux modes spéciaux et ne traite pas le mode Normal.
-    Le blueprint s'appuie en priorité sur le plan d'arrosage calculé par
-    l'intégration, exécute les zones séquentiellement et laisse la détection
-    automatique de session enregistrer l'arrosage réel.
-    Il bloque volontairement l'arrosage en Traitement et en Hivernage.
+    Compatibilité manuelle pour les modes spéciaux hors Normal.
+    L'exécution automatique est pilotée par l'intégration elle-même.
+    Ce blueprint conserve uniquement un déclenchement manuel de secours
+    et bloque volontairement l'arrosage en Traitement et en Hivernage.
   domain: automation
   input:
     mode_select:
@@ -24,69 +22,45 @@ blueprint:
       selector:
         entity:
           domain: binary_sensor
+    sensor_fenetre_optimale:
+      name: Fenêtre optimale
+      selector:
+        entity:
+          domain: sensor
+    sensor_dernier_arrosage_detecte:
+      name: Dernier arrosage détecté (optionnel)
+      default: ""
+      selector:
+        entity:
+          domain: sensor
     sensor_pluie_stop:
       name: Blocage pluie (optionnel)
       default: ""
       selector:
         entity:
           domain: binary_sensor
-    sensor_etp:
-      name: ETP (optionnel)
-      default: ""
-      selector:
-        entity:
-          domain: sensor
-    sensor_humidite:
-      name: Humidité (optionnel)
-      default: ""
-      selector:
-        entity:
-          domain: sensor
-
-    heure_matin:
-      name: Matin
-      default: "06:00:00"
-      selector:
-        time: {}
-    heure_midi:
-      name: Midi
-      default: "12:30:00"
-      selector:
-        time: {}
-    heure_soir:
-      name: Soir
-      default: "18:30:00"
-      selector:
-        time: {}
-
 mode: single
 
 trigger:
-  - platform: time
-    at: !input heure_matin
-    id: matin
-  - platform: time
-    at: !input heure_midi
-    id: midi
-  - platform: time
-    at: !input heure_soir
-    id: soir
+  - platform: event
+    event_type: gazon_intelligent_manual_watering_requested
+    id: manual
 
 variables:
   mode_select_entity: !input mode_select
   plan_arrosage_entity: !input sensor_plan_arrosage
   arrosage_recommande_entity: !input sensor_arrosage_recommande
+  fenetre_optimale_entity: !input sensor_fenetre_optimale
+  dernier_arrosage_entity: !input sensor_dernier_arrosage_detecte
   pluie_stop_entity: !input sensor_pluie_stop
-  sensor_etp_entity: !input sensor_etp
-  sensor_humidite_entity: !input sensor_humidite
   trigger_id: "{{ trigger.id | default('') }}"
+  trigger_is_manual: "{{ trigger_id == 'manual' }}"
 
   mode_gazon_raw: "{{ states(mode_select_entity) }}"
   plan_raw: "{{ states(plan_arrosage_entity) }}"
   arrosage_recommande_raw: "{{ states(arrosage_recommande_entity) }}"
+  fenetre_optimale_raw: "{{ states(fenetre_optimale_entity) }}"
   pluie_stop_raw: "{{ states(pluie_stop_entity) }}"
-  etp_raw: "{{ states(sensor_etp_entity) }}"
-  hum_raw: "{{ states(sensor_humidite_entity) }}"
 
   mode_gazon: "{{ mode_gazon_raw }}"
   plan_objective_mm: "{{ state_attr(plan_arrosage_entity, 'objective_mm') | float(0) }}"
@@ -96,6 +70,26 @@ variables:
   plan_passages: "{{ state_attr(plan_arrosage_entity, 'passages') | int(1) }}"
   plan_pause_minutes: "{{ state_attr(plan_arrosage_entity, 'pause_between_passages_minutes') | int(0) }}"
   plan_zones: "{{ state_attr(plan_arrosage_entity, 'zones') or [] }}"
+  last_detected_at: >-
+    {{
+      state_attr(dernier_arrosage_entity, 'detected_at')
+      if dernier_arrosage_entity not in ['', none]
+      else ''
+    }}
+  last_total_mm: >-
+    {{
+      state_attr(dernier_arrosage_entity, 'total_mm')
+      | float(0)
+      if dernier_arrosage_entity not in ['', none]
+      else 0
+    }}
+  plan_passage_label: >-
+    {% set passages = state_attr(plan_arrosage_entity, 'passages') | int(1) %}
+    {% if passages <= 1 %}
+      un passage unique
+    {% else %}
+      {{ passages }} passages séquentiels
+    {% endif %}
 
   plan_zones_summary: >-
     {% set zones = state_attr(plan_arrosage_entity, 'zones') or [] %}
@@ -108,16 +102,35 @@ variables:
       aucune zone exploitable
     {% endif %}
 
+  fenetre_target_date: >-
+    {{
+      state_attr(fenetre_optimale_entity, 'watering_target_date')
+      | default('', true)
+      | string
+    }}
+  recent_watering_block: >-
+    {% set detected_at = last_detected_at %}
+    {% set recent = false %}
+    {% if detected_at not in ['', none, 'unknown', 'unavailable'] %}
+      {% set age_seconds = as_timestamp(now()) - as_timestamp(detected_at) %}
+      {% set recent = age_seconds < 6 * 3600 %}
+    {% endif %}
+    {% set objective = plan_objective_mm | float(0) %}
+    {% set last_total = last_total_mm | float(0) %}
+      {{ recent or (objective > 0 and last_total >= objective) }}
+
   capteurs_ok: >
     {{
       mode_gazon_raw not in ['unknown', 'unavailable', 'none', '']
       and plan_raw not in ['unknown', 'unavailable', 'none', '']
       and arrosage_recommande_raw not in ['unknown', 'unavailable', 'none', '']
+      and fenetre_optimale_raw not in ['unknown', 'unavailable', 'none', '']
     }}
 
   plan_ok: >
     {{
-      (plan_zone_count | int(0)) > 0
+      (plan_objective_mm | float(0)) > 0
+      and (plan_zone_count | int(0)) > 0
       and (plan_total_duration_min | float(0)) > 0
       and (plan_zones | count > 0)
       and (plan_passages | int(1)) > 0
@@ -125,7 +138,7 @@ variables:
 
   arrosage_ok: "{{ arrosage_recommande_raw == 'on' }}"
 
-  pluie_stop: >
+  pluie_stop: >-
     {{
       pluie_stop_entity not in ['', none]
       and pluie_stop_raw not in ['unknown', 'unavailable', 'none', '']
@@ -153,62 +166,31 @@ action:
           - condition: template
             value_template: >
               {{
-                mode_gazon == 'Sursemis'
+                trigger_is_manual
                 and (plan_ok | bool)
-                and (plan_zone_count | int(0)) > 0
-                and (plan_total_duration_min | float(0)) > 0
                 and (arrosage_ok | bool)
-                and trigger_id in ['matin', 'midi', 'soir']
                 and not (pluie_stop | bool)
+                and mode_gazon not in ['Traitement', 'Hivernage', 'Normal']
+                and not (recent_watering_block | bool)
               }}
         sequence:
           - service: logbook.log
             data:
               name: Gazon Intelligent
               message: >
-                Plan d'arrosage lancé en mode {{ mode_gazon }} :
+                Lancement manuel du plan d'arrosage en mode {{ mode_gazon }} :
                 {{ plan_zone_count }} zone(s),
                 {{ plan_total_duration_min | round(1) }} min,
                 objectif {{ plan_objective_mm | round(1) }} mm,
-                passages={{ plan_passages }},
-                pause={{ plan_pause_minutes }} min,
+                {{ plan_passage_label | trim }},
+                pause entre cycles={{ plan_pause_minutes }} min,
                 fractionation={{ plan_fractionation }}.
+                Fenêtre optimale={{ fenetre_optimale_raw }}.
                 Zones: {{ plan_zones_summary | trim }}.
           - service: gazon_intelligent.start_auto_irrigation
             data:
               plan_arrosage_entity: !input sensor_plan_arrosage
-
-      - conditions:
-          - condition: template
-            value_template: >
-              {{
-                mode_gazon in ['Fertilisation', 'Biostimulant', 'Agent Mouillant', 'Scarification']
-                and (plan_ok | bool)
-                and (plan_zone_count | int(0)) > 0
-                and (plan_total_duration_min | float(0)) > 0
-                and (arrosage_ok | bool)
-                and (
-                  trigger_id == 'matin'
-                  or (trigger_id == 'soir' and (etp_raw | float(0)) >= 4 and (hum_raw | float(0)) <= 55)
-                )
-                and not (pluie_stop | bool)
-              }}
-        sequence:
-          - service: logbook.log
-            data:
-              name: Gazon Intelligent
-              message: >
-                Plan d'arrosage lancé en mode {{ mode_gazon }} :
-                {{ plan_zone_count }} zone(s),
-                {{ plan_total_duration_min | round(1) }} min,
-                objectif {{ plan_objective_mm | round(1) }} mm,
-                passages={{ plan_passages }},
-                pause={{ plan_pause_minutes }} min,
-                fractionation={{ plan_fractionation }}.
-                Zones: {{ plan_zones_summary | trim }}.
-          - service: gazon_intelligent.start_auto_irrigation
-            data:
-              plan_arrosage_entity: !input sensor_plan_arrosage
+              source: manual_plan
 
     default:
       - service: logbook.log
@@ -217,11 +199,15 @@ action:
           message: >
             Aucun arrosage n'a été lancé pour le trigger {{ trigger_id }}.
             Mode={{ mode_gazon }},
+            fenetre_optimale={{ fenetre_optimale_raw }},
+            date_cible={{ fenetre_target_date or 'non renseignée' }},
             plan_ok={{ plan_ok }},
             arrosage_ok={{ arrosage_ok }},
             pluie_stop={{ pluie_stop }},
+            recent_watering_block={{ recent_watering_block }},
             capteurs_ok={{ capteurs_ok }},
             objectif_plan={{ plan_objective_mm | round(1) }} mm,
             duree_plan={{ plan_total_duration_min | round(1) }} min,
             zones={{ plan_zone_count }},
-            passages={{ plan_passages }}.
+            passages={{ plan_passages }},
+            fractionation={{ plan_fractionation }}.

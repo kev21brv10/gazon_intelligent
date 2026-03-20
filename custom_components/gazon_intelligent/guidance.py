@@ -3,6 +3,69 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
+# Règles agronomiques soutenues par les sources:
+# - arroser tôt le matin;
+# - pour les semis / sursemis, garder la surface humide sans saturation;
+# - réduire la fréquence à mesure que l'enracinement progresse.
+#
+# Conventions internes de l'intégration:
+# - bornes horaires concrètes pour décider "maintenant" vs "demain matin";
+# - seuils de bascule pour le moteur Home Assistant.
+SURSEMIS_MORNING_START_HOUR = 6
+SURSEMIS_MORNING_END_HOUR = 10
+GENERAL_MORNING_START_HOUR = 5
+GENERAL_MORNING_END_HOUR = 10
+EVENING_START_HOUR = 18
+EVENING_END_HOUR = 21
+
+
+def _temperature_band(temperature: float | None) -> str:
+    temperature = temperature if temperature is not None else 0.0
+    if temperature < 10:
+        return "cool"
+    if temperature > 22:
+        return "hot"
+    return "mild"
+
+
+def _morning_window_bounds(phase_dominante: str, temperature: float | None) -> tuple[int, int, str]:
+    band = _temperature_band(temperature)
+    if phase_dominante == "Sursemis":
+        if band == "cool":
+            return 330, 600, band
+        if band == "hot":
+            return 360, 540, band
+        return 360, 570, band
+
+    if band == "cool":
+        return 300, 600, band
+    if band == "hot":
+        return 330, 540, band
+    return 330, 570, band
+
+
+def _evening_window_allowed(
+    temperature: float | None,
+    humidite: float | None,
+    water_balance: dict[str, float],
+    objectif_mm: float,
+) -> bool:
+    temperature = temperature if temperature is not None else 0.0
+    humidite = humidite if humidite is not None else 0.0
+    bilan_hydrique_mm = water_balance.get("bilan_hydrique_mm", 0.0)
+    arrosage_recent = water_balance.get("arrosage_recent", 0.0)
+    deficit_3j = water_balance.get("deficit_3j", 0.0)
+
+    if temperature < 24:
+        return False
+    if humidite > 65:
+        return False
+    if arrosage_recent > 0.25:
+        return False
+    if bilan_hydrique_mm >= -0.3 and deficit_3j <= 0.8:
+        return False
+    return objectif_mm > 0
+
 
 def _risk_rank(level: str) -> int:
     return {"faible": 0, "modere": 1, "eleve": 2}.get(level, 0)
@@ -40,19 +103,19 @@ def compute_objectif_mm(
     besoin_court = max(0.0, -bilan_hydrique_mm)
     besoin_tendance = (deficit_3j * 0.18) + (deficit_7j * 0.06)
 
-    if bilan_hydrique_mm >= 1.2:
+    if phase_dominante != "Sursemis" and bilan_hydrique_mm >= 1.2:
         return 0.0
     if pluie_demain >= 2.0 and bilan_hydrique_mm >= -0.5:
         return 0.0
 
     if phase_dominante == "Sursemis":
         if sous_phase == "Germination":
-            objectif = (besoin_court * 0.45) + (besoin_tendance * 0.08)
+            objectif = (besoin_court * 0.5) + (besoin_tendance * 0.1)
             if humidite >= 85 and temperature < 28:
-                objectif *= 0.8
-            minimum, maximum = 0.4, 1.6
+                objectif *= 0.9
+            minimum, maximum = 0.6, 1.8
         elif sous_phase == "Enracinement":
-            objectif = (besoin_court * 0.55) + (besoin_tendance * 0.10)
+            objectif = (besoin_court * 0.45) + (besoin_tendance * 0.08)
             minimum, maximum = 0.5, 2.1
         else:
             objectif = (besoin_court * 0.7) + (besoin_tendance * 0.12)
@@ -168,15 +231,32 @@ def compute_action_guidance(
     pluie_compensatrice = objectif_mm > 0 and pluie_demain >= max(2.0, objectif_mm * 0.8)
     pluie_proche = pluie_24h >= 4 or pluie_demain >= 4
     now_hour = hour_of_day if hour_of_day is not None else datetime.now().hour
+    now_minutes = now_hour * 60 + int(datetime.now().minute if hour_of_day is None else 0)
     vent = advanced_context.get("vent")
     rosee = advanced_context.get("rosee")
     hauteur_gazon = advanced_context.get("hauteur_gazon")
+    morning_start_minute, morning_end_minute, temperature_band = _morning_window_bounds(
+        phase_dominante=phase_dominante,
+        temperature=temperature,
+    )
+    evening_allowed = _evening_window_allowed(
+        temperature=temperature,
+        humidite=humidite,
+        water_balance=water_balance,
+        objectif_mm=objectif_mm,
+    )
 
     if phase_dominante in {"Traitement", "Hivernage"}:
         return {
             "niveau_action": "surveiller",
             "fenetre_optimale": "attendre",
             "risque_gazon": "faible",
+            "watering_window_start_minute": morning_start_minute,
+            "watering_window_end_minute": morning_end_minute,
+            "watering_evening_start_minute": EVENING_START_HOUR * 60,
+            "watering_evening_end_minute": EVENING_END_HOUR * 60,
+            "watering_window_profile": temperature_band,
+            "watering_evening_allowed": False,
         }
 
     if objectif_mm <= 0:
@@ -187,13 +267,19 @@ def compute_action_guidance(
             "niveau_action": "aucune_action" if phase_dominante == "Normal" else "surveiller",
             "fenetre_optimale": fenetre_optimale,
             "risque_gazon": "faible" if phase_dominante == "Normal" else "modere",
+            "watering_window_start_minute": morning_start_minute,
+            "watering_window_end_minute": morning_end_minute,
+            "watering_evening_start_minute": EVENING_START_HOUR * 60,
+            "watering_evening_end_minute": EVENING_END_HOUR * 60,
+            "watering_window_profile": temperature_band,
+            "watering_evening_allowed": evening_allowed,
         }
 
     if phase_dominante == "Sursemis":
         niveau_action = "critique" if pression_hydrique >= 2.2 or bilan_hydrique_mm <= -1.5 else "a_faire"
         if pluie_compensatrice or pluie_proche:
             fenetre_optimale = "apres_pluie"
-        elif now_hour < 9 and (vent is None or vent < 15):
+        elif morning_start_minute <= now_minutes < morning_end_minute and (vent is None or vent < 15):
             fenetre_optimale = "maintenant"
         else:
             fenetre_optimale = "demain_matin"
@@ -206,9 +292,18 @@ def compute_action_guidance(
             "niveau_action": niveau_action,
             "fenetre_optimale": fenetre_optimale,
             "risque_gazon": risque_gazon,
+            "watering_window_start_minute": morning_start_minute,
+            "watering_window_end_minute": morning_end_minute,
+            "watering_evening_start_minute": EVENING_START_HOUR * 60,
+            "watering_evening_end_minute": EVENING_END_HOUR * 60,
+            "watering_window_profile": temperature_band,
+            "watering_evening_allowed": False,
         }
 
-    if pluie_compensatrice:
+    if evening_allowed and now_hour >= EVENING_START_HOUR:
+        fenetre_optimale = "soir"
+        niveau_action = "a_faire"
+    elif pluie_compensatrice:
         fenetre_optimale = "apres_pluie"
         niveau_action = "surveiller"
     elif humidite >= 85 and bilan_hydrique_mm >= -0.5:
@@ -224,12 +319,12 @@ def compute_action_guidance(
         fenetre_optimale = "attendre"
         niveau_action = "surveiller"
     elif bilan_hydrique_mm <= -4.0:
-        fenetre_optimale = "maintenant" if now_hour < 9 else "demain_matin"
+        fenetre_optimale = "maintenant" if now_hour < GENERAL_MORNING_END_HOUR - 1 else "demain_matin"
         niveau_action = "critique"
     elif bilan_hydrique_mm <= -0.8 or pression_hydrique >= 1.5:
-        fenetre_optimale = "maintenant" if now_hour < 10 else "demain_matin"
+        fenetre_optimale = "maintenant" if now_hour < GENERAL_MORNING_END_HOUR else "demain_matin"
         niveau_action = "a_faire"
-    elif now_hour < 9:
+    elif morning_start_minute <= now_minutes < morning_end_minute:
         fenetre_optimale = "maintenant"
         niveau_action = "a_faire"
     else:
@@ -251,6 +346,12 @@ def compute_action_guidance(
         "niveau_action": niveau_action,
         "fenetre_optimale": fenetre_optimale,
         "risque_gazon": risque_gazon,
+        "watering_window_start_minute": morning_start_minute,
+        "watering_window_end_minute": morning_end_minute,
+        "watering_evening_start_minute": EVENING_START_HOUR * 60,
+        "watering_evening_end_minute": EVENING_END_HOUR * 60,
+        "watering_window_profile": temperature_band,
+        "watering_evening_allowed": evening_allowed,
     }
 
 
