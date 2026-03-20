@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from datetime import datetime, timezone
 import asyncio
 import logging
 from typing import Any
@@ -32,6 +33,9 @@ from .const import (
     DEFAULT_HAUTEUR_MIN_TONDEUSE_CM,
     CONF_TYPE_SOL,
     DEFAULT_TYPE_SOL,
+    WATERING_SESSION_END_GRACE_SECONDS,
+    WATERING_SESSION_MIN_DURATION_SECONDS,
+    WATERING_SESSION_MIN_SEGMENT_SECONDS,
 )
 from .decision import (
     build_decision_snapshot,
@@ -63,7 +67,8 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._unsub_start_listener: CALLBACK_TYPE | None = None
         self._unsub_delayed_refresh: CALLBACK_TYPE | None = None
         self._unsub_zone_listeners: list[CALLBACK_TYPE] = []
-        self._zone_start_times: dict[str, Any] = {}
+        self._watering_session: dict[str, Any] | None = None
+        self._unsub_watering_session_finalize: CALLBACK_TYPE | None = None
         self._zone_tracking_suspended = 0
 
     async def _async_update_data(self) -> dict[str, Any]:
@@ -122,7 +127,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             rosee = self._estimate_rosee(weather_profile, temperature, humidite)
         hauteur_gazon = self._get_float_state(self._get_conf(CONF_CAPTEUR_HAUTEUR_GAZON))
         retour_arrosage_sensor = self._get_float_state(self._get_conf(CONF_CAPTEUR_RETOUR_ARROSAGE))
-        if retour_arrosage_sensor is not None:
+        if retour_arrosage_sensor is not None and retour_arrosage_sensor > 0:
             retour_arrosage = retour_arrosage_sensor
         else:
             retour_arrosage_today = compute_recent_watering_mm(self.history, today=date.today(), days=0)
@@ -383,14 +388,17 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         total_mm: float | None = None,
         zones: list[dict[str, Any]] | None = None,
         source: str = "service",
+        detected_at: datetime | None = None,
     ) -> None:
-        self.brain.record_watering(
+        payload = self.brain.record_watering(
             date_action=date_action,
             objectif_mm=objectif_mm,
             total_mm=total_mm,
             zones=zones,
             source=source,
         )
+        if detected_at is not None:
+            payload["detected_at"] = detected_at.isoformat()
         await self._async_save_state()
         await self.async_request_refresh()
 
@@ -403,6 +411,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._unsub_zone_listeners = [
             async_track_state_change_event(self.hass, zone_ids, self._handle_zone_state_change)
         ]
+        self._rebuild_watering_session_from_current_state()
 
     @callback
     def _handle_zone_state_change(self, event: Event) -> None:
@@ -417,59 +426,346 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         new_is_on = str(new_state.state).lower() == "on"
         old_is_on = old_state is not None and str(old_state.state).lower() == "on"
+        changed_at = getattr(new_state, "last_changed", None) or datetime.now(timezone.utc)
 
         if new_is_on:
-            self._zone_start_times[entity_id] = new_state.last_changed
+            self._track_watering_zone_on(entity_id, changed_at)
             return
 
-        start = self._zone_start_times.pop(entity_id, None)
-        if start is None and old_is_on and old_state is not None:
-            start = old_state.last_changed
-        if start is None:
-            return
+        if self._track_watering_zone_off(
+            entity_id,
+            changed_at,
+            old_state.last_changed if old_is_on and old_state is not None else None,
+        ):
+            self._schedule_watering_session_finalize()
 
-        rate_mm_min = self._get_zone_rate_mm_min(entity_id)
-        if rate_mm_min <= 0:
+    def _ensure_watering_session(self, started_at: datetime) -> None:
+        if self._watering_session is not None:
             return
+        self._watering_session = {
+            "started_at": started_at,
+            "last_activity_at": started_at,
+            "last_inactive_at": None,
+            "zones": {},
+            "active_zones": {},
+            "zone_order": 0,
+        }
 
-        duration_minutes = max((new_state.last_changed - start).total_seconds() / 60.0, 0.0)
-        objectif_mm = round(duration_minutes * rate_mm_min, 1)
-        if objectif_mm <= 0:
+    def _clear_watering_session(self) -> None:
+        self._cancel_watering_session_finalize()
+        self._watering_session = None
+
+    def _cancel_watering_session_finalize(self) -> None:
+        if self._unsub_watering_session_finalize:
+            self._unsub_watering_session_finalize()
+            self._unsub_watering_session_finalize = None
+
+    def _schedule_watering_session_finalize(self) -> None:
+        if self._watering_session is None:
             return
-
-        self.hass.async_create_task(
-            self._async_record_switch_watering(
-                entity_id,
-                objectif_mm,
-                new_state.last_changed,
-                duration_minutes,
-                rate_mm_min,
-            )
+        self._cancel_watering_session_finalize()
+        self._unsub_watering_session_finalize = async_call_later(
+            self.hass,
+            WATERING_SESSION_END_GRACE_SECONDS,
+            self._async_finalize_watering_session,
         )
 
-    async def _async_record_switch_watering(
-        self,
-        entity_id: str,
-        objectif_mm: float,
-        ended_at,
-        duration_minutes: float,
-        rate_mm_min: float,
-    ) -> None:
-        rate_mm_h = max(0.0, rate_mm_min * 60.0)
-        await self.async_record_watering(
-            ended_at.date(),
-            objectif_mm=objectif_mm,
-            total_mm=objectif_mm,
-            zones=[
+    def _rebuild_watering_session_from_current_state(self) -> None:
+        """Reconstruit une session en cours à partir des zones déjà allumées."""
+        if self._watering_session is not None:
+            return
+
+        active_zones: list[tuple[str, datetime]] = []
+        now = datetime.now(timezone.utc)
+        for entity_id, _ in self._iter_zones_with_rate():
+            state = self.hass.states.get(entity_id)
+            if state is None or str(state.state).lower() != "on":
+                continue
+            changed_at = getattr(state, "last_changed", None) or now
+            if not isinstance(changed_at, datetime):
+                changed_at = now
+            active_zones.append((entity_id, changed_at))
+
+        if not active_zones:
+            return
+
+        started_at = min(changed_at for _, changed_at in active_zones)
+        self._watering_session = {
+            "started_at": started_at,
+            "last_activity_at": max(changed_at for _, changed_at in active_zones),
+            "last_inactive_at": None,
+            "zones": {},
+            "active_zones": {},
+            "zone_order": 0,
+        }
+        session = self._watering_session
+        if session is None:
+            return
+
+        for order, (entity_id, changed_at) in enumerate(sorted(active_zones, key=lambda item: item[1]), start=1):
+            rate_mm_h = max(0.0, self._get_zone_rate_mm_h(entity_id))
+            session["zone_order"] = order
+            session["active_zones"][entity_id] = changed_at
+            session["zones"][entity_id] = {
+                "order": order,
+                "zone": entity_id,
+                "entity_id": entity_id,
+                "rate_mm_h": rate_mm_h,
+                "duration_seconds": 0.0,
+                "mm": 0.0,
+                "started_at": changed_at,
+                "ended_at": None,
+            }
+
+    def _build_watering_plan_from_state(self, plan_arrosage_entity_id: str) -> dict[str, Any] | None:
+        """Lit le plan d'arrosage calculé depuis l'entité capteur."""
+        plan_state = self.hass.states.get(plan_arrosage_entity_id)
+        if plan_state is None:
+            return None
+        attributes = plan_state.attributes if isinstance(plan_state.attributes, dict) else {}
+        zones = attributes.get("zones")
+        if not isinstance(zones, list) or not zones:
+            return None
+
+        try:
+            passages = max(1, int(attributes.get("passages", 1)))
+        except (TypeError, ValueError):
+            passages = 1
+        try:
+            pause_minutes = max(0, int(attributes.get("pause_between_passages_minutes", 0)))
+        except (TypeError, ValueError):
+            pause_minutes = 0
+
+        normalized_zones: list[dict[str, Any]] = []
+        for zone in zones:
+            if not isinstance(zone, dict):
+                continue
+            entity_id = str(zone.get("zone") or zone.get("entity_id") or "").strip()
+            if not entity_id:
+                continue
+            duration_seconds = zone.get("duration_seconds")
+            if duration_seconds is None:
+                duration_min = zone.get("duration_min")
+                try:
+                    duration_seconds = float(duration_min) * 60.0 if duration_min is not None else None
+                except (TypeError, ValueError):
+                    duration_seconds = None
+            try:
+                duration_seconds = float(duration_seconds)
+            except (TypeError, ValueError):
+                continue
+            if duration_seconds <= 0:
+                continue
+            normalized_zones.append(
                 {
                     "zone": entity_id,
                     "entity_id": entity_id,
-                    "rate_mm_h": rate_mm_h,
-                    "duration_min": duration_minutes,
-                    "mm": objectif_mm,
+                    "rate_mm_h": zone.get("rate_mm_h"),
+                    "duration_seconds": duration_seconds,
+                    "duration_min": zone.get("duration_min"),
+                    "mm": zone.get("mm"),
                 }
-            ],
-            source="zone_switch",
+            )
+
+        if not normalized_zones:
+            return None
+
+        return {
+            "objective_mm": attributes.get("objective_mm"),
+            "total_duration_min": attributes.get("total_duration_min"),
+            "zones": normalized_zones,
+            "passages": passages,
+            "pause_between_passages_minutes": pause_minutes,
+        }
+
+    def _track_watering_zone_on(self, entity_id: str, changed_at: datetime) -> None:
+        self._ensure_watering_session(changed_at)
+        session = self._watering_session
+        if session is None:
+            return
+        if entity_id in session["active_zones"]:
+            session["active_zones"][entity_id] = changed_at
+            session["last_activity_at"] = changed_at
+            return
+
+        session["active_zones"][entity_id] = changed_at
+        session["last_activity_at"] = changed_at
+        zone_record = session["zones"].get(entity_id)
+        if zone_record is None:
+            session["zone_order"] += 1
+            zone_record = {
+                "order": session["zone_order"],
+                "zone": entity_id,
+                "entity_id": entity_id,
+                "rate_mm_h": max(0.0, self._get_zone_rate_mm_h(entity_id)),
+                "duration_seconds": 0.0,
+                "mm": 0.0,
+                "started_at": changed_at,
+                "ended_at": None,
+            }
+            session["zones"][entity_id] = zone_record
+        else:
+            if zone_record.get("started_at") is None:
+                zone_record["started_at"] = changed_at
+
+        self._cancel_watering_session_finalize()
+
+    def _track_watering_zone_off(
+        self,
+        entity_id: str,
+        changed_at: datetime,
+        fallback_start: datetime | None = None,
+    ) -> bool:
+        session = self._watering_session
+        if session is None:
+            if fallback_start is None:
+                return False
+            self._ensure_watering_session(fallback_start)
+            session = self._watering_session
+            if session is None:
+                return False
+            session["active_zones"][entity_id] = fallback_start
+            zone_record = session["zones"].get(entity_id)
+            if zone_record is None:
+                session["zone_order"] += 1
+                zone_record = {
+                    "order": session["zone_order"],
+                    "zone": entity_id,
+                    "entity_id": entity_id,
+                    "rate_mm_h": max(0.0, self._get_zone_rate_mm_h(entity_id)),
+                    "duration_seconds": 0.0,
+                    "mm": 0.0,
+                    "started_at": fallback_start,
+                    "ended_at": None,
+                }
+                session["zones"][entity_id] = zone_record
+
+        start = session["active_zones"].pop(entity_id, None)
+        if start is None:
+            return False
+
+        rate_mm_h = max(0.0, self._get_zone_rate_mm_h(entity_id))
+        if rate_mm_h <= 0:
+            return False
+
+        duration_seconds = max((changed_at - start).total_seconds(), 0.0)
+        if duration_seconds < WATERING_SESSION_MIN_SEGMENT_SECONDS:
+            if not session["active_zones"]:
+                session["last_inactive_at"] = changed_at
+                return True
+            return False
+
+        zone_record = session["zones"].setdefault(
+            entity_id,
+            {
+                "order": session["zone_order"] + 1,
+                "zone": entity_id,
+                "entity_id": entity_id,
+                "rate_mm_h": rate_mm_h,
+                "duration_seconds": 0.0,
+                "mm": 0.0,
+                "started_at": start,
+                "ended_at": None,
+            },
+        )
+        if zone_record.get("order") is None:
+            session["zone_order"] += 1
+            zone_record["order"] = session["zone_order"]
+        elif zone_record["order"] > session["zone_order"]:
+            session["zone_order"] = int(zone_record["order"])
+
+        zone_record["rate_mm_h"] = rate_mm_h
+        zone_record["started_at"] = zone_record.get("started_at") or start
+        zone_record["ended_at"] = changed_at
+        zone_record["duration_seconds"] = float(zone_record.get("duration_seconds", 0.0)) + duration_seconds
+        zone_record["mm"] = float(zone_record.get("mm", 0.0)) + ((rate_mm_h * duration_seconds) / 3600.0)
+        session["last_activity_at"] = changed_at
+        if not session["active_zones"]:
+            session["last_inactive_at"] = changed_at
+            return True
+        return False
+
+    def _build_watering_session_payload(self) -> dict[str, Any] | None:
+        session = self._watering_session
+        if session is None:
+            return
+        if session["active_zones"]:
+            return None
+
+        ended_at = session.get("last_inactive_at")
+        started_at = session.get("started_at")
+        if not isinstance(ended_at, datetime) or not isinstance(started_at, datetime):
+            return None
+
+        session_duration_seconds = max((ended_at - started_at).total_seconds(), 0.0)
+        if session_duration_seconds < WATERING_SESSION_MIN_DURATION_SECONDS:
+            return None
+
+        zones = []
+        for zone_record in sorted(session["zones"].values(), key=lambda item: int(item.get("order", 0))):
+            if not isinstance(zone_record, dict):
+                continue
+            duration_seconds = float(zone_record.get("duration_seconds", 0.0))
+            mm = float(zone_record.get("mm", 0.0))
+            if duration_seconds < WATERING_SESSION_MIN_SEGMENT_SECONDS or mm <= 0:
+                continue
+            duration_min = duration_seconds / 60.0
+            zones.append(
+                {
+                    "order": int(zone_record.get("order", len(zones) + 1)),
+                    "zone": zone_record.get("zone") or zone_record.get("entity_id"),
+                    "entity_id": zone_record.get("entity_id") or zone_record.get("zone"),
+                    "rate_mm_h": round(max(0.0, float(zone_record.get("rate_mm_h", 0.0))), 1),
+                    "duration_min": round(max(0.0, duration_min), 1),
+                    "duration_seconds": int(max(0.0, duration_seconds)),
+                    "mm": round(mm, 1),
+                }
+            )
+
+        if not zones:
+            return None
+
+        total_mm = round(sum(float(zone["mm"]) for zone in zones), 1)
+        if total_mm <= 0:
+            return None
+
+        return {
+            "date_action": ended_at.date(),
+            "objectif_mm": total_mm,
+            "total_mm": total_mm,
+            "zones": zones,
+            "source": "zone_session",
+        }
+
+    async def _async_finalize_watering_session(self, now) -> None:
+        self._unsub_watering_session_finalize = None
+        session = self._watering_session
+        if session is None:
+            return
+        if session.get("active_zones"):
+            return
+        ended_at = session.get("last_inactive_at")
+        if not isinstance(ended_at, datetime):
+            return
+        if not isinstance(now, datetime):
+            now = datetime.now(timezone.utc)
+        elapsed = (now - ended_at).total_seconds()
+        if elapsed < WATERING_SESSION_END_GRACE_SECONDS:
+            self._schedule_watering_session_finalize()
+            return
+
+        payload = self._build_watering_session_payload()
+        self._clear_watering_session()
+        if payload is None:
+            return
+
+        await self.async_record_watering(
+            payload["date_action"],
+            objectif_mm=payload["objectif_mm"],
+            total_mm=payload["total_mm"],
+            zones=payload["zones"],
+            source=payload["source"],
+            detected_at=ended_at,
         )
 
     async def async_register_product(
@@ -537,36 +833,64 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except (TypeError, ValueError):
             return 0.0
 
-    async def async_start_auto_irrigation(self, objectif_mm: float | None) -> None:
+    def _get_zone_rate_mm_h(self, entity_id: str | None, rate_h: Any | None = None) -> float:
+        if not entity_id:
+            return 0.0
+        if rate_h is None:
+            for idx in range(1, 6):
+                if entity_id == self._get_conf(f"zone_{idx}"):
+                    rate_h = self._get_conf(f"debit_zone_{idx}")
+                    break
+        try:
+            return float(rate_h or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    async def async_start_auto_irrigation(
+        self,
+        objectif_mm: float | None,
+        plan_arrosage_entity_id: str | None = None,
+    ) -> None:
         """Arrose automatiquement chaque zone en séquence selon le débit renseigné."""
         if self._auto_irrigation_task and not self._auto_irrigation_task.done():
             raise HomeAssistantError(
                 "Un arrosage automatique est déjà en cours."
             )
 
-        objectif = float(objectif_mm) if objectif_mm is not None else float(
-            self.data.get("objectif_mm", 0.0)
-        )
-        zones = list(self._iter_zones_with_rate())
-        if not zones:
-            raise HomeAssistantError(
-                "Aucune zone d'arrosage valide n'est configurée (zone + débit mm/h)."
+        plan = None
+        if plan_arrosage_entity_id:
+            plan = self._build_watering_plan_from_state(plan_arrosage_entity_id)
+            if plan is None:
+                raise HomeAssistantError(
+                    "Le plan d'arrosage est vide ou invalide."
+                )
+        else:
+            objectif = float(objectif_mm) if objectif_mm is not None else float(
+                self.data.get("objectif_mm", 0.0)
             )
-
-        async def _run_zone(entity_id: str, duration_minutes: float) -> None:
-            await self.hass.services.async_call(
-                "switch", "turn_on", {"entity_id": entity_id}, blocking=True
-            )
-            try:
-                await asyncio.sleep(max(duration_minutes, 0) * 60)
-            finally:
-                await self.hass.services.async_call(
-                    "switch", "turn_off", {"entity_id": entity_id}, blocking=True
+            zones = list(self._iter_zones_with_rate())
+            if not zones:
+                raise HomeAssistantError(
+                    "Aucune zone d'arrosage valide n'est configurée (zone + débit mm/h)."
                 )
 
-        async def _sequence():
+        async def _turn_off_zone(entity_id: str) -> None:
+            try:
+                await asyncio.shield(
+                    self.hass.services.async_call(
+                        "switch",
+                        "turn_off",
+                        {"entity_id": entity_id},
+                        blocking=True,
+                    )
+                )
+            except Exception as err:  # pragma: no cover - best effort cleanup
+                _LOGGER.debug("Echec turn_off pour %s: %s", entity_id, err)
+
+        async def _run_legacy_sequence():
             session_zones: list[dict[str, Any]] = []
             try:
+                self._clear_watering_session()
                 self._zone_tracking_suspended += 1
                 for order, (entity_id, rate) in enumerate(zones, start=1):
                     if rate <= 0:
@@ -574,7 +898,13 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     duration = objectif / rate
                     if duration <= 0:
                         continue
-                    await _run_zone(entity_id, duration)
+                    await self.hass.services.async_call(
+                        "switch", "turn_on", {"entity_id": entity_id}, blocking=True
+                    )
+                    try:
+                        await asyncio.sleep(max(duration, 0) * 60)
+                    finally:
+                        await _turn_off_zone(entity_id)
                     session_zones.append(
                         {
                             "order": order,
@@ -596,8 +926,42 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._zone_tracking_suspended = max(0, self._zone_tracking_suspended - 1)
                 self._auto_irrigation_task = None
 
+        async def _run_plan_sequence():
+            assert plan is not None
+            zones = list(plan["zones"])
+            passages = max(1, int(plan["passages"]))
+            pause_minutes = max(0, int(plan["pause_between_passages_minutes"]))
+            started_zones: list[str] = []
+            try:
+                for passage_index in range(passages):
+                    for zone in zones:
+                        entity_id = str(zone["zone"])
+                        duration_seconds = zone.get("duration_seconds")
+                        try:
+                            duration_seconds = float(duration_seconds)
+                        except (TypeError, ValueError):
+                            continue
+                        if duration_seconds <= 0:
+                            continue
+                        await self.hass.services.async_call(
+                            "switch", "turn_on", {"entity_id": entity_id}, blocking=True
+                        )
+                        started_zones.append(entity_id)
+                        try:
+                            await asyncio.sleep(max(1, int(round(duration_seconds / passages))))
+                        finally:
+                            await _turn_off_zone(entity_id)
+                    if passage_index < passages - 1 and pause_minutes > 0:
+                        await asyncio.sleep(pause_minutes * 60)
+            finally:
+                cleanup_targets = list(dict.fromkeys(started_zones or [str(zone["zone"]) for zone in zones]))
+                for entity_id in reversed(cleanup_targets):
+                    await _turn_off_zone(entity_id)
+                self._auto_irrigation_task = None
+
+        sequence = _run_plan_sequence if plan is not None else _run_legacy_sequence
         self._auto_irrigation_task = self.hass.async_create_task(
-            _sequence(), "gazon_intelligent_auto_irrigation_sequence"
+            sequence(), "gazon_intelligent_auto_irrigation_sequence"
         )
 
     def schedule_post_start_refresh(self, delay_seconds: int = 30) -> None:
@@ -636,7 +1000,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for unsub in self._unsub_zone_listeners:
             unsub()
         self._unsub_zone_listeners.clear()
-        self._zone_start_times.clear()
+        self._clear_watering_session()
 
     async def async_shutdown(self) -> None:
         """Nettoie les tâches en cours à la fermeture de l'intégration."""

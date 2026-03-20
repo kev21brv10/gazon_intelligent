@@ -245,7 +245,9 @@ Flux recommandé :
 
 - déclencher l’arrosage automatiquement  
 - bloquer selon le mode (Traitement, Hivernage, etc.)  
-- adapter le volume selon l’objectif calculé  
+- s’appuyer sur le plan d’arrosage calculé par l’intégration
+- lancer les zones en séquentiel avec les durées calculées
+- laisser l’intégration enregistrer automatiquement la session réelle
 
 ---
 

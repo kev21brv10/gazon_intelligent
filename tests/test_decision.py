@@ -292,6 +292,36 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertNotIn("0.0 mm", snapshot["action_recommandee"])
         self.assertEqual(snapshot["action_a_eviter"], "Éviter tout arrosage inutile.")
 
+    def test_build_decision_snapshot_reduces_watering_when_rain_compensates(self) -> None:
+        dry_snapshot = decision.build_decision_snapshot(
+            history=[],
+            today=date(2026, 3, 17),
+            hour_of_day=7,
+            temperature=20,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=60,
+            type_sol="limoneux",
+            etp_capteur=3.0,
+        )
+        rainy_snapshot = decision.build_decision_snapshot(
+            history=[],
+            today=date(2026, 3, 17),
+            hour_of_day=7,
+            temperature=20,
+            pluie_24h=0,
+            pluie_demain=3.0,
+            humidite=60,
+            type_sol="limoneux",
+            etp_capteur=3.0,
+        )
+
+        self.assertTrue(rainy_snapshot["arrosage_recommande"])
+        self.assertLess(rainy_snapshot["objectif_mm"], dry_snapshot["objectif_mm"])
+        self.assertEqual(rainy_snapshot["objectif_mm"], rainy_snapshot["decision_resume"]["objectif_mm"])
+        self.assertLessEqual(rainy_snapshot["objectif_mm"], rainy_snapshot["objectif_mm_brut"])
+        self.assertIn("Réduis", rainy_snapshot["action_recommandee"])
+
     def test_build_decision_snapshot_normal_uses_soil_fractionation(self) -> None:
         snapshot = decision.build_decision_snapshot(
             history=[],
@@ -440,6 +470,32 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertGreater(advanced_snapshot["score_hydrique"], base_snapshot["score_hydrique"])
         self.assertGreaterEqual(advanced_snapshot["score_stress"], base_snapshot["score_stress"])
         self.assertIn(advanced_snapshot["niveau_action"], {"a_faire", "surveiller", "critique"})
+
+    def test_build_decision_snapshot_keeps_return_watering_sensor_priority(self) -> None:
+        snapshot = decision.build_decision_snapshot(
+            history=[
+                {
+                    "type": "arrosage",
+                    "date": "2026-03-17",
+                    "objectif_mm": 4.0,
+                    "zones": [
+                        {"zone": "switch.zone_1", "mm": 2.0},
+                        {"zone": "switch.zone_2", "mm": 2.0},
+                    ],
+                }
+            ],
+            today=date(2026, 3, 17),
+            hour_of_day=7,
+            temperature=24,
+            pluie_24h=1.0,
+            pluie_demain=0.0,
+            humidite=55,
+            type_sol="limoneux",
+            etp_capteur=4.0,
+            retour_arrosage=0.7,
+        )
+
+        self.assertEqual(snapshot["retour_arrosage"], 0.7)
 
     def test_build_decision_snapshot_blocks_mowing_on_third_rule(self) -> None:
         snapshot = decision.build_decision_snapshot(

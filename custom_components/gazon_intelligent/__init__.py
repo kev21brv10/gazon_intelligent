@@ -97,7 +97,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     vol.Optional("objectif_mm"): vol.All(
                         vol.Coerce(float),
                         vol.Range(min=0, max=30),
-                    )
+                    ),
+                    vol.Optional("plan_arrosage_entity"): vol.Coerce(str),
                 }
             ),
         )
@@ -261,7 +262,10 @@ async def _handle_start_manual_irrigation(call: ServiceCall) -> None:
 async def _handle_start_auto_irrigation(call: ServiceCall) -> None:
     hass = call.hass
     coordinator = _get_first_coordinator(hass)
-    await coordinator.async_start_auto_irrigation(call.data.get("objectif_mm"))
+    await coordinator.async_start_auto_irrigation(
+        call.data.get("objectif_mm"),
+        call.data.get("plan_arrosage_entity"),
+    )
 
 
 async def _handle_declare_intervention(call: ServiceCall) -> None:

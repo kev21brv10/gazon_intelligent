@@ -32,4 +32,6 @@ ACTIVE_ENTITY_SUFFIXES: set[str] = {
     "fenetre_optimale",
     "risque_gazon",
     "type_arrosage",
+    "plan_arrosage",
+    "dernier_arrosage_detecte",
 }

@@ -147,6 +147,8 @@ def compute_decision(
         arrosage_auto_autorise=watering_bundle["arrosage_auto_autorise"],
         type_arrosage=watering_bundle["type_arrosage"],
         arrosage_conseille=watering_bundle["arrosage_conseille"],
+        watering_passages=watering_bundle["watering_passages"],
+        watering_pause_minutes=watering_bundle["watering_pause_minutes"],
         phase_dominante_source=phase_bundle["phase_dominante_source"],
         sous_phase_detail=phase_bundle["sous_phase_detail"],
         sous_phase_age_days=phase_bundle["sous_phase_age_days"],
@@ -163,6 +165,8 @@ def compute_decision(
         phase_context=phase_bundle,
         extra={
             "jours_restants": jours_restants,
+            "watering_passages": watering_bundle["watering_passages"],
+            "watering_pause_minutes": watering_bundle["watering_pause_minutes"],
         },
     )
 
@@ -226,7 +230,7 @@ def build_decision_snapshot(
         niveau_action=risk_bundle["niveau_action"],
         fenetre_optimale=risk_bundle["fenetre_optimale"],
         risque_gazon=risk_bundle["risque_gazon"],
-        objectif_arrosage=water_bundle["objectif_mm"],
+        objectif_arrosage=watering_bundle["objectif_mm"],
         tonte_autorisee=mowing_bundle["tonte_autorisee"],
         conseil_principal=watering_bundle["conseil_principal"],
         tonte_statut=mowing_bundle["tonte_statut"],
@@ -234,6 +238,8 @@ def build_decision_snapshot(
         arrosage_auto_autorise=watering_bundle["arrosage_auto_autorise"],
         type_arrosage=watering_bundle["type_arrosage"],
         arrosage_conseille=watering_bundle["arrosage_conseille"],
+        watering_passages=watering_bundle["watering_passages"],
+        watering_pause_minutes=watering_bundle["watering_pause_minutes"],
         phase_dominante_source=phase_bundle["phase_dominante_source"],
         sous_phase_detail=phase_bundle["sous_phase_detail"],
         sous_phase_age_days=phase_bundle["sous_phase_age_days"],
@@ -277,7 +283,8 @@ def build_decision_snapshot(
             "bilan_hydrique_mm": water_bundle["water_balance"]["bilan_hydrique_mm"],
             "bilan_hydrique_3j": water_bundle["water_balance"]["bilan_hydrique_3j"],
             "bilan_hydrique_7j": water_bundle["water_balance"]["bilan_hydrique_7j"],
-            "objectif_mm": water_bundle["objectif_mm"],
+            "objectif_mm": watering_bundle["objectif_mm"],
+            "objectif_mm_brut": water_bundle["objectif_mm"],
             "score_hydrique": risk_bundle["scores"]["score_hydrique"],
             "score_stress": risk_bundle["scores"]["score_stress"],
             "score_tonte": risk_bundle["scores"]["score_tonte"],
@@ -320,7 +327,7 @@ def build_decision_result(context: DecisionContext) -> DecisionResult:
         niveau_action=risk_bundle["niveau_action"],
         fenetre_optimale=risk_bundle["fenetre_optimale"],
         risque_gazon=risk_bundle["risque_gazon"],
-        objectif_arrosage=water_bundle["objectif_mm"],
+        objectif_arrosage=watering_bundle["objectif_mm"],
         tonte_autorisee=mowing_bundle["tonte_autorisee"],
         hauteur_tonte_recommandee_cm=mowing_bundle["hauteur_tonte_recommandee_cm"],
         hauteur_tonte_min_cm=mowing_bundle["hauteur_tonte_min_cm"],
@@ -345,4 +352,8 @@ def build_decision_result(context: DecisionContext) -> DecisionResult:
         advanced_context=water_bundle["advanced_context"],
         water_balance=water_bundle["water_balance"],
         phase_context=phase_bundle,
+        extra={
+            "objectif_mm_brut": water_bundle["objectif_mm"],
+            "objectif_mm_executable": watering_bundle["objectif_mm"],
+        },
     )
