@@ -393,14 +393,14 @@ class GazonDerniereActionUtilisateurSensor(GazonEntityBase, SensorEntity):
     def native_value(self):
         summary = self._latest_action()
         if not summary:
-            return None
+            return "none"
         return summary.get("state")
 
     @property
     def extra_state_attributes(self):
         summary = self._latest_action()
         if not summary:
-            return None
+            return {"summary": "Aucune action récente"}
         attrs = {
             key: value
             for key, value in summary.items()
@@ -493,12 +493,21 @@ class GazonPlanArrosageSensor(GazonEntityBase, SensorEntity):
 
     def _build_plan(self) -> dict[str, object] | None:
         objective = self._latest_objective()
+
+        def _duration_human(total_minutes: float) -> str:
+            total_seconds = max(0, int(round(total_minutes * 60.0)))
+            minutes, seconds = divmod(total_seconds, 60)
+            if seconds == 0:
+                return f"{minutes} min"
+            return f"{minutes} min {seconds:02d}"
+
         def _empty_plan(reason: str) -> dict[str, object]:
             return {
                 "objective_mm": round(max(0.0, objective or 0.0), 1),
                 "zones": [],
                 "zone_count": 0,
                 "total_duration_min": 0.0,
+                "duration_human": _duration_human(0.0),
                 "min_duration_min": 0.0,
                 "max_duration_min": 0.0,
                 "fractionation": False,
@@ -507,6 +516,7 @@ class GazonPlanArrosageSensor(GazonEntityBase, SensorEntity):
                 "source": "no_plan",
                 "reason": reason,
                 "plan_type": "no_plan",
+                "summary": "Aucun plan d'arrosage",
             }
 
         if objective is None or objective <= 0:
@@ -572,6 +582,7 @@ class GazonPlanArrosageSensor(GazonEntityBase, SensorEntity):
             "zones": zones,
             "zone_count": len(zones),
             "total_duration_min": total_duration_min,
+            "duration_human": _duration_human(total_duration_min),
             "min_duration_min": round(min_minutes, 1),
             "max_duration_min": round(max_minutes, 1),
             "fractionation": self._watering_passages() > 1,
@@ -579,6 +590,10 @@ class GazonPlanArrosageSensor(GazonEntityBase, SensorEntity):
             "pause_between_passages_minutes": self._watering_pause_minutes(),
             "source": "calculated_from_objective",
             "plan_type": "multi_zone" if len(zones) > 1 else "single_zone",
+            "summary": (
+                f"{len(zones)} zone{'s' if len(zones) != 1 else ''} • "
+                f"{round(objective, 1):.1f} mm • {_duration_human(total_duration_min)}"
+            ),
         }
 
     @property
@@ -806,7 +821,7 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
         if auto_autorise:
             return {
                 "status": "auto",
-                "next_action": "Lancer le plan maintenant",
+                "next_action": "Aucune action requise",
                 "summary": f"Arrosage prévu {display_window or 'maintenant'} (auto)",
             }
 

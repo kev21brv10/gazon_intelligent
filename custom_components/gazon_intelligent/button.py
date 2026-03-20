@@ -8,7 +8,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
         [
-            LancerArrosageButton(coordinator),
+            ArroserMaintenantButton(coordinator),
             RetourModeNormalButton(coordinator),
             DateActionAujourdhuiButton(coordinator),
         ]
@@ -16,7 +16,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
 
 class LancerArrosageButton(GazonEntityBase, ButtonEntity):
-    _attr_name = "Lancer le plan maintenant"
+    _attr_name = "Arrosage du plan courant"
     _attr_has_entity_name = True
     _attr_icon = "mdi:water-pump"
 

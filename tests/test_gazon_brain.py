@@ -168,7 +168,7 @@ class GazonBrainTests(unittest.TestCase):
     def test_record_user_action_is_persisted(self) -> None:
         brain = GazonBrain()
         summary = brain.record_user_action(
-            action="Lancer le plan maintenant",
+            action="Plan d'arrosage lancé",
             state="ok",
             reason="Plan lancé immédiatement.",
             plan_type="multi_zone",
@@ -177,7 +177,7 @@ class GazonBrainTests(unittest.TestCase):
         )
 
         self.assertEqual(summary["state"], "ok")
-        self.assertEqual(brain.memory["derniere_action_utilisateur"]["action"], "Lancer le plan maintenant")
+        self.assertEqual(brain.memory["derniere_action_utilisateur"]["action"], "Plan d'arrosage lancé")
         self.assertEqual(brain.memory["derniere_action_utilisateur"]["plan_type"], "multi_zone")
 
         reloaded = GazonBrain()

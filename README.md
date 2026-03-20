@@ -80,7 +80,7 @@ Puis il te donne une seule chose :
 - Arrosage après application autorisé
 - Arrosage automatique autorisé
 - Type d'arrosage  
-- Bouton `Lancer le plan maintenant`
+- Bouton `Arrosage manuel immédiat`
 
 ---
 
@@ -186,6 +186,7 @@ Les capteurs utiles :
 
 - `Dernière application`
 - `Dernière action utilisateur`
+- `Plan d'arrosage`
 - `Arrosage après application autorisé`
 - `application_block_remaining_minutes`
 - `application_post_watering_ready_at`
@@ -201,26 +202,18 @@ Le capteur `Dernière action utilisateur` utilise ces états lisibles :
 
 Le champ `action` reprend le libellé utilisateur, par exemple :
 
-- `Lancer le plan maintenant`
+- `Arrosage manuel immédiat`
+- `Plan d'arrosage lancé`
+
+À vide, `Dernière action utilisateur` affiche `none` avec le résumé `Aucune action récente`.
 
 Le bouton visible dans l'interface principale :
 
-- `Lancer le plan maintenant`
-- déclenche le plan calculé immédiatement
+- `Arrosage manuel immédiat`
+- déclenche un arrosage manuel immédiat contrôlé
 - reste l'unique action manuelle visible pour l'utilisateur
 
-Le mode manuel immédiat reste possible via le service dédié :
-
-- il passe par un service avancé, pas par l'interface principale
-- il conserve les sécurités critiques
-- il peut être utilisé par des automatisations ou services avancés si nécessaire
-
-Le bouton de plan :
-
-- `Lancer le plan maintenant`
-- lance le plan courant calculé
-- sert à l'exécution opérationnelle du plan multi-zone ou du plan courant
-- n'est pas le même flux qu'un arrosage manuel immédiat interne
+Le plan d'arrosage reste géré automatiquement par le scheduler interne.
 
 Le switch global :
 
@@ -405,9 +398,9 @@ Si le projet t’aide :
 
 ## 🧾 Version
 
-- manifest : `0.4.0`
-- README : `0.4.0`
-- changelog : `0.4.0`
+- manifest : `0.4.1`
+- README : `0.4.1`
+- changelog : `0.4.1`
 
 
 ## 📄 Licence

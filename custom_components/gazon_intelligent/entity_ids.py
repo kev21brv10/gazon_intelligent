@@ -20,7 +20,6 @@ ACTIVE_ENTITY_SUFFIXES: set[str] = {
     "arrosage_recommande",
     "retour_mode_normal",
     "date_action_today",
-    "lancer_arrosage",
     "hauteur_tonte",
     "phase_active",
     "sous_phase",
@@ -39,4 +38,5 @@ ACTIVE_ENTITY_SUFFIXES: set[str] = {
     "derniere_action_utilisateur",
     "arrosage_apres_application_autorise",
     "arrosage_automatique",
+    "arroser_maintenant",
 }
