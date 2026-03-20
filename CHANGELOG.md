@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.4.0
+- Bump de version pour la nouvelle release.
+
 ## 0.3.28
 - Expose des valeurs explicites pour les capteurs d'arrosage quand aucune donnée réelle n'est encore disponible.
 - Ajoute des attributs hydriques lisibles sur l'objectif d'arrosage pour faciliter le debug dans Home Assistant.

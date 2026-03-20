@@ -19,13 +19,14 @@ from .coordinator import GazonIntelligentCoordinator
 from .date_utils import parse_optional_date
 from .migration import async_migrate_entry
 
-PLATFORMS = ["select", "number", "sensor", "binary_sensor", "button"]
+PLATFORMS = ["select", "number", "sensor", "binary_sensor", "switch", "button"]
 
 SERVICE_SET_MODE = "set_mode"
 SERVICE_SET_DATE_ACTION = "set_date_action"
 SERVICE_RESET_MODE = "reset_mode"
 SERVICE_START_MANUAL_IRRIGATION = "start_manual_irrigation"
 SERVICE_START_AUTO_IRRIGATION = "start_auto_irrigation"
+SERVICE_START_APPLICATION_IRRIGATION = "start_application_irrigation"
 SERVICE_DECLARE_INTERVENTION = "declare_intervention"
 SERVICE_DECLARE_MOWING = "declare_mowing"
 SERVICE_DECLARE_WATERING = "declare_watering"
@@ -99,8 +100,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         vol.Range(min=0, max=30),
                     ),
                     vol.Optional("plan_arrosage_entity"): vol.Coerce(str),
+                    vol.Optional("source"): vol.Coerce(str),
                 }
             ),
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_START_APPLICATION_IRRIGATION):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_START_APPLICATION_IRRIGATION,
+            _handle_start_application_irrigation,
         )
 
     if not hass.services.has_service(DOMAIN, SERVICE_DECLARE_INTERVENTION):
@@ -120,6 +129,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         vol.Coerce(int),
                         vol.Range(min=0, max=365),
                     ),
+                    vol.Optional("application_type"): vol.In(["sol", "foliaire"]),
+                    vol.Optional("application_requires_watering_after"): vol.Coerce(bool),
+                    vol.Optional("application_post_watering_mm"): vol.All(
+                        vol.Coerce(float),
+                        vol.Range(min=0, max=10),
+                    ),
+                    vol.Optional("application_irrigation_block_hours"): vol.All(
+                        vol.Coerce(float),
+                        vol.Range(min=0, max=72),
+                    ),
+                    vol.Optional("application_irrigation_delay_minutes"): vol.All(
+                        vol.Coerce(float),
+                        vol.Range(min=0, max=1440),
+                    ),
+                    vol.Optional("application_irrigation_mode"): vol.In(["auto", "manuel", "suggestion"]),
+                    vol.Optional("application_label_notes"): vol.Coerce(str),
                     vol.Optional("note"): vol.Coerce(str),
                 }
             ),
@@ -145,6 +170,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         vol.Range(min=0, max=3650),
                     ),
                     vol.Optional("phase_compatible"): vol.Coerce(str),
+                    vol.Optional("application_type"): vol.In(["sol", "foliaire"]),
+                    vol.Optional("application_requires_watering_after"): vol.Coerce(bool),
+                    vol.Optional("application_post_watering_mm"): vol.All(
+                        vol.Coerce(float),
+                        vol.Range(min=0, max=10),
+                    ),
+                    vol.Optional("application_irrigation_block_hours"): vol.All(
+                        vol.Coerce(float),
+                        vol.Range(min=0, max=72),
+                    ),
+                    vol.Optional("application_irrigation_delay_minutes"): vol.All(
+                        vol.Coerce(float),
+                        vol.Range(min=0, max=1440),
+                    ),
+                    vol.Optional("application_irrigation_mode"): vol.In(["auto", "manuel", "suggestion"]),
+                    vol.Optional("application_label_notes"): vol.Coerce(str),
                     vol.Optional("note"): vol.Coerce(str),
                 }
             ),
@@ -199,6 +240,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             SERVICE_RESET_MODE,
             SERVICE_START_MANUAL_IRRIGATION,
             SERVICE_START_AUTO_IRRIGATION,
+            SERVICE_START_APPLICATION_IRRIGATION,
             SERVICE_DECLARE_INTERVENTION,
             SERVICE_DECLARE_MOWING,
             SERVICE_DECLARE_WATERING,
@@ -265,7 +307,14 @@ async def _handle_start_auto_irrigation(call: ServiceCall) -> None:
     await coordinator.async_start_auto_irrigation(
         call.data.get("objectif_mm"),
         call.data.get("plan_arrosage_entity"),
+        source=str(call.data.get("source") or "auto_irrigation"),
     )
+
+
+async def _handle_start_application_irrigation(call: ServiceCall) -> None:
+    hass = call.hass
+    coordinator = _get_first_coordinator(hass)
+    await coordinator.async_start_application_irrigation()
 
 
 async def _handle_declare_intervention(call: ServiceCall) -> None:
@@ -280,6 +329,13 @@ async def _handle_declare_intervention(call: ServiceCall) -> None:
             call.data.get("dose"),
             call.data.get("zone"),
             call.data.get("reapplication_after_days"),
+            call.data.get("application_type"),
+            call.data.get("application_requires_watering_after"),
+            call.data.get("application_post_watering_mm"),
+            call.data.get("application_irrigation_block_hours"),
+            call.data.get("application_irrigation_delay_minutes"),
+            call.data.get("application_irrigation_mode"),
+            call.data.get("application_label_notes"),
             call.data.get("note"),
         )
     except ValueError as err:
@@ -321,6 +377,13 @@ async def _handle_register_product(call: ServiceCall) -> None:
             call.data.get("reapplication_after_days"),
             call.data.get("delai_avant_tonte_jours"),
             call.data.get("phase_compatible"),
+            call.data.get("application_type"),
+            call.data.get("application_requires_watering_after"),
+            call.data.get("application_post_watering_mm"),
+            call.data.get("application_irrigation_block_hours"),
+            call.data.get("application_irrigation_delay_minutes"),
+            call.data.get("application_irrigation_mode"),
+            call.data.get("application_label_notes"),
             call.data.get("note"),
         )
     except Exception as err:  # pragma: no cover

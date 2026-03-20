@@ -27,6 +27,7 @@ _ensure_package("custom_components", PACKAGE_DIR.parent)
 _ensure_package("custom_components.gazon_intelligent", PACKAGE_DIR)
 
 decision = importlib.import_module("custom_components.gazon_intelligent.decision")
+decision_watering = importlib.import_module("custom_components.gazon_intelligent.decision_watering")
 
 
 class DecisionEngineTests(unittest.TestCase):
@@ -337,7 +338,8 @@ class DecisionEngineTests(unittest.TestCase):
 
         self.assertEqual(snapshot["phase_active"], "Normal")
         self.assertTrue(snapshot["arrosage_recommande"])
-        self.assertIn("2 passages", snapshot["action_recommandee"])
+        self.assertGreaterEqual(snapshot["watering_passages"], 2)
+        self.assertIn("passages courts", snapshot["action_recommandee"])
 
     def test_build_decision_snapshot_treatment_blocks_actions(self) -> None:
         snapshot = decision.build_decision_snapshot(
@@ -364,6 +366,141 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertEqual(snapshot["prochaine_reevaluation"], "dans 24 h")
         self.assertEqual(snapshot["objectif_mm"], 0.0)
 
+    def test_build_decision_snapshot_foliar_application_blocks_auto_watering(self) -> None:
+        snapshot = decision.build_decision_snapshot(
+            history=[
+                {
+                    "type": "Traitement",
+                    "date": "2026-03-20",
+                    "declared_at": "2026-03-20T08:00:00+00:00",
+                    "produit": "Fongicide X",
+                    "application_type": "foliaire",
+                    "application_requires_watering_after": False,
+                    "application_post_watering_mm": 0.0,
+                    "application_irrigation_block_hours": 24.0,
+                    "application_irrigation_delay_minutes": 0.0,
+                    "application_irrigation_mode": "suggestion",
+                    "application_label_notes": "Pas d'arrosage après application",
+                }
+            ],
+            today=date(2026, 3, 20),
+            hour_of_day=10,
+            temperature=18,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=50,
+            type_sol="limoneux",
+            etp_capteur=2.0,
+        )
+
+        self.assertEqual(snapshot["application_type"], "foliaire")
+        self.assertTrue(snapshot["application_block_active"])
+        self.assertGreater(snapshot["application_block_remaining_minutes"], 0.0)
+        self.assertEqual(snapshot["type_arrosage"], "bloque")
+        self.assertFalse(snapshot["arrosage_recommande"])
+        self.assertEqual(snapshot["objectif_mm"], 0.0)
+        self.assertIn("fenêtre de protection", snapshot["conseil_principal"])
+        self.assertEqual(snapshot["application_label_notes"], "Pas d'arrosage après application")
+        self.assertEqual(snapshot["application_irrigation_mode"], "suggestion")
+
+    def test_build_decision_snapshot_sol_application_uses_application_technique(self) -> None:
+        snapshot = decision.build_decision_snapshot(
+            history=[
+                {
+                    "type": "Fertilisation",
+                    "date": "2026-03-17",
+                    "declared_at": "2026-03-17T08:00:00+00:00",
+                    "produit": "Engrais printemps",
+                    "application_type": "sol",
+                    "application_requires_watering_after": True,
+                    "application_post_watering_mm": 1.2,
+                    "application_irrigation_block_hours": 0.0,
+                    "application_irrigation_delay_minutes": 0.0,
+                    "application_irrigation_mode": "auto",
+                }
+            ],
+            today=date(2026, 3, 17),
+            hour_of_day=8,
+            temperature=18,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=55,
+            type_sol="limoneux",
+            etp_capteur=2.0,
+        )
+
+        self.assertEqual(snapshot["application_type"], "sol")
+        self.assertFalse(snapshot["application_block_active"])
+        self.assertTrue(snapshot["application_post_watering_ready"])
+        self.assertTrue(snapshot["arrosage_recommande"])
+        self.assertTrue(snapshot["arrosage_auto_autorise"])
+        self.assertEqual(snapshot["type_arrosage"], "application_technique")
+        self.assertEqual(snapshot["arrosage_conseille"], "application_technique")
+        self.assertGreater(snapshot["objectif_mm"], 0.0)
+        self.assertEqual(snapshot["decision_resume"]["type_arrosage"], "application_technique")
+        self.assertEqual(snapshot["application_irrigation_mode"], "auto")
+
+    def test_build_decision_snapshot_sol_application_manual_mode_requires_button(self) -> None:
+        snapshot = decision.build_decision_snapshot(
+            history=[
+                {
+                    "type": "Biostimulant",
+                    "date": "2026-03-17",
+                    "declared_at": "2026-03-17T08:00:00+00:00",
+                    "produit": "Bio Boost",
+                    "application_type": "sol",
+                    "application_requires_watering_after": True,
+                    "application_post_watering_mm": 1.0,
+                    "application_irrigation_block_hours": 0.0,
+                    "application_irrigation_delay_minutes": 0.0,
+                    "application_irrigation_mode": "manuel",
+                }
+            ],
+            today=date(2026, 3, 17),
+            hour_of_day=8,
+            temperature=18,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=55,
+            type_sol="limoneux",
+            etp_capteur=2.0,
+        )
+
+        self.assertEqual(snapshot["application_irrigation_mode"], "manuel")
+        self.assertTrue(snapshot["arrosage_recommande"])
+        self.assertFalse(snapshot["arrosage_auto_autorise"])
+        self.assertEqual(snapshot["type_arrosage"], "application_technique")
+        self.assertIn("arrosage manuel immédiat", snapshot["conseil_principal"].lower())
+
+    def test_build_decision_snapshot_unknown_application_type_blocks_auto_watering(self) -> None:
+        snapshot = decision.build_decision_snapshot(
+            history=[
+                {
+                    "type": "Sursemis",
+                    "date": "2026-03-17",
+                    "declared_at": "2026-03-17T08:00:00+00:00",
+                    "produit": "Produit inconnu",
+                    "application_requires_watering_after": True,
+                    "application_post_watering_mm": 1.0,
+                    "application_irrigation_block_hours": 0.0,
+                    "application_irrigation_delay_minutes": 0.0,
+                }
+            ],
+            today=date(2026, 3, 17),
+            hour_of_day=8,
+            temperature=18,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=55,
+            type_sol="limoneux",
+            etp_capteur=2.0,
+        )
+
+        self.assertNotIn("application_type", snapshot)
+        self.assertFalse(snapshot["arrosage_recommande"])
+        self.assertEqual(snapshot["type_arrosage"], "bloque")
+        self.assertIn("type d'application inconnu", snapshot["conseil_principal"].lower())
+
     def test_build_decision_snapshot_sursemis_mentions_passage_interval(self) -> None:
         snapshot = decision.build_decision_snapshot(
             history=[{"type": "Sursemis", "date": "2026-03-17"}],
@@ -378,8 +515,167 @@ class DecisionEngineTests(unittest.TestCase):
         )
 
         self.assertEqual(snapshot["phase_active"], "Sursemis")
-        self.assertIn("20 à 30 min", snapshot["conseil_principal"])
+        self.assertEqual(snapshot["fenetre_optimale"], "demain_matin")
+        self.assertEqual(snapshot["watering_target_date"], "2026-03-18")
+        self.assertIn("demain matin", snapshot["conseil_principal"])
+        self.assertNotIn("ce matin", snapshot["conseil_principal"])
         self.assertIn("20 à 30 min", snapshot["action_recommandee"])
+
+    def test_compute_objectif_mm_sursemis_germination_is_more_humid(self) -> None:
+        germination = decision.compute_objectif_mm(
+            phase_dominante="Sursemis",
+            sous_phase="Germination",
+            water_balance={
+                "bilan_hydrique_mm": 0.8,
+                "deficit_3j": 1.5,
+                "deficit_7j": 3.0,
+            },
+            today=date(2026, 3, 17),
+            pluie_demain=0,
+            humidite=60,
+            temperature=18.0,
+            etp=1.2,
+            type_sol="limoneux",
+        )
+        enracinement = decision.compute_objectif_mm(
+            phase_dominante="Sursemis",
+            sous_phase="Enracinement",
+            water_balance={
+                "bilan_hydrique_mm": 0.8,
+                "deficit_3j": 1.5,
+                "deficit_7j": 3.0,
+            },
+            today=date(2026, 3, 17),
+            pluie_demain=0,
+            humidite=60,
+            temperature=18.0,
+            etp=1.2,
+            type_sol="limoneux",
+        )
+
+        self.assertGreater(germination, enracinement)
+        self.assertGreater(germination, 0.0)
+
+    def test_compute_objectif_mm_keeps_small_sursemis_watering_floor(self) -> None:
+        objectif = decision.compute_objectif_mm(
+            phase_dominante="Sursemis",
+            sous_phase="Enracinement",
+            water_balance={
+                "bilan_hydrique_mm": 10.8,
+                "deficit_3j": 2.8,
+                "deficit_7j": 8.6,
+            },
+            today=date(2026, 3, 17),
+            pluie_demain=0,
+            humidite=50,
+            temperature=18.7,
+            etp=1.4,
+            type_sol="limoneux",
+        )
+
+        self.assertEqual(objectif, 0.5)
+
+    def test_compute_action_guidance_sursemis_waits_until_6am(self) -> None:
+        base_kwargs = dict(
+            phase_dominante="Sursemis",
+            sous_phase="Enracinement",
+            water_balance={
+                "bilan_hydrique_mm": -1.0,
+                "deficit_3j": 1.2,
+                "deficit_7j": 2.4,
+            },
+            advanced_context={
+                "vent": 8,
+                "rosee": 0.0,
+                "hauteur_gazon": 7.0,
+            },
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            humidite=55.0,
+            temperature=18.0,
+            etp=1.2,
+            objectif_mm=0.5,
+        )
+
+        early = decision.compute_action_guidance(hour_of_day=5, **base_kwargs)
+        acceptable = decision.compute_action_guidance(hour_of_day=6, **base_kwargs)
+
+        self.assertEqual(early["fenetre_optimale"], "demain_matin")
+        self.assertEqual(acceptable["fenetre_optimale"], "maintenant")
+
+    def test_compute_action_guidance_adjusts_window_with_temperature(self) -> None:
+        base_kwargs = dict(
+            phase_dominante="Sursemis",
+            sous_phase="Enracinement",
+            water_balance={
+                "bilan_hydrique_mm": -1.0,
+                "deficit_3j": 1.2,
+                "deficit_7j": 2.4,
+            },
+            advanced_context={
+                "vent": 8,
+                "rosee": 0.0,
+                "hauteur_gazon": 7.0,
+            },
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            humidite=55.0,
+            etp=1.2,
+            objectif_mm=0.5,
+            hour_of_day=6,
+        )
+
+        cool = decision.compute_action_guidance(temperature=8.0, **base_kwargs)
+        hot = decision.compute_action_guidance(temperature=24.0, **base_kwargs)
+
+        self.assertEqual(cool["watering_window_start_minute"], 330)
+        self.assertEqual(cool["watering_window_end_minute"], 600)
+        self.assertEqual(hot["watering_window_start_minute"], 360)
+        self.assertEqual(hot["watering_window_end_minute"], 540)
+        self.assertEqual(cool["watering_window_profile"], "cool")
+        self.assertEqual(hot["watering_window_profile"], "hot")
+
+    def test_compute_action_guidance_allows_evening_when_conditions_match(self) -> None:
+        guidance = decision.compute_action_guidance(
+            phase_dominante="Normal",
+            sous_phase="Normal",
+            water_balance={
+                "bilan_hydrique_mm": -1.6,
+                "deficit_3j": 2.1,
+                "deficit_7j": 3.9,
+            },
+            advanced_context={
+                "vent": 6,
+                "rosee": 0.0,
+                "hauteur_gazon": 8.0,
+            },
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            humidite=42.0,
+            temperature=27.0,
+            etp=4.4,
+            objectif_mm=2.0,
+            hour_of_day=19,
+        )
+
+        self.assertEqual(guidance["fenetre_optimale"], "soir")
+        self.assertTrue(guidance["watering_evening_allowed"])
+        self.assertEqual(guidance["watering_evening_start_minute"], 1080)
+        self.assertEqual(guidance["watering_evening_end_minute"], 1260)
+
+    def test_fractionation_expands_above_two_mm(self) -> None:
+        passages = decision_watering._soil_fractionation_passages(
+            phase_dominante="Normal",
+            sous_phase="Normal",
+            type_sol="limoneux",
+            objectif_mm=3.0,
+            stress_level="modere",
+            temperature=18.0,
+            humidite=55.0,
+            etp=2.0,
+        )
+
+        self.assertEqual(passages, 2)
 
     def test_build_decision_snapshot_sursemis_objectif_zero_never_recommends_zero_mm(self) -> None:
         snapshot = decision.build_decision_snapshot(
@@ -403,7 +699,7 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertNotIn("0.0 mm", snapshot["conseil_principal"])
         self.assertEqual(snapshot["action_a_eviter"], "Éviter tout arrosage inutile.")
 
-    def test_build_decision_snapshot_fertilisation_blocks_heat_stress(self) -> None:
+    def test_build_decision_snapshot_fertilisation_uses_application_technique(self) -> None:
         snapshot = decision.build_decision_snapshot(
             history=[{"type": "Fertilisation", "date": "2026-06-15"}],
             today=date(2026, 6, 15),
@@ -417,12 +713,13 @@ class DecisionEngineTests(unittest.TestCase):
         )
 
         self.assertEqual(snapshot["phase_active"], "Fertilisation")
-        self.assertEqual(snapshot["objectif_mm"], 0.0)
-        self.assertFalse(snapshot["arrosage_recommande"])
-        self.assertEqual(snapshot["niveau_action"], "surveiller")
-        self.assertEqual(snapshot["fenetre_optimale"], "attendre")
-        self.assertIn("reporte", snapshot["conseil_principal"])
-        self.assertIn("Attends", snapshot["action_recommandee"])
+        self.assertEqual(snapshot["application_type"], "sol")
+        self.assertTrue(snapshot["arrosage_recommande"])
+        self.assertEqual(snapshot["type_arrosage"], "application_technique")
+        self.assertEqual(snapshot["arrosage_conseille"], "application_technique")
+        self.assertGreater(snapshot["objectif_mm"], 0.0)
+        self.assertIn("arrose", snapshot["conseil_principal"].lower())
+        self.assertIn("application technique", snapshot["raison_decision"].lower())
 
     def test_build_decision_snapshot_uses_advanced_sensors(self) -> None:
         base_snapshot = decision.build_decision_snapshot(

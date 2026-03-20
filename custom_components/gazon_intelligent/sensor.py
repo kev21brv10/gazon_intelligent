@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from datetime import date
+
 from homeassistant.components.sensor import SensorEntity, SensorStateClass
 
 from .const import DOMAIN
 from .entity_base import GazonEntityBase
+from .memory import compute_application_state
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -24,6 +27,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
             GazonTypeArrosageSensor(coordinator),
             GazonPlanArrosageSensor(coordinator),
             GazonDernierArrosageDetecteSensor(coordinator),
+            GazonDerniereApplicationSensor(coordinator),
+            GazonDerniereActionUtilisateurSensor(coordinator),
         ]
     )
 
@@ -267,6 +272,143 @@ class GazonDernierArrosageDetecteSensor(GazonEntityBase, SensorEntity):
         return clean or None
 
 
+class GazonDerniereApplicationSensor(GazonEntityBase, SensorEntity):
+    _attr_name = "Dernière application"
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:spray-bottle"
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_derniere_application"
+
+    def _application_state(self) -> dict[str, object]:
+        memory = getattr(self.coordinator, "memory", None)
+        if isinstance(memory, dict):
+            state = {
+                "derniere_application": memory.get("derniere_application"),
+                "application_type": memory.get("application_type"),
+                "application_requires_watering_after": memory.get("application_requires_watering_after"),
+                "application_post_watering_mm": memory.get("application_post_watering_mm"),
+                "application_irrigation_block_hours": memory.get("application_irrigation_block_hours"),
+                "application_irrigation_delay_minutes": memory.get("application_irrigation_delay_minutes"),
+                "application_irrigation_mode": memory.get("application_irrigation_mode"),
+                "application_label_notes": memory.get("application_label_notes"),
+                "declared_at": memory.get("declared_at"),
+                "application_block_until": memory.get("application_block_until"),
+                "application_block_active": memory.get("application_block_active"),
+                "application_block_remaining_minutes": memory.get("application_block_remaining_minutes"),
+                "application_post_watering_pending": memory.get("application_post_watering_pending"),
+                "application_post_watering_ready_at": memory.get("application_post_watering_ready_at"),
+                "application_post_watering_delay_remaining_minutes": memory.get(
+                    "application_post_watering_delay_remaining_minutes"
+                ),
+                "application_post_watering_ready": memory.get("application_post_watering_ready"),
+                "application_post_watering_remaining_mm": memory.get("application_post_watering_remaining_mm"),
+            }
+            summary = state.get("derniere_application")
+            if isinstance(summary, dict) and summary:
+                return state
+        history = getattr(self.coordinator, "history", None)
+        if isinstance(history, list):
+            return compute_application_state(history)
+        return {
+            "derniere_application": None,
+            "application_type": None,
+            "application_requires_watering_after": False,
+            "application_post_watering_mm": 0.0,
+            "application_irrigation_block_hours": 0.0,
+            "application_irrigation_delay_minutes": 0.0,
+            "application_irrigation_mode": None,
+            "application_label_notes": None,
+            "declared_at": None,
+            "application_block_until": None,
+            "application_block_active": False,
+            "application_block_remaining_minutes": 0.0,
+            "application_post_watering_pending": False,
+            "application_post_watering_ready_at": None,
+            "application_post_watering_delay_remaining_minutes": 0.0,
+            "application_post_watering_ready": False,
+            "application_post_watering_remaining_mm": 0.0,
+        }
+
+    @property
+    def native_value(self):
+        state = self._application_state()
+        summary = state.get("derniere_application")
+        if isinstance(summary, dict) and summary:
+            return summary.get("libelle") or summary.get("produit") or summary.get("type") or "Application"
+        return "Aucune application"
+
+    @property
+    def extra_state_attributes(self):
+        state = self._application_state()
+        summary = state.get("derniere_application")
+        attrs: dict[str, object] = {}
+        if isinstance(summary, dict) and summary:
+            attrs.update(summary)
+        for key in (
+            "application_type",
+            "application_requires_watering_after",
+            "application_post_watering_mm",
+            "application_irrigation_block_hours",
+            "application_irrigation_delay_minutes",
+            "application_irrigation_mode",
+            "application_label_notes",
+            "declared_at",
+            "application_block_until",
+            "application_block_active",
+            "application_block_remaining_minutes",
+            "application_post_watering_pending",
+            "application_post_watering_ready_at",
+            "application_post_watering_delay_remaining_minutes",
+            "application_post_watering_ready",
+            "application_post_watering_remaining_mm",
+        ):
+            value = state.get(key)
+            if value not in (None, "", [], {}):
+                attrs[key] = value
+        attrs.setdefault("source", "none" if not summary else summary.get("source"))
+        return attrs or None
+
+
+class GazonDerniereActionUtilisateurSensor(GazonEntityBase, SensorEntity):
+    _attr_name = "Dernière action utilisateur"
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:gesture-tap-button"
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_derniere_action_utilisateur"
+
+    def _latest_action(self) -> dict[str, object] | None:
+        memory = getattr(self.coordinator, "memory", None)
+        if not isinstance(memory, dict):
+            return None
+        summary = memory.get("derniere_action_utilisateur")
+        if isinstance(summary, dict) and summary:
+            return summary
+        return None
+
+    @property
+    def native_value(self):
+        summary = self._latest_action()
+        if not summary:
+            return None
+        return summary.get("state")
+
+    @property
+    def extra_state_attributes(self):
+        summary = self._latest_action()
+        if not summary:
+            return None
+        attrs = {
+            key: value
+            for key, value in summary.items()
+            if key != "state" and value not in (None, "", [], {})
+        }
+        return attrs or None
+
+
 class GazonPlanArrosageSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Plan d'arrosage"
     _attr_has_entity_name = True
@@ -364,6 +506,7 @@ class GazonPlanArrosageSensor(GazonEntityBase, SensorEntity):
                 "pause_between_passages_minutes": self._watering_pause_minutes(),
                 "source": "no_plan",
                 "reason": reason,
+                "plan_type": "no_plan",
             }
 
         if objective is None or objective <= 0:
@@ -431,10 +574,11 @@ class GazonPlanArrosageSensor(GazonEntityBase, SensorEntity):
             "total_duration_min": total_duration_min,
             "min_duration_min": round(min_minutes, 1),
             "max_duration_min": round(max_minutes, 1),
-            "fractionation": len(zones) > 1,
+            "fractionation": self._watering_passages() > 1,
             "passages": self._watering_passages(),
             "pause_between_passages_minutes": self._watering_pause_minutes(),
             "source": "calculated_from_objective",
+            "plan_type": "multi_zone" if len(zones) > 1 else "single_zone",
         }
 
     @property
@@ -562,6 +706,154 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
     @property
     def native_value(self):
         return self._decision_value("fenetre_optimale")
+
+    def _contextual_watering_state(self) -> dict[str, object] | None:
+        result = self.decision_result
+        if result is None:
+            return None
+
+        extra = getattr(result, "extra", None)
+        if not isinstance(extra, dict):
+            extra = {}
+
+        objective = self._decision_value("objectif_mm", 0.0)
+        try:
+            objective = float(objective or 0.0)
+        except (TypeError, ValueError):
+            objective = 0.0
+
+        target_date = str(extra.get("watering_target_date") or "").strip()
+        watering_window = str(self._decision_value("fenetre_optimale", "") or "").strip()
+        application_mode = str(extra.get("application_irrigation_mode") or "").strip().lower()
+        type_arrosage = str(self._decision_value("type_arrosage", "") or "").strip().lower()
+        auto_autorise = bool(self._decision_value("arrosage_auto_autorise", False))
+        arrosage_recommande = bool(self._decision_value("arrosage_recommande", False))
+        application_block_active = bool(extra.get("application_block_active", False))
+        application_requires = bool(extra.get("application_requires_watering_after", False))
+        application_pending = bool(extra.get("application_post_watering_pending", False))
+        auto_irrigation_enabled = bool(extra.get("auto_irrigation_enabled", True))
+        application_type = str(extra.get("application_type") or "").strip().lower()
+        application_type_known = application_type in {"sol", "foliaire"}
+        application_label = "Arrosage"
+        display_window = watering_window.replace("_", " ").strip()
+        application_summary = extra.get("derniere_application")
+        if isinstance(application_summary, dict) and application_summary:
+            application_label = str(
+                application_summary.get("libelle")
+                or application_summary.get("produit")
+                or application_summary.get("type")
+                or application_label
+            )
+
+        today = date.today().isoformat()
+        if application_summary and not application_type_known:
+            return {
+                "status": "bloque",
+                "next_action": "Vérifier le type d'application",
+                "summary": f"{application_label} bloqué: type d'application inconnu",
+            }
+
+        if application_block_active or type_arrosage == "bloque":
+            return {
+                "status": "bloque",
+                "next_action": "Attendre la fin du bloc",
+                "summary": f"Arrosage bloqué ({application_label})",
+            }
+
+        if application_requires and not application_pending:
+            return {
+                "status": "en_attente",
+                "next_action": "Attendre la fin du délai applicatif",
+                "summary": f"Arrosage technique en attente ({application_label})",
+            }
+
+        if not auto_irrigation_enabled:
+            return {
+                "status": "bloque",
+                "next_action": "Réactiver l'arrosage automatique",
+                "summary": "Arrosage automatique désactivé",
+                "auto_irrigation_enabled": False,
+            }
+
+        if objective <= 0 or not arrosage_recommande:
+            return {
+                "status": "en_attente",
+                "next_action": "Aucun arrosage nécessaire",
+                "summary": "Aucun arrosage nécessaire",
+            }
+
+        if application_mode == "manuel":
+            return {
+                "status": "en_attente",
+                "next_action": "Arrosage manuel immédiat",
+                "summary": f"Arrosage prévu {display_window or 'plus tard'} (manuel)",
+            }
+
+        if application_mode == "suggestion":
+            return {
+                "status": "en_attente",
+                "next_action": "Décider manuellement",
+                "summary": f"Arrosage suggéré {display_window or 'plus tard'} (suggestion)",
+            }
+
+        if target_date and target_date > today:
+            return {
+                "status": "en_attente",
+                "next_action": "Attendre le créneau prévu",
+                "summary": f"Arrosage prévu {display_window or 'plus tard'} (auto)",
+            }
+
+        if auto_autorise:
+            return {
+                "status": "auto",
+                "next_action": "Lancer le plan maintenant",
+                "summary": f"Arrosage prévu {display_window or 'maintenant'} (auto)",
+            }
+
+        return {
+            "status": "en_attente",
+            "next_action": "Attendre le prochain créneau",
+            "summary": f"Arrosage en attente {display_window or 'plus tard'}",
+        }
+
+    @property
+    def extra_state_attributes(self):
+        attrs = self._attrs_from_result(
+            "watering_target_date",
+            "watering_window_start_minute",
+            "watering_window_end_minute",
+            "watering_evening_start_minute",
+            "watering_evening_end_minute",
+            "watering_window_profile",
+            "watering_evening_allowed",
+            "auto_irrigation_enabled",
+        )
+        contextual_state = self._contextual_watering_state()
+        if contextual_state:
+            attrs = attrs or {}
+            attrs.update(contextual_state)
+        if attrs:
+            possible_values = self._possible_values_attr("fenetre_optimale")
+            if possible_values:
+                attrs.update(possible_values)
+            return attrs
+        attrs = self._attrs_from_data(
+            "watering_target_date",
+            "watering_window_start_minute",
+            "watering_window_end_minute",
+            "watering_evening_start_minute",
+            "watering_evening_end_minute",
+            "watering_window_profile",
+            "watering_evening_allowed",
+        )
+        contextual_state = self._contextual_watering_state()
+        if contextual_state:
+            attrs = attrs or {}
+            attrs.update(contextual_state)
+        possible_values = self._possible_values_attr("fenetre_optimale")
+        if possible_values and attrs:
+            attrs.update(possible_values)
+        return attrs
 
 
 class GazonRisqueGazonSensor(GazonEntityBase, SensorEntity):

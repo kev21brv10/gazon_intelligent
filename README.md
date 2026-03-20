@@ -75,7 +75,12 @@ Puis il te donne une seule chose :
 - Objectif d'arrosage  
 - Plan d'arrosage
 - Dernier arrosage détecté
+- Dernière application
+- Dernière action utilisateur
+- Arrosage après application autorisé
+- Arrosage automatique autorisé
 - Type d'arrosage  
+- Bouton `Lancer le plan maintenant`
 
 ---
 
@@ -106,14 +111,142 @@ Le système :
 
 ## 💧 Gestion de l’arrosage
 
-- calcul du besoin réel en eau  
-- prise en compte pluie / ETP / humidité  
-- adaptation selon la phase du gazon  
+### Règles agronomiques sourcées
+
+Ces principes viennent des bonnes pratiques d'irrigation du gazon et du sursemis :
+
+- arroser tôt le matin plutôt qu'en pleine journée
+- garder la couche superficielle humide pour le sursemis
+- éviter la saturation du sol
+- privilégier des apports légers et fréquents au démarrage
+- espacer progressivement les arrosages à mesure que l'enracinement progresse
+- en conditions chaudes, sèches ou venteuses, plusieurs petits arrosages peuvent être nécessaires
+- certains produits de type sol peuvent nécessiter un arrosage technique après application
+- certains traitements foliaires doivent au contraire rester protégés avant tout arrosage
+
+### Conventions internes de l’intégration
+
+Ce sont des choix d'implémentation Home Assistant, pas des vérités universelles :
+
+- Sursemis plus restrictif que les autres modes
+- fenêtre matinale dynamique selon la température
+- fractionnement automatique au-delà d'un objectif jugé trop élevé pour un seul passage
+- autorisation du soir seulement si la journée a été chaude, sèche et sans arrosage récent
+- blocage d'un nouvel arrosage si une session réelle récente a déjà atteint l'objectif
+- traitement applicatif séparé en `sol` et `foliaire`
+- arrosage technique possible après certaines applications `sol`
+- blocage automatique après certaines applications `foliaire`
+- type d'application inconnu = aucun arrosage automatique
+- délai applicatif configurable avant arrosage post-application
+- mode applicatif configurable: `auto`, `manuel`, `suggestion`
+- `plan_type` décrit la composition du plan: `single_zone` ou `multi_zone`
+- `fractionation` décrit uniquement le fractionnement temporel réel: `true` seulement si `passages > 1`
+- un plan multi-zone peut rester sans fractionnement temporel quand `passages = 1`
+
+### Tableau de fonctionnement
+
+| Mode | Fenêtre cible | Objectif mm | Fréquence | Fractionnement |
+| --- | --- | --- | --- | --- |
+| Sursemis / Germination | Matin prioritaire, dès 6h côté moteur | Faible, léger et fréquent | Plusieurs petits apports si sec / chaud / venteux | Oui si l'objectif dépasse 1 à 2 mm |
+| Sursemis / Enracinement | Matin prioritaire, plus souple | Faible à modéré | On espace progressivement | Oui si l'objectif dépasse 2 mm |
+| Normal | Matin tôt prioritaire | Plus profond | Plus rare, plus dense en eau | Oui si l'objectif est élevé |
+| Fertilisation / Biostimulant | Matin tôt, arrosage technique après application si requis | Technique, modéré | Ponctuel | Oui si le plan l'exige |
+| Agent Mouillant / Scarification | Matin tôt prioritaire | Technique, modéré | Ponctuel | Oui si l'objectif l'exige |
+| Application sol avec `application_irrigation_mode=manuel` | Après délai applicatif, via service ou bouton manuel interne | Technique, léger | Déclenchement manuel contrôlé | Oui selon le plan calculé |
+| Application sol avec `application_irrigation_mode=suggestion` | Affichage seulement | Technique, léger | Aucune exécution automatique | Non |
+| Application foliaire | Bloqué pendant la fenêtre de protection | 0 | 0 | Non |
+| Type d'application inconnu | Bloqué | 0 | 0 | Non |
+
+### Plan d'arrosage: composition vs fractionnement
+
+- `plan_type = single_zone` quand une seule zone compose le plan
+- `plan_type = multi_zone` quand le plan couvre plusieurs zones
+- `fractionation = true` uniquement quand l'arrosage est réellement découpé dans le temps
+- `zone_count` indique le nombre de zones
+- `passages` indique le nombre de cycles temporels
+
+### Arrosage applicatif
+
+Le moteur distingue maintenant :
+
+- `sol` : application pouvant nécessiter un arrosage technique juste après
+- `foliaire` : application qui bloque l'arrosage automatique pendant une durée label-driven
+
+Les champs applicatifs disponibles sont :
+
+- `application_type`
+- `application_requires_watering_after`
+- `application_post_watering_mm`
+- `application_irrigation_block_hours`
+- `application_irrigation_delay_minutes`
+- `application_irrigation_mode`
+- `application_label_notes`
+
+Les capteurs utiles :
+
+- `Dernière application`
+- `Dernière action utilisateur`
+- `Arrosage après application autorisé`
+- `application_block_remaining_minutes`
+- `application_post_watering_ready_at`
+- `application_post_watering_delay_remaining_minutes`
+- `application_post_watering_ready`
+
+Le capteur `Dernière action utilisateur` utilise ces états lisibles :
+
+- `ok` : action acceptée et envoyée au moteur
+- `en_attente` : action reconnue mais différée
+- `bloque` : action refusée par sécurité ou fenêtre invalide
+- `refuse` : action impossible ou incohérente
+
+Le champ `action` reprend le libellé utilisateur, par exemple :
+
+- `Lancer le plan maintenant`
+
+Le bouton visible dans l'interface principale :
+
+- `Lancer le plan maintenant`
+- déclenche le plan calculé immédiatement
+- reste l'unique action manuelle visible pour l'utilisateur
+
+Le mode manuel immédiat reste possible via le service dédié :
+
+- il passe par un service avancé, pas par l'interface principale
+- il conserve les sécurités critiques
+- il peut être utilisé par des automatisations ou services avancés si nécessaire
+
+Le bouton de plan :
+
+- `Lancer le plan maintenant`
+- lance le plan courant calculé
+- sert à l'exécution opérationnelle du plan multi-zone ou du plan courant
+- n'est pas le même flux qu'un arrosage manuel immédiat interne
+
+Le switch global :
+
+- `Arrosage automatique autorisé`
+- bloque ou autorise l'exécution automatique
+- laisse les calculs visibles même quand il est coupé
+- le scheduler interne réévalue périodiquement le contexte via le coordinator; un léger décalage peut exister selon le cycle de refresh
+
+Le capteur `Fenêtre optimale` expose aussi un contexte lisible :
+
+- `status` : `auto`, `bloque`, `en_attente`
+- `next_action` : prochaine action lisible
+- `summary` : résumé utilisateur, par exemple `Arrosage prévu demain matin (auto)`
+
+Le flux reste compatible avec :
+
+- calcul du besoin réel en eau
+- prise en compte pluie / ETP / humidité
+- adaptation selon la phase du gazon
 - conversion automatique du besoin en mm vers une durée par zone
 - exécution séquentielle des zones configurées
 - fractionnement en plusieurs passages si nécessaire
 - détection automatique des sessions réelles d'arrosage
-- historique lisible via `Plan d'arrosage` et `Dernier arrosage détecté`
+- historique lisible via `Plan d'arrosage`, `Dernier arrosage détecté` et `Dernière application`
+- blocage explicite si le type d'application est inconnu
+- blocage / délai / suggestion pilotés par `application_irrigation_mode`
 
 ---
 
@@ -158,11 +291,11 @@ Aucune configuration YAML obligatoire.
 - `capteur_humidite`  
 - `capteur_humidite_sol`  
 - `capteur_hauteur_gazon`  
-- `capteur_vent`  
-- `capteur_rosee`  
-- `capteur_retour_arrosage`  
-- `hauteur_min_tondeuse_cm`  
-- `hauteur_max_tondeuse_cm`  
+- `capteur_vent`
+- `capteur_rosee`
+- `capteur_retour_arrosage`
+- `hauteur_min_tondeuse_cm`
+- `hauteur_max_tondeuse_cm`
 
 ### Règles de fonctionnement
 
@@ -186,6 +319,7 @@ Aucune configuration YAML obligatoire.
 - Action à éviter  
 - État de tonte  
 - Arrosage recommandé  
+- Arrosage automatique autorisé
 
 👉 Tu ne réfléchis pas. Tu appliques.
 
@@ -212,6 +346,7 @@ Le matin :
 - décisions arrosage / tonte  
 - mémoire des actions  
 - suivi des interventions  
+- verrou global d'arrosage automatique
 
 ---
 
@@ -222,6 +357,7 @@ Le matin :
 - `gazon_intelligent.reset_mode`  
 - `gazon_intelligent.start_manual_irrigation`  
 - `gazon_intelligent.start_auto_irrigation`  
+- `gazon_intelligent.start_application_irrigation`
 - `gazon_intelligent.declare_intervention`  
 - `gazon_intelligent.declare_mowing`  
 - `gazon_intelligent.declare_watering`  
@@ -249,12 +385,11 @@ Flux recommandé :
 
 ### À quoi il sert
 
-- déclencher l’arrosage automatiquement  
-- bloquer selon le mode (Traitement, Hivernage, etc.)  
-- s’appuyer sur le plan d’arrosage calculé par l’intégration
-- lancer les zones en séquentiel avec les durées calculées
-- gérer les passages multiples et la pause entre cycles
-- laisser l’intégration enregistrer automatiquement la session réelle
+- compatibilité manuelle pour le plan courant calculé
+- bloquer selon le mode (Traitement, Hivernage, etc.)
+- laisser l’intégration piloter l’automatique comme source de vérité
+- ne jamais piloter les zones directement
+- rester un fallback pour les usages avancés et la compatibilité historique
 
 ---
 
@@ -270,9 +405,9 @@ Si le projet t’aide :
 
 ## 🧾 Version
 
-- manifest : `0.3.28`
-- README : `0.3.28`
-- changelog : `0.3.28`
+- manifest : `0.4.0`
+- README : `0.4.0`
+- changelog : `0.4.0`
 
 
 ## 📄 Licence

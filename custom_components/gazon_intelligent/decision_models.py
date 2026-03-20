@@ -30,11 +30,19 @@ POSSIBLE_TONTE_STATUT_VALUES: tuple[str, ...] = (
     "deconseillee",
     "interdite",
 )
+POSSIBLE_FENETRE_OPTIMALE_VALUES: tuple[str, ...] = (
+    "maintenant",
+    "demain_matin",
+    "apres_pluie",
+    "soir",
+    "attendre",
+)
 POSSIBLE_TYPE_ARROSAGE_VALUES: tuple[str, ...] = (
     "bloque",
     "personnalise",
     "manuel_frequent",
     "fractionne",
+    "application_technique",
     "auto",
 )
 
@@ -43,6 +51,7 @@ TYPE_ARROSAGE_DISPLAY_LABELS: dict[str, str] = {
     "personnalise": "Réglage personnalisé",
     "manuel_frequent": "Arrosage manuel fréquent",
     "fractionne": "Arrosage fractionné",
+    "application_technique": "Arrosage technique",
     "auto": "Arrosage automatique",
 }
 
@@ -200,6 +209,7 @@ class DecisionResult:
             "sous_phase": POSSIBLE_SOUS_PHASE_VALUES,
             "niveau_action": POSSIBLE_NIVEAU_ACTION_VALUES,
             "tonte_statut": POSSIBLE_TONTE_STATUT_VALUES,
+            "fenetre_optimale": POSSIBLE_FENETRE_OPTIMALE_VALUES,
             "type_arrosage": POSSIBLE_TYPE_ARROSAGE_VALUES,
         }
 

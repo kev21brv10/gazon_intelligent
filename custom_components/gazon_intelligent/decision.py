@@ -13,6 +13,7 @@ mais délègue la logique métier aux modules spécialisés:
 from datetime import date
 from typing import Any
 
+from .const import DEFAULT_AUTO_IRRIGATION_ENABLED
 from .decision_models import DecisionContext, DecisionResult
 from .decision_mowing import build_mowing_bundle
 from .decision_phase import build_phase_bundle
@@ -167,6 +168,38 @@ def compute_decision(
             "jours_restants": jours_restants,
             "watering_passages": watering_bundle["watering_passages"],
             "watering_pause_minutes": watering_bundle["watering_pause_minutes"],
+            "watering_target_date": watering_bundle["watering_target_date"],
+            "derniere_application": watering_bundle.get("derniere_application"),
+            "application_type": watering_bundle.get("application_type"),
+            "application_requires_watering_after": watering_bundle.get("application_requires_watering_after"),
+            "application_post_watering_mm": watering_bundle.get("application_post_watering_mm"),
+            "application_irrigation_block_hours": watering_bundle.get("application_irrigation_block_hours"),
+            "application_irrigation_delay_minutes": watering_bundle.get("application_irrigation_delay_minutes"),
+            "application_irrigation_mode": watering_bundle.get("application_irrigation_mode"),
+            "application_label_notes": watering_bundle.get("application_label_notes"),
+            "auto_irrigation_enabled": bool(
+                context.memory.get("auto_irrigation_enabled", DEFAULT_AUTO_IRRIGATION_ENABLED)
+                if context.memory
+                else DEFAULT_AUTO_IRRIGATION_ENABLED
+            ),
+            "application_block_until": watering_bundle.get("application_block_until"),
+            "application_block_active": watering_bundle.get("application_block_active"),
+            "application_block_remaining_minutes": watering_bundle.get("application_block_remaining_minutes"),
+            "application_post_watering_pending": watering_bundle.get("application_post_watering_pending"),
+            "application_post_watering_ready_at": watering_bundle.get("application_post_watering_ready_at"),
+            "application_post_watering_delay_remaining_minutes": watering_bundle.get(
+                "application_post_watering_delay_remaining_minutes"
+            ),
+            "application_post_watering_ready": watering_bundle.get("application_post_watering_ready"),
+            "application_post_watering_remaining_mm": watering_bundle.get(
+                "application_post_watering_remaining_mm"
+            ),
+            "watering_window_start_minute": risk_bundle["watering_window_start_minute"],
+            "watering_window_end_minute": risk_bundle["watering_window_end_minute"],
+            "watering_evening_start_minute": risk_bundle["watering_evening_start_minute"],
+            "watering_evening_end_minute": risk_bundle["watering_evening_end_minute"],
+            "watering_window_profile": risk_bundle["watering_window_profile"],
+            "watering_evening_allowed": risk_bundle["watering_evening_allowed"],
         },
     )
 
@@ -283,6 +316,32 @@ def build_decision_snapshot(
             "bilan_hydrique_mm": water_bundle["water_balance"]["bilan_hydrique_mm"],
             "bilan_hydrique_3j": water_bundle["water_balance"]["bilan_hydrique_3j"],
             "bilan_hydrique_7j": water_bundle["water_balance"]["bilan_hydrique_7j"],
+            "watering_target_date": watering_bundle["watering_target_date"],
+            "derniere_application": watering_bundle.get("derniere_application"),
+            "application_type": watering_bundle.get("application_type"),
+            "application_requires_watering_after": watering_bundle.get("application_requires_watering_after"),
+            "application_post_watering_mm": watering_bundle.get("application_post_watering_mm"),
+            "application_irrigation_block_hours": watering_bundle.get("application_irrigation_block_hours"),
+            "application_irrigation_delay_minutes": watering_bundle.get("application_irrigation_delay_minutes"),
+            "application_irrigation_mode": watering_bundle.get("application_irrigation_mode"),
+            "application_label_notes": watering_bundle.get("application_label_notes"),
+            "auto_irrigation_enabled": bool(
+                context.memory.get("auto_irrigation_enabled", DEFAULT_AUTO_IRRIGATION_ENABLED)
+                if context.memory
+                else DEFAULT_AUTO_IRRIGATION_ENABLED
+            ),
+            "application_block_until": watering_bundle.get("application_block_until"),
+            "application_block_active": watering_bundle.get("application_block_active"),
+            "application_block_remaining_minutes": watering_bundle.get("application_block_remaining_minutes"),
+            "application_post_watering_pending": watering_bundle.get("application_post_watering_pending"),
+            "application_post_watering_ready_at": watering_bundle.get("application_post_watering_ready_at"),
+            "application_post_watering_delay_remaining_minutes": watering_bundle.get(
+                "application_post_watering_delay_remaining_minutes"
+            ),
+            "application_post_watering_ready": watering_bundle.get("application_post_watering_ready"),
+            "application_post_watering_remaining_mm": watering_bundle.get(
+                "application_post_watering_remaining_mm"
+            ),
             "objectif_mm": watering_bundle["objectif_mm"],
             "objectif_mm_brut": water_bundle["objectif_mm"],
             "score_hydrique": risk_bundle["scores"]["score_hydrique"],
@@ -307,6 +366,12 @@ def build_decision_snapshot(
             "urgence": risk_bundle["urgence"],
             "prochaine_reevaluation": risk_bundle["prochaine_reevaluation"],
             "decision_resume": watering_bundle["decision_resume"],
+            "watering_window_start_minute": risk_bundle["watering_window_start_minute"],
+            "watering_window_end_minute": risk_bundle["watering_window_end_minute"],
+            "watering_evening_start_minute": risk_bundle["watering_evening_start_minute"],
+            "watering_evening_end_minute": risk_bundle["watering_evening_end_minute"],
+            "watering_window_profile": risk_bundle["watering_window_profile"],
+            "watering_evening_allowed": risk_bundle["watering_evening_allowed"],
         },
     )
     return result.to_snapshot()
@@ -353,7 +418,32 @@ def build_decision_result(context: DecisionContext) -> DecisionResult:
         water_balance=water_bundle["water_balance"],
         phase_context=phase_bundle,
         extra={
+            "temperature": context.temperature,
+            "pluie_demain": context.pluie_demain,
+            "etp": water_bundle["etp"],
             "objectif_mm_brut": water_bundle["objectif_mm"],
             "objectif_mm_executable": watering_bundle["objectif_mm"],
+            "derniere_application": watering_bundle.get("derniere_application"),
+            "application_type": watering_bundle.get("application_type"),
+            "application_requires_watering_after": watering_bundle.get("application_requires_watering_after"),
+            "application_post_watering_mm": watering_bundle.get("application_post_watering_mm"),
+            "application_irrigation_block_hours": watering_bundle.get("application_irrigation_block_hours"),
+            "application_label_notes": watering_bundle.get("application_label_notes"),
+            "application_block_until": watering_bundle.get("application_block_until"),
+            "application_block_active": watering_bundle.get("application_block_active"),
+            "application_post_watering_pending": watering_bundle.get("application_post_watering_pending"),
+            "application_post_watering_remaining_mm": watering_bundle.get(
+                "application_post_watering_remaining_mm"
+            ),
+            "bilan_hydrique_mm": water_bundle["water_balance"].get("bilan_hydrique_mm"),
+            "deficit_3j": water_bundle["water_balance"].get("deficit_3j"),
+            "deficit_7j": water_bundle["water_balance"].get("deficit_7j"),
+            "watering_target_date": watering_bundle["watering_target_date"],
+            "watering_window_start_minute": risk_bundle["watering_window_start_minute"],
+            "watering_window_end_minute": risk_bundle["watering_window_end_minute"],
+            "watering_evening_start_minute": risk_bundle["watering_evening_start_minute"],
+            "watering_evening_end_minute": risk_bundle["watering_evening_end_minute"],
+            "watering_window_profile": risk_bundle["watering_window_profile"],
+            "watering_evening_allowed": risk_bundle["watering_evening_allowed"],
         },
     )

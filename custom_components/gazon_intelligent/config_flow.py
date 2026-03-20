@@ -144,6 +144,15 @@ def build_advanced_schema(current: dict | None = None):
 class GazonIntelligentConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 2
 
+    def _current_reconfigure_entry(self):
+        entry = getattr(self, "_reconfigure_entry_data", None)
+        if entry is not None:
+            return entry
+        getter = getattr(self, "_get_reconfigure_entry", None)
+        if callable(getter):
+            return getter()
+        raise RuntimeError("Reconfigure entry is not available")
+
     async def async_step_user(self, user_input=None):
         if user_input is not None:
             self._base_user_input = dict(user_input)
@@ -162,6 +171,15 @@ class GazonIntelligentConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
 
         return self.async_show_form(step_id="sensors", data_schema=build_advanced_schema())
+
+    async def async_step_reconfigure(self, user_input=None):
+        entry = self._current_reconfigure_entry()
+        current = {**entry.data, **entry.options}
+
+        if user_input is not None:
+            return self.async_update_reload_and_abort(entry, data_updates=user_input)
+
+        return self.async_show_form(step_id="reconfigure", data_schema=build_schema(current))
 
     @staticmethod
     def async_get_options_flow(entry: config_entries.ConfigEntry):

@@ -61,6 +61,12 @@ def build_risk_bundle(
         "niveau_action": action_guidance["niveau_action"],
         "fenetre_optimale": action_guidance["fenetre_optimale"],
         "risque_gazon": action_guidance["risque_gazon"],
+        "watering_window_start_minute": action_guidance.get("watering_window_start_minute"),
+        "watering_window_end_minute": action_guidance.get("watering_window_end_minute"),
+        "watering_evening_start_minute": action_guidance.get("watering_evening_start_minute"),
+        "watering_evening_end_minute": action_guidance.get("watering_evening_end_minute"),
+        "watering_window_profile": action_guidance.get("watering_window_profile"),
+        "watering_evening_allowed": action_guidance.get("watering_evening_allowed"),
         "prochaine_reevaluation": prochaine_reevaluation,
         "urgence": urgence,
     }
@@ -88,4 +94,3 @@ def _decision_urgence(
     if niveau_action in {"a_faire", "surveiller"} or bilan_hydrique_mm <= -0.5:
         return "moyenne"
     return "faible"
-

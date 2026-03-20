@@ -83,11 +83,17 @@ def _install_stubs() -> None:
             def async_create_entry(self, **kwargs):
                 return kwargs
 
+            def async_update_reload_and_abort(self, entry, data_updates=None):
+                return {"entry": entry, "data_updates": data_updates, "abort": True}
+
             async def async_set_unique_id(self, *args, **kwargs):
                 return None
 
             def _abort_if_unique_id_configured(self):
                 return None
+
+            def _get_reconfigure_entry(self):
+                return getattr(self, "_reconfigure_entry", None)
 
         config_entries.ConfigFlow = ConfigFlow
     if not hasattr(config_entries, "OptionsFlow"):
@@ -200,6 +206,37 @@ class ConfigFlowTests(unittest.TestCase):
         result = asyncio.run(flow.async_step_user(base_input))
 
         self.assertEqual(result["step_id"], "sensors")
+
+    def test_reconfigure_flow_updates_base_configuration(self) -> None:
+        flow = config_flow_mod.GazonIntelligentConfigFlow()
+        flow._reconfigure_entry_data = types.SimpleNamespace(
+            data={
+                config_flow_mod.CONF_ZONE_1: "switch.zone_1",
+                config_flow_mod.CONF_DEBIT_ZONE_1: 10,
+                config_flow_mod.CONF_TYPE_SOL: "limoneux",
+            },
+            options={},
+        )
+
+        form = asyncio.run(flow.async_step_reconfigure())
+
+        self.assertEqual(form["step_id"], "reconfigure")
+
+        updated = asyncio.run(
+            flow.async_step_reconfigure(
+                {
+                    config_flow_mod.CONF_ZONE_1: "switch.zone_2",
+                    config_flow_mod.CONF_DEBIT_ZONE_1: 12,
+                    config_flow_mod.CONF_TYPE_SOL: "argileux",
+                }
+            )
+        )
+
+        self.assertTrue(updated["abort"])
+        self.assertEqual(updated["entry"].data[config_flow_mod.CONF_ZONE_1], "switch.zone_1")
+        self.assertEqual(updated["data_updates"][config_flow_mod.CONF_ZONE_1], "switch.zone_2")
+        self.assertEqual(updated["data_updates"][config_flow_mod.CONF_DEBIT_ZONE_1], 12)
+        self.assertEqual(updated["data_updates"][config_flow_mod.CONF_TYPE_SOL], "argileux")
 
 
 if __name__ == "__main__":

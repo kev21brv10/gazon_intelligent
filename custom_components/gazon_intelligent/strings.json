@@ -135,12 +135,20 @@
         "objectif_mm": {
           "name": "Eau à apporter (optionnel)",
           "description": "Quantité d'eau en mm. Si omis, prend l'objectif calculé par le mode courant."
+        },
+        "source": {
+          "name": "Source d'exécution (optionnelle)",
+          "description": "auto_irrigation pour l'automatique, manual_plan pour le lancement manuel du plan."
         }
       }
     },
+    "start_application_irrigation": {
+      "name": "Arroser maintenant",
+      "description": "Déclenche un arrosage contrôlé post-application sans piloter les zones directement."
+    },
     "declare_intervention": {
       "name": "Déclarer une intervention",
-      "description": "Déclare une intervention réelle et peut mémoriser le produit, la dose et la prochaine réapplication.",
+      "description": "Déclare une intervention réelle et peut mémoriser le produit, la dose, le type d'application et la prochaine réapplication.",
       "fields": {
         "intervention": {
           "name": "Intervention",
@@ -169,6 +177,34 @@
         "reapplication_after_days": {
           "name": "Réapplication dans X jours (optionnel)",
           "description": "Délai avant de réévaluer ou de refaire l'application."
+        },
+        "application_type": {
+          "name": "Type d'application (optionnel)",
+          "description": "sol ou foliaire."
+        },
+        "application_requires_watering_after": {
+          "name": "Arrosage après application requis (optionnel)",
+          "description": "Indique si un arrosage technique doit suivre."
+        },
+        "application_post_watering_mm": {
+          "name": "Arrosage après application (mm, optionnel)",
+          "description": "Quantité d'eau technique à apporter après l'application."
+        },
+        "application_irrigation_block_hours": {
+          "name": "Blocage arrosage (h, optionnel)",
+          "description": "Durée de blocage automatique après application."
+        },
+        "application_irrigation_delay_minutes": {
+          "name": "Délai avant arrosage (min, optionnel)",
+          "description": "Temps d'attente avant d'autoriser l'arrosage post-application."
+        },
+        "application_irrigation_mode": {
+          "name": "Mode arrosage post-application (optionnel)",
+          "description": "auto, manuel ou suggestion."
+        },
+        "application_label_notes": {
+          "name": "Notes étiquette (optionnel)",
+          "description": "Notes informatives liées à l'étiquette produit."
         },
         "note": {
           "name": "Note (optionnelle)",
@@ -208,6 +244,34 @@
           "name": "Phases compatibles (optionnel)",
           "description": "Liste séparée par des virgules."
         },
+        "application_type": {
+          "name": "Type d'application (optionnel)",
+          "description": "sol ou foliaire."
+        },
+        "application_requires_watering_after": {
+          "name": "Arrosage après application requis (optionnel)",
+          "description": "Indique si un arrosage technique doit suivre."
+        },
+        "application_post_watering_mm": {
+          "name": "Arrosage après application (mm, optionnel)",
+          "description": "Quantité d'eau technique à apporter après l'application."
+        },
+        "application_irrigation_block_hours": {
+          "name": "Blocage arrosage (h, optionnel)",
+          "description": "Durée de blocage automatique après application."
+        },
+        "application_irrigation_delay_minutes": {
+          "name": "Délai avant arrosage (min, optionnel)",
+          "description": "Temps d'attente avant d'autoriser l'arrosage post-application."
+        },
+        "application_irrigation_mode": {
+          "name": "Mode arrosage post-application (optionnel)",
+          "description": "auto, manuel ou suggestion."
+        },
+        "application_label_notes": {
+          "name": "Notes étiquette (optionnel)",
+          "description": "Notes informatives liées à l'étiquette produit."
+        },
         "note": {
           "name": "Note (optionnelle)",
           "description": "Commentaire libre."
@@ -246,6 +310,13 @@
           "name": "Quantité appliquée (optionnelle)",
           "description": "Quantité d'eau appliquée en mm."
         }
+      }
+    }
+  },
+  "entity": {
+    "switch": {
+      "auto_irrigation_enabled": {
+        "name": "Arrosage automatique autorisé"
       }
     }
   }

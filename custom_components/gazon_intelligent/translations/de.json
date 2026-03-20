@@ -136,6 +136,10 @@
         "objectif_mm": {
           "name": "Wasser ausbringen (optional)",
           "description": "Wassermenge in mm. Falls leer, wird das vom aktuellen Modus berechnete Ziel verwendet."
+        },
+        "source": {
+          "name": "Ausführungsquelle (optional)",
+          "description": "auto_irrigation für die automatische Ausführung, manual_plan für den manuellen Planstart."
         }
       }
     },
@@ -247,6 +251,13 @@
           "name": "Ausgebrachte Menge (optional)",
           "description": "Ausgebrachte Wassermenge in mm."
         }
+      }
+    }
+  },
+  "entity": {
+    "switch": {
+      "auto_irrigation_enabled": {
+        "name": "Automatische Bewässerung erlaubt"
       }
     }
   }

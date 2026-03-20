@@ -30,6 +30,17 @@ memory = importlib.import_module("custom_components.gazon_intelligent.memory")
 
 
 class MemoryCatalogTests(unittest.TestCase):
+    def test_auto_irrigation_enabled_defaults_to_true_and_persists(self) -> None:
+        fresh_memory = memory.compute_memory([], today=date(2026, 3, 18))
+        self.assertTrue(fresh_memory["auto_irrigation_enabled"])
+
+        persisted = memory.compute_memory(
+            [],
+            today=date(2026, 3, 18),
+            previous_memory={"auto_irrigation_enabled": False},
+        )
+        self.assertFalse(persisted["auto_irrigation_enabled"])
+
     def test_normalize_product_record_keeps_simple_catalog_fields(self) -> None:
         record = memory.normalize_product_record(
             "Engrais Printemps",
@@ -40,6 +51,13 @@ class MemoryCatalogTests(unittest.TestCase):
                 "reapplication_after_days": "21",
                 "delai_avant_tonte_jours": "2",
                 "phase_compatible": "Normal, Reprise",
+                "application_type": "sol",
+                "application_requires_watering_after": "true",
+                "application_post_watering_mm": "1.5",
+                "application_irrigation_block_hours": "0",
+                "application_irrigation_delay_minutes": "15",
+                "application_irrigation_mode": "manuel",
+                "application_label_notes": "Appliquer au matin",
                 "note": "Appliquer au matin",
             },
         )
@@ -53,6 +71,13 @@ class MemoryCatalogTests(unittest.TestCase):
         self.assertEqual(record["reapplication_after_days"], 21)
         self.assertEqual(record["delai_avant_tonte_jours"], 2)
         self.assertEqual(record["phase_compatible"], ["Normal", "Reprise"])
+        self.assertEqual(record["application_type"], "sol")
+        self.assertTrue(record["application_requires_watering_after"])
+        self.assertEqual(record["application_post_watering_mm"], 1.5)
+        self.assertEqual(record["application_irrigation_block_hours"], 0.0)
+        self.assertEqual(record["application_irrigation_delay_minutes"], 15.0)
+        self.assertEqual(record["application_irrigation_mode"], "manuel")
+        self.assertEqual(record["application_label_notes"], "Appliquer au matin")
 
     def test_build_application_summary_includes_product_id(self) -> None:
         summary = memory.build_application_summary(
@@ -66,6 +91,14 @@ class MemoryCatalogTests(unittest.TestCase):
                 "note": "Test",
                 "reapplication_after_days": 21,
                 "source": "service",
+                "application_type": "sol",
+                "application_requires_watering_after": True,
+                "application_post_watering_mm": 1.0,
+                "application_irrigation_block_hours": 0.0,
+                "application_irrigation_delay_minutes": 30.0,
+                "application_irrigation_mode": "auto",
+                "application_label_notes": "Notes produit",
+                "declared_at": "2026-03-18T08:00:00+00:00",
             }
         )
 
@@ -74,6 +107,96 @@ class MemoryCatalogTests(unittest.TestCase):
         self.assertEqual(summary["produit_id"], "engrais_printemps")
         self.assertEqual(summary["libelle"], "Engrais printemps")
         self.assertEqual(summary["reapplication_after_days"], 21)
+        self.assertEqual(summary["application_type"], "sol")
+        self.assertTrue(summary["application_requires_watering_after"])
+        self.assertEqual(summary["application_post_watering_mm"], 1.0)
+        self.assertEqual(summary["application_irrigation_block_hours"], 0.0)
+        self.assertEqual(summary["application_irrigation_delay_minutes"], 30.0)
+        self.assertEqual(summary["application_irrigation_mode"], "auto")
+        self.assertEqual(summary["application_label_notes"], "Notes produit")
+        self.assertEqual(summary["declared_at"], "2026-03-18T08:00:00+00:00")
+
+    def test_compute_application_state_tracks_block_and_pending_water(self) -> None:
+        state = memory.compute_application_state(
+            [
+                {
+                    "type": "Traitement",
+                    "date": "2026-03-18",
+                    "declared_at": "2026-03-18T08:00:00+00:00",
+                    "produit": "Fongicide X",
+                    "application_type": "foliaire",
+                    "application_requires_watering_after": False,
+                    "application_post_watering_mm": 0.0,
+                    "application_irrigation_block_hours": 24.0,
+                    "application_irrigation_delay_minutes": 0.0,
+                    "application_irrigation_mode": "suggestion",
+                    "application_label_notes": "Attendre 24 h",
+                },
+                {
+                    "type": "arrosage",
+                    "date": "2026-03-18",
+                    "objectif_mm": 0.5,
+                    "source": "manual",
+                },
+            ],
+            now=memory.datetime(2026, 3, 18, 9, 0, tzinfo=memory.timezone.utc),
+        )
+
+        self.assertEqual(state["application_type"], "foliaire")
+        self.assertFalse(state["application_requires_watering_after"])
+        self.assertEqual(state["application_irrigation_block_hours"], 24.0)
+        self.assertEqual(state["application_irrigation_delay_minutes"], 0.0)
+        self.assertEqual(state["application_irrigation_mode"], "suggestion")
+        self.assertTrue(state["application_block_active"])
+        self.assertGreater(state["application_block_remaining_minutes"], 0.0)
+        self.assertFalse(state["application_post_watering_pending"])
+        self.assertFalse(state["application_post_watering_ready"])
+        self.assertEqual(state["application_post_watering_remaining_mm"], 0.0)
+
+    def test_compute_application_state_tracks_delay_and_ready(self) -> None:
+        state = memory.compute_application_state(
+            [
+                {
+                    "type": "Fertilisation",
+                    "date": "2026-03-18",
+                    "declared_at": "2026-03-18T08:00:00+00:00",
+                    "produit": "Engrais printemps",
+                    "application_type": "sol",
+                    "application_requires_watering_after": True,
+                    "application_post_watering_mm": 1.0,
+                    "application_irrigation_block_hours": 0.0,
+                    "application_irrigation_delay_minutes": 90.0,
+                    "application_irrigation_mode": "manuel",
+                }
+            ],
+            now=memory.datetime(2026, 3, 18, 8, 45, tzinfo=memory.timezone.utc),
+        )
+
+        self.assertEqual(state["application_irrigation_delay_minutes"], 90.0)
+        self.assertEqual(state["application_irrigation_mode"], "manuel")
+        self.assertFalse(state["application_post_watering_ready"])
+        self.assertGreater(state["application_post_watering_delay_remaining_minutes"], 0.0)
+
+        ready_state = memory.compute_application_state(
+            [
+                {
+                    "type": "Fertilisation",
+                    "date": "2026-03-18",
+                    "declared_at": "2026-03-18T08:00:00+00:00",
+                    "produit": "Engrais printemps",
+                    "application_type": "sol",
+                    "application_requires_watering_after": True,
+                    "application_post_watering_mm": 1.0,
+                    "application_irrigation_block_hours": 0.0,
+                    "application_irrigation_delay_minutes": 30.0,
+                    "application_irrigation_mode": "auto",
+                }
+            ],
+            now=memory.datetime(2026, 3, 18, 8, 45, tzinfo=memory.timezone.utc),
+        )
+
+        self.assertTrue(ready_state["application_post_watering_ready"])
+        self.assertEqual(ready_state["application_post_watering_delay_remaining_minutes"], 0.0)
 
     def test_compute_next_reapplication_date_prefers_latest_item(self) -> None:
         next_date = memory.compute_next_reapplication_date(

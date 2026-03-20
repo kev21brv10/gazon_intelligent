@@ -38,6 +38,13 @@ class FullCycleTests(unittest.TestCase):
             reapplication_after_days=25,
             delai_avant_tonte_jours=2,
             phase_compatible="Sursemis, Reprise",
+            application_type="sol",
+            application_requires_watering_after=True,
+            application_post_watering_mm=1.0,
+            application_irrigation_block_hours=0.0,
+            application_irrigation_delay_minutes=0.0,
+            application_irrigation_mode="auto",
+            application_label_notes="Arrosage léger après application",
             note="Produit test",
         )
         brain.declare_intervention(
@@ -46,6 +53,13 @@ class FullCycleTests(unittest.TestCase):
             produit_id="humuslight",
             zone="Gazon complet",
             note="Application test",
+            application_type="sol",
+            application_requires_watering_after=True,
+            application_post_watering_mm=1.0,
+            application_irrigation_block_hours=0.0,
+            application_irrigation_delay_minutes=0.0,
+            application_irrigation_mode="auto",
+            application_label_notes="Arrosage léger après application",
         )
         brain.record_watering(
             date_action=date(2026, 3, 18),
@@ -99,4 +113,8 @@ class FullCycleTests(unittest.TestCase):
         self.assertEqual(first_snapshot["bilan_hydrique_mm"], second_snapshot["bilan_hydrique_mm"])
         self.assertEqual(reloaded.memory["catalogue_produits"], 1)
         self.assertEqual(reloaded.memory["derniere_application"]["produit_id"], "humuslight")
+        self.assertEqual(reloaded.memory["derniere_application"]["application_type"], "sol")
+        self.assertTrue(reloaded.memory["application_requires_watering_after"])
+        self.assertEqual(reloaded.memory["application_post_watering_mm"], 1.0)
+        self.assertEqual(reloaded.memory["application_irrigation_mode"], "auto")
         self.assertEqual(reloaded.memory["prochaine_reapplication"], "2026-04-12")

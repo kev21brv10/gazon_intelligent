@@ -136,6 +136,10 @@
         "objectif_mm": {
           "name": "Water toe te passen (optioneel)",
           "description": "Hoeveelheid water in mm. Indien weggelaten, wordt het doel van de huidige modus gebruikt."
+        },
+        "source": {
+          "name": "Uitvoeringsbron (optioneel)",
+          "description": "auto_irrigation voor automatische uitvoering, manual_plan voor het handmatig starten van het plan."
         }
       }
     },
@@ -247,6 +251,13 @@
           "name": "Toegepaste hoeveelheid (optioneel)",
           "description": "Toegepaste hoeveelheid water in mm."
         }
+      }
+    }
+  },
+  "entity": {
+    "switch": {
+      "auto_irrigation_enabled": {
+        "name": "Automatische irrigatie toegestaan"
       }
     }
   }

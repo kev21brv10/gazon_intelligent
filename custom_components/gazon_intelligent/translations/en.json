@@ -136,6 +136,10 @@
         "objectif_mm": {
           "name": "Water to apply (optional)",
           "description": "Water amount in mm. If omitted, uses the objective calculated by the current mode."
+        },
+        "source": {
+          "name": "Execution source (optional)",
+          "description": "auto_irrigation for automatic runs, manual_plan for the manual plan launch."
         }
       }
     },
@@ -247,6 +251,13 @@
           "name": "Applied amount (optional)",
           "description": "Amount of water applied in mm."
         }
+      }
+    }
+  },
+  "entity": {
+    "switch": {
+      "auto_irrigation_enabled": {
+        "name": "Automatic watering allowed"
       }
     }
   }

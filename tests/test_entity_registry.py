@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
 import unittest
 from dataclasses import dataclass
@@ -47,6 +48,10 @@ def _install_homeassistant_stubs() -> None:
     if not hasattr(binary_sensor_mod, "BinarySensorEntity"):
         binary_sensor_mod.BinarySensorEntity = type("BinarySensorEntity", (), {"__init__": lambda self, *args, **kwargs: None})
 
+    switch_mod = ensure_module("homeassistant.components.switch")
+    if not hasattr(switch_mod, "SwitchEntity"):
+        switch_mod.SwitchEntity = type("SwitchEntity", (), {"__init__": lambda self, *args, **kwargs: None})
+
     button_mod = ensure_module("homeassistant.components.button")
     if not hasattr(button_mod, "ButtonEntity"):
         button_mod.ButtonEntity = type("ButtonEntity", (), {"__init__": lambda self, *args, **kwargs: None})
@@ -89,6 +94,7 @@ _install_homeassistant_stubs()
 entity_ids = importlib.import_module("custom_components.gazon_intelligent.entity_ids")
 sensor = importlib.import_module("custom_components.gazon_intelligent.sensor")
 binary_sensor = importlib.import_module("custom_components.gazon_intelligent.binary_sensor")
+switch = importlib.import_module("custom_components.gazon_intelligent.switch")
 button = importlib.import_module("custom_components.gazon_intelligent.button")
 number = importlib.import_module("custom_components.gazon_intelligent.number")
 select = importlib.import_module("custom_components.gazon_intelligent.select")
@@ -105,6 +111,15 @@ class _FakeCoordinator:
     data: dict[str, object]
 
 
+class _LaunchCoordinator(_FakeCoordinator):
+    def __init__(self, entry: _FakeEntry, data: dict[str, object]):
+        super().__init__(entry=entry, data=data)
+        self.launch_calls = 0
+
+    async def async_start_current_watering_plan(self) -> None:
+        self.launch_calls += 1
+
+
 class EntityRegistryTests(unittest.TestCase):
     def test_all_exposed_entities_have_known_suffixes(self) -> None:
         coordinator = _FakeCoordinator(entry=_FakeEntry(), data={})
@@ -115,6 +130,8 @@ class EntityRegistryTests(unittest.TestCase):
             sensor.GazonTypeArrosageSensor(coordinator),
             sensor.GazonPlanArrosageSensor(coordinator),
             sensor.GazonDernierArrosageDetecteSensor(coordinator),
+            sensor.GazonDerniereApplicationSensor(coordinator),
+            sensor.GazonDerniereActionUtilisateurSensor(coordinator),
             sensor.GazonTonteEtatSensor(coordinator),
             sensor.GazonHauteurTonteSensor(coordinator),
             sensor.GazonConseilPrincipalSensor(coordinator),
@@ -125,6 +142,9 @@ class EntityRegistryTests(unittest.TestCase):
             sensor.GazonRisqueGazonSensor(coordinator),
             binary_sensor.GazonTonteAutoriseeBinarySensor(coordinator),
             binary_sensor.GazonArrosageRecommandeBinarySensor(coordinator),
+            binary_sensor.GazonApplicationArrosageAutoriseBinarySensor(coordinator),
+            switch.GazonAutoIrrigationSwitch(coordinator),
+            button.LancerArrosageButton(coordinator),
             button.RetourModeNormalButton(coordinator),
             button.DateActionAujourdhuiButton(coordinator),
             select.GazonModeSelect(coordinator),
@@ -158,6 +178,22 @@ class EntityRegistryTests(unittest.TestCase):
         }
 
         self.assertEqual(suffixes, entity_ids.ACTIVE_ENTITY_SUFFIXES)
+
+    def test_button_labels_are_explicit(self) -> None:
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={})
+        self.assertEqual(button.LancerArrosageButton(coordinator)._attr_name, "Lancer le plan maintenant")
+        self.assertEqual(
+            switch.GazonAutoIrrigationSwitch(coordinator)._attr_translation_key,
+            "auto_irrigation_enabled",
+        )
+
+    def test_manual_launch_button_calls_current_plan(self) -> None:
+        coordinator = _LaunchCoordinator(entry=_FakeEntry(), data={})
+        entity = button.LancerArrosageButton(coordinator)
+
+        asyncio.run(entity.async_press())
+
+        self.assertEqual(coordinator.launch_calls, 1)
 
     def test_config_numbers_do_not_expose_decision_attributes(self) -> None:
         self.assertNotIn("extra_state_attributes", number.GazonDebitZoneNumber.__dict__)

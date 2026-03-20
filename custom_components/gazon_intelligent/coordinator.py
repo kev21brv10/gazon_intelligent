@@ -16,6 +16,9 @@ from homeassistant.helpers.storage import Store
 
 from .const import (
     DOMAIN,
+    DEFAULT_AUTO_IRRIGATION_ENABLED,
+    APPLICATION_TYPE_FOLIAIRE,
+    APPLICATION_TYPE_SOL,
     CONF_CAPTEUR_ETP,
     CONF_CAPTEUR_PLUIE_24H,
     CONF_CAPTEUR_PLUIE_DEMAIN,
@@ -43,9 +46,24 @@ from .decision import (
 )
 from .decision_models import DecisionResult
 from .gazon_brain import GazonBrain
+from .memory import compute_application_state
 from .weather_adapter import WeatherAdapter
 
 _LOGGER = logging.getLogger(__name__)
+
+AUTO_IRRIGATION_AUTO_SOURCES = {
+    "auto_irrigation",
+    "application_technique",
+    "application_technique_auto",
+}
+
+AUTO_IRRIGATION_MANUAL_SOURCES = {
+    "manual_plan",
+    "manual_irrigation",
+    "manual_force",
+    "manual_application",
+    "application_technique_manual",
+}
 
 
 class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -64,6 +82,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._loaded = False
         self.brain = GazonBrain()
         self._auto_irrigation_task: asyncio.Task | None = None
+        self._auto_irrigation_scheduler_task: asyncio.Task | None = None
         self._unsub_start_listener: CALLBACK_TYPE | None = None
         self._unsub_delayed_refresh: CALLBACK_TYPE | None = None
         self._unsub_zone_listeners: list[CALLBACK_TYPE] = []
@@ -161,6 +180,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             hauteur_max_tondeuse_cm=hauteur_max_tondeuse_cm,
         )
         await self._async_save_state()
+        self._maybe_schedule_auto_irrigation(snapshot)
 
         return {
             "mode": snapshot["mode"],
@@ -186,6 +206,20 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "hauteur_tonte_recommandee_cm": snapshot.get("hauteur_tonte_recommandee_cm"),
             "hauteur_tonte_min_cm": snapshot.get("hauteur_tonte_min_cm"),
             "hauteur_tonte_max_cm": snapshot.get("hauteur_tonte_max_cm"),
+            "derniere_application": snapshot.get("derniere_application"),
+            "application_type": snapshot.get("application_type"),
+            "application_requires_watering_after": snapshot.get("application_requires_watering_after"),
+            "application_post_watering_mm": snapshot.get("application_post_watering_mm"),
+            "application_irrigation_block_hours": snapshot.get("application_irrigation_block_hours"),
+            "application_label_notes": snapshot.get("application_label_notes"),
+            "application_block_until": snapshot.get("application_block_until"),
+            "application_block_active": snapshot.get("application_block_active"),
+            "application_post_watering_pending": snapshot.get("application_post_watering_pending"),
+            "application_post_watering_remaining_mm": snapshot.get("application_post_watering_remaining_mm"),
+            "auto_irrigation_enabled": snapshot.get(
+                "auto_irrigation_enabled",
+                self.auto_irrigation_enabled,
+            ),
         }
 
     @property
@@ -229,6 +263,21 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     @memory.setter
     def memory(self, value: dict[str, Any]) -> None:
         self.brain.memory = value
+
+    @property
+    def auto_irrigation_enabled(self) -> bool:
+        memory = self.memory
+        if isinstance(memory, dict):
+            return bool(
+                memory.get("auto_irrigation_enabled", DEFAULT_AUTO_IRRIGATION_ENABLED)
+            )
+        return DEFAULT_AUTO_IRRIGATION_ENABLED
+
+    async def async_set_auto_irrigation_enabled(self, enabled: bool) -> None:
+        """Autorise ou bloque l'arrosage automatique globalement."""
+        self.memory["auto_irrigation_enabled"] = bool(enabled)
+        await self._async_save_state()
+        await self.async_request_refresh()
 
     @property
     def products(self) -> dict[str, dict[str, Any]]:
@@ -361,6 +410,13 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         dose: str | None = None,
         zone: str | None = None,
         reapplication_after_days: int | None = None,
+        application_type: str | None = None,
+        application_requires_watering_after: bool | None = None,
+        application_post_watering_mm: float | None = None,
+        application_irrigation_block_hours: float | None = None,
+        application_irrigation_delay_minutes: float | None = None,
+        application_irrigation_mode: str | None = None,
+        application_label_notes: str | None = None,
         note: str | None = None,
     ) -> None:
         self.brain.declare_intervention(
@@ -371,6 +427,13 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             dose=dose,
             zone=zone,
             reapplication_after_days=reapplication_after_days,
+            application_type=application_type,
+            application_requires_watering_after=application_requires_watering_after,
+            application_post_watering_mm=application_post_watering_mm,
+            application_irrigation_block_hours=application_irrigation_block_hours,
+            application_irrigation_delay_minutes=application_irrigation_delay_minutes,
+            application_irrigation_mode=application_irrigation_mode,
+            application_label_notes=application_label_notes,
             note=note,
         )
         await self._async_save_state()
@@ -578,6 +641,274 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "pause_between_passages_minutes": pause_minutes,
         }
 
+    def _plan_type_for_zone_count(self, zone_count: int) -> str:
+        if zone_count <= 0:
+            return "no_plan"
+        if zone_count > 1:
+            return "multi_zone"
+        return "single_zone"
+
+    def _build_watering_plan_summary_for_user_action(
+        self,
+        objectif_mm: float | None = None,
+        plan: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if isinstance(plan, dict):
+            zones = plan.get("zones")
+            if not isinstance(zones, list):
+                zones = []
+            zone_count = plan.get("zone_count")
+            try:
+                zone_count = int(zone_count) if zone_count is not None else len(zones)
+            except (TypeError, ValueError):
+                zone_count = len(zones)
+            passages = plan.get("passages", 1)
+            try:
+                passages = max(1, int(passages))
+            except (TypeError, ValueError):
+                passages = 1
+            summary = dict(plan)
+            summary["zone_count"] = zone_count
+            summary["passages"] = passages
+            summary["fractionation"] = passages > 1
+            summary["plan_type"] = self._plan_type_for_zone_count(zone_count)
+            return summary
+
+        objective = float(
+            objectif_mm if objectif_mm is not None else self.data.get("objectif_mm") or 0.0
+        )
+        passages = self.data.get("watering_passages") or 1
+        pause_minutes = self.data.get("watering_pause_minutes") or 0
+        try:
+            passages = max(1, int(passages))
+        except (TypeError, ValueError):
+            passages = 1
+        try:
+            pause_minutes = max(0, int(pause_minutes))
+        except (TypeError, ValueError):
+            pause_minutes = 0
+
+        zones: list[dict[str, Any]] = []
+        max_minutes = 0.0
+        min_minutes = 99999.0
+        if objective > 0:
+            for entity_id, rate_mm_min in self._iter_zones_with_rate():
+                rate_mm_h = rate_mm_min * 60.0
+                if rate_mm_h <= 0:
+                    continue
+                duration_min = (objective / rate_mm_h) * 60.0
+                if duration_min <= 0:
+                    continue
+                rounded_duration = max(0.5, round(duration_min * 2.0) / 2.0)
+                rounded_duration = min(rounded_duration, 180.0)
+                max_minutes = max(max_minutes, rounded_duration)
+                min_minutes = min(min_minutes, rounded_duration)
+                zones.append(
+                    {
+                        "zone": entity_id,
+                        "entity_id": entity_id,
+                        "rate_mm_h": round(rate_mm_h, 1),
+                        "objectif_mm": round(objective, 1),
+                        "duration_min": round(rounded_duration, 1),
+                        "duration_seconds": int(round(rounded_duration * 60.0)),
+                    }
+                )
+
+        if not zones or objective <= 0:
+            return {
+                "objective_mm": round(max(0.0, objective), 1),
+                "zones": [],
+                "zone_count": 0,
+                "total_duration_min": 0.0,
+                "min_duration_min": 0.0,
+                "max_duration_min": 0.0,
+                "fractionation": False,
+                "passages": passages,
+                "pause_between_passages_minutes": pause_minutes,
+                "source": "no_plan",
+                "plan_type": "no_plan",
+            }
+
+        total_duration_min = round(sum(float(zone["duration_min"]) for zone in zones), 1)
+        return {
+            "objective_mm": round(objective, 1),
+            "zones": zones,
+            "zone_count": len(zones),
+            "total_duration_min": total_duration_min,
+            "min_duration_min": round(min_minutes, 1),
+            "max_duration_min": round(max_minutes, 1),
+            "fractionation": passages > 1,
+            "passages": passages,
+            "pause_between_passages_minutes": pause_minutes,
+            "source": "calculated_from_objective",
+            "plan_type": self._plan_type_for_zone_count(len(zones)),
+        }
+
+    def _plan_arrosage_entity_id(self) -> str:
+        """Résout l'entité du plan d'arrosage courant."""
+        fallback = "sensor.gazon_intelligent_plan_d_arrosage"
+        unique_id = f"{self.entry.entry_id}_plan_arrosage"
+        try:
+            from homeassistant.helpers import entity_registry as er  # local import for HA runtime
+
+            registry = er.async_get(self.hass)
+            get_entity_id = getattr(registry, "async_get_entity_id", None)
+            if callable(get_entity_id):
+                entity_id = get_entity_id("sensor", DOMAIN, unique_id)
+                if isinstance(entity_id, str) and entity_id:
+                    return entity_id
+        except Exception:  # pragma: no cover - fallback only
+            _LOGGER.debug("Impossible de résoudre le capteur de plan d'arrosage via le registre.", exc_info=True)
+        return fallback
+
+    async def async_record_user_action(
+        self,
+        action: str,
+        state: str,
+        reason: str | None = None,
+        plan_type: str | None = None,
+        zone_count: int | None = None,
+        passages: int | None = None,
+        triggered_at: datetime | None = None,
+    ) -> dict[str, Any]:
+        summary = self.brain.record_user_action(
+            action=action,
+            state=state,
+            reason=reason,
+            plan_type=plan_type,
+            zone_count=zone_count,
+            passages=passages,
+            triggered_at=triggered_at,
+        )
+        await self._async_save_state()
+        await self.async_request_refresh()
+        return summary
+
+    def _parse_datetime_value(self, value: Any) -> datetime | None:
+        if value in (None, ""):
+            return None
+        if isinstance(value, datetime):
+            parsed = value
+        else:
+            text = str(value).strip()
+            if not text:
+                return None
+            if text.endswith("Z"):
+                text = text[:-1] + "+00:00"
+            try:
+                parsed = datetime.fromisoformat(text)
+            except ValueError:
+                return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    def _recent_watering_block_active(self, objective_mm: float | None = None) -> bool:
+        objective = float(objective_mm or 0.0)
+        history = getattr(self, "history", None)
+        if not isinstance(history, list):
+            return False
+        for item in reversed(history):
+            if not isinstance(item, dict) or item.get("type") != "arrosage":
+                continue
+            recorded_at = (
+                item.get("recorded_at")
+                or item.get("detected_at")
+                or item.get("date")
+            )
+            recorded_dt = self._parse_datetime_value(recorded_at)
+            if recorded_dt is not None:
+                age_seconds = (datetime.now(timezone.utc) - recorded_dt).total_seconds()
+                if age_seconds < 6 * 3600:
+                    return True
+            total_mm = item.get("total_mm") or item.get("session_total_mm") or item.get("objectif_mm")
+            try:
+                total_mm_value = float(total_mm or 0.0)
+            except (TypeError, ValueError):
+                total_mm_value = 0.0
+            return objective > 0 and total_mm_value >= objective
+        return False
+
+    def _should_launch_auto_irrigation(self, snapshot: dict[str, Any]) -> tuple[bool, str]:
+        if not self.auto_irrigation_enabled:
+            return False, "auto_irrigation_disabled"
+
+        objectif_mm = float(snapshot.get("objectif_mm") or 0.0)
+        if objectif_mm <= 0:
+            return False, "no_objective"
+        if not bool(snapshot.get("arrosage_recommande")):
+            return False, "not_recommended"
+
+        fenetre = str(snapshot.get("fenetre_optimale") or "").strip()
+        if fenetre in {"", "unknown", "unavailable", "none", "attendre"}:
+            return False, "window_unavailable"
+
+        target_date = str(snapshot.get("watering_target_date") or "").strip()
+        today_str = date.today().isoformat()
+        if target_date and today_str < target_date:
+            return False, "target_date_future"
+
+        if self._recent_watering_block_active(objectif_mm):
+            return False, "recent_watering"
+
+        current = datetime.now().astimezone()
+        current_minutes = current.hour * 60 + current.minute
+        window_start = int(snapshot.get("watering_window_start_minute") or 0)
+        window_end = int(snapshot.get("watering_window_end_minute") or 0)
+        evening_start = int(snapshot.get("watering_evening_start_minute") or 1080)
+        evening_end = int(snapshot.get("watering_evening_end_minute") or 1260)
+        evening_allowed = bool(snapshot.get("watering_evening_allowed"))
+
+        if fenetre == "soir":
+            if not evening_allowed:
+                return False, "evening_disabled"
+            if not (evening_start <= current_minutes < evening_end):
+                return False, "outside_evening_window"
+        elif not (window_start <= current_minutes < window_end):
+            return False, "outside_window"
+
+        return True, "ready"
+
+    def _maybe_schedule_auto_irrigation(self, snapshot: dict[str, Any]) -> None:
+        auto_task = getattr(self, "_auto_irrigation_task", None)
+        scheduler_task = getattr(self, "_auto_irrigation_scheduler_task", None)
+        if auto_task and not auto_task.done():
+            return
+        if scheduler_task and not scheduler_task.done():
+            return
+
+        should_launch, _reason = self._should_launch_auto_irrigation(snapshot)
+        if not should_launch:
+            return
+
+        plan_entity_id = self._plan_arrosage_entity_id()
+        plan = self._build_watering_plan_from_state(plan_entity_id)
+        objectif_mm = None
+        if plan is None:
+            try:
+                objectif_mm = float(snapshot.get("objectif_mm") or 0.0)
+            except (TypeError, ValueError):
+                objectif_mm = 0.0
+            if objectif_mm <= 0:
+                return
+
+        async def _runner() -> None:
+            try:
+                await self.async_start_auto_irrigation(
+                    objectif_mm,
+                    plan_entity_id if plan is not None else None,
+                    source="auto_irrigation",
+                )
+            except HomeAssistantError as err:
+                _LOGGER.debug("Arrosage automatique ignoré: %s", err)
+            finally:
+                self._auto_irrigation_scheduler_task = None
+
+        self._auto_irrigation_scheduler_task = self.hass.async_create_task(
+            _runner(),
+            "gazon_intelligent_auto_irrigation_scheduler",
+        )
+
     def _track_watering_zone_on(self, entity_id: str, changed_at: datetime) -> None:
         self._ensure_watering_session(changed_at)
         session = self._watering_session
@@ -777,6 +1108,13 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         reapplication_after_days: int | None = None,
         delai_avant_tonte_jours: int | None = None,
         phase_compatible: str | None = None,
+        application_type: str | None = None,
+        application_requires_watering_after: bool | None = None,
+        application_post_watering_mm: float | None = None,
+        application_irrigation_block_hours: float | None = None,
+        application_irrigation_delay_minutes: float | None = None,
+        application_irrigation_mode: str | None = None,
+        application_label_notes: str | None = None,
         note: str | None = None,
     ) -> None:
         self.brain.register_product(
@@ -787,6 +1125,13 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             reapplication_after_days=reapplication_after_days,
             delai_avant_tonte_jours=delai_avant_tonte_jours,
             phase_compatible=phase_compatible,
+            application_type=application_type,
+            application_requires_watering_after=application_requires_watering_after,
+            application_post_watering_mm=application_post_watering_mm,
+            application_irrigation_block_hours=application_irrigation_block_hours,
+            application_irrigation_delay_minutes=application_irrigation_delay_minutes,
+            application_irrigation_mode=application_irrigation_mode,
+            application_label_notes=application_label_notes,
             note=note,
         )
         await self._async_save_state()
@@ -808,6 +1153,268 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "date_action": self.date_action.isoformat() if self.date_action else None,
             },
         )
+
+    def _current_objective_mm(self) -> float:
+        result = self.result
+        if result is not None:
+            value = getattr(result, "objectif_arrosage", None)
+            try:
+                if value is not None:
+                    return max(0.0, float(value))
+            except (TypeError, ValueError):
+                pass
+            extra = getattr(result, "extra", None)
+            if isinstance(extra, dict):
+                value = extra.get("objective_mm")
+                try:
+                    if value is not None:
+                        return max(0.0, float(value))
+                except (TypeError, ValueError):
+                    pass
+
+        data = getattr(self, "data", None)
+        if isinstance(data, dict):
+            value = data.get("objectif_mm")
+            try:
+                if value is not None:
+                    return max(0.0, float(value))
+            except (TypeError, ValueError):
+                pass
+        return 0.0
+
+    async def async_start_current_watering_plan(self) -> None:
+        """Déclenche l'arrosage du plan courant via l'automation blueprint."""
+        plan_entity_id = self._plan_arrosage_entity_id()
+        plan = self._build_watering_plan_from_state(plan_entity_id)
+        if plan is None:
+            await self.async_record_user_action(
+                action="Lancer le plan maintenant",
+                state="refuse",
+                reason="Le plan d'arrosage est vide ou invalide.",
+                plan_type="no_plan",
+                zone_count=0,
+                passages=1,
+            )
+            raise HomeAssistantError("Le plan d'arrosage est vide ou invalide.")
+
+        plan_feedback = self._build_watering_plan_summary_for_user_action(plan=plan)
+        try:
+            await self.async_start_auto_irrigation(
+                None,
+                plan_entity_id,
+                source="manual_plan",
+            )
+        except HomeAssistantError as err:
+            await self.async_record_user_action(
+                action="Lancer le plan maintenant",
+                state="refuse",
+                reason=str(err),
+                plan_type=str(plan_feedback.get("plan_type") or "no_plan"),
+                zone_count=int(plan_feedback.get("zone_count") or 0),
+                passages=int(plan_feedback.get("passages") or 1),
+            )
+            raise
+        await self.async_record_user_action(
+            action="Lancer le plan maintenant",
+            state="ok",
+            reason="Plan lancé immédiatement.",
+            plan_type=str(plan_feedback.get("plan_type") or "no_plan"),
+            zone_count=int(plan_feedback.get("zone_count") or 0),
+            passages=int(plan_feedback.get("passages") or 1),
+        )
+
+    async def async_force_manual_irrigation(self) -> None:
+        """Déclenche un arrosage manuel immédiat sur l'objectif courant."""
+        objectif_mm = self._current_objective_mm()
+        if objectif_mm <= 0:
+            await self.async_record_user_action(
+                action="Arrosage manuel immédiat",
+                state="refuse",
+                reason="Action bloquée (conditions non remplies). Aucun objectif d'arrosage disponible.",
+                plan_type="no_plan",
+                zone_count=0,
+                passages=1,
+            )
+            raise HomeAssistantError("Aucun objectif d'arrosage disponible pour un arrosage manuel immédiat.")
+
+        plan_feedback = self._build_watering_plan_summary_for_user_action(objectif_mm=objectif_mm)
+        try:
+            await self.async_start_auto_irrigation(objectif_mm, source="manual_force")
+        except HomeAssistantError as err:
+            await self.async_record_user_action(
+                action="Arrosage manuel immédiat",
+                state="refuse",
+                reason=str(err),
+                plan_type=str(plan_feedback.get("plan_type") or "no_plan"),
+                zone_count=int(plan_feedback.get("zone_count") or 0),
+                passages=int(plan_feedback.get("passages") or 1),
+            )
+            raise
+        await self.async_record_user_action(
+            action="Arrosage manuel immédiat",
+            state="ok",
+            reason="Arrosage manuel immédiat lancé.",
+            plan_type=str(plan_feedback.get("plan_type") or "no_plan"),
+            zone_count=int(plan_feedback.get("zone_count") or 0),
+            passages=int(plan_feedback.get("passages") or 1),
+        )
+
+    async def async_start_application_irrigation(self) -> None:
+        """Déclenche un arrosage contrôlé après application, si requis."""
+        application_state = compute_application_state(self.history)
+        application_summary = application_state.get("derniere_application")
+        application_type = application_state.get("application_type")
+        application_mode = str(application_state.get("application_irrigation_mode") or "").strip().lower()
+        application_type_known = application_type in {APPLICATION_TYPE_SOL, APPLICATION_TYPE_FOLIAIRE}
+        planned_objectif_mm = float(
+            application_state.get("application_post_watering_remaining_mm")
+            or application_state.get("application_post_watering_mm")
+            or 0.0
+        )
+        plan_feedback = self._build_watering_plan_summary_for_user_action(objectif_mm=planned_objectif_mm)
+        if application_summary and not application_type_known:
+            await self.async_record_user_action(
+                action="Arroser maintenant",
+                state="refuse",
+                reason="Le type d'application est inconnu: aucun arrosage automatique ne peut être lancé.",
+                plan_type="no_plan",
+                zone_count=0,
+                passages=1,
+            )
+            raise HomeAssistantError(
+                "Le type d'application est inconnu: aucun arrosage automatique ne peut être lancé."
+            )
+        if application_state.get("application_block_active"):
+            await self.async_record_user_action(
+                action="Arroser maintenant",
+                state="bloque",
+                reason=(
+                    f"L'arrosage est bloqué par la fenêtre de protection. "
+                    f"Temps restant={float(application_state.get('application_block_remaining_minutes') or 0.0):.0f} min."
+                ),
+                plan_type=str(plan_feedback.get("plan_type") or "no_plan"),
+                zone_count=int(plan_feedback.get("zone_count") or 0),
+                passages=int(plan_feedback.get("passages") or 1),
+            )
+            raise HomeAssistantError(
+                "L'arrosage est bloqué par la fenêtre de protection de l'application."
+            )
+
+        if application_summary and application_type == "foliaire":
+            await self.async_record_user_action(
+                action="Arroser maintenant",
+                state="bloque",
+                reason="Application foliaire: l'arrosage automatique reste bloqué pendant la fenêtre de protection.",
+                plan_type=str(plan_feedback.get("plan_type") or "no_plan"),
+                zone_count=int(plan_feedback.get("zone_count") or 0),
+                passages=int(plan_feedback.get("passages") or 1),
+            )
+            raise HomeAssistantError(
+                "L'application foliaire bloque l'arrosage automatique pendant la fenêtre de protection."
+            )
+
+        application_requires_watering_after = bool(
+            application_state.get("application_requires_watering_after", False)
+        )
+        application_post_watering_pending = bool(
+            application_state.get("application_post_watering_pending", False)
+        )
+        application_post_watering_ready = bool(
+            application_state.get("application_post_watering_ready", False)
+        )
+        application_delay_remaining = float(
+            application_state.get("application_post_watering_delay_remaining_minutes") or 0.0
+        )
+        if application_summary and application_requires_watering_after:
+            if not application_post_watering_pending:
+                await self.async_record_user_action(
+                    action="Arroser maintenant",
+                    state="refuse",
+                    reason="Aucun arrosage technique n'est requis pour l'application courante.",
+                    plan_type="no_plan",
+                    zone_count=0,
+                    passages=1,
+                )
+                raise HomeAssistantError("Aucun arrosage technique n'est requis pour l'application courante.")
+            if not application_post_watering_ready:
+                await self.async_record_user_action(
+                    action="Arroser maintenant",
+                    state="en_attente",
+                    reason=(
+                        f"L'arrosage technique est différé: attendre encore {application_delay_remaining:.0f} minute(s)."
+                    ),
+                    plan_type=str(plan_feedback.get("plan_type") or "no_plan"),
+                    zone_count=int(plan_feedback.get("zone_count") or 0),
+                    passages=int(plan_feedback.get("passages") or 1),
+                )
+                raise HomeAssistantError(
+                    f"L'arrosage technique est différé: attendre encore {application_delay_remaining:.0f} minute(s)."
+                )
+            if application_mode == "suggestion":
+                await self.async_record_user_action(
+                    action="Arroser maintenant",
+                    state="refuse",
+                    reason="Cette application est en mode suggestion uniquement: aucun arrosage ne doit être lancé.",
+                    plan_type=str(plan_feedback.get("plan_type") or "no_plan"),
+                    zone_count=int(plan_feedback.get("zone_count") or 0),
+                    passages=int(plan_feedback.get("passages") or 1),
+                )
+                raise HomeAssistantError(
+                    "Cette application est en mode suggestion uniquement: aucun arrosage ne doit être lancé."
+                )
+            objectif_mm = planned_objectif_mm
+            if objectif_mm <= 0:
+                await self.async_record_user_action(
+                    action="Arroser maintenant",
+                    state="refuse",
+                    reason="Aucun arrosage technique n'est requis pour l'application courante.",
+                    plan_type="no_plan",
+                    zone_count=0,
+                    passages=1,
+                )
+                raise HomeAssistantError("Aucun arrosage technique n'est requis pour l'application courante.")
+            try:
+                await self.async_start_auto_irrigation(objectif_mm, source="manual_application")
+            except HomeAssistantError as err:
+                await self.async_record_user_action(
+                    action="Arroser maintenant",
+                    state="refuse",
+                    reason=str(err),
+                    plan_type=str(plan_feedback.get("plan_type") or "no_plan"),
+                    zone_count=int(plan_feedback.get("zone_count") or 0),
+                    passages=int(plan_feedback.get("passages") or 1),
+                )
+                raise
+            await self.async_record_user_action(
+                action="Arroser maintenant",
+                state="ok",
+                reason="Arrosage technique lancé.",
+                plan_type=str(plan_feedback.get("plan_type") or "no_plan"),
+                zone_count=int(plan_feedback.get("zone_count") or 0),
+                passages=int(plan_feedback.get("passages") or 1),
+            )
+            return
+
+        if application_summary:
+            await self.async_record_user_action(
+                action="Arroser maintenant",
+                state="refuse",
+                reason="Cette application ne requiert pas d'arrosage technique.",
+                plan_type="no_plan",
+                zone_count=0,
+                passages=1,
+            )
+            raise HomeAssistantError("Cette application ne requiert pas d'arrosage technique.")
+
+        await self.async_record_user_action(
+            action="Arroser maintenant",
+            state="refuse",
+            reason="Aucune application en cours ne requiert d'arrosage technique.",
+            plan_type="no_plan",
+            zone_count=0,
+            passages=1,
+        )
+        raise HomeAssistantError("Aucune application en cours ne requiert d'arrosage technique.")
 
     def _iter_zones_with_rate(self):
         """Itère sur les zones configurées avec leur débit converti en mm/min."""
@@ -850,8 +1457,12 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self,
         objectif_mm: float | None,
         plan_arrosage_entity_id: str | None = None,
+        source: str = "auto_irrigation",
     ) -> None:
         """Arrose automatiquement chaque zone en séquence selon le débit renseigné."""
+        source = str(source or "auto_irrigation")
+        if source in AUTO_IRRIGATION_AUTO_SOURCES and not self.auto_irrigation_enabled:
+            raise HomeAssistantError("L'arrosage automatique est désactivé.")
         if self._auto_irrigation_task and not self._auto_irrigation_task.done():
             raise HomeAssistantError(
                 "Un arrosage automatique est déjà en cours."
@@ -920,7 +1531,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         date.today(),
                         objectif_mm=objectif,
                         zones=session_zones,
-                        source="auto_irrigation",
+                        source=source,
                     )
             finally:
                 self._zone_tracking_suspended = max(0, self._zone_tracking_suspended - 1)
@@ -1006,6 +1617,13 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Nettoie les tâches en cours à la fermeture de l'intégration."""
         self._cancel_post_start_refresh()
         self._cancel_zone_monitoring()
+        if self._auto_irrigation_scheduler_task and not self._auto_irrigation_scheduler_task.done():
+            self._auto_irrigation_scheduler_task.cancel()
+            try:
+                await self._auto_irrigation_scheduler_task
+            except asyncio.CancelledError:
+                pass
+        self._auto_irrigation_scheduler_task = None
         if self._auto_irrigation_task and not self._auto_irrigation_task.done():
             self._auto_irrigation_task.cancel()
             try:
