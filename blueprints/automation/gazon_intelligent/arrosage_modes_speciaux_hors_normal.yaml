@@ -2,6 +2,7 @@ blueprint:
   name: Gazon Intelligent - Arrosage intelligent (modes spéciaux hors Normal)
   description: >
     Automatise l'arrosage des modes spéciaux hors Normal.
+    Ce blueprint est réservé aux modes spéciaux et ne traite pas le mode Normal.
     Le blueprint s'appuie en priorité sur le plan d'arrosage calculé par
     l'intégration, exécute les zones séquentiellement et laisse la détection
     automatique de session enregistrer l'arrosage réel.
@@ -29,23 +30,15 @@ blueprint:
       selector:
         entity:
           domain: binary_sensor
-    sensor_pluie_24h:
-      name: Pluie 24h
-      selector:
-        entity:
-          domain: sensor
-    sensor_pluie_demain:
-      name: Pluie demain
-      selector:
-        entity:
-          domain: sensor
     sensor_etp:
-      name: ETP
+      name: ETP (optionnel)
+      default: ""
       selector:
         entity:
           domain: sensor
     sensor_humidite:
-      name: Humidité
+      name: Humidité (optionnel)
+      default: ""
       selector:
         entity:
           domain: sensor
@@ -66,25 +59,6 @@ blueprint:
       selector:
         time: {}
 
-    seuil_pluie_stop_24h:
-      name: Pluie stop 24h (mm)
-      default: 8
-      selector:
-        number:
-          min: 0
-          max: 30
-          step: 0.5
-          unit_of_measurement: mm
-    seuil_pluie_stop_demain:
-      name: Pluie stop demain (mm)
-      default: 6
-      selector:
-        number:
-          min: 0
-          max: 30
-          step: 0.5
-          unit_of_measurement: mm
-
 mode: single
 
 trigger:
@@ -103,19 +77,14 @@ variables:
   plan_arrosage_entity: !input sensor_plan_arrosage
   arrosage_recommande_entity: !input sensor_arrosage_recommande
   pluie_stop_entity: !input sensor_pluie_stop
-  sensor_pluie_24h_entity: !input sensor_pluie_24h
-  sensor_pluie_demain_entity: !input sensor_pluie_demain
   sensor_etp_entity: !input sensor_etp
   sensor_humidite_entity: !input sensor_humidite
-  seuil_pluie_stop_24h_value: !input seuil_pluie_stop_24h
-  seuil_pluie_stop_demain_value: !input seuil_pluie_stop_demain
+  trigger_id: "{{ trigger.id | default('') }}"
 
   mode_gazon_raw: "{{ states(mode_select_entity) }}"
   plan_raw: "{{ states(plan_arrosage_entity) }}"
   arrosage_recommande_raw: "{{ states(arrosage_recommande_entity) }}"
   pluie_stop_raw: "{{ states(pluie_stop_entity) }}"
-  pluie24_raw: "{{ states(sensor_pluie_24h_entity) }}"
-  pluie_demain_raw: "{{ states(sensor_pluie_demain_entity) }}"
   etp_raw: "{{ states(sensor_etp_entity) }}"
   hum_raw: "{{ states(sensor_humidite_entity) }}"
 
@@ -123,7 +92,7 @@ variables:
   plan_objective_mm: "{{ state_attr(plan_arrosage_entity, 'objective_mm') | float(0) }}"
   plan_total_duration_min: "{{ state_attr(plan_arrosage_entity, 'total_duration_min') | float(0) }}"
   plan_zone_count: "{{ state_attr(plan_arrosage_entity, 'zone_count') | int(0) }}"
-  plan_fractionation: "{{ state_attr(plan_arrosage_entity, 'fractionation') | bool }}"
+  plan_fractionation: "{{ state_attr(plan_arrosage_entity, 'fractionation') | default(false) | bool }}"
   plan_passages: "{{ state_attr(plan_arrosage_entity, 'passages') | int(1) }}"
   plan_pause_minutes: "{{ state_attr(plan_arrosage_entity, 'pause_between_passages_minutes') | int(0) }}"
   plan_zones: "{{ state_attr(plan_arrosage_entity, 'zones') or [] }}"
@@ -144,10 +113,6 @@ variables:
       mode_gazon_raw not in ['unknown', 'unavailable', 'none', '']
       and plan_raw not in ['unknown', 'unavailable', 'none', '']
       and arrosage_recommande_raw not in ['unknown', 'unavailable', 'none', '']
-      and pluie24_raw not in ['unknown', 'unavailable', 'none', '']
-      and pluie_demain_raw not in ['unknown', 'unavailable', 'none', '']
-      and etp_raw not in ['unknown', 'unavailable', 'none', '']
-      and hum_raw not in ['unknown', 'unavailable', 'none', '']
     }}
 
   plan_ok: >
@@ -162,18 +127,9 @@ variables:
 
   pluie_stop: >
     {{
-      (
-        pluie_stop_entity not in ['', none]
-        and pluie_stop_raw not in ['unknown', 'unavailable', 'none', '']
-        and is_state(pluie_stop_entity, 'on')
-      )
-      or (
-        pluie_stop_entity in ['', none]
-        and (
-          (pluie24_raw | float(0)) >= seuil_pluie_stop_24h_value
-          or (pluie_demain_raw | float(0)) >= seuil_pluie_stop_demain_value
-        )
-      )
+      pluie_stop_entity not in ['', none]
+      and pluie_stop_raw not in ['unknown', 'unavailable', 'none', '']
+      and is_state(pluie_stop_entity, 'on')
     }}
 
 condition:
@@ -199,8 +155,10 @@ action:
               {{
                 mode_gazon == 'Sursemis'
                 and (plan_ok | bool)
+                and (plan_zone_count | int(0)) > 0
+                and (plan_total_duration_min | float(0)) > 0
                 and (arrosage_ok | bool)
-                and trigger.id in ['matin', 'midi', 'soir']
+                and trigger_id in ['matin', 'midi', 'soir']
                 and not (pluie_stop | bool)
               }}
         sequence:
@@ -226,10 +184,12 @@ action:
               {{
                 mode_gazon in ['Fertilisation', 'Biostimulant', 'Agent Mouillant', 'Scarification']
                 and (plan_ok | bool)
+                and (plan_zone_count | int(0)) > 0
+                and (plan_total_duration_min | float(0)) > 0
                 and (arrosage_ok | bool)
                 and (
-                  trigger.id == 'matin'
-                  or (trigger.id == 'soir' and (etp_raw | float(0)) >= 4 and (hum_raw | float(0)) <= 55)
+                  trigger_id == 'matin'
+                  or (trigger_id == 'soir' and (etp_raw | float(0)) >= 4 and (hum_raw | float(0)) <= 55)
                 )
                 and not (pluie_stop | bool)
               }}
@@ -251,12 +211,11 @@ action:
               plan_arrosage_entity: !input sensor_plan_arrosage
 
     default:
-      - service: persistent_notification.create
+      - service: logbook.log
         data:
-          notification_id: gazon_intelligent_arrosage_blueprint
-          title: "Gazon Intelligent: aucune action lancée"
+          name: Gazon Intelligent
           message: >
-            Aucun arrosage n'a été lancé pour le trigger {{ trigger.id }}.
+            Aucun arrosage n'a été lancé pour le trigger {{ trigger_id }}.
             Mode={{ mode_gazon }},
             plan_ok={{ plan_ok }},
             arrosage_ok={{ arrosage_ok }},
