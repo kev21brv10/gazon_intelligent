@@ -194,7 +194,7 @@ class GazonDernierArrosageDetecteSensor(GazonEntityBase, SensorEntity):
     def native_value(self):
         session = self._latest_zone_session()
         if not session:
-            return None
+            return 0.0
         for key in ("total_mm", "session_total_mm", "objectif_mm"):
             value = session.get(key)
             if value is None:
@@ -203,13 +203,18 @@ class GazonDernierArrosageDetecteSensor(GazonEntityBase, SensorEntity):
                 return float(value)
             except (TypeError, ValueError):
                 continue
-        return None
+        return 0.0
 
     @property
     def extra_state_attributes(self):
         session = self._latest_zone_session()
         if not session:
-            return None
+            return {
+                "source": "none",
+                "zone_count": 0,
+                "objectif_mm": 0.0,
+                "total_mm": 0.0,
+            }
 
         zones = session.get("zones")
         zone_details: list[dict[str, object]] = []
@@ -336,8 +341,23 @@ class GazonPlanArrosageSensor(GazonEntityBase, SensorEntity):
 
     def _build_plan(self) -> dict[str, object] | None:
         objective = self._latest_objective()
+        def _empty_plan(reason: str) -> dict[str, object]:
+            return {
+                "objective_mm": round(max(0.0, objective or 0.0), 1),
+                "zones": [],
+                "zone_count": 0,
+                "total_duration_min": 0.0,
+                "min_duration_min": 0.0,
+                "max_duration_min": 0.0,
+                "fractionation": False,
+                "passages": self._watering_passages(),
+                "pause_between_passages_minutes": self._watering_pause_minutes(),
+                "source": "no_plan",
+                "reason": reason,
+            }
+
         if objective is None or objective <= 0:
-            return None
+            return _empty_plan("objective_non_positive")
 
         def _conf(key: str):
             getter = getattr(self.coordinator, "_get_conf", None)
@@ -388,11 +408,11 @@ class GazonPlanArrosageSensor(GazonEntityBase, SensorEntity):
             )
 
         if not zones:
-            return None
+            return _empty_plan("no_valid_zones")
 
         total_duration_min = round(sum(float(zone["duration_min"]) for zone in zones), 1)
         if total_duration_min <= 0:
-            return None
+            return _empty_plan("non_positive_total_duration")
 
         return {
             "objective_mm": round(objective, 1),
