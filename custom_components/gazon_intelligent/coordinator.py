@@ -1188,7 +1188,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         plan = self._build_watering_plan_from_state(plan_entity_id)
         if plan is None:
             await self.async_record_user_action(
-                action="Lancer le plan maintenant",
+                action="Plan d'arrosage lancé",
                 state="refuse",
                 reason="Le plan d'arrosage est vide ou invalide.",
                 plan_type="no_plan",
@@ -1206,7 +1206,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
         except HomeAssistantError as err:
             await self.async_record_user_action(
-                action="Lancer le plan maintenant",
+                action="Plan d'arrosage lancé",
                 state="refuse",
                 reason=str(err),
                 plan_type=str(plan_feedback.get("plan_type") or "no_plan"),
@@ -1215,7 +1215,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             raise
         await self.async_record_user_action(
-            action="Lancer le plan maintenant",
+            action="Plan d'arrosage lancé",
             state="ok",
             reason="Plan lancé immédiatement.",
             plan_type=str(plan_feedback.get("plan_type") or "no_plan"),

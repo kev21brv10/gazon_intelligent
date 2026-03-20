@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1
+- Clarifie l'UX des boutons et des capteurs affichés dans Home Assistant.
+- Ajoute un résumé lisible du plan d'arrosage et supprime les valeurs vides ambiguës.
+- Conserve l'automatisme comme source de vérité tout en simplifiant l'action manuelle visible.
+
 ## 0.4.0
 - Bump de version pour la nouvelle release.
 

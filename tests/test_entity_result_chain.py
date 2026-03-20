@@ -149,9 +149,11 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(plan_sensor.extra_state_attributes["objective_mm"], 0.0)
         self.assertEqual(plan_sensor.extra_state_attributes["zone_count"], 0)
         self.assertEqual(plan_sensor.extra_state_attributes["total_duration_min"], 0.0)
+        self.assertEqual(plan_sensor.extra_state_attributes["duration_human"], "0 min")
         self.assertEqual(plan_sensor.extra_state_attributes["source"], "no_plan")
         self.assertEqual(plan_sensor.extra_state_attributes["reason"], "objective_non_positive")
         self.assertEqual(plan_sensor.extra_state_attributes["plan_type"], "no_plan")
+        self.assertEqual(plan_sensor.extra_state_attributes["summary"], "Aucun plan d'arrosage")
         self.assertFalse(plan_sensor.extra_state_attributes["fractionation"])
 
         self.assertEqual(last_watering_sensor.native_value, 0.0)
@@ -160,8 +162,8 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(last_watering_sensor.extra_state_attributes["objectif_mm"], 0.0)
         self.assertEqual(last_watering_sensor.extra_state_attributes["total_mm"], 0.0)
         self.assertEqual(last_application_sensor.native_value, "Aucune application")
-        self.assertIsNone(last_user_action_sensor.native_value)
-        self.assertIsNone(last_user_action_sensor.extra_state_attributes)
+        self.assertEqual(last_user_action_sensor.native_value, "none")
+        self.assertEqual(last_user_action_sensor.extra_state_attributes["summary"], "Aucune action récente")
         self.assertFalse(application_allowed_sensor.is_on)
         self.assertNotIn("application_type", application_allowed_sensor.extra_state_attributes)
 
@@ -198,7 +200,7 @@ class DecisionResultChainTests(unittest.TestCase):
 
         self.assertEqual(window_sensor.native_value, "demain_matin")
         self.assertEqual(window_sensor.extra_state_attributes["status"], "auto")
-        self.assertEqual(window_sensor.extra_state_attributes["next_action"], "Lancer le plan maintenant")
+        self.assertEqual(window_sensor.extra_state_attributes["next_action"], "Aucune action requise")
         self.assertEqual(window_sensor.extra_state_attributes["summary"], "Arrosage prévu demain matin (auto)")
 
     def test_watering_window_sensor_uses_manual_immediate_wording(self) -> None:
@@ -424,6 +426,8 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(plan_sensor.extra_state_attributes["plan_type"], "multi_zone")
         self.assertEqual(plan_sensor.extra_state_attributes["source"], "calculated_from_objective")
         self.assertEqual(plan_sensor.extra_state_attributes["total_duration_min"], 3.5)
+        self.assertEqual(plan_sensor.extra_state_attributes["duration_human"], "3 min 30")
+        self.assertEqual(plan_sensor.extra_state_attributes["summary"], "2 zones • 1.2 mm • 3 min 30")
         self.assertEqual(plan_sensor.extra_state_attributes["passages"], 2)
         self.assertEqual(plan_sensor.extra_state_attributes["pause_between_passages_minutes"], 25)
         self.assertEqual(plan_sensor.extra_state_attributes["zones"][0]["zone"], "switch.zone_1")
