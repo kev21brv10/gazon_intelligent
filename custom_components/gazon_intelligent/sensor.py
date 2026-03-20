@@ -138,7 +138,17 @@ class GazonObjectifMmSensor(GazonEntityBase, SensorEntity):
 
     @property
     def extra_state_attributes(self):
-        return self._attrs_from_result("phase_active", "phase_dominante", "sous_phase")
+        return self._attrs_from_result(
+            "phase_active",
+            "phase_dominante",
+            "sous_phase",
+            "bilan_hydrique_mm",
+            "deficit_3j",
+            "deficit_7j",
+            "pluie_demain",
+            "temperature",
+            "etp",
+        )
 
 
 class GazonTypeArrosageSensor(GazonEntityBase, SensorEntity):

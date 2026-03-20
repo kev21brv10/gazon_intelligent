@@ -117,6 +117,12 @@ def _make_result():
         extra={
             "configuration": {"type_sol": "argileux"},
             "pluie_demain_source": "meteo_forecast",
+            "bilan_hydrique_mm": -1.8,
+            "deficit_3j": 1.2,
+            "deficit_7j": 2.4,
+            "pluie_demain": 0.8,
+            "temperature": 26.5,
+            "etp": 3.1,
         },
     )
 
@@ -214,6 +220,12 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(sous_phase_sensor.native_value, "Enracinement")
         self.assertEqual(sous_phase_sensor.extra_state_attributes["sous_phase_age_days"], 12)
         self.assertEqual(objectif_sensor.native_value, 1.2)
+        self.assertEqual(objectif_sensor.extra_state_attributes["bilan_hydrique_mm"], -1.8)
+        self.assertEqual(objectif_sensor.extra_state_attributes["deficit_3j"], 1.2)
+        self.assertEqual(objectif_sensor.extra_state_attributes["deficit_7j"], 2.4)
+        self.assertEqual(objectif_sensor.extra_state_attributes["pluie_demain"], 0.8)
+        self.assertEqual(objectif_sensor.extra_state_attributes["temperature"], 26.5)
+        self.assertEqual(objectif_sensor.extra_state_attributes["etp"], 3.1)
         self.assertEqual(type_arrosage_sensor.native_value, "Arrosage fractionné")
         self.assertEqual(hauteur_sensor.native_value, 7.0)
         self.assertEqual(hauteur_sensor.extra_state_attributes["hauteur_tonte_min_cm"], 3.0)
