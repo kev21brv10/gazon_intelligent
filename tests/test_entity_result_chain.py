@@ -122,6 +122,25 @@ def _make_result():
 
 
 class DecisionResultChainTests(unittest.TestCase):
+    def test_watering_sensors_return_explicit_defaults_without_history(self) -> None:
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=None, history=[])
+
+        plan_sensor = sensor.GazonPlanArrosageSensor(coordinator)
+        last_watering_sensor = sensor.GazonDernierArrosageDetecteSensor(coordinator)
+
+        self.assertEqual(plan_sensor.native_value, 0.0)
+        self.assertEqual(plan_sensor.extra_state_attributes["objective_mm"], 0.0)
+        self.assertEqual(plan_sensor.extra_state_attributes["zone_count"], 0)
+        self.assertEqual(plan_sensor.extra_state_attributes["total_duration_min"], 0.0)
+        self.assertEqual(plan_sensor.extra_state_attributes["source"], "no_plan")
+        self.assertEqual(plan_sensor.extra_state_attributes["reason"], "objective_non_positive")
+
+        self.assertEqual(last_watering_sensor.native_value, 0.0)
+        self.assertEqual(last_watering_sensor.extra_state_attributes["source"], "none")
+        self.assertEqual(last_watering_sensor.extra_state_attributes["zone_count"], 0)
+        self.assertEqual(last_watering_sensor.extra_state_attributes["objectif_mm"], 0.0)
+        self.assertEqual(last_watering_sensor.extra_state_attributes["total_mm"], 0.0)
+
     def test_entities_read_decision_result_before_legacy_snapshot(self) -> None:
         coordinator = _FakeCoordinator(
             entry=_FakeEntry(),
