@@ -270,9 +270,9 @@ Si le projet t’aide :
 
 ## 🧾 Version
 
-- manifest : `0.3.27`
-- README : `0.3.27`
-- changelog : `0.3.27`
+- manifest : `0.3.28`
+- README : `0.3.28`
+- changelog : `0.3.28`
 
 
 ## 📄 Licence
