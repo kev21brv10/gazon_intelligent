@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.3.27
+- Bump de version pour la nouvelle release.
+
 ## 0.3.26
 - Expose la hauteur de tonte conseillée comme entité dédiée et exploitable dans Home Assistant.
 - Simplifie et stabilise les réglages de hauteur de tondeuse avec une logique générique et arrondie au pas réel.
