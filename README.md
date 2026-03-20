@@ -57,30 +57,30 @@ Puis il te donne une seule chose :
 
 ## 👀 Ce que tu vois dans Home Assistant
 
-### Entités principales
+### 🧩 Entités principales
 
-- Mode du gazon  
-- Phase dominante  
-- Sous-phase  
-- Conseil principal  
-- Action recommandée  
-- Action à éviter  
-- Niveau d'action  
-- Fenêtre optimale  
-- Risque gazon  
-- État de tonte  
-- Hauteur de tonte conseillée  
-- Tonte autorisée  
-- Arrosage recommandé  
-- Objectif d'arrosage  
-- Plan d'arrosage
-- Dernier arrosage détecté
-- Dernière application
-- Dernière action utilisateur
-- Arrosage après application autorisé
-- Arrosage automatique autorisé
-- Type d'arrosage  
-- Bouton `Arrosage manuel immédiat`
+- 🎛️ Mode du gazon
+- 🌱 Phase dominante
+- 🌱 Sous-phase
+- 💡 Conseil principal
+- ✅ Action recommandée
+- ⛔ Action à éviter
+- 📶 Niveau d'action
+- ⏱️ Fenêtre optimale
+- 🛡️ Risque gazon
+- ✂️ État de tonte
+- 📏 Hauteur de tonte conseillée
+- ✂️ Tonte autorisée
+- 💧 Arrosage recommandé
+- 🎯 Objectif d'arrosage
+- 🧾 Plan d'arrosage
+- 🕘 Dernier arrosage détecté
+- 🧴 Dernière application
+- 👆 Dernière action utilisateur
+- 🔓 Arrosage après application autorisé
+- 🔘 Arrosage automatique autorisé
+- 🚿 Type d'arrosage
+- 🖲️ Bouton `Arrosage manuel immédiat`
 
 ---
 
@@ -111,7 +111,7 @@ Le système :
 
 ## 💧 Gestion de l’arrosage
 
-### Règles agronomiques sourcées
+### 📚 Règles agronomiques sourcées
 
 Ces principes viennent des bonnes pratiques d'irrigation du gazon et du sursemis :
 
@@ -124,7 +124,7 @@ Ces principes viennent des bonnes pratiques d'irrigation du gazon et du sursemis
 - certains produits de type sol peuvent nécessiter un arrosage technique après application
 - certains traitements foliaires doivent au contraire rester protégés avant tout arrosage
 
-### Conventions internes de l’intégration
+### 🛠️ Conventions internes de l’intégration
 
 Ce sont des choix d'implémentation Home Assistant, pas des vérités universelles :
 
@@ -143,7 +143,7 @@ Ce sont des choix d'implémentation Home Assistant, pas des vérités universell
 - `fractionation` décrit uniquement le fractionnement temporel réel: `true` seulement si `passages > 1`
 - un plan multi-zone peut rester sans fractionnement temporel quand `passages = 1`
 
-### Tableau de fonctionnement
+### 📋 Tableau de fonctionnement
 
 | Mode | Fenêtre cible | Objectif mm | Fréquence | Fractionnement |
 | --- | --- | --- | --- | --- |
@@ -157,7 +157,7 @@ Ce sont des choix d'implémentation Home Assistant, pas des vérités universell
 | Application foliaire | Bloqué pendant la fenêtre de protection | 0 | 0 | Non |
 | Type d'application inconnu | Bloqué | 0 | 0 | Non |
 
-### Plan d'arrosage: composition vs fractionnement
+### 🧮 Plan d'arrosage: composition vs fractionnement
 
 - `plan_type = single_zone` quand une seule zone compose le plan
 - `plan_type = multi_zone` quand le plan couvre plusieurs zones
@@ -165,7 +165,7 @@ Ce sont des choix d'implémentation Home Assistant, pas des vérités universell
 - `zone_count` indique le nombre de zones
 - `passages` indique le nombre de cycles temporels
 
-### Arrosage applicatif
+### 🧪 Arrosage applicatif
 
 Le moteur distingue maintenant :
 
@@ -322,10 +322,10 @@ Aucune configuration YAML obligatoire.
 
 Le matin :
 
-- Phase dominante = Sursemis  
-- Conseil principal = Arroser demain matin en 2 passages courts  
-- Action recommandée = Appliquer 1.1 mm fractionnés  
-- État de tonte = interdite  
+- Phase dominante = Sursemis
+- Conseil principal = Arroser demain matin
+- Action recommandée = Appliquer 1.1 mm en un ou plusieurs passages selon le plan
+- État de tonte = interdite
 
 👉 Tu appliques. Le système s’adapte.
 
@@ -343,19 +343,27 @@ Le matin :
 
 ---
 
+## 🛠️ Services essentiels
+
+- `gazon_intelligent.set_mode`
+- `gazon_intelligent.reset_mode`
+- `gazon_intelligent.start_auto_irrigation`
+- `gazon_intelligent.start_application_irrigation`
+- `gazon_intelligent.declare_intervention`
+- `gazon_intelligent.register_product`
+
 ## 🛠️ Services avancés
 
-- `gazon_intelligent.set_mode`  
-- `gazon_intelligent.set_date_action`  
-- `gazon_intelligent.reset_mode`  
-- `gazon_intelligent.start_manual_irrigation`  
-- `gazon_intelligent.start_auto_irrigation`  
-- `gazon_intelligent.start_application_irrigation`
-- `gazon_intelligent.declare_intervention`  
-- `gazon_intelligent.declare_mowing`  
-- `gazon_intelligent.declare_watering`  
-- `gazon_intelligent.register_product`  
-- `gazon_intelligent.remove_product`  
+- `gazon_intelligent.set_date_action`
+- `gazon_intelligent.start_manual_irrigation`
+- `gazon_intelligent.declare_mowing`
+- `gazon_intelligent.declare_watering`
+- `gazon_intelligent.remove_product`
+
+Notes:
+
+- `start_manual_irrigation` reste un outil avancé pour lancer un arrosage manuel contrôlé, mais ce n'est pas le chemin principal d'usage.
+- `declare_mowing` et `declare_watering` sont des raccourcis de compatibilité qui restent utiles, mais `declare_intervention` est le point d'entrée principal pour les interventions.
 
 ---
 
