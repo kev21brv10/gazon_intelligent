@@ -23,6 +23,12 @@ blueprint:
       selector:
         entity:
           domain: binary_sensor
+    sensor_pluie_stop:
+      name: Blocage pluie (optionnel)
+      default: ""
+      selector:
+        entity:
+          domain: binary_sensor
     sensor_pluie_24h:
       name: Pluie 24h
       selector:
@@ -96,6 +102,7 @@ variables:
   mode_select_entity: !input mode_select
   plan_arrosage_entity: !input sensor_plan_arrosage
   arrosage_recommande_entity: !input sensor_arrosage_recommande
+  pluie_stop_entity: !input sensor_pluie_stop
   sensor_pluie_24h_entity: !input sensor_pluie_24h
   sensor_pluie_demain_entity: !input sensor_pluie_demain
   sensor_etp_entity: !input sensor_etp
@@ -106,6 +113,7 @@ variables:
   mode_gazon_raw: "{{ states(mode_select_entity) }}"
   plan_raw: "{{ states(plan_arrosage_entity) }}"
   arrosage_recommande_raw: "{{ states(arrosage_recommande_entity) }}"
+  pluie_stop_raw: "{{ states(pluie_stop_entity) }}"
   pluie24_raw: "{{ states(sensor_pluie_24h_entity) }}"
   pluie_demain_raw: "{{ states(sensor_pluie_demain_entity) }}"
   etp_raw: "{{ states(sensor_etp_entity) }}"
@@ -154,8 +162,18 @@ variables:
 
   pluie_stop: >
     {{
-      (pluie24_raw | float(0)) >= seuil_pluie_stop_24h_value
-      or (pluie_demain_raw | float(0)) >= seuil_pluie_stop_demain_value
+      (
+        pluie_stop_entity not in ['', none]
+        and pluie_stop_raw not in ['unknown', 'unavailable', 'none', '']
+        and is_state(pluie_stop_entity, 'on')
+      )
+      or (
+        pluie_stop_entity in ['', none]
+        and (
+          (pluie24_raw | float(0)) >= seuil_pluie_stop_24h_value
+          or (pluie_demain_raw | float(0)) >= seuil_pluie_stop_demain_value
+        )
+      )
     }}
 
 condition:
