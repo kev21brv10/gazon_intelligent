@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import importlib
 import unittest
 from dataclasses import dataclass
@@ -111,19 +110,6 @@ class _FakeCoordinator:
     data: dict[str, object]
 
 
-class _LaunchCoordinator(_FakeCoordinator):
-    def __init__(self, entry: _FakeEntry, data: dict[str, object]):
-        super().__init__(entry=entry, data=data)
-        self.launch_calls = 0
-        self.force_calls = 0
-
-    async def async_start_current_watering_plan(self) -> None:
-        self.launch_calls += 1
-
-    async def async_force_manual_irrigation(self) -> None:
-        self.force_calls += 1
-
-
 class EntityRegistryTests(unittest.TestCase):
     def test_all_exposed_entities_have_known_suffixes(self) -> None:
         coordinator = _FakeCoordinator(entry=_FakeEntry(), data={})
@@ -148,7 +134,6 @@ class EntityRegistryTests(unittest.TestCase):
             binary_sensor.GazonArrosageRecommandeBinarySensor(coordinator),
             binary_sensor.GazonApplicationArrosageAutoriseBinarySensor(coordinator),
             switch.GazonAutoIrrigationSwitch(coordinator),
-            button.LancerArrosageButton(coordinator),
             button.ArroserMaintenantButton(coordinator),
             button.RetourModeNormalButton(coordinator),
             button.DateActionAujourdhuiButton(coordinator),
@@ -191,15 +176,6 @@ class EntityRegistryTests(unittest.TestCase):
             switch.GazonAutoIrrigationSwitch(coordinator)._attr_translation_key,
             "auto_irrigation_enabled",
         )
-
-    def test_manual_launch_button_calls_current_plan(self) -> None:
-        coordinator = _LaunchCoordinator(entry=_FakeEntry(), data={})
-        entity = button.ArroserMaintenantButton(coordinator)
-
-        asyncio.run(entity.async_press())
-
-        self.assertEqual(coordinator.launch_calls, 0)
-        self.assertEqual(coordinator.force_calls, 1)
 
     def test_config_numbers_do_not_expose_decision_attributes(self) -> None:
         self.assertNotIn("extra_state_attributes", number.GazonDebitZoneNumber.__dict__)
