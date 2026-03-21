@@ -6,6 +6,7 @@ from importlib import util
 from pathlib import Path
 import sys
 import types
+from unittest.mock import patch
 
 
 MODULE_DIR = (
@@ -39,11 +40,16 @@ _load_module("custom_components.gazon_intelligent.const", "const.py")
 _load_module("custom_components.gazon_intelligent.water", "water.py")
 _load_module("custom_components.gazon_intelligent.memory", "memory.py")
 _load_module("custom_components.gazon_intelligent.soil_balance", "soil_balance.py")
+DecisionResult = _load_module(
+    "custom_components.gazon_intelligent.decision_models",
+    "decision_models.py",
+).DecisionResult
 _load_module("custom_components.gazon_intelligent.decision", "decision.py")
-GazonBrain = _load_module(
+gazon_brain_module = _load_module(
     "custom_components.gazon_intelligent.gazon_brain",
     "gazon_brain.py",
-).GazonBrain
+)
+GazonBrain = gazon_brain_module.GazonBrain
 
 
 class GazonBrainTests(unittest.TestCase):
@@ -224,3 +230,69 @@ class GazonBrainTests(unittest.TestCase):
         self.assertEqual(brain.last_result.phase_active, snapshot["phase_active"])
         self.assertEqual(brain.last_result.extra["configuration"]["type_sol"], "limoneux")
         self.assertEqual(brain.last_result.extra["pluie_demain_source"], "meteo_forecast")
+
+    def test_compute_snapshot_adds_temperature_note_to_watering_conseil(self) -> None:
+        brain = GazonBrain()
+        fake_result = DecisionResult(
+            phase_dominante="Normal",
+            sous_phase="Normal",
+            action_recommandee="Arroser maintenant en un passage.",
+            action_a_eviter="Aucune",
+            niveau_action="a_faire",
+            fenetre_optimale="maintenant",
+            risque_gazon="modere",
+            objectif_arrosage=1.0,
+            tonte_autorisee=True,
+            conseil_principal="Arroser maintenant en un passage.",
+            tonte_statut="autorisee",
+            arrosage_recommande=True,
+            arrosage_auto_autorise=True,
+            type_arrosage="auto",
+            arrosage_conseille="auto",
+            watering_passages=1,
+            watering_pause_minutes=25,
+            phase_dominante_source="historique_actif",
+            sous_phase_detail="Normal",
+            sous_phase_age_days=0,
+            sous_phase_progression=0,
+            prochaine_reevaluation="dans 24 h",
+            urgence="moyenne",
+            raison_decision="Test",
+            score_hydrique=42,
+            score_stress=33,
+            score_tonte=12,
+            advanced_context={"niveau_action": "a_faire"},
+            water_balance={"bilan_hydrique_mm": 1.0},
+            phase_context=None,
+            extra={"configuration": {"type_sol": "limoneux"}},
+        )
+
+        with patch.object(gazon_brain_module, "build_decision_result", return_value=fake_result):
+            snapshot = brain.compute_snapshot(
+                today=date(2026, 6, 15),
+                hour_of_day=7,
+                temperature=20.0,
+                forecast_temperature_today=18.2,
+                temperature_source="capteur",
+                pluie_24h=0.0,
+                pluie_demain=0.0,
+                humidite=60.0,
+                type_sol="limoneux",
+                etp_capteur=3.0,
+                humidite_sol=None,
+                vent=None,
+                rosee=None,
+                hauteur_gazon=None,
+                retour_arrosage=None,
+                pluie_source="capteur_pluie_24h",
+                pluie_demain_source="meteo_forecast",
+                weather_profile={},
+            )
+
+        self.assertTrue(snapshot["arrosage_recommande"])
+        self.assertIn("température réelle 20.0°C", snapshot["conseil_principal"])
+        self.assertIn("prévision du jour 18.2°C", snapshot["conseil_principal"])
+        self.assertEqual(
+            brain.last_result.extra["temperature_note"],
+            "température réelle 20.0°C, prévision du jour 18.2°C",
+        )

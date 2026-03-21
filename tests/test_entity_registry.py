@@ -148,6 +148,7 @@ class EntityRegistryTests(unittest.TestCase):
             binary_sensor.GazonArrosageRecommandeBinarySensor(coordinator),
             binary_sensor.GazonApplicationArrosageAutoriseBinarySensor(coordinator),
             switch.GazonAutoIrrigationSwitch(coordinator),
+            button.LancerArrosageButton(coordinator),
             button.ArroserMaintenantButton(coordinator),
             button.RetourModeNormalButton(coordinator),
             button.DateActionAujourdhuiButton(coordinator),

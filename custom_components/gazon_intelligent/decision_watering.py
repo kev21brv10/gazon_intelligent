@@ -92,6 +92,8 @@ def _watering_needed_text() -> str:
 
 
 def _watering_window_phrase(window: str, hour_of_day: int) -> str:
+    if window == "ce_matin":
+        return "ce matin"
     if window == "demain_matin":
         return "demain matin"
     if window == "apres_pluie":
@@ -106,6 +108,8 @@ def _watering_window_phrase(window: str, hour_of_day: int) -> str:
 
 
 def _watering_target_date(window: str, today: date) -> str | None:
+    if window == "ce_matin":
+        return today.isoformat()
     if window == "demain_matin":
         return (today + timedelta(days=1)).isoformat()
     if window in {"maintenant", "apres_pluie", "soir"}:

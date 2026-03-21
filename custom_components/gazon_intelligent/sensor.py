@@ -152,6 +152,8 @@ class GazonObjectifMmSensor(GazonEntityBase, SensorEntity):
             "deficit_7j",
             "pluie_demain",
             "temperature",
+            "forecast_temperature_today",
+            "temperature_source",
             "etp",
         )
 

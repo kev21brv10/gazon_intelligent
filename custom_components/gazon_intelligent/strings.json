@@ -136,6 +136,10 @@
           "name": "Eau à apporter (optionnel)",
           "description": "Quantité d'eau en mm. Si omis, prend l'objectif calculé par le mode courant."
         },
+        "plan_arrosage_entity": {
+          "name": "Entité du plan d'arrosage (optionnelle)",
+          "description": "Capteur du plan calculé à lancer manuellement."
+        },
         "source": {
           "name": "Source d'exécution (optionnelle)",
           "description": "auto_irrigation pour l'automatique, manual_plan pour le lancement manuel du plan."

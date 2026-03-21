@@ -137,6 +137,10 @@
           "name": "Wasser ausbringen (optional)",
           "description": "Wassermenge in mm. Falls leer, wird das vom aktuellen Modus berechnete Ziel verwendet."
         },
+        "plan_arrosage_entity": {
+          "name": "Bewässerungsplan-Entität (optional)",
+          "description": "Sensor-Entität für den berechneten Plan, der manuell gestartet werden soll."
+        },
         "source": {
           "name": "Ausführungsquelle (optional)",
           "description": "auto_irrigation für die automatische Ausführung, manual_plan für den manuellen Planstart."

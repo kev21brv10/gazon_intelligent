@@ -32,6 +32,7 @@ POSSIBLE_TONTE_STATUT_VALUES: tuple[str, ...] = (
 )
 POSSIBLE_FENETRE_OPTIMALE_VALUES: tuple[str, ...] = (
     "maintenant",
+    "ce_matin",
     "demain_matin",
     "apres_pluie",
     "soir",

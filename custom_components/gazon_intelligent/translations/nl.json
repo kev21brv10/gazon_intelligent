@@ -137,6 +137,10 @@
           "name": "Water toe te passen (optioneel)",
           "description": "Hoeveelheid water in mm. Indien weggelaten, wordt het doel van de huidige modus gebruikt."
         },
+        "plan_arrosage_entity": {
+          "name": "Irrigatieplan-entiteit (optioneel)",
+          "description": "Sensor-entiteit voor het berekende plan dat handmatig wordt gestart."
+        },
         "source": {
           "name": "Uitvoeringsbron (optioneel)",
           "description": "auto_irrigation voor automatische uitvoering, manual_plan voor het handmatig starten van het plan."

@@ -281,6 +281,8 @@ def compute_action_guidance(
             fenetre_optimale = "apres_pluie"
         elif morning_start_minute <= now_minutes < morning_end_minute and (vent is None or vent < 15):
             fenetre_optimale = "maintenant"
+        elif now_minutes < morning_start_minute:
+            fenetre_optimale = "ce_matin"
         else:
             fenetre_optimale = "demain_matin"
         risque_gazon = "eleve" if bilan_hydrique_mm <= -1.5 or pression_hydrique >= 2.5 else "modere"
@@ -322,10 +324,16 @@ def compute_action_guidance(
         fenetre_optimale = "maintenant" if now_hour < GENERAL_MORNING_END_HOUR - 1 else "demain_matin"
         niveau_action = "critique"
     elif bilan_hydrique_mm <= -0.8 or pression_hydrique >= 1.5:
-        fenetre_optimale = "maintenant" if now_hour < GENERAL_MORNING_END_HOUR else "demain_matin"
+        if now_minutes < morning_start_minute:
+            fenetre_optimale = "ce_matin"
+        else:
+            fenetre_optimale = "maintenant" if now_hour < GENERAL_MORNING_END_HOUR else "demain_matin"
         niveau_action = "a_faire"
     elif morning_start_minute <= now_minutes < morning_end_minute:
         fenetre_optimale = "maintenant"
+        niveau_action = "a_faire"
+    elif now_minutes < morning_start_minute:
+        fenetre_optimale = "ce_matin"
         niveau_action = "a_faire"
     else:
         fenetre_optimale = "demain_matin"
@@ -366,6 +374,8 @@ def compute_next_reevaluation(
 
     if fenetre_optimale == "apres_pluie" and pluie_demain > 0:
         return "apres_pluie"
+    if fenetre_optimale == "ce_matin":
+        return "dans quelques heures"
     if phase_dominante in {"Traitement", "Hivernage"}:
         return "dans 24 h"
     if phase_dominante == "Sursemis":

@@ -137,6 +137,10 @@
           "name": "Water to apply (optional)",
           "description": "Water amount in mm. If omitted, uses the objective calculated by the current mode."
         },
+        "plan_arrosage_entity": {
+          "name": "Watering plan entity (optional)",
+          "description": "Sensor entity for the calculated plan to launch manually."
+        },
         "source": {
           "name": "Execution source (optional)",
           "description": "auto_irrigation for automatic runs, manual_plan for the manual plan launch."
