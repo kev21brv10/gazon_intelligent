@@ -137,6 +137,10 @@
           "name": "Agua a aplicar (opcional)",
           "description": "Cantidad de agua en mm. Si se omite, usa el objetivo calculado por el modo actual."
         },
+        "plan_arrosage_entity": {
+          "name": "Entidad del plan de riego (opcional)",
+          "description": "Entidad sensor del plan calculado que se lanzará manualmente."
+        },
         "source": {
           "name": "Origen de ejecución (opcional)",
           "description": "auto_irrigation para la ejecución automática, manual_plan para el lanzamiento manual del plan."

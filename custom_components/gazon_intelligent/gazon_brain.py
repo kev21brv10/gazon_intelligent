@@ -49,6 +49,25 @@ class GazonBrain:
         self.soil_balance: dict[str, Any] = {}
         self.last_result: DecisionResult | None = None
 
+    @staticmethod
+    def _build_temperature_note(
+        *,
+        temperature: float | None,
+        forecast_temperature_today: float | None,
+        temperature_source: str | None,
+        arrosage_recommande: bool,
+    ) -> str | None:
+        """Construit une note courte pour distinguer réel et prévision."""
+        if forecast_temperature_today is None or not arrosage_recommande:
+            return None
+        if temperature_source == "meteo_forecast":
+            if temperature is not None:
+                return f"température issue de la prévision du jour {temperature:.1f}°C"
+            return f"prévision du jour {forecast_temperature_today:.1f}°C"
+        if temperature is None:
+            return f"prévision du jour {forecast_temperature_today:.1f}°C"
+        return f"température réelle {temperature:.1f}°C, prévision du jour {forecast_temperature_today:.1f}°C"
+
     def load_state(self, data: dict[str, Any] | None) -> None:
         state = data or {}
         mode = state.get("mode")
@@ -402,6 +421,8 @@ class GazonBrain:
         *,
         today: date,
         temperature: float | None,
+        forecast_temperature_today: float | None = None,
+        temperature_source: str | None = None,
         pluie_24h: float | None,
         pluie_demain: float | None,
         humidite: float | None,
@@ -458,12 +479,29 @@ class GazonBrain:
             hauteur_max_tondeuse_cm=hauteur_max_tondeuse_cm,
         )
         result = build_decision_result(context)
+        temperature_note = self._build_temperature_note(
+            temperature=temperature,
+            forecast_temperature_today=forecast_temperature_today,
+            temperature_source=temperature_source,
+            arrosage_recommande=result.arrosage_recommande,
+        )
+        if temperature_note:
+            conseil = result.conseil_principal.strip()
+            if conseil.endswith((".", "!", "?")):
+                conseil = conseil[:-1].rstrip()
+            if conseil:
+                result.conseil_principal = f"{conseil} ({temperature_note})."
+            else:
+                result.conseil_principal = temperature_note
+            result.extra.setdefault("temperature_note", temperature_note)
         result.extra.setdefault(
             "configuration",
             {
                 "type_sol": type_sol,
             },
         )
+        result.extra.setdefault("forecast_temperature_today", forecast_temperature_today)
+        result.extra.setdefault("temperature_source", temperature_source)
         if pluie_demain_source is not None:
             result.extra.setdefault("pluie_demain_source", pluie_demain_source)
         self.last_result = result

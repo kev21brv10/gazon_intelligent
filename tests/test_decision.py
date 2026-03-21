@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 import importlib
 from pathlib import Path
 import sys
@@ -367,12 +367,13 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertEqual(snapshot["objectif_mm"], 0.0)
 
     def test_build_decision_snapshot_foliar_application_blocks_auto_watering(self) -> None:
+        now = datetime.now(timezone.utc)
         snapshot = decision.build_decision_snapshot(
             history=[
                 {
                     "type": "Traitement",
-                    "date": "2026-03-20",
-                    "declared_at": "2026-03-20T08:00:00+00:00",
+                    "date": now.date().isoformat(),
+                    "declared_at": (now - timedelta(hours=2)).isoformat(),
                     "produit": "Fongicide X",
                     "application_type": "foliaire",
                     "application_requires_watering_after": False,
@@ -383,7 +384,7 @@ class DecisionEngineTests(unittest.TestCase):
                     "application_label_notes": "Pas d'arrosage après application",
                 }
             ],
-            today=date(2026, 3, 20),
+            today=now.date(),
             hour_of_day=10,
             temperature=18,
             pluie_24h=0,
@@ -600,7 +601,7 @@ class DecisionEngineTests(unittest.TestCase):
         early = decision.compute_action_guidance(hour_of_day=5, **base_kwargs)
         acceptable = decision.compute_action_guidance(hour_of_day=6, **base_kwargs)
 
-        self.assertEqual(early["fenetre_optimale"], "demain_matin")
+        self.assertEqual(early["fenetre_optimale"], "ce_matin")
         self.assertEqual(acceptable["fenetre_optimale"], "maintenant")
 
     def test_compute_action_guidance_adjusts_window_with_temperature(self) -> None:

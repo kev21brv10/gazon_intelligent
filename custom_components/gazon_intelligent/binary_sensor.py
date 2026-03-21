@@ -98,6 +98,8 @@ class GazonApplicationArrosageAutoriseBinarySensor(GazonEntityBase, BinarySensor
             summary = state.get("derniere_application")
             if isinstance(summary, dict) and summary:
                 return state
+        else:
+            memory = None
         history = getattr(self.coordinator, "history", None)
         if isinstance(history, list):
             state = compute_application_state(history)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 import sys
 import types
@@ -118,6 +119,8 @@ def _make_result():
         extra={
             "configuration": {"type_sol": "argileux"},
             "pluie_demain_source": "meteo_forecast",
+            "temperature_source": "capteur",
+            "forecast_temperature_today": 18.2,
             "bilan_hydrique_mm": -1.8,
             "deficit_3j": 1.2,
             "deficit_7j": 2.4,
@@ -202,6 +205,25 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(window_sensor.extra_state_attributes["status"], "auto")
         self.assertEqual(window_sensor.extra_state_attributes["next_action"], "Aucune action requise")
         self.assertEqual(window_sensor.extra_state_attributes["summary"], "Arrosage prévu demain matin (auto)")
+
+    def test_watering_window_sensor_exposes_morning_same_day_status(self) -> None:
+        result = _make_result()
+        result.fenetre_optimale = "ce_matin"
+        result.extra["watering_target_date"] = date(2026, 3, 17).isoformat()
+
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={},
+            result=result,
+            history=[],
+            memory={},
+        )
+
+        window_sensor = sensor.GazonFenetreOptimaleSensor(coordinator)
+
+        self.assertEqual(window_sensor.native_value, "ce_matin")
+        self.assertEqual(window_sensor.extra_state_attributes["summary"], "Arrosage prévu ce matin (auto)")
+        self.assertEqual(window_sensor.extra_state_attributes["watering_target_date"], "2026-03-17")
 
     def test_watering_window_sensor_uses_manual_immediate_wording(self) -> None:
         result = _make_result()
@@ -314,6 +336,35 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertTrue(application_allowed_sensor.is_on)
         self.assertEqual(application_allowed_sensor.extra_state_attributes["application_post_watering_mm"], 1.0)
 
+    def test_application_state_falls_back_to_history_without_memory(self) -> None:
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={},
+            result=None,
+            history=[
+                {
+                    "type": "Fertilisation",
+                    "date": "2026-03-18",
+                    "declared_at": "2026-03-18T08:00:00+00:00",
+                    "produit": "Engrais printemps",
+                    "application_type": "sol",
+                    "application_requires_watering_after": True,
+                    "application_post_watering_mm": 1.0,
+                    "application_irrigation_block_hours": 0.0,
+                    "application_irrigation_delay_minutes": 0.0,
+                    "application_irrigation_mode": "auto",
+                }
+            ],
+            memory=None,
+        )
+
+        last_application_sensor = sensor.GazonDerniereApplicationSensor(coordinator)
+        application_allowed_sensor = binary_sensor.GazonApplicationArrosageAutoriseBinarySensor(coordinator)
+
+        self.assertEqual(last_application_sensor.native_value, "Engrais printemps")
+        self.assertTrue(application_allowed_sensor.is_on)
+        self.assertEqual(application_allowed_sensor.extra_state_attributes["application_type"], "sol")
+
     def test_entities_read_decision_result_before_legacy_snapshot(self) -> None:
         coordinator = _FakeCoordinator(
             entry=_FakeEntry(),
@@ -393,6 +444,8 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(objectif_sensor.extra_state_attributes["deficit_7j"], 2.4)
         self.assertEqual(objectif_sensor.extra_state_attributes["pluie_demain"], 0.8)
         self.assertEqual(objectif_sensor.extra_state_attributes["temperature"], 26.5)
+        self.assertEqual(objectif_sensor.extra_state_attributes["forecast_temperature_today"], 18.2)
+        self.assertEqual(objectif_sensor.extra_state_attributes["temperature_source"], "capteur")
         self.assertEqual(objectif_sensor.extra_state_attributes["etp"], 3.1)
         self.assertEqual(fenetre_sensor.native_value, "demain_matin")
         self.assertEqual(fenetre_sensor.extra_state_attributes["watering_target_date"], "2026-03-18")

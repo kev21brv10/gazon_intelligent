@@ -404,6 +404,17 @@ Si le projet t’aide :
 
 ---
 
+## 🛠️ Développement local
+
+Pour lancer la suite de tests avec `pytest`:
+
+```bash
+python3 -m pip install -r requirements-dev.txt
+python3 -m pytest
+```
+
+---
+
 ## 🧾 Version
 
 - manifest : `0.4.1`
