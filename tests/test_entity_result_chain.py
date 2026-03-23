@@ -261,6 +261,7 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(window_sensor.extra_state_attributes["summary"], "Arrosage prévu demain matin (auto)")
         self.assertEqual(window_sensor.extra_state_attributes["next_action_date"], "2026-03-18")
         self.assertEqual(window_sensor.extra_state_attributes["next_action_display"], "18/03/2026")
+        self.assertNotIn("watering_target_date", window_sensor.extra_state_attributes)
 
     def test_watering_window_sensor_exposes_morning_same_day_status(self) -> None:
         result = _make_result()
@@ -279,9 +280,9 @@ class DecisionResultChainTests(unittest.TestCase):
 
         self.assertEqual(window_sensor.native_value, "ce_matin")
         self.assertEqual(window_sensor.extra_state_attributes["summary"], "Arrosage prévu ce matin (auto)")
-        self.assertEqual(window_sensor.extra_state_attributes["watering_target_date"], "2026-03-17")
         self.assertEqual(window_sensor.extra_state_attributes["next_action_date"], "2026-03-17")
         self.assertEqual(window_sensor.extra_state_attributes["next_action_display"], "17/03/2026")
+        self.assertNotIn("watering_target_date", window_sensor.extra_state_attributes)
 
     def test_watering_window_sensor_uses_manual_immediate_wording(self) -> None:
         result = _make_result()
@@ -511,6 +512,9 @@ class DecisionResultChainTests(unittest.TestCase):
         result.tonte_autorisee = False
         result.tonte_statut = "interdite"
         result.extra["raison_blocage_tonte"] = "Hauteur trop basse."
+        result.extra["raison_blocage_code"] = "hauteur_tonte_insuffisante"
+        result.extra["next_mowing_date"] = "2026-04-07"
+        result.extra["next_mowing_display"] = "07/04/2026"
         coordinator = _FakeCoordinator(
             entry=_FakeEntry(),
             data={},
@@ -522,6 +526,9 @@ class DecisionResultChainTests(unittest.TestCase):
 
         self.assertFalse(tonte_sensor.is_on)
         self.assertEqual(tonte_sensor.extra_state_attributes["raison_blocage_tonte"], "Hauteur trop basse.")
+        self.assertEqual(tonte_sensor.extra_state_attributes["raison_blocage_code"], "hauteur_tonte_insuffisante")
+        self.assertEqual(tonte_sensor.extra_state_attributes["next_mowing_date"], "2026-04-07")
+        self.assertEqual(tonte_sensor.extra_state_attributes["next_mowing_display"], "07/04/2026")
         self.assertNotIn("niveau_action", tonte_sensor.extra_state_attributes)
         self.assertNotIn("fenetre_optimale", tonte_sensor.extra_state_attributes)
 
@@ -611,13 +618,14 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(objectif_sensor.extra_state_attributes["hydric_balance_level"], "déficit")
         self.assertEqual(objectif_sensor.extra_state_attributes["hydric_strategy"], "arroser profondément")
         self.assertEqual(fenetre_sensor.native_value, "demain_matin")
-        self.assertEqual(fenetre_sensor.extra_state_attributes["watering_target_date"], "2026-03-18")
         self.assertEqual(fenetre_sensor.extra_state_attributes["watering_window_start_minute"], 360)
         self.assertEqual(fenetre_sensor.extra_state_attributes["watering_window_end_minute"], 570)
         self.assertEqual(fenetre_sensor.extra_state_attributes["watering_evening_start_minute"], 1080)
         self.assertEqual(fenetre_sensor.extra_state_attributes["watering_evening_end_minute"], 1260)
         self.assertEqual(fenetre_sensor.extra_state_attributes["watering_window_profile"], "mild")
         self.assertFalse(fenetre_sensor.extra_state_attributes["watering_evening_allowed"])
+        self.assertEqual(fenetre_sensor.extra_state_attributes["next_action_date"], "2026-03-18")
+        self.assertEqual(fenetre_sensor.extra_state_attributes["next_action_display"], "18/03/2026")
         self.assertEqual(type_arrosage_sensor.native_value, "Arrosage fractionné")
         self.assertEqual(hauteur_sensor.native_value, 7.0)
         self.assertEqual(hauteur_sensor.extra_state_attributes["hauteur_tonte_min_cm"], 3.0)

@@ -1003,8 +1003,6 @@ class GazonConseilPrincipalSensor(GazonEntityBase, SensorEntity):
             attrs["next_action_date"] = target_date
             display_date = (
                 self._decision_value("next_action_display")
-                or self._decision_value("next_action_date_display")
-                or self._decision_value("prochaine_action_le")
             )
             if display_date in (None, "", [], {}):
                 display_date = _human_date_text(target_date)
@@ -1216,8 +1214,6 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
         ).strip()
         display_date = (
             extra.get("next_action_display")
-            or extra.get("next_action_date_display")
-            or extra.get("prochaine_action_le")
         )
         if display_date is None:
             display_date = _human_date_text(target_date)
@@ -1231,7 +1227,6 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
 
     def _base_watering_attributes(self) -> dict[str, object] | None:
         attrs = self._attrs_from_result(
-            "watering_target_date",
             "next_action_date",
             "next_action_display",
             "watering_window_start_minute",
@@ -1268,7 +1263,6 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
         if attrs:
             return attrs
         return self._attrs_from_data(
-            "watering_target_date",
             "next_action_date",
             "next_action_display",
             "watering_window_start_minute",

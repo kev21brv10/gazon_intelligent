@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.5
+- Ajoute une projection de reprise de tonte avec `next_mowing_date` et `next_mowing_display`.
+- Structure les attributs visibles pour mieux séparer décision, exécution, plan calculé et session détectée.
+- Nettoie les libellés UI et les champs exposés pour supprimer les doublons et clarifier les automatisations.
+
 ## 0.4.4
 - Finalise la V2 du moteur d'arrosage avec une observabilité renforcée.
 - Harmonise les libellés UI, les traductions et la documentation autour du profil d'arrosage, du cycle calculé et des sessions détectées.

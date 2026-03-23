@@ -15,12 +15,13 @@ Gazon Intelligent est une intégration Home Assistant qui transforme les donnée
 
 ---
 
-## ✨ Version 0.4.4
+## ✨ Version 0.4.5
 
-Cette release regroupe deux évolutions séparées:
+Cette release finalise une passe de cohérence métier et d'UX:
 
-- V2 du moteur d'arrosage, plus agronomique et mieux tracée
-- renommage UI pour harmoniser les libellés dans Home Assistant, les traductions et la documentation
+- projection de reprise de tonte avec `next_mowing_date` et `next_mowing_display`
+- structuration des attributs visibles pour séparer décision, exécution et plan
+- nettoyage des libellés UI et suppression des doublons visibles
 
 ---
 
@@ -452,9 +453,9 @@ python3 -m pytest
 
 ## 🧾 Version
 
-- manifest : `0.4.4`
-- README : `0.4.4`
-- changelog : `0.4.4`
+- manifest : `0.4.5`
+- README : `0.4.5`
+- changelog : `0.4.5`
 
 
 ## 📄 Licence
