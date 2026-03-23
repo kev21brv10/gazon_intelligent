@@ -508,6 +508,7 @@ class GazonBrain:
                 "type_sol": type_sol,
             },
         )
+        result.extra.setdefault("type_sol", type_sol)
         result.extra.setdefault("forecast_temperature_today", forecast_temperature_today)
         result.extra.setdefault("temperature_source", temperature_source)
         if pluie_demain_source is not None:

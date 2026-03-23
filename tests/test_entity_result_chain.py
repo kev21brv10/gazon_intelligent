@@ -169,7 +169,7 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(plan_sensor.extra_state_attributes["source"], "no_plan")
         self.assertEqual(plan_sensor.extra_state_attributes["reason"], "objective_non_positive")
         self.assertEqual(plan_sensor.extra_state_attributes["plan_type"], "no_plan")
-        self.assertEqual(plan_sensor.extra_state_attributes["summary"], "Aucun plan d'arrosage")
+        self.assertEqual(plan_sensor.extra_state_attributes["summary"], "Aucun cycle calculé")
         self.assertFalse(plan_sensor.extra_state_attributes["fractionation"])
 
         self.assertEqual(watering_progress_sensor.native_value, 0.0)
@@ -180,9 +180,10 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(last_watering_sensor.native_value, 0.0)
         self.assertEqual(last_watering_sensor.extra_state_attributes["source"], "none")
         self.assertEqual(last_watering_sensor.extra_state_attributes["zone_count"], 0)
-        self.assertEqual(last_watering_sensor.extra_state_attributes["objectif_mm"], 0.0)
         self.assertEqual(last_watering_sensor.extra_state_attributes["total_mm"], 0.0)
         self.assertEqual(last_watering_sensor.extra_state_attributes["summary"], "Aucun arrosage détecté")
+        self.assertNotIn("objectif_mm", last_watering_sensor.extra_state_attributes)
+        self.assertNotIn("session_total_mm", last_watering_sensor.extra_state_attributes)
         self.assertEqual(last_application_sensor.native_value, "Aucune application")
         self.assertEqual(last_application_sensor.extra_state_attributes["summary"], "Aucune application détectée")
         self.assertEqual(last_user_action_sensor.native_value, "none")
@@ -258,6 +259,8 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(window_sensor.extra_state_attributes["status"], "auto")
         self.assertEqual(window_sensor.extra_state_attributes["next_action"], "Aucune action requise")
         self.assertEqual(window_sensor.extra_state_attributes["summary"], "Arrosage prévu demain matin (auto)")
+        self.assertEqual(window_sensor.extra_state_attributes["next_action_date"], "2026-03-18")
+        self.assertEqual(window_sensor.extra_state_attributes["next_action_display"], "18/03/2026")
 
     def test_watering_window_sensor_exposes_morning_same_day_status(self) -> None:
         result = _make_result()
@@ -277,6 +280,8 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(window_sensor.native_value, "ce_matin")
         self.assertEqual(window_sensor.extra_state_attributes["summary"], "Arrosage prévu ce matin (auto)")
         self.assertEqual(window_sensor.extra_state_attributes["watering_target_date"], "2026-03-17")
+        self.assertEqual(window_sensor.extra_state_attributes["next_action_date"], "2026-03-17")
+        self.assertEqual(window_sensor.extra_state_attributes["next_action_display"], "17/03/2026")
 
     def test_watering_window_sensor_uses_manual_immediate_wording(self) -> None:
         result = _make_result()
@@ -450,13 +455,26 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(action_sensor.native_value, "en_attente")
         self.assertEqual(
             action_sensor.extra_state_attributes["summary"],
-            f"Dernière action: Arrosage manuel - le {_local_text('2026-03-18T08:15:00+00:00')} - état en_attente",
+            f"Dernière exécution: Arrosage manuel - le {_local_text('2026-03-18T08:15:00+00:00')} - état en_attente",
         )
         self.assertEqual(
             action_sensor.extra_state_attributes["last_action_when"],
             _local_text("2026-03-18T08:15:00+00:00"),
         )
-        self.assertEqual(action_sensor.extra_state_attributes["action"], "Arrosage manuel")
+        self.assertEqual(action_sensor.extra_state_attributes["execution_action"], "Arrosage manuel")
+        self.assertEqual(action_sensor.extra_state_attributes["execution_state"], "en_attente")
+        self.assertEqual(action_sensor.extra_state_attributes["execution_plan_type"], "single_zone")
+        self.assertEqual(action_sensor.extra_state_attributes["executed_zone_count"], 1)
+        self.assertEqual(action_sensor.extra_state_attributes["executed_passages"], 1)
+        self.assertEqual(action_sensor.extra_state_attributes["execution_reason"], "Séquence lancée")
+        self.assertEqual(
+            action_sensor.extra_state_attributes["execution_triggered_at"],
+            "2026-03-18T08:15:00+00:00",
+        )
+        self.assertNotIn("action", action_sensor.extra_state_attributes)
+        self.assertNotIn("plan_type", action_sensor.extra_state_attributes)
+        self.assertNotIn("zone_count", action_sensor.extra_state_attributes)
+        self.assertNotIn("passages", action_sensor.extra_state_attributes)
 
     def test_conseil_principal_sensor_surfaces_summary_in_attributes(self) -> None:
         result = _make_result()
@@ -480,8 +498,32 @@ class DecisionResultChainTests(unittest.TestCase):
 
         self.assertEqual(advice_sensor.native_value, "arrosage")
         self.assertEqual(advice_sensor.extra_state_attributes["summary"], "Arroser demain matin.")
-        self.assertEqual(advice_sensor.extra_state_attributes["decision_action"], "arrosage")
-        self.assertEqual(advice_sensor.extra_state_attributes["decision_moment"], "demain_matin")
+        self.assertEqual(advice_sensor.extra_state_attributes["action_type"], "arrosage")
+        self.assertEqual(advice_sensor.extra_state_attributes["action_moment"], "demain_matin")
+        self.assertEqual(advice_sensor.extra_state_attributes["objectif_mm"], 1.2)
+        self.assertEqual(advice_sensor.extra_state_attributes["type_arrosage"], "manuel_frequent")
+        self.assertEqual(advice_sensor.extra_state_attributes["next_action_date"], "2026-03-18")
+        self.assertEqual(advice_sensor.extra_state_attributes["next_action_display"], "18/03/2026")
+        self.assertNotIn("conseil_principal", advice_sensor.extra_state_attributes)
+
+    def test_tonte_sensor_exposes_block_reason_only_when_blocked(self) -> None:
+        result = _make_result()
+        result.tonte_autorisee = False
+        result.tonte_statut = "interdite"
+        result.extra["raison_blocage_tonte"] = "Hauteur trop basse."
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={},
+            result=result,
+            history=[],
+        )
+
+        tonte_sensor = binary_sensor.GazonTonteAutoriseeBinarySensor(coordinator)
+
+        self.assertFalse(tonte_sensor.is_on)
+        self.assertEqual(tonte_sensor.extra_state_attributes["raison_blocage_tonte"], "Hauteur trop basse.")
+        self.assertNotIn("niveau_action", tonte_sensor.extra_state_attributes)
+        self.assertNotIn("fenetre_optimale", tonte_sensor.extra_state_attributes)
 
     def test_entities_read_decision_result_before_legacy_snapshot(self) -> None:
         coordinator = _FakeCoordinator(
@@ -553,7 +595,8 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(phase_sensor.native_value, "Sursemis")
         self.assertEqual(phase_sensor.extra_state_attributes["phase_dominante_source"], "historique_actif")
         self.assertEqual(phase_sensor.extra_state_attributes["pluie_demain_source"], "meteo_forecast")
-        self.assertEqual(phase_sensor.extra_state_attributes["configuration"]["type_sol"], "argileux")
+        self.assertEqual(phase_sensor.extra_state_attributes["type_sol"], "argileux")
+        self.assertNotIn("configuration", phase_sensor.extra_state_attributes)
         self.assertEqual(sous_phase_sensor.native_value, "Enracinement")
         self.assertEqual(sous_phase_sensor.extra_state_attributes["sous_phase_age_days"], 12)
         self.assertEqual(objectif_sensor.native_value, 1.2)
@@ -565,6 +608,8 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(objectif_sensor.extra_state_attributes["forecast_temperature_today"], 18.2)
         self.assertEqual(objectif_sensor.extra_state_attributes["temperature_source"], "capteur")
         self.assertEqual(objectif_sensor.extra_state_attributes["etp"], 3.1)
+        self.assertEqual(objectif_sensor.extra_state_attributes["hydric_balance_level"], "déficit")
+        self.assertEqual(objectif_sensor.extra_state_attributes["hydric_strategy"], "arroser profondément")
         self.assertEqual(fenetre_sensor.native_value, "demain_matin")
         self.assertEqual(fenetre_sensor.extra_state_attributes["watering_target_date"], "2026-03-18")
         self.assertEqual(fenetre_sensor.extra_state_attributes["watering_window_start_minute"], 360)
@@ -601,6 +646,8 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(plan_sensor.extra_state_attributes["summary"], "2 zones • 1.2 mm • 3 min 30")
         self.assertEqual(plan_sensor.extra_state_attributes["passages"], 2)
         self.assertEqual(plan_sensor.extra_state_attributes["pause_between_passages_minutes"], 25)
+        self.assertNotIn("min_duration_min", plan_sensor.extra_state_attributes)
+        self.assertNotIn("max_duration_min", plan_sensor.extra_state_attributes)
         self.assertEqual(plan_sensor.extra_state_attributes["zones"][0]["zone"], "switch.zone_1")
         self.assertEqual(plan_sensor.extra_state_attributes["zones"][0]["duration_min"], 1.0)
         self.assertEqual(plan_sensor.extra_state_attributes["zones"][1]["duration_min"], 2.5)
@@ -619,6 +666,9 @@ class DecisionResultChainTests(unittest.TestCase):
         )
         self.assertEqual(last_watering_sensor.extra_state_attributes["zone_count"], 2)
         self.assertEqual(last_watering_sensor.extra_state_attributes["zones_used"], ["switch.zone_1", "switch.zone_2"])
+        self.assertEqual(last_watering_sensor.extra_state_attributes["total_mm"], 4.0)
+        self.assertNotIn("objectif_mm", last_watering_sensor.extra_state_attributes)
+        self.assertNotIn("session_total_mm", last_watering_sensor.extra_state_attributes)
         self.assertEqual(last_watering_sensor.extra_state_attributes["zones"][0]["order"], 1)
         self.assertEqual(last_watering_sensor.extra_state_attributes["zones"][1]["order"], 2)
         self.assertTrue(tonte_sensor.is_on)
@@ -629,7 +679,9 @@ class DecisionResultChainTests(unittest.TestCase):
         )
         self.assertEqual(tonte_sensor.extra_state_attributes["hauteur_tonte_min_cm"], 3.0)
         self.assertEqual(tonte_sensor.extra_state_attributes["hauteur_tonte_max_cm"], 8.0)
-        self.assertNotIn("pas_hauteur_tondeuse_cm", tonte_sensor.extra_state_attributes)
+        self.assertNotIn("niveau_action", tonte_sensor.extra_state_attributes)
+        self.assertNotIn("fenetre_optimale", tonte_sensor.extra_state_attributes)
+        self.assertNotIn("raison_blocage_tonte", tonte_sensor.extra_state_attributes)
         self.assertIn("possible_values", phase_sensor.extra_state_attributes)
         self.assertIn("possible_values", sous_phase_sensor.extra_state_attributes)
 

@@ -47,6 +47,15 @@ from .water import (
 )
 
 
+def _display_date_from_iso(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value).strftime("%d/%m/%Y")
+    except ValueError:
+        return value
+
+
 def compute_decision(
     phase_dominante: str,
     sous_phase: str,
@@ -135,6 +144,9 @@ def compute_decision(
         risk_bundle=risk_bundle,
         mowing_bundle=mowing_bundle,
     )
+    watering_target_date = watering_bundle.get("watering_target_date")
+    next_action_display = _display_date_from_iso(str(watering_target_date) if watering_target_date else None)
+    reason_blocage_tonte = mowing_bundle.get("tonte_reason") if not mowing_bundle["tonte_autorisee"] else None
     return DecisionResult(
         phase_dominante=phase_dominante,
         sous_phase=sous_phase,
@@ -182,7 +194,12 @@ def compute_decision(
             "jours_restants": jours_restants,
             "watering_passages": watering_bundle["watering_passages"],
             "watering_pause_minutes": watering_bundle["watering_pause_minutes"],
-            "watering_target_date": watering_bundle["watering_target_date"],
+            "watering_target_date": watering_target_date,
+            "next_action_date": watering_target_date,
+            "next_action_display": next_action_display,
+            "type_sol": context.type_sol,
+            "raison_blocage_tonte": reason_blocage_tonte,
+            "tonte_reason": reason_blocage_tonte,
             "derniere_application": watering_bundle.get("derniere_application"),
             "application_type": watering_bundle.get("application_type"),
             "application_requires_watering_after": watering_bundle.get("application_requires_watering_after"),
@@ -301,6 +318,9 @@ def build_decision_snapshot(
     risk_bundle = build_risk_bundle(context, phase_bundle, water_bundle)
     mowing_bundle = build_mowing_bundle(context, phase_bundle, water_bundle, risk_bundle)
     watering_bundle = build_watering_bundle(context, phase_bundle, water_bundle, risk_bundle, mowing_bundle)
+    watering_target_date = watering_bundle.get("watering_target_date")
+    next_action_display = _display_date_from_iso(str(watering_target_date) if watering_target_date else None)
+    reason_blocage_tonte = mowing_bundle.get("tonte_reason") if not mowing_bundle["tonte_autorisee"] else None
 
     result = DecisionResult(
         phase_dominante=phase_bundle["phase_dominante"],
@@ -345,6 +365,7 @@ def build_decision_snapshot(
         extra={
             "mode": phase_bundle["phase_dominante"],
             "phase_active": phase_bundle["phase_dominante"],
+            "type_sol": context.type_sol,
             "date_action": phase_bundle["date_action"],
             "date_fin": phase_bundle["date_fin"],
             "phase_age_days": phase_bundle["phase_age_days"],
@@ -371,7 +392,11 @@ def build_decision_snapshot(
             "bilan_hydrique_mm": water_bundle["water_balance"]["bilan_hydrique_mm"],
             "bilan_hydrique_3j": water_bundle["water_balance"]["bilan_hydrique_3j"],
             "bilan_hydrique_7j": water_bundle["water_balance"]["bilan_hydrique_7j"],
-            "watering_target_date": watering_bundle["watering_target_date"],
+            "watering_target_date": watering_target_date,
+            "next_action_date": watering_target_date,
+            "next_action_display": next_action_display,
+            "raison_blocage_tonte": reason_blocage_tonte,
+            "tonte_reason": reason_blocage_tonte,
             "derniere_application": watering_bundle.get("derniere_application"),
             "application_type": watering_bundle.get("application_type"),
             "application_requires_watering_after": watering_bundle.get("application_requires_watering_after"),
@@ -461,6 +486,9 @@ def build_decision_result(context: DecisionContext) -> DecisionResult:
     risk_bundle = build_risk_bundle(context, phase_bundle, water_bundle)
     mowing_bundle = build_mowing_bundle(context, phase_bundle, water_bundle, risk_bundle)
     watering_bundle = build_watering_bundle(context, phase_bundle, water_bundle, risk_bundle, mowing_bundle)
+    watering_target_date = watering_bundle.get("watering_target_date")
+    next_action_display = _display_date_from_iso(str(watering_target_date) if watering_target_date else None)
+    reason_blocage_tonte = mowing_bundle.get("tonte_reason") if not mowing_bundle["tonte_autorisee"] else None
     return DecisionResult(
         phase_dominante=phase_bundle["phase_dominante"],
         sous_phase=phase_bundle["sous_phase"],
@@ -503,6 +531,7 @@ def build_decision_result(context: DecisionContext) -> DecisionResult:
         water_balance=water_bundle["water_balance"],
         phase_context=phase_bundle,
         extra={
+            "type_sol": context.type_sol,
             "temperature": context.temperature,
             "pluie_demain": context.pluie_demain,
             "etp": water_bundle["etp"],
@@ -520,6 +549,11 @@ def build_decision_result(context: DecisionContext) -> DecisionResult:
             "confidence_reasons": watering_bundle.get("confidence_reasons"),
             "block_reason": watering_bundle.get("block_reason"),
             "cooldown_24h_hours": watering_bundle.get("cooldown_24h_hours"),
+            "watering_target_date": watering_target_date,
+            "next_action_date": watering_target_date,
+            "next_action_display": next_action_display,
+            "raison_blocage_tonte": reason_blocage_tonte,
+            "tonte_reason": reason_blocage_tonte,
             "derniere_application": watering_bundle.get("derniere_application"),
             "application_type": watering_bundle.get("application_type"),
             "application_requires_watering_after": watering_bundle.get("application_requires_watering_after"),

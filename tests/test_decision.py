@@ -175,6 +175,7 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertEqual(snapshot["bilan_hydrique_mm"], 14.0)
         self.assertAlmostEqual(snapshot["bilan_hydrique_journalier_mm"], -2.9, places=1)
         self.assertEqual(snapshot["bilan_hydrique_precedent_mm"], 11.0)
+        self.assertEqual(snapshot["type_sol"], "limoneux")
         self.assertEqual(snapshot["soil_balance"]["reserve_mm"], 14.0)
 
     def test_compute_advanced_context_uses_weather_probability(self) -> None:
@@ -589,6 +590,8 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertLessEqual(snapshot["objectif_mm"], snapshot["objectif_mm_brut"])
         self.assertEqual(snapshot["fenetre_optimale"], "demain_matin")
         self.assertEqual(snapshot["watering_target_date"], "2026-03-18")
+        self.assertEqual(snapshot["next_action_date"], "2026-03-18")
+        self.assertEqual(snapshot["next_action_display"], "18/03/2026")
         self.assertIn("manuel_frequent", snapshot["raison_decision"])
         self.assertIn("matin prioritaire", snapshot["raison_decision"])
         self.assertIn("demain matin", snapshot["conseil_principal"])

@@ -39,6 +39,55 @@ def _human_datetime_text(value: object) -> str | None:
     return None
 
 
+def _human_date_text(value: object) -> str | None:
+    if value in (None, "", [], {}):
+        return None
+    if isinstance(value, date):
+        return value.strftime("%d/%m/%Y")
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        return date.fromisoformat(text[:10]).strftime("%d/%m/%Y")
+    except ValueError:
+        return text
+
+
+def _hydric_balance_level(balance_mm: float | None, deficit_3j: float | None, deficit_7j: float | None) -> str | None:
+    if balance_mm is None and deficit_3j is None and deficit_7j is None:
+        return None
+    balance_mm = float(balance_mm or 0.0)
+    deficit_3j = float(deficit_3j or 0.0)
+    deficit_7j = float(deficit_7j or 0.0)
+    stress = max(deficit_3j, deficit_7j)
+    if balance_mm >= 2.0 and stress <= 1.0:
+        return "excédentaire"
+    if balance_mm >= 0.5 and stress <= 2.0:
+        return "équilibré"
+    if balance_mm >= -0.5 and stress <= 4.0:
+        return "léger déficit"
+    if balance_mm >= -2.0 or stress <= 8.0:
+        return "déficit"
+    return "fort déficit"
+
+
+def _hydric_strategy(balance_mm: float | None, deficit_3j: float | None, deficit_7j: float | None) -> str | None:
+    level = _hydric_balance_level(balance_mm, deficit_3j, deficit_7j)
+    if level is None:
+        return None
+    if level == "excédentaire":
+        return "reporter"
+    if level == "équilibré":
+        return "surveiller"
+    if level == "léger déficit":
+        return "attendre ou regrouper"
+    if level == "déficit":
+        return "arroser profondément"
+    return "arroser rapidement en profondeur"
+
+
 async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
@@ -91,9 +140,13 @@ class GazonPhaseActiveSensor(GazonEntityBase, SensorEntity):
         if result is not None:
             extra = getattr(result, "extra", None)
             if isinstance(extra, dict):
-                configuration = extra.get("configuration")
-                if isinstance(configuration, dict) and configuration:
-                    attrs["configuration"] = configuration
+                type_sol = extra.get("type_sol")
+                if type_sol in (None, "", [], {}):
+                    configuration = extra.get("configuration")
+                    if isinstance(configuration, dict):
+                        type_sol = configuration.get("type_sol")
+                if type_sol not in (None, "", [], {}):
+                    attrs["type_sol"] = type_sol
                 pluie_demain_source = extra.get("pluie_demain_source")
                 if pluie_demain_source is not None:
                     if pluie_demain_source == "indisponible":
@@ -101,7 +154,13 @@ class GazonPhaseActiveSensor(GazonEntityBase, SensorEntity):
                     attrs["pluie_demain_source"] = pluie_demain_source
         if attrs:
             return attrs
-        return self.coordinator.get_used_entities_attributes()
+        fallback_attrs = self.coordinator.get_used_entities_attributes() or {}
+        configuration = fallback_attrs.pop("configuration", None)
+        if isinstance(configuration, dict):
+            type_sol = configuration.get("type_sol")
+            if type_sol not in (None, "", [], {}):
+                fallback_attrs["type_sol"] = type_sol
+        return fallback_attrs or None
 
 
 class GazonHauteurTonteSensor(GazonEntityBase, SensorEntity):
@@ -195,7 +254,22 @@ class GazonObjectifMmSensor(GazonEntityBase, SensorEntity):
 
     @property
     def extra_state_attributes(self):
-        return self._attrs_from_result(*self._objective_attrs_keys())
+        attrs = self._attrs_from_result(*self._objective_attrs_keys()) or {}
+        hydric_balance_level = _hydric_balance_level(
+            attrs.get("bilan_hydrique_mm"),
+            attrs.get("deficit_3j"),
+            attrs.get("deficit_7j"),
+        )
+        hydric_strategy = _hydric_strategy(
+            attrs.get("bilan_hydrique_mm"),
+            attrs.get("deficit_3j"),
+            attrs.get("deficit_7j"),
+        )
+        if hydric_balance_level is not None:
+            attrs["hydric_balance_level"] = hydric_balance_level
+        if hydric_strategy is not None:
+            attrs["hydric_strategy"] = hydric_strategy
+        return attrs or None
 
 
 class GazonTypeArrosageSensor(GazonEntityBase, SensorEntity):
@@ -288,10 +362,9 @@ class GazonDernierArrosageDetecteSensor(GazonEntityBase, SensorEntity):
             "zones_used": zones_used,
             "zones": zone_details,
         }
-        for key in ("objectif_mm", "total_mm", "session_total_mm"):
-            if session.get(key) is not None:
-                attrs[key] = session.get(key)
         total_mm = session.get("total_mm") or session.get("session_total_mm") or session.get("objectif_mm") or 0.0
+        if total_mm is not None:
+            attrs["total_mm"] = total_mm
         when_text = self._session_when_text(session)
         source = str(session.get("source") or "").strip()
         raw_detected_at = session.get("detected_at") or session.get("date")
@@ -332,7 +405,6 @@ class GazonDernierArrosageDetecteSensor(GazonEntityBase, SensorEntity):
             return {
                 "source": "none",
                 "zone_count": 0,
-                "objectif_mm": 0.0,
                 "total_mm": 0.0,
                 "summary": "Aucun arrosage détecté",
             }
@@ -502,11 +574,22 @@ class GazonDerniereActionUtilisateurSensor(GazonEntityBase, SensorEntity):
 
     @staticmethod
     def _clean_action_summary(summary: dict[str, object]) -> dict[str, object] | None:
-        attrs = {
-            key: value
-            for key, value in summary.items()
-            if key != "state" and value not in (None, "", [], {})
+        rename_map = {
+            "action": "execution_action",
+            "state": "execution_state",
+            "reason": "execution_reason",
+            "source": "execution_source",
+            "plan_type": "execution_plan_type",
+            "zone_count": "executed_zone_count",
+            "passages": "executed_passages",
+            "triggered_at": "execution_triggered_at",
         }
+        attrs = {
+            rename_map.get(key, key): value
+            for key, value in summary.items()
+            if value not in (None, "", [], {})
+        }
+        attrs.pop("state", None)
         return attrs or None
 
     @staticmethod
@@ -629,8 +712,6 @@ class GazonPlanArrosageSensor(GazonEntityBase, SensorEntity):
                 "zone_count": 0,
                 "total_duration_min": 0.0,
                 "duration_human": _duration_human(0.0),
-                "min_duration_min": 0.0,
-                "max_duration_min": 0.0,
                 "fractionation": False,
                 "passages": self._watering_passages(),
                 "pause_between_passages_minutes": self._watering_pause_minutes(),
@@ -661,8 +742,6 @@ class GazonPlanArrosageSensor(GazonEntityBase, SensorEntity):
             return None
 
         zones: list[dict[str, object]] = []
-        max_minutes = 0.0
-        min_minutes = 99999.0
         for idx in range(1, 6):
             entity_id = _conf(f"zone_{idx}")
             raw_rate = _conf(f"debit_zone_{idx}")
@@ -679,8 +758,6 @@ class GazonPlanArrosageSensor(GazonEntityBase, SensorEntity):
                 continue
             rounded_duration = max(0.5, round(duration_min * 2.0) / 2.0)
             rounded_duration = min(rounded_duration, 180.0)
-            max_minutes = max(max_minutes, rounded_duration)
-            min_minutes = min(min_minutes, rounded_duration)
             zones.append(
                 {
                     "zone": entity_id,
@@ -704,8 +781,6 @@ class GazonPlanArrosageSensor(GazonEntityBase, SensorEntity):
             "zone_count": len(zones),
             "total_duration_min": total_duration_min,
             "duration_human": _duration_human(total_duration_min),
-            "min_duration_min": round(min_minutes, 1),
-            "max_duration_min": round(max_minutes, 1),
             "fractionation": self._watering_passages() > 1,
             "passages": self._watering_passages(),
             "pause_between_passages_minutes": self._watering_pause_minutes(),
@@ -905,38 +980,51 @@ class GazonConseilPrincipalSensor(GazonEntityBase, SensorEntity):
     @property
     def extra_state_attributes(self):
         attrs = self._attrs_from_result(
-            "conseil_principal",
             "action_recommandee",
             "action_a_eviter",
             "niveau_action",
             "fenetre_optimale",
             "risque_gazon",
+            "next_action_date",
+            "next_action_display",
         )
         if attrs is None:
             attrs = self._attrs_from_data(
-                "conseil_principal",
                 "action_recommandee",
                 "action_a_eviter",
                 "niveau_action",
                 "fenetre_optimale",
                 "risque_gazon",
+                "next_action_date",
+                "next_action_display",
             ) or {}
+        target_date = self._decision_value("next_action_date") or self._decision_value("watering_target_date")
+        if target_date not in (None, "", [], {}):
+            attrs["next_action_date"] = target_date
+            display_date = (
+                self._decision_value("next_action_display")
+                or self._decision_value("next_action_date_display")
+                or self._decision_value("prochaine_action_le")
+            )
+            if display_date in (None, "", [], {}):
+                display_date = _human_date_text(target_date)
+            if display_date not in (None, "", [], {}):
+                attrs["next_action_display"] = display_date
 
         decision_resume = self._decision_value("decision_resume")
         if isinstance(decision_resume, dict):
             if decision_resume.get("action") is not None:
-                attrs["decision_action"] = decision_resume.get("action")
+                attrs["action_type"] = decision_resume.get("action")
             if decision_resume.get("moment") is not None:
-                attrs["decision_moment"] = decision_resume.get("moment")
+                attrs["action_moment"] = decision_resume.get("moment")
             if decision_resume.get("objectif_mm") is not None:
-                attrs["decision_objectif_mm"] = decision_resume.get("objectif_mm")
+                attrs["objectif_mm"] = decision_resume.get("objectif_mm")
             if decision_resume.get("type_arrosage") is not None:
-                attrs["decision_type_arrosage"] = decision_resume.get("type_arrosage")
+                attrs["type_arrosage"] = decision_resume.get("type_arrosage")
 
         conseil = self._decision_value("conseil_principal")
         if conseil not in (None, "", [], {}):
             attrs["summary"] = conseil
-            attrs.setdefault("conseil_principal", conseil)
         return attrs or None
 
 
@@ -1111,9 +1199,41 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
             "summary": f"Arrosage en attente {display_window or 'plus tard'}",
         }
 
+    def _next_action_date_attributes(self) -> dict[str, object] | None:
+        result = self.decision_result
+        if result is None:
+            return None
+
+        extra = getattr(result, "extra", None)
+        if not isinstance(extra, dict):
+            extra = {}
+
+        target_date = str(
+            extra.get("next_action_date")
+            or extra.get("watering_target_date")
+            or self._decision_value("watering_target_date", "")
+            or ""
+        ).strip()
+        display_date = (
+            extra.get("next_action_display")
+            or extra.get("next_action_date_display")
+            or extra.get("prochaine_action_le")
+        )
+        if display_date is None:
+            display_date = _human_date_text(target_date)
+
+        attrs: dict[str, object] = {}
+        if target_date:
+            attrs["next_action_date"] = target_date
+        if display_date:
+            attrs["next_action_display"] = display_date
+        return attrs or None
+
     def _base_watering_attributes(self) -> dict[str, object] | None:
         attrs = self._attrs_from_result(
             "watering_target_date",
+            "next_action_date",
+            "next_action_display",
             "watering_window_start_minute",
             "watering_window_end_minute",
             "watering_window_optimal_start_minute",
@@ -1149,6 +1269,8 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
             return attrs
         return self._attrs_from_data(
             "watering_target_date",
+            "next_action_date",
+            "next_action_display",
             "watering_window_start_minute",
             "watering_window_end_minute",
             "watering_window_optimal_start_minute",
@@ -1187,6 +1309,10 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
         if contextual_state:
             attrs = attrs or {}
             attrs.update(contextual_state)
+        next_action_date_attrs = self._next_action_date_attributes()
+        if next_action_date_attrs:
+            attrs = attrs or {}
+            attrs.update(next_action_date_attrs)
         if attrs:
             possible_values = self._possible_values_attr("fenetre_optimale")
             if possible_values:
