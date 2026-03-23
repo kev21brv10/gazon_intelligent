@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Logique pure d'arrosage et de recommandations utilisateur."""
 
+import logging
 from math import ceil
 from datetime import date, timedelta
 from typing import Any
@@ -12,10 +13,12 @@ from .const import (
     DEFAULT_AUTO_IRRIGATION_ENABLED,
 )
 from .decision_models import DecisionContext
-from .guidance import compute_objectif_mm, is_fertilization_window_open
+from .guidance import compute_watering_profile, is_fertilization_window_open
 from .memory import compute_application_state
 from .scores import classify_stress_level
 from .water import compute_advanced_context, compute_etp, compute_water_balance
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def build_water_bundle(
@@ -29,6 +32,7 @@ def build_water_bundle(
         hauteur_gazon=context.hauteur_gazon,
         retour_arrosage=context.retour_arrosage,
         pluie_source=context.pluie_source,
+        type_sol=context.type_sol,
         weather_profile=context.weather_profile,
     )
     etp = compute_etp(
@@ -61,17 +65,19 @@ def build_water_bundle(
         balance_snapshot["arrosage_jour_mm"] = context.soil_balance.get("arrosage_mm")
         balance_snapshot["etp_jour_mm"] = context.soil_balance.get("etp_mm")
         balance_snapshot["delta_jour_mm"] = context.soil_balance.get("delta_mm")
-    objective_mm = compute_objectif_mm(
+    watering_profile = compute_watering_profile(
         phase_dominante=phase_bundle["phase_dominante"],
         sous_phase=phase_bundle["sous_phase"],
         water_balance=balance_snapshot,
         today=context.today,
+        pluie_24h=context.pluie_24h,
         pluie_demain=context.pluie_demain,
         humidite=context.humidite,
         temperature=context.temperature,
         etp=etp,
         type_sol=context.type_sol,
         weather_profile=context.weather_profile,
+        history=context.history,
         pluie_j2=context.pluie_j2,
         pluie_3j=context.pluie_3j,
         pluie_probabilite_max_3j=context.pluie_probabilite_max_3j,
@@ -80,7 +86,57 @@ def build_water_bundle(
         "etp": etp,
         "advanced_context": advanced_context,
         "water_balance": balance_snapshot,
-        "objectif_mm": objective_mm,
+        "objectif_mm": watering_profile["mm_final_recommande"],
+        "objectif_mm_brut": watering_profile["deficit_brut_mm"],
+        "deficit_mm_brut": watering_profile.get("deficit_mm_brut", watering_profile["deficit_brut_mm"]),
+        "deficit_mm_ajuste": watering_profile.get("deficit_mm_ajuste"),
+        "mm_cible": watering_profile["mm_cible"],
+        "mm_final_recommande": watering_profile["mm_final_recommande"],
+        "mm_final": watering_profile.get("mm_final", watering_profile["mm_final_recommande"]),
+        "mm_requested": watering_profile.get("mm_requested", watering_profile["mm_cible"]),
+        "mm_applied": watering_profile.get("mm_applied", watering_profile["mm_final_recommande"]),
+        "mm_detected": watering_profile.get("mm_detected"),
+        "type_arrosage": watering_profile["type_arrosage"],
+        "arrosage_recommande": watering_profile["arrosage_recommande"],
+        "arrosage_auto_autorise": watering_profile["arrosage_auto_autorise"],
+        "arrosage_conseille": watering_profile["arrosage_conseille"],
+        "watering_passages": watering_profile["watering_passages"],
+        "watering_pause_minutes": watering_profile["watering_pause_minutes"],
+        "fractionnement": watering_profile["fractionnement"],
+        "niveau_confiance": watering_profile["niveau_confiance"],
+        "confidence_score": watering_profile.get("confidence_score"),
+        "confidence_reasons": watering_profile.get("confidence_reasons"),
+        "heat_stress_level": watering_profile.get("heat_stress_level"),
+        "heat_stress_phase": watering_profile.get("heat_stress_phase"),
+        "raison_decision_base": watering_profile["raison_decision_base"],
+        "block_reason": watering_profile.get("block_reason"),
+        "recent_watering_count_7j": watering_profile["recent_watering_count_7j"],
+        "recent_watering_mm_7j": watering_profile["recent_watering_mm_7j"],
+        "weekly_guardrail_mm_min": watering_profile.get("weekly_guardrail_mm_min"),
+        "weekly_guardrail_mm_max": watering_profile.get("weekly_guardrail_mm_max"),
+        "weekly_guardrail_reason": watering_profile.get("weekly_guardrail_reason"),
+        "soil_profile": watering_profile.get("soil_profile"),
+        "soil_retention_factor": watering_profile.get("soil_retention_factor"),
+        "soil_drainage_factor": watering_profile.get("soil_drainage_factor"),
+        "soil_infiltration_factor": watering_profile.get("soil_infiltration_factor"),
+        "soil_need_factor": watering_profile.get("soil_need_factor"),
+        "watering_window_start_minute": watering_profile.get("watering_window_start_minute"),
+        "watering_window_end_minute": watering_profile.get("watering_window_end_minute"),
+        "watering_window_optimal_start_minute": watering_profile.get("watering_window_optimal_start_minute"),
+        "watering_window_optimal_end_minute": watering_profile.get("watering_window_optimal_end_minute"),
+        "watering_window_acceptable_end_minute": watering_profile.get("watering_window_acceptable_end_minute"),
+        "watering_evening_start_minute": watering_profile.get("watering_evening_start_minute"),
+        "watering_evening_end_minute": watering_profile.get("watering_evening_end_minute"),
+        "watering_window_profile": watering_profile.get("watering_window_profile"),
+        "watering_evening_allowed": watering_profile.get("watering_evening_allowed"),
+        "weekly_guardrail_mm_min": watering_profile.get("weekly_guardrail_mm_min"),
+        "weekly_guardrail_mm_max": watering_profile.get("weekly_guardrail_mm_max"),
+        "weekly_guardrail_reason": watering_profile.get("weekly_guardrail_reason"),
+        "soil_profile": watering_profile.get("soil_profile"),
+        "soil_retention_factor": watering_profile.get("soil_retention_factor"),
+        "soil_drainage_factor": watering_profile.get("soil_drainage_factor"),
+        "soil_infiltration_factor": watering_profile.get("soil_infiltration_factor"),
+        "soil_need_factor": watering_profile.get("soil_need_factor"),
     }
 
 
@@ -202,6 +258,13 @@ def _watering_amount_text(mm: float) -> str:
     return f"{mm:.1f} mm"
 
 
+def _hydric_summary_text(deficit_brut_mm: float, deficit_mm_ajuste: float, final_mm: float) -> str:
+    return (
+        f"Déficit: brut={deficit_brut_mm:.1f} mm, "
+        f"ajusté={deficit_mm_ajuste:.1f} mm, final={final_mm:.1f} mm."
+    )
+
+
 def _watering_pause_minutes(passages: int) -> int:
     if passages <= 1:
         return 0
@@ -261,8 +324,38 @@ def build_watering_bundle(
     sous_phase = phase_bundle["sous_phase"]
     water_balance = water_bundle["water_balance"]
     advanced_context = water_bundle["advanced_context"]
-    objectif_mm_brut = water_bundle["objectif_mm"]
-    objectif_mm = objectif_mm_brut
+    objectif_mm_brut = water_bundle.get("objectif_mm_brut", water_bundle["objectif_mm"])
+    objectif_mm = water_bundle["objectif_mm"]
+    deficit_mm_brut = water_bundle.get("deficit_mm_brut", objectif_mm_brut)
+    deficit_mm_ajuste = water_bundle.get("deficit_mm_ajuste", objectif_mm_brut)
+    mm_cible = water_bundle.get("mm_cible", objectif_mm)
+    mm_final_recommande = water_bundle.get("mm_final_recommande", objectif_mm)
+    mm_final = water_bundle.get("mm_final", mm_final_recommande)
+    fractionnement = water_bundle.get("fractionnement") or {
+        "enabled": False,
+        "passages": 1,
+        "pause_minutes": 0,
+        "max_mm_per_passage": 0.0,
+        "reason": "unknown",
+    }
+    niveau_confiance = water_bundle.get("niveau_confiance")
+    heat_stress_level = water_bundle.get("heat_stress_level") or risk_bundle.get("heat_stress_level")
+    heat_stress_phase = water_bundle.get("heat_stress_phase") or risk_bundle.get("heat_stress_phase") or "normal"
+    watering_window_start_minute = water_bundle.get("watering_window_start_minute") or risk_bundle.get(
+        "watering_window_start_minute"
+    )
+    watering_window_end_minute = water_bundle.get("watering_window_end_minute") or risk_bundle.get(
+        "watering_window_end_minute"
+    )
+    watering_window_optimal_start_minute = water_bundle.get("watering_window_optimal_start_minute") or risk_bundle.get(
+        "watering_window_optimal_start_minute"
+    )
+    watering_window_optimal_end_minute = water_bundle.get("watering_window_optimal_end_minute") or risk_bundle.get(
+        "watering_window_optimal_end_minute"
+    )
+    watering_window_acceptable_end_minute = water_bundle.get(
+        "watering_window_acceptable_end_minute"
+    ) or risk_bundle.get("watering_window_acceptable_end_minute")
     niveau_action = risk_bundle["niveau_action"]
     fenetre_optimale = risk_bundle["fenetre_optimale"]
     risque_gazon = risk_bundle["risque_gazon"]
@@ -282,6 +375,9 @@ def build_watering_bundle(
     pluie_efficace = water_balance.get("pluie_efficace", 0.0)
     pluie_24h = context.pluie_24h or 0.0
     pluie_demain = context.pluie_demain or 0.0
+    pluie_j2 = context.pluie_j2 or 0.0
+    pluie_3j = context.pluie_3j or 0.0
+    pluie_probabilite_max_3j = context.pluie_probabilite_max_3j or 0.0
     humidite = context.humidite or 0.0
     temperature = context.temperature or 0.0
     etp = water_bundle["etp"] or 0.0
@@ -305,6 +401,13 @@ def build_watering_bundle(
 
     pluie_significative = pluie_24h >= 4 or pluie_demain >= 4
     pluie_compensatrice = objectif_mm > 0 and pluie_demain >= max(2.0, objectif_mm * 0.8)
+    pluie_proche = (
+        pluie_24h >= 4.0
+        or pluie_demain >= 4.0
+        or pluie_j2 >= 4.0
+        or pluie_3j >= 6.0
+        or pluie_probabilite_max_3j >= 80.0
+    )
     stress_thermique = temperature >= 30 and etp >= 4
     humidite_haute = humidite >= 85
     application_state = compute_application_state(context.history)
@@ -372,7 +475,10 @@ def build_watering_bundle(
             "conseil_principal": "N'arrose pas et limite les interventions.",
             "action_recommandee": "Surveille uniquement.",
             "action_a_eviter": "Arroser fréquemment.",
-            "raison_decision": "Hivernage actif: repos végétatif.",
+            "raison_decision": (
+                f"Hivernage actif: repos végétatif. "
+                f"{_hydric_summary_text(objectif_mm_brut, deficit_mm_ajuste, 0.0)}"
+            ),
             "decision_resume": {
                 "faire": False,
                 "action": "surveillance",
@@ -406,7 +512,10 @@ def build_watering_bundle(
             ),
             "action_recommandee": "Vérifie l'étiquette ou renseigne le type d'application avant d'arroser.",
             "action_a_eviter": "Lancer un arrosage sans type d'application confirmé.",
-            "raison_decision": "Type d'application inconnu: sécurité renforcée, aucun arrosage automatique.",
+            "raison_decision": (
+                "Type d'application inconnu: sécurité renforcée, aucun arrosage automatique. "
+                f"{_hydric_summary_text(objectif_mm_brut, deficit_mm_ajuste, 0.0)}"
+            ),
             "decision_resume": {
                 "faire": False,
                 "action": "surveillance",
@@ -442,7 +551,8 @@ def build_watering_bundle(
             "action_a_eviter": "Arroser pendant la fenêtre de protection.",
             "raison_decision": (
                 f"Bloc applicatif actif jusqu'au {application_block_until or 'prochain créneau autorisé'}. "
-                f"Temps restant={application_block_remaining_minutes:.0f} min."
+                f"Temps restant={application_block_remaining_minutes:.0f} min. "
+                f"{_hydric_summary_text(objectif_mm_brut, deficit_mm_ajuste, 0.0)}"
             ),
             "decision_resume": {
                 "faire": False,
@@ -482,7 +592,8 @@ def build_watering_bundle(
             "raison_decision": (
                 f"Application foliaire: arrosage automatique interdit, "
                 f"bloc restant={application_block_remaining_minutes:.0f} min, "
-                f"mode={application_mode or 'suggestion'}."
+                f"mode={application_mode or 'suggestion'}. "
+                f"{_hydric_summary_text(objectif_mm_brut, deficit_mm_ajuste, 0.0)}"
             ),
             "decision_resume": {
                 "faire": False,
@@ -522,7 +633,8 @@ def build_watering_bundle(
                 "action_a_eviter": "Arroser avant la fin du délai d'incorporation.",
                 "raison_decision": (
                     f"Application technique différée: délai restant {application_post_watering_delay_remaining_minutes:.0f} min, "
-                    f"mode={application_mode or 'auto'}."
+                    f"mode={application_mode or 'auto'}. "
+                    f"{_hydric_summary_text(objectif_mm_brut, deficit_mm_ajuste, 0.0)}"
                 ),
                 "decision_resume": {
                     "faire": False,
@@ -569,7 +681,8 @@ def build_watering_bundle(
                 "action_a_eviter": "Lancer un arrosage automatique non confirmé.",
                 "raison_decision": (
                     f"Application technique en suggestion uniquement: {application_label}, "
-                    f"mode=suggestion."
+                    f"mode=suggestion. "
+                    f"{_hydric_summary_text(objectif_mm_brut, deficit_mm_ajuste, 0.0)}"
                 ),
                 "decision_resume": {
                     "faire": False,
@@ -615,7 +728,8 @@ def build_watering_bundle(
             "raison_decision": (
                 f"Application technique en attente: {application_label}, "
                 f"mm restant={application_post_watering_remaining_mm:.1f}, "
-                f"fenêtre={fenetre_texte}, bilan={bilan_hydrique_mm:.1f} mm, mode={application_mode or 'auto'}."
+                f"fenêtre={fenetre_texte}, bilan={bilan_hydrique_mm:.1f} mm, mode={application_mode or 'auto'}. "
+                f"{_hydric_summary_text(objectif_mm_brut, deficit_mm_ajuste, objectif_mm)}"
             ),
             "decision_resume": {
                 "faire": True,
@@ -646,7 +760,10 @@ def build_watering_bundle(
             "conseil_principal": f"Laisser agir le traitement encore {phase_bundle['jours_restants']} jour(s).",
             "action_recommandee": "Surveiller l'état du gazon sans intervention hydrique.",
             "action_a_eviter": "Tondre ou arroser.",
-            "raison_decision": "Traitement actif: tonte et arrosage bloqués.",
+            "raison_decision": (
+                f"Traitement actif: tonte et arrosage bloqués. "
+                f"{_hydric_summary_text(objectif_mm_brut, deficit_mm_ajuste, 0.0)}"
+            ),
             "decision_resume": {
                 "faire": False,
                 "action": "surveillance",
@@ -680,7 +797,8 @@ def build_watering_bundle(
             "action_a_eviter": "Fertiliser sous chaleur ou stress hydrique.",
             "raison_decision": (
                 f"{phase_dominante} bloqué: bilan={bilan_hydrique_mm:.1f} mm, "
-                f"stress={stress_level}, température={temperature:.1f}°C, ETP={etp:.1f} mm."
+                f"stress={stress_level}, température={temperature:.1f}°C, ETP={etp:.1f} mm. "
+                f"{_hydric_summary_text(objectif_mm_brut, deficit_mm_ajuste, 0.0)}"
             ),
             "decision_resume": {
                 "faire": False,
@@ -730,7 +848,8 @@ def build_watering_bundle(
                 "action_a_eviter": action_a_eviter,
                 "raison_decision": (
                     f"Sursemis / {sous_phase}: objectif nul, bilan={bilan_hydrique_mm:.1f} mm, "
-                    f"tendance 3j={bilan_hydrique_3j:.1f} mm, 7j={bilan_hydrique_7j:.1f} mm."
+                    f"tendance 3j={bilan_hydrique_3j:.1f} mm, 7j={bilan_hydrique_7j:.1f} mm. "
+                    f"{_hydric_summary_text(objectif_mm_brut, deficit_mm_ajuste, 0.0)}"
                 ),
                 "decision_resume": {
                     "faire": False,
@@ -795,8 +914,10 @@ def build_watering_bundle(
             "action_recommandee": action_recommandee,
             "action_a_eviter": action_a_eviter,
             "raison_decision": (
-                f"Sursemis / {sous_phase}: bilan={bilan_hydrique_mm:.1f} mm, tendance 3j={bilan_hydrique_3j:.1f} mm, 7j={bilan_hydrique_7j:.1f} mm. "
-                f"Pluie efficace={pluie_efficace:.1f} mm."
+                f"Sursemis / {sous_phase}: type=manuel_frequent, matin prioritaire, micro-apports légers et fractionnés. "
+                f"Bilan={bilan_hydrique_mm:.1f} mm, tendance 3j={bilan_hydrique_3j:.1f} mm, 7j={bilan_hydrique_7j:.1f} mm. "
+                f"Pluie efficace={pluie_efficace:.1f} mm. "
+                f"{_hydric_summary_text(objectif_mm_brut, deficit_mm_ajuste, objectif_mm)}"
             ),
             "decision_resume": {
                 "faire": objectif_mm > 0,
@@ -814,11 +935,12 @@ def build_watering_bundle(
         }
 
     if not recommande:
+        watering_blocked = pluie_compensatrice or pluie_proche or humidite_haute or pluie_significative
         conseil_principal = f"Phase {phase_dominante}: n'arrose pas pour l'instant."
         action_recommandee = "Surveille les capteurs et l'évolution météo."
         action_a_eviter = "Éviter tout arrosage inutile."
         objectif_mm = 0.0
-        type_arrosage = "personnalise"
+        type_arrosage = "bloque" if watering_blocked else "personnalise"
         arrosage_recommande = False
         arrosage_auto_autorise = False
         arrosage_conseille = "personnalise"
@@ -947,6 +1069,11 @@ def build_watering_bundle(
                 else:
                     action_recommandee = _watering_needed_text()
                 action_a_eviter = "Lancer un cycle complet avant la pluie."
+            elif pluie_demain > 0 or pluie_j2 > 0 or pluie_3j > 0:
+                reduction_mm = round(objectif_mm * 0.8, 1)
+                conseil_principal = "Réduis l'arrosage: la pluie annoncée peut déjà compenser une partie du besoin."
+                action_recommandee = f"Réduis l'apport à {reduction_mm:.1f} mm maximum."
+                action_a_eviter = "Lancer un cycle complet sans tenir compte de la pluie annoncée."
             elif stress_thermique:
                 passages = _soil_fractionation_passages(
                     phase_dominante,
@@ -1008,11 +1135,45 @@ def build_watering_bundle(
         "risque_gazon": risque_gazon,
     }
 
+    weekly_guardrail_min = float(water_bundle.get("weekly_guardrail_mm_min") or 20.0)
+    weekly_guardrail_max = float(water_bundle.get("weekly_guardrail_mm_max") or 25.0)
+    heat_stress_phase_value = water_bundle.get("heat_stress_phase")
+    soil_profile_value = water_bundle.get("soil_profile")
+    confidence_score_value = water_bundle.get("confidence_score")
+    block_reason_value = water_bundle.get("block_reason")
+
     raison_parts = [
         f"Mode {phase_dominante} / {sous_phase} en cours ({phase_bundle['jours_restants']} jour(s) restants).",
         f"Bilan hydrique={bilan_hydrique_mm:.1f} mm, tendance 3j={bilan_hydrique_3j:.1f} mm, 7j={bilan_hydrique_7j:.1f} mm.",
         f"Pluie efficace={pluie_efficace:.1f} mm.",
+        (
+            "Fenêtre cible: matin prioritaire 04:00-08:00, acceptable jusqu'à 10:00, "
+            "soir uniquement en rattrapage exceptionnel, journée interdite."
+        ),
+        (
+            f"Déficit: brut={deficit_mm_brut:.1f} mm, ajusté={deficit_mm_ajuste:.1f} mm, "
+            f"cible={mm_cible:.1f} mm, final={mm_final:.1f} mm."
+        ),
+        (
+            f"Historique 7j: {water_bundle.get('recent_watering_count_7j', 0)} arrosage(s), "
+            f"{water_bundle.get('recent_watering_mm_7j', 0.0):.1f} mm."
+        ),
     ]
+    if phase_dominante == "Normal":
+        raison_parts.append(
+            "Mode Normal: arrosage profond et rare, seuil utile minimal 10 mm, "
+            f"garde-fou hebdomadaire dynamique {weekly_guardrail_min:.1f} à {weekly_guardrail_max:.1f} mm sur 7 jours glissants."
+        )
+    elif phase_dominante == "Sursemis":
+        raison_parts.append("Sursemis: micro-apports légers et fréquents, jamais d'auto standard.")
+    if heat_stress_level != "normal":
+        raison_parts.append(f"Stress thermique={heat_stress_level}; matin renforcé, soirée plus restrictive.")
+    if heat_stress_phase_value not in (None, "normal"):
+        raison_parts.append(f"Phase canicule={heat_stress_phase_value}")
+    if pluie_compensatrice or pluie_proche:
+        raison_parts.append("pluie prévue suffisante: arrosage reporté ou bloqué.")
+    if humidite_haute:
+        raison_parts.append("humidité élevée: sol trop chargé pour un arrosage immédiat.")
     if pluie_significative:
         raison_parts.append("risque d'humidité élevé")
     if stress_thermique:
@@ -1029,11 +1190,61 @@ def build_watering_bundle(
         raison_parts.append(f"hauteur_gazon={advanced_context['hauteur_gazon']}")
     if advanced_context.get("retour_arrosage") is not None:
         raison_parts.append(f"retour_arrosage={advanced_context['retour_arrosage']}")
+    if soil_profile_value is not None:
+        raison_parts.append(
+            "Sol="
+            f"{soil_profile_value} (rétention={water_bundle.get('soil_retention_factor')}, "
+            f"drainage={water_bundle.get('soil_drainage_factor')}, infiltration={water_bundle.get('soil_infiltration_factor')})."
+        )
+    if confidence_score_value is not None:
+        raison_parts.append(
+            f"Confiance={water_bundle.get('niveau_confiance')} ({confidence_score_value}/100)."
+        )
+    if block_reason_value:
+        raison_parts.append(f"Motif exact: {block_reason_value}.")
     raison_parts.append(tonte_reason)
+
+    confidence_score = water_bundle.get("confidence_score")
+    observability_payload = {
+        "phase": phase_dominante,
+        "sous_phase": sous_phase,
+        "type_arrosage": type_arrosage,
+        "deficit_brut_mm": round(deficit_mm_brut, 1),
+        "deficit_mm_ajuste": round(deficit_mm_ajuste, 1),
+        "mm_cible": round(mm_cible, 1),
+        "mm_final": round(mm_final, 1),
+        "mm_requested": round(mm_cible, 1),
+        "mm_applied": round(mm_final, 1),
+        "mm_detected": round(water_balance.get("arrosage_recent_jour", 0.0), 1),
+        "heat_stress_level": heat_stress_level,
+        "heat_stress_phase": heat_stress_phase,
+        "confidence_level": niveau_confiance,
+        "confidence_score": confidence_score,
+        "block_reason": water_bundle.get("block_reason"),
+        "weekly_guardrail_mm_min": water_bundle.get("weekly_guardrail_mm_min"),
+        "weekly_guardrail_mm_max": water_bundle.get("weekly_guardrail_mm_max"),
+        "soil_profile": water_bundle.get("soil_profile"),
+        "soil_retention_factor": water_bundle.get("soil_retention_factor"),
+        "soil_drainage_factor": water_bundle.get("soil_drainage_factor"),
+        "soil_infiltration_factor": water_bundle.get("soil_infiltration_factor"),
+    }
+    feedback_observation = context.memory.get("feedback_observation") if isinstance(context.memory, dict) else None
+    if feedback_observation:
+        observability_payload["feedback_observation"] = feedback_observation
+    _LOGGER.debug("Gazon Intelligent V2 watering observability: %s", observability_payload)
 
     return {
         "objectif_mm": objectif_mm,
         "objectif_mm_brut": objectif_mm_brut,
+        "deficit_brut_mm": deficit_mm_brut,
+        "deficit_mm_brut": deficit_mm_brut,
+        "deficit_mm_ajuste": deficit_mm_ajuste,
+        "mm_cible": mm_cible,
+        "mm_final_recommande": mm_final_recommande,
+        "mm_final": mm_final,
+        "mm_requested": water_bundle.get("mm_requested"),
+        "mm_applied": water_bundle.get("mm_applied"),
+        "mm_detected": water_bundle.get("mm_detected"),
         "conseil_principal": conseil_principal,
         "action_recommandee": action_recommandee,
         "action_a_eviter": action_a_eviter,
@@ -1041,7 +1252,14 @@ def build_watering_bundle(
         "arrosage_auto_autorise": arrosage_auto_autorise,
         "type_arrosage": type_arrosage,
         "arrosage_conseille": arrosage_conseille,
+        "fractionnement": fractionnement,
+        "niveau_confiance": niveau_confiance,
+        "confidence_score": water_bundle.get("confidence_score"),
+        "confidence_reasons": water_bundle.get("confidence_reasons"),
+        "heat_stress_level": heat_stress_level,
+        "heat_stress_phase": water_bundle.get("heat_stress_phase"),
         "decision_resume": decision_resume,
+        "block_reason": water_bundle.get("block_reason"),
         "raison_decision": " ".join(raison_parts),
         "niveau_action": niveau_action,
         "fenetre_optimale": fenetre_optimale,
@@ -1052,5 +1270,18 @@ def build_watering_bundle(
         "watering_passages": watering_passages,
         "watering_pause_minutes": watering_pause_minutes,
         "watering_target_date": watering_target_date,
+        "weekly_guardrail_mm_min": water_bundle.get("weekly_guardrail_mm_min"),
+        "weekly_guardrail_mm_max": water_bundle.get("weekly_guardrail_mm_max"),
+        "weekly_guardrail_reason": water_bundle.get("weekly_guardrail_reason"),
+        "soil_profile": water_bundle.get("soil_profile"),
+        "soil_retention_factor": water_bundle.get("soil_retention_factor"),
+        "soil_drainage_factor": water_bundle.get("soil_drainage_factor"),
+        "soil_infiltration_factor": water_bundle.get("soil_infiltration_factor"),
+        "soil_need_factor": water_bundle.get("soil_need_factor"),
+        "watering_window_start_minute": watering_window_start_minute,
+        "watering_window_end_minute": watering_window_end_minute,
+        "watering_window_optimal_start_minute": watering_window_optimal_start_minute,
+        "watering_window_optimal_end_minute": watering_window_optimal_end_minute,
+        "watering_window_acceptable_end_minute": watering_window_acceptable_end_minute,
         **application_payload,
     }

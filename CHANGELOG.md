@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.3
+- Finalise la V2 du moteur d'arrosage avec une observabilité renforcée.
+- Ajoute un score de confiance, un stress thermique détaillé et un garde-fou hebdomadaire dynamique.
+- Clarifie le résumé hydrique et la traçabilité des blocages dans les décisions.
+- Conserve la compatibilité Home Assistant sans nouvelle entité obligatoire.
+
 ## 0.4.2
 - Nettoie le moteur interne en supprimant du code mort et des helpers devenus redondants.
 - Stabilise le calcul et le déclenchement de l'arrosage automatique avec des gardes métier plus lisibles.

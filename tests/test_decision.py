@@ -280,12 +280,18 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertIn(snapshot["tonte_statut"], {"autorisee", "autorisee_avec_precaution", "a_surveiller"})
         self.assertEqual(snapshot["niveau_action"], "a_faire")
         self.assertEqual(snapshot["fenetre_optimale"], "maintenant")
-        self.assertEqual(snapshot["risque_gazon"], "eleve")
+        self.assertEqual(snapshot["risque_gazon"], "modere")
         self.assertEqual(snapshot["prochaine_reevaluation"], "dans 24 h")
         self.assertGreater(snapshot["objectif_mm"], 0)
         self.assertLess(snapshot["bilan_hydrique_mm"], 0)
         self.assertEqual(snapshot["decision_resume"]["action"], "arrosage")
         self.assertTrue(snapshot["tonte_autorisee"])
+        self.assertEqual(snapshot["heat_stress_level"], "vigilance")
+        self.assertGreaterEqual(snapshot["deficit_mm_ajuste"], 0.0)
+        self.assertGreaterEqual(snapshot["mm_final"], snapshot["mm_cible"])
+        self.assertIn("04:00-08:00", snapshot["raison_decision"])
+        self.assertIn("Déficit", snapshot["raison_decision"])
+        self.assertIn("garde-fou hebdomadaire dynamique", snapshot["raison_decision"])
 
     def test_build_decision_snapshot_normal_suppresses_micro_watering(self) -> None:
         snapshot = decision.build_decision_snapshot(
@@ -337,6 +343,26 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertEqual(rainy_snapshot["objectif_mm"], rainy_snapshot["decision_resume"]["objectif_mm"])
         self.assertLessEqual(rainy_snapshot["objectif_mm"], rainy_snapshot["objectif_mm_brut"])
         self.assertIn("Réduis", rainy_snapshot["action_recommandee"])
+
+    def test_build_decision_snapshot_blocks_when_forecast_rain_covers_need(self) -> None:
+        snapshot = decision.build_decision_snapshot(
+            history=[],
+            today=date(2026, 3, 17),
+            hour_of_day=7,
+            temperature=20,
+            pluie_24h=0,
+            pluie_demain=10.0,
+            humidite=60,
+            type_sol="limoneux",
+            etp_capteur=3.0,
+        )
+
+        self.assertEqual(snapshot["objectif_mm"], 0.0)
+        self.assertEqual(snapshot["type_arrosage"], "bloque")
+        self.assertFalse(snapshot["arrosage_recommande"])
+        self.assertFalse(snapshot["arrosage_auto_autorise"])
+        self.assertEqual(snapshot["fenetre_optimale"], "apres_pluie")
+        self.assertIn("pluie prévue suffisante", snapshot["raison_decision"])
 
     def test_build_decision_snapshot_normal_uses_soil_fractionation(self) -> None:
         snapshot = decision.build_decision_snapshot(
@@ -554,11 +580,98 @@ class DecisionEngineTests(unittest.TestCase):
         )
 
         self.assertEqual(snapshot["phase_active"], "Sursemis")
+        self.assertEqual(snapshot["type_arrosage"], "manuel_frequent")
+        self.assertFalse(snapshot["arrosage_auto_autorise"])
+        self.assertTrue(snapshot["arrosage_recommande"])
+        self.assertGreater(snapshot["objectif_mm"], 0.0)
+        self.assertLessEqual(snapshot["objectif_mm"], snapshot["objectif_mm_brut"])
         self.assertEqual(snapshot["fenetre_optimale"], "demain_matin")
         self.assertEqual(snapshot["watering_target_date"], "2026-03-18")
+        self.assertIn("manuel_frequent", snapshot["raison_decision"])
+        self.assertIn("matin prioritaire", snapshot["raison_decision"])
         self.assertIn("demain matin", snapshot["conseil_principal"])
         self.assertNotIn("ce matin", snapshot["conseil_principal"])
         self.assertIn("20 à 30 min", snapshot["action_recommandee"])
+
+    def test_build_decision_snapshot_distinguishes_canicule_phases(self) -> None:
+        short = decision.build_decision_snapshot(
+            history=[],
+            today=date(2026, 7, 20),
+            hour_of_day=8,
+            temperature=31,
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            humidite=40,
+            type_sol="limoneux",
+            etp_capteur=4.2,
+        )
+        prolonged = decision.build_decision_snapshot(
+            history=[],
+            today=date(2026, 7, 20),
+            hour_of_day=8,
+            temperature=35,
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            humidite=25,
+            type_sol="limoneux",
+            etp_capteur=5.5,
+        )
+        recovery = decision.build_decision_snapshot(
+            history=[],
+            today=date(2026, 7, 20),
+            hour_of_day=8,
+            temperature=35,
+            pluie_24h=0.0,
+            pluie_demain=8.0,
+            humidite=25,
+            type_sol="limoneux",
+            etp_capteur=5.5,
+            pluie_3j=8.0,
+        )
+
+        self.assertEqual(short["heat_stress_phase"], "canicule_courte")
+        self.assertEqual(prolonged["heat_stress_phase"], "canicule_prolongee")
+        self.assertEqual(recovery["heat_stress_phase"], "sortie_de_canicule")
+        self.assertGreater(short["objectif_mm"], 0.0)
+        self.assertGreater(prolonged["objectif_mm"], short["objectif_mm"])
+        self.assertEqual(recovery["objectif_mm"], 0.0)
+        self.assertEqual(recovery["type_arrosage"], "bloque")
+        self.assertIn("Phase canicule", short["raison_decision"])
+        self.assertIn("Phase canicule", prolonged["raison_decision"])
+        self.assertIn("Phase canicule", recovery["raison_decision"])
+
+    def test_build_water_bundle_dynamic_guardrail_varies_with_season(self) -> None:
+        winter_context = decision.DecisionContext.from_legacy_args(
+            history=[],
+            today=date(2026, 1, 15),
+            hour_of_day=7,
+            temperature=20,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=60,
+            type_sol="limoneux",
+            etp_capteur=3.0,
+        )
+        summer_context = decision.DecisionContext.from_legacy_args(
+            history=[],
+            today=date(2026, 7, 15),
+            hour_of_day=7,
+            temperature=20,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=60,
+            type_sol="limoneux",
+            etp_capteur=3.0,
+        )
+        winter_phase = decision.build_phase_bundle(winter_context)
+        summer_phase = decision.build_phase_bundle(summer_context)
+        winter_water = decision.build_water_bundle(winter_context, winter_phase)
+        summer_water = decision.build_water_bundle(summer_context, summer_phase)
+
+        self.assertLess(winter_water["weekly_guardrail_mm_min"], summer_water["weekly_guardrail_mm_min"])
+        self.assertLess(winter_water["weekly_guardrail_mm_max"], summer_water["weekly_guardrail_mm_max"])
+        self.assertIn("saison=winter", winter_water["weekly_guardrail_reason"])
+        self.assertIn("saison=summer", summer_water["weekly_guardrail_reason"])
 
     def test_compute_objectif_mm_sursemis_germination_is_more_humid(self) -> None:
         germination = decision.compute_objectif_mm(
@@ -658,7 +771,7 @@ class DecisionEngineTests(unittest.TestCase):
 
         self.assertEqual(objectif, 0.0)
 
-    def test_compute_action_guidance_sursemis_waits_until_6am(self) -> None:
+    def test_compute_action_guidance_sursemis_waits_until_optimal_morning(self) -> None:
         base_kwargs = dict(
             phase_dominante="Sursemis",
             sous_phase="Enracinement",
@@ -680,7 +793,7 @@ class DecisionEngineTests(unittest.TestCase):
             objectif_mm=0.5,
         )
 
-        early = decision.compute_action_guidance(hour_of_day=5, **base_kwargs)
+        early = decision.compute_action_guidance(hour_of_day=3, **base_kwargs)
         acceptable = decision.compute_action_guidance(hour_of_day=6, **base_kwargs)
 
         self.assertEqual(early["fenetre_optimale"], "ce_matin")
@@ -711,10 +824,14 @@ class DecisionEngineTests(unittest.TestCase):
         cool = decision.compute_action_guidance(temperature=8.0, **base_kwargs)
         hot = decision.compute_action_guidance(temperature=24.0, **base_kwargs)
 
-        self.assertEqual(cool["watering_window_start_minute"], 330)
+        self.assertEqual(cool["watering_window_start_minute"], 240)
         self.assertEqual(cool["watering_window_end_minute"], 600)
-        self.assertEqual(hot["watering_window_start_minute"], 360)
-        self.assertEqual(hot["watering_window_end_minute"], 540)
+        self.assertEqual(cool["watering_window_optimal_start_minute"], 240)
+        self.assertEqual(cool["watering_window_optimal_end_minute"], 480)
+        self.assertEqual(hot["watering_window_start_minute"], 240)
+        self.assertEqual(hot["watering_window_end_minute"], 600)
+        self.assertEqual(hot["watering_window_optimal_start_minute"], 240)
+        self.assertEqual(hot["watering_window_optimal_end_minute"], 480)
         self.assertEqual(cool["watering_window_profile"], "cool")
         self.assertEqual(hot["watering_window_profile"], "hot")
 
@@ -744,7 +861,7 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertEqual(guidance["fenetre_optimale"], "soir")
         self.assertTrue(guidance["watering_evening_allowed"])
         self.assertEqual(guidance["watering_evening_start_minute"], 1080)
-        self.assertEqual(guidance["watering_evening_end_minute"], 1260)
+        self.assertEqual(guidance["watering_evening_end_minute"], 1200)
 
     def test_compute_action_guidance_prefers_after_rain_when_three_day_horizon_is_wet(self) -> None:
         guidance = decision.compute_action_guidance(

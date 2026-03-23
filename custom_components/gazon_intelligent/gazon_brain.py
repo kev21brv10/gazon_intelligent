@@ -39,6 +39,7 @@ class GazonBrain:
             "dernier_conseil": None,
             "derniere_action_utilisateur": None,
             "derniere_application": None,
+            "feedback_observation": None,
             "prochaine_reapplication": None,
             "catalogue_produits": 0,
             "date_derniere_mise_a_jour": None,
@@ -113,6 +114,7 @@ class GazonBrain:
                 "dernier_conseil": None,
                 "derniere_action_utilisateur": None,
                 "derniere_application": None,
+                "feedback_observation": None,
                 "prochaine_reapplication": None,
                 "catalogue_produits": len(self.products),
                 "date_derniere_mise_a_jour": None,
@@ -123,6 +125,7 @@ class GazonBrain:
         self.memory.setdefault("catalogue_produits", len(self.products))
         self.memory.setdefault("derniere_action_utilisateur", None)
         self.memory.setdefault("auto_irrigation_enabled", DEFAULT_AUTO_IRRIGATION_ENABLED)
+        self.memory.setdefault("feedback_observation", None)
         self.memory["historique_total"] = len(self.history)
         self.memory["catalogue_produits"] = len(self.products)
 
@@ -579,6 +582,9 @@ class GazonBrain:
             previous_memory=self.memory,
             today=today,
         )
+        snapshot["feedback_observation"] = self.memory.get("feedback_observation")
+        if self.last_result is not None:
+            self.last_result.extra["feedback_observation"] = self.memory.get("feedback_observation")
         self.memory["hauteur_tonte_recommandee_cm"] = snapshot.get("hauteur_tonte_recommandee_cm")
         self.memory["hauteur_tonte_recommandee_date"] = today.isoformat()
         self.memory["catalogue_produits"] = len(self.products)

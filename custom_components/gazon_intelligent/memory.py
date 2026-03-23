@@ -531,6 +531,60 @@ def compute_next_reapplication_date(
     return next_date.isoformat()
 
 
+def build_feedback_observation(
+    history: list[dict[str, Any]],
+    previous_memory: dict[str, Any] | None,
+    decision: dict[str, Any] | None,
+    today: date,
+) -> dict[str, Any] | None:
+    if not previous_memory:
+        return None
+    previous_advice = previous_memory.get("dernier_conseil")
+    if not isinstance(previous_advice, dict):
+        return None
+    raw_date = previous_advice.get("date") or previous_memory.get("date_derniere_mise_a_jour")
+    if not raw_date:
+        return None
+    try:
+        advice_date = date.fromisoformat(str(raw_date)[:10])
+    except ValueError:
+        return None
+    elapsed_days = (today - advice_date).days
+    if elapsed_days not in {1, 2}:
+        return None
+
+    recommended_mm = _to_float(previous_advice.get("objectif_mm"))
+    if recommended_mm is None:
+        recommended_mm = _to_float(previous_advice.get("mm_final"))
+    if recommended_mm is None:
+        recommended_mm = _to_float(previous_advice.get("mm_final_recommande"))
+    if recommended_mm is None:
+        recommended_mm = 0.0
+
+    observed_mm = compute_recent_watering_mm(history, today=today, days=elapsed_days)
+    current_deficit = _to_float(
+        (decision or {}).get("deficit_mm_ajuste")
+        or (decision or {}).get("deficit_brut_mm")
+        or (decision or {}).get("objectif_mm")
+    )
+    if current_deficit is None:
+        current_deficit = 0.0
+
+    feedback = {
+        "window": f"{elapsed_days * 24}h",
+        "recommended_mm": round(recommended_mm, 1),
+        "observed_mm": round(observed_mm, 1),
+        "delta_mm": round(observed_mm - recommended_mm, 1),
+        "current_deficit_mm": round(current_deficit, 1),
+        "current_risk": (decision or {}).get("risque_gazon"),
+        "current_heat_stress_level": (decision or {}).get("heat_stress_level"),
+        "current_type_arrosage": (decision or {}).get("type_arrosage"),
+        "current_mm_final": _to_float((decision or {}).get("mm_final")),
+        "source": "observation_only",
+    }
+    return {key: value for key, value in feedback.items() if value is not None}
+
+
 def compute_memory(
     history: list[dict[str, Any]],
     current_phase: str | None = None,
@@ -593,6 +647,7 @@ def compute_memory(
         or item.get("dose") is not None,
     )
     application_state = compute_application_state(history, now=datetime.now(timezone.utc))
+    feedback_observation = build_feedback_observation(history, previous_memory, decision, today=today)
 
     return {
         "historique_total": len(history),
@@ -628,6 +683,7 @@ def compute_memory(
             if previous_memory
             else DEFAULT_AUTO_IRRIGATION_ENABLED
         ),
+        "feedback_observation": feedback_observation,
         "prochaine_reapplication": compute_next_reapplication_date(history, today=today),
         "date_derniere_mise_a_jour": today.isoformat(),
     }
