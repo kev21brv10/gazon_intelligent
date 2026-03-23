@@ -11,7 +11,7 @@
 
 > Un système autonome qui décide pour ton gazon à ta place.
 
-Gazon Intelligent est une intégration Home Assistant qui transforme les données du jardin en décisions simples, claires et directement actionnables.
+Gazon Intelligent est une intégration Home Assistant qui transforme les données du jardin en décisions claires, lisibles et directement actionnables.
 
 ---
 
@@ -37,27 +37,25 @@ Gazon Intelligent analyse en permanence :
 - les phases du gazon  
 - l’historique des actions  
 
-Puis il te donne une seule chose :
-
-👉 **une décision claire**
+Il fournit ensuite une décision claire :
 
 - quoi faire  
 - quand le faire  
 - pourquoi  
 - quoi éviter  
 
-👉 Tu ne calcules rien. Tu suis.
+Aucun calcul manuel n’est nécessaire.
 
 ---
 
 ## 🚀 Ce que fait Gazon Intelligent
 
-- 💧 Décide quand arroser (et combien)  
+- 💧 Détermine quand arroser et quelle quantité appliquer
 - ✂️ Recommande la hauteur de tonte idéale  
 - 🌱 S’adapte aux phases du gazon (sursemis, reprise…)  
 - 🌦️ Analyse météo + sol + historique  
 - 🧠 Évite les erreurs (tonte trop basse, arrosage inutile…)  
-- 📊 Simplifie les décisions dans Home Assistant  
+- 📊 Rend les décisions lisibles dans Home Assistant
 
 ---
 
@@ -141,7 +139,7 @@ Ces principes viennent des bonnes pratiques d'irrigation du gazon et du sursemis
 
 ### 🛠️ Conventions internes de l’intégration
 
-Ce sont des choix d'implémentation Home Assistant, pas des vérités universelles :
+Ce sont des choix d’implémentation propres à cette intégration, pas des vérités universelles :
 
 - Sursemis plus restrictif que les autres modes
 - fenêtre matinale dynamique selon la température
@@ -172,6 +170,22 @@ Ce sont des choix d'implémentation Home Assistant, pas des vérités universell
 | Application sol avec `application_irrigation_mode=suggestion` | Affichage seulement | Technique, léger | Aucune exécution automatique | Non |
 | Application foliaire | Bloqué pendant la fenêtre de protection | 0 | 0 | Non |
 | Type d'application inconnu | Bloqué | 0 | 0 | Non |
+
+### 🔍 Traçabilité V2
+
+Le moteur expose aussi des champs de debug lisibles pour comprendre la décision:
+
+- `deficit_brut_mm`
+- `deficit_mm_ajuste`
+- `mm_cible`
+- `mm_final`
+- `heat_stress_level`
+- `confidence_level`
+- `block_reason`
+
+Le résumé hydrique affiché dans `raison_decision` suit le format:
+
+- `Déficit: brut=X mm, ajusté=Y mm, final=Z mm`
 
 ### 🧮 Plan d'arrosage: composition vs fractionnement
 
