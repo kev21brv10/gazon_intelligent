@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.4
+- Finalise la V2 du moteur d'arrosage avec une observabilité renforcée.
+- Harmonise les libellés UI, les traductions et la documentation autour du profil d'arrosage, du cycle calculé et des sessions détectées.
+- Conserve la compatibilité Home Assistant sans nouvelle entité obligatoire.
+
 ## 0.4.3
 - Finalise la V2 du moteur d'arrosage avec une observabilité renforcée.
 - Ajoute un score de confiance, un stress thermique détaillé et un garde-fou hebdomadaire dynamique.
