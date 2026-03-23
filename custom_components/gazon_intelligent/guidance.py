@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any
 
 from .water import compute_recent_watering_count
@@ -23,6 +23,17 @@ EVENING_END_HOUR = 20
 NORMAL_WEEKLY_GUARDRAIL_MM_MIN = 20.0
 NORMAL_WEEKLY_GUARDRAIL_MM_MAX = 25.0
 NORMAL_MIN_USEFUL_SESSION_MM = 10.0
+SATURATION_BILAN_HYDRIQUE_MM = 5.0
+MODE_MIN_WATERING_MM = {
+    "Normal": 10.0,
+    "Sursemis": 0.5,
+    "Fertilisation": 3.0,
+    "Biostimulant": 5.0,
+    "Agent Mouillant": 5.0,
+    "Scarification": 5.0,
+    "Traitement": 0.0,
+    "Hivernage": 0.0,
+}
 RAINY_WEATHER_CONDITIONS = {
     "rainy",
     "pouring",
@@ -64,6 +75,54 @@ def _to_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _parse_history_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        try:
+            parsed_date = date.fromisoformat(text[:10])
+        except ValueError:
+            return None
+        parsed = datetime(parsed_date.year, parsed_date.month, parsed_date.day, tzinfo=timezone.utc)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _latest_watering_datetime(history: list[dict[str, Any]]) -> datetime | None:
+    latest: datetime | None = None
+    for item in history:
+        if not isinstance(item, dict) or item.get("type") != "arrosage":
+            continue
+        raw_value = item.get("recorded_at") or item.get("detected_at") or item.get("date")
+        parsed = _parse_history_datetime(raw_value)
+        if parsed is None:
+            continue
+        if latest is None or parsed > latest:
+            latest = parsed
+    return latest
+
+
+def _mode_min_watering_mm(phase_dominante: str) -> float:
+    return float(MODE_MIN_WATERING_MM.get(phase_dominante, 0.0))
+
+
+def _apply_mode_watering_constraints(candidate_mm: float, deficit_mm_brut: float, phase_dominante: str) -> float:
+    floor_mm = _mode_min_watering_mm(phase_dominante)
+    if deficit_mm_brut <= 0:
+        return round(floor_mm, 1) if floor_mm > 0 else 0.0
+    value = candidate_mm
+    if value > 0:
+        value = max(value, floor_mm)
+    value = min(value, max(deficit_mm_brut, floor_mm))
+    return round(max(0.0, value), 1)
 
 
 def _morning_window_bounds(phase_dominante: str, temperature: float | None) -> tuple[int, int, int, str]:
@@ -353,6 +412,15 @@ def compute_watering_profile(
     etp = etp or 0.0
     soil_profile = (type_sol or "limoneux").strip().lower()
     recent_watering_count = compute_recent_watering_count(history, today=today, days=7) if history else 0
+    latest_watering_dt = _latest_watering_datetime(history) if history else None
+    now = datetime.now().astimezone()
+    cooldown_24h_hours: float | None = None
+    cooldown_24h_active = False
+    if phase_dominante == "Normal" and latest_watering_dt is not None:
+        delta_hours = (now - latest_watering_dt.astimezone(now.tzinfo)).total_seconds() / 3600.0
+        if delta_hours >= 0:
+            cooldown_24h_hours = delta_hours
+            cooldown_24h_active = delta_hours < 24.0
 
     bilan_hydrique_mm = water_balance.get("bilan_hydrique_mm", 0.0)
     deficit_jour = water_balance.get("deficit_jour", 0.0)
@@ -461,6 +529,7 @@ def compute_watering_profile(
             "weekly_guardrail_mm_min": guardrail_min_mm,
             "weekly_guardrail_mm_max": guardrail_max_mm,
             "weekly_guardrail_reason": guardrail_reason,
+            "cooldown_24h_hours": round(cooldown_24h_hours, 1) if cooldown_24h_hours is not None else None,
         }
 
     besoin_court = max(0.0, -bilan_hydrique_mm)
@@ -481,8 +550,9 @@ def compute_watering_profile(
     )
     morning_start_minute = optimal_start_minute
     morning_end_minute = optimal_end_minute
-    now_hour = datetime.now().hour
-    now_minutes = now_hour * 60 + datetime.now().minute
+    now_hour = now.hour
+    now_minutes = now.hour * 60 + now.minute
+    saturation_block = phase_dominante != "Sursemis" and bilan_hydrique_mm > SATURATION_BILAN_HYDRIQUE_MM
     evening_allowed = _evening_window_allowed(
         temperature=temperature,
         humidite=humidite,
@@ -504,6 +574,8 @@ def compute_watering_profile(
             block_reason = "pluie_prevue_suffisante"
         elif humidite >= 85:
             block_reason = "humidite_elevee"
+        if block_reason is None:
+            mm_cible = _apply_mode_watering_constraints(mm_cible, deficit_mm_brut, phase_dominante)
         mm_final = 0.0 if block_reason else mm_cible
         type_arrosage = "manuel_frequent" if mm_final > 0 else "personnalise"
         arrosage_auto = False
@@ -570,6 +642,7 @@ def compute_watering_profile(
             "weekly_guardrail_mm_min": guardrail_min_mm,
             "weekly_guardrail_mm_max": guardrail_max_mm,
             "weekly_guardrail_reason": guardrail_reason,
+            "cooldown_24h_hours": round(cooldown_24h_hours, 1) if cooldown_24h_hours is not None else None,
         }
 
     if phase_dominante == "Normal":
@@ -586,6 +659,10 @@ def compute_watering_profile(
         block_reason = None
         if pluie_compensatrice or pluie_proche:
             block_reason = "pluie_prevue_suffisante"
+        elif cooldown_24h_active:
+            block_reason = "cooldown_24h"
+        elif saturation_block:
+            block_reason = "sol_deja_humide"
         elif humidite >= 85 or bilan_hydrique_mm > 0.5:
             block_reason = "humidite_excessive"
         elif (
@@ -608,6 +685,8 @@ def compute_watering_profile(
                 )
         if block_reason is not None:
             mm_cible = 0.0
+        else:
+            mm_cible = _apply_mode_watering_constraints(mm_cible, deficit_mm_brut, phase_dominante)
         mm_final = mm_cible
         passages = 1
         if mm_final > 12.0:
@@ -676,6 +755,7 @@ def compute_watering_profile(
             "weekly_guardrail_mm_min": guardrail_min_effective,
             "weekly_guardrail_mm_max": guardrail_max_effective,
             "weekly_guardrail_reason": f"{guardrail_reason}; pluie_support={pluie_support:.1f}",
+            "cooldown_24h_hours": round(cooldown_24h_hours, 1) if cooldown_24h_hours is not None else None,
         }
 
     if phase_dominante in {"Fertilisation", "Biostimulant", "Agent Mouillant", "Scarification"}:
@@ -697,8 +777,12 @@ def compute_watering_profile(
         block_reason = None
         if pluie_compensatrice or pluie_proche:
             block_reason = "pluie_prevue_suffisante"
+        elif saturation_block:
+            block_reason = "sol_deja_humide"
         elif humidite >= 85:
             block_reason = "humidite_elevee"
+        if block_reason is None:
+            mm_cible = _apply_mode_watering_constraints(mm_cible, deficit_mm_brut, phase_dominante)
         mm_final = 0.0 if block_reason else mm_cible
         passages = 1 if mm_final <= 4.0 else 2
         pause_minutes = 25 if passages > 1 else 0
@@ -762,14 +846,19 @@ def compute_watering_profile(
             "weekly_guardrail_mm_min": guardrail_min_mm,
             "weekly_guardrail_mm_max": guardrail_max_mm,
             "weekly_guardrail_reason": guardrail_reason,
+            "cooldown_24h_hours": round(cooldown_24h_hours, 1) if cooldown_24h_hours is not None else None,
         }
 
     mm_cible = _clamp(max(deficit_mm_ajuste, 5.0), 5.0, 20.0)
     block_reason = None
     if pluie_compensatrice or pluie_proche:
         block_reason = "pluie_prevue_suffisante"
+    elif saturation_block:
+        block_reason = "sol_deja_humide"
     elif humidite >= 85:
         block_reason = "humidite_elevee"
+    if block_reason is None:
+        mm_cible = _apply_mode_watering_constraints(mm_cible, deficit_mm_brut, phase_dominante)
     mm_final = 0.0 if block_reason else mm_cible
     passages = 1 if mm_final <= 12.0 else 2
     pause_minutes = 25 if passages > 1 else 0
