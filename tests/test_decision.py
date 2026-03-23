@@ -598,6 +598,26 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertNotIn("ce matin", snapshot["conseil_principal"])
         self.assertIn("20 à 30 min", snapshot["action_recommandee"])
 
+    def test_build_decision_snapshot_sursemis_projects_next_mowing_date(self) -> None:
+        snapshot = decision.build_decision_snapshot(
+            history=[{"type": "Sursemis", "date": "2026-03-17"}],
+            today=date(2026, 3, 17),
+            hour_of_day=10,
+            temperature=18,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=50,
+            type_sol="limoneux",
+            etp_capteur=2.0,
+        )
+
+        self.assertFalse(snapshot["tonte_autorisee"])
+        self.assertEqual(snapshot["next_mowing_date"], "2026-04-07")
+        self.assertEqual(snapshot["next_mowing_display"], "07/04/2026")
+        self.assertIn("Prochaine tonte estimée le 07/04/2026", snapshot["raison_blocage_tonte"])
+        self.assertIn("phase=Sursemis", snapshot["raison_blocage_tonte"])
+        self.assertEqual(snapshot["raison_blocage_code"], "phase_sursemis")
+
     def test_build_decision_snapshot_distinguishes_canicule_phases(self) -> None:
         short = decision.build_decision_snapshot(
             history=[],
