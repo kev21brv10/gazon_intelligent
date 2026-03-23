@@ -20,21 +20,21 @@
         }
       },
       "sensors": {
-        "title": "Advanced options",
-        "description": "Fill in the weather entity, extra sensors and mower settings if you have them. Some values can come from a weather.* entity if it exposes them, while others are calculated automatically if you leave them empty.",
+        "title": "Primary weather and complementary sensors",
+        "description": "Fill in one primary weather entity, then any complementary sensors if you have them. Weather stays the priority, and provided sensors override or complete missing values.",
         "data": {
-          "entite_meteo": "Weather (required)",
-          "capteur_pluie_24h": "24h rain (optional, weather may not provide the value)",
-          "capteur_pluie_demain": "Tomorrow rain (optional, weather may not provide the value)",
-          "capteur_temperature": "Temperature (optional if weather exposes the value)",
+          "entite_meteo": "Primary weather (required)",
+          "capteur_pluie_24h": "Local 24h rain (optional, used first if provided)",
+          "capteur_pluie_demain": "Local tomorrow rain (optional, used first if provided)",
+          "capteur_temperature": "Local temperature (optional, used first if provided)",
           "capteur_etp": "Daily ETP (optional, automatic if not provided)",
-          "capteur_humidite": "Humidity (optional if weather exposes the value)",
+          "capteur_humidite": "Local humidity (optional, used first if provided)",
           "capteur_hauteur_gazon": "Grass height (recommended if available)",
           "hauteur_min_tondeuse_cm": "Minimum mower height (cm)",
           "hauteur_max_tondeuse_cm": "Maximum mower height (cm)",
           "capteur_retour_arrosage": "Watering return (optional, automatic or estimated from zone history)",
           "capteur_humidite_sol": "Soil humidity (%) (recommended if available)",
-          "capteur_vent": "Wind (optional if weather exposes the value)",
+          "capteur_vent": "Local wind (optional, used first if provided)",
           "capteur_rosee": "Dew / leaf wetness (optional, automatic if not provided)"
         }
       }
@@ -46,21 +46,21 @@
   "options": {
     "step": {
       "user": {
-        "title": "Advanced options",
-        "description": "Fill in the weather entity, extra sensors and mower settings if you have them. Some values can come from a weather.* entity if it exposes them, while others are calculated automatically if you leave them empty.",
+        "title": "Primary weather and complementary sensors",
+        "description": "Fill in one primary weather entity, then any complementary sensors if you have them. Weather stays the priority, and provided sensors override or complete missing values.",
         "data": {
-          "entite_meteo": "Weather (required)",
-          "capteur_pluie_24h": "24h rain (optional, weather may not provide the value)",
-          "capteur_pluie_demain": "Tomorrow rain (optional, weather may not provide the value)",
-          "capteur_temperature": "Temperature (optional if weather exposes the value)",
+          "entite_meteo": "Primary weather (required)",
+          "capteur_pluie_24h": "Local 24h rain (optional, used first if provided)",
+          "capteur_pluie_demain": "Local tomorrow rain (optional, used first if provided)",
+          "capteur_temperature": "Local temperature (optional, used first if provided)",
           "capteur_etp": "Daily ETP (optional, automatic if not provided)",
-          "capteur_humidite": "Humidity (optional if weather exposes the value)",
+          "capteur_humidite": "Local humidity (optional, used first if provided)",
           "capteur_hauteur_gazon": "Grass height (recommended if available)",
           "hauteur_min_tondeuse_cm": "Minimum mower height (cm)",
           "hauteur_max_tondeuse_cm": "Maximum mower height (cm)",
           "capteur_retour_arrosage": "Watering return (optional, automatic or estimated from zone history)",
           "capteur_humidite_sol": "Soil humidity (%) (recommended if available)",
-          "capteur_vent": "Wind (optional if weather exposes the value)",
+          "capteur_vent": "Local wind (optional, used first if provided)",
           "capteur_rosee": "Dew / leaf wetness (optional, automatic if not provided)"
         }
       }
@@ -143,7 +143,7 @@
         },
         "source": {
           "name": "Execution source (optional)",
-          "description": "auto_irrigation for automatic runs, manual_plan for the manual plan launch."
+          "description": "auto_irrigation for automatic runs, manual for a hand-triggered launch."
         }
       }
     },

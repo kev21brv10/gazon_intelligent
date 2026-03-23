@@ -58,7 +58,7 @@ def extract_weather_profile(attributes: Mapping[str, Any] | None) -> dict[str, A
 
 
 def extract_weather_forecast_summary(forecasts: list[Mapping[str, Any]] | None) -> dict[str, Any]:
-    """Extrait la pluie et la température prévues pour aujourd'hui et demain par date réelle."""
+    """Extrait un horizon météo court et générique à partir des prévisions journalières."""
     if not forecasts:
         return {}
 
@@ -80,6 +80,32 @@ def extract_weather_forecast_summary(forecasts: list[Mapping[str, Any]] | None) 
         except ValueError:
             return None
 
+    def _forecast_precipitation_mm(forecast: Mapping[str, Any] | None) -> float | None:
+        if not forecast:
+            return None
+        return _read_float(forecast, "precipitation")
+
+    def _forecast_precipitation_signal(forecast: Mapping[str, Any] | None) -> float | None:
+        if not forecast:
+            return None
+        return _read_float(forecast, "precipitation", "precipitation_probability")
+
+    def _forecast_probability(forecast: Mapping[str, Any] | None) -> float | None:
+        if not forecast:
+            return None
+        return _read_float(forecast, "precipitation_probability")
+
+    def _daily_summary(forecast: Mapping[str, Any] | None, forecast_date: date | None) -> dict[str, Any]:
+        return {
+            "date": forecast_date.isoformat() if forecast_date else None,
+            "temperature": _read_float(forecast, "temperature", "apparent_temperature"),
+            "apparent_temperature": _read_float(forecast, "apparent_temperature"),
+            "precipitation_mm": _forecast_precipitation_mm(forecast),
+            "precipitation_signal": _forecast_precipitation_signal(forecast),
+            "precipitation_probability": _forecast_probability(forecast),
+            "condition": forecast.get("condition") if forecast else None,
+        }
+
     by_date: dict[date, Mapping[str, Any]] = {}
     for forecast in forecasts:
         if not isinstance(forecast, Mapping):
@@ -90,19 +116,47 @@ def extract_weather_forecast_summary(forecasts: list[Mapping[str, Any]] | None) 
         by_date.setdefault(forecast_date, forecast)
 
     today_date = date.today()
-    today = by_date.get(today_date)
-    tomorrow_date = today_date + timedelta(days=1)
-    tomorrow = by_date.get(tomorrow_date)
-    if today is None:
-        today = forecasts[0] if len(forecasts) > 0 and isinstance(forecasts[0], Mapping) else None
-    if tomorrow is None:
-        tomorrow = forecasts[1] if len(forecasts) > 1 and isinstance(forecasts[1], Mapping) else None
+    horizon_dates = [today_date + timedelta(days=offset) for offset in range(3)]
+    horizon_forecasts: list[Mapping[str, Any] | None] = [by_date.get(forecast_date) for forecast_date in horizon_dates]
+    if horizon_forecasts[0] is None:
+        horizon_forecasts[0] = forecasts[0] if len(forecasts) > 0 and isinstance(forecasts[0], Mapping) else None
+    if horizon_forecasts[1] is None:
+        horizon_forecasts[1] = forecasts[1] if len(forecasts) > 1 and isinstance(forecasts[1], Mapping) else None
+    if horizon_forecasts[2] is None:
+        horizon_forecasts[2] = forecasts[2] if len(forecasts) > 2 and isinstance(forecasts[2], Mapping) else None
+
+    daily_summaries = []
+    for forecast, forecast_date in zip(horizon_forecasts, horizon_dates):
+        daily_summaries.append(_daily_summary(forecast, forecast_date))
+
+    precipitation_mm_values = [item["precipitation_mm"] for item in daily_summaries]
+    precipitation_probability_values = [
+        item["precipitation_probability"] for item in daily_summaries if item["precipitation_probability"] is not None
+    ]
+    if all(value is not None for value in precipitation_mm_values):
+        forecast_pluie_3j = round(sum(float(value) for value in precipitation_mm_values if value is not None), 1)
+    else:
+        forecast_pluie_3j = None
+    forecast_probabilite_max_3j = (
+        round(max(float(value) for value in precipitation_probability_values), 1)
+        if precipitation_probability_values
+        else None
+    )
 
     return {
-        "forecast_pluie_24h": _read_float(today, "precipitation"),
-        "forecast_pluie_demain": _read_float(tomorrow, "precipitation", "precipitation_probability"),
-        "forecast_temperature_today": _read_float(today, "temperature", "apparent_temperature"),
-        "forecast_condition_today": today.get("condition") if today else None,
-        "forecast_date_today": today_date.isoformat(),
-        "forecast_date_tomorrow": tomorrow_date.isoformat(),
+        "forecast_pluie_24h": daily_summaries[0]["precipitation_signal"],
+        "forecast_pluie_demain": daily_summaries[1]["precipitation_signal"],
+        "forecast_pluie_j2": daily_summaries[2]["precipitation_signal"],
+        "forecast_pluie_3j": forecast_pluie_3j,
+        "forecast_probabilite_max_3j": forecast_probabilite_max_3j,
+        "forecast_temperature_today": daily_summaries[0]["temperature"],
+        "forecast_temperature_tomorrow": daily_summaries[1]["temperature"],
+        "forecast_temperature_j2": daily_summaries[2]["temperature"],
+        "forecast_condition_today": daily_summaries[0]["condition"],
+        "forecast_condition_tomorrow": daily_summaries[1]["condition"],
+        "forecast_condition_j2": daily_summaries[2]["condition"],
+        "forecast_date_today": daily_summaries[0]["date"],
+        "forecast_date_tomorrow": daily_summaries[1]["date"],
+        "forecast_date_j2": daily_summaries[2]["date"],
+        "forecast_days": daily_summaries,
     }

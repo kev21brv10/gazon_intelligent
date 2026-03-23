@@ -17,6 +17,29 @@ GENERAL_MORNING_START_HOUR = 5
 GENERAL_MORNING_END_HOUR = 10
 EVENING_START_HOUR = 18
 EVENING_END_HOUR = 21
+RAINY_WEATHER_CONDITIONS = {
+    "rainy",
+    "pouring",
+    "lightning-rainy",
+    "snowy-rainy",
+}
+
+
+def is_active_rain_weather(weather_profile: dict[str, Any] | None) -> bool:
+    weather_profile = weather_profile or {}
+    condition = str(weather_profile.get("weather_condition") or "").strip().lower()
+    if condition in RAINY_WEATHER_CONDITIONS:
+        return True
+    precipitation_probability = weather_profile.get("weather_precipitation_probability")
+    try:
+        precipitation_probability = (
+            float(precipitation_probability)
+            if precipitation_probability is not None
+            else None
+        )
+    except (TypeError, ValueError):
+        precipitation_probability = None
+    return precipitation_probability is not None and precipitation_probability >= 80.0
 
 
 def _temperature_band(temperature: float | None) -> str:
@@ -81,16 +104,26 @@ def compute_objectif_mm(
     water_balance: dict[str, float],
     today: date | None = None,
     pluie_demain: float | None = None,
+    pluie_j2: float | None = None,
+    pluie_3j: float | None = None,
+    pluie_probabilite_max_3j: float | None = None,
     humidite: float | None = None,
     temperature: float | None = None,
     etp: float | None = None,
     type_sol: str = "limoneux",
+    weather_profile: dict[str, Any] | None = None,
 ) -> float:
     today = today or date.today()
     if phase_dominante in ("Traitement", "Hivernage"):
         return 0.0
 
+    if is_active_rain_weather(weather_profile):
+        return 0.0
+
     pluie_demain = pluie_demain or 0.0
+    pluie_j2 = pluie_j2 or 0.0
+    pluie_3j = pluie_3j or 0.0
+    pluie_probabilite_max_3j = pluie_probabilite_max_3j or 0.0
     humidite = humidite or 0.0
     temperature = temperature or 0.0
     etp = etp or 0.0
@@ -106,6 +139,12 @@ def compute_objectif_mm(
     if phase_dominante != "Sursemis" and bilan_hydrique_mm >= 1.2:
         return 0.0
     if pluie_demain >= 2.0 and bilan_hydrique_mm >= -0.5:
+        return 0.0
+    if pluie_j2 >= 2.0 and bilan_hydrique_mm >= -0.3:
+        return 0.0
+    if pluie_3j >= 4.0 and bilan_hydrique_mm >= -0.8:
+        return 0.0
+    if pluie_probabilite_max_3j >= 80.0 and bilan_hydrique_mm >= -0.5:
         return 0.0
 
     if phase_dominante == "Sursemis":
@@ -208,15 +247,21 @@ def compute_action_guidance(
     advanced_context: dict[str, Any] | None,
     pluie_24h: float | None,
     pluie_demain: float | None,
-    humidite: float | None,
-    temperature: float | None,
-    etp: float | None,
-    objectif_mm: float,
+    pluie_j2: float | None = None,
+    pluie_3j: float | None = None,
+    pluie_probabilite_max_3j: float | None = None,
+    humidite: float | None = None,
+    temperature: float | None = None,
+    etp: float | None = None,
+    objectif_mm: float = 0.0,
     hour_of_day: int | None = None,
 ) -> dict[str, str]:
     advanced_context = advanced_context or {}
     pluie_24h = pluie_24h or 0.0
     pluie_demain = pluie_demain or 0.0
+    pluie_j2 = pluie_j2 or 0.0
+    pluie_3j = pluie_3j or 0.0
+    pluie_probabilite_max_3j = pluie_probabilite_max_3j or 0.0
     humidite = humidite or 0.0
     temperature = temperature or 0.0
     etp = etp or 0.0
@@ -229,7 +274,16 @@ def compute_action_guidance(
     besoin_tendance = (deficit_3j * 0.18) + (deficit_7j * 0.06)
     pression_hydrique = besoin_court + besoin_tendance
     pluie_compensatrice = objectif_mm > 0 and pluie_demain >= max(2.0, objectif_mm * 0.8)
-    pluie_proche = pluie_24h >= 4 or pluie_demain >= 4
+    pluie_compensatrice = pluie_compensatrice or (
+        objectif_mm > 0 and pluie_j2 >= max(2.0, objectif_mm * 0.8)
+    )
+    pluie_compensatrice = pluie_compensatrice or (
+        objectif_mm > 0 and pluie_3j >= max(4.0, objectif_mm * 1.5)
+    )
+    pluie_compensatrice = pluie_compensatrice or (
+        objectif_mm > 0 and pluie_probabilite_max_3j >= 80.0
+    )
+    pluie_proche = pluie_24h >= 4 or pluie_demain >= 4 or pluie_j2 >= 4 or pluie_3j >= 6 or pluie_probabilite_max_3j >= 80.0
     now_hour = hour_of_day if hour_of_day is not None else datetime.now().hour
     now_minutes = now_hour * 60 + int(datetime.now().minute if hour_of_day is None else 0)
     vent = advanced_context.get("vent")
@@ -251,6 +305,19 @@ def compute_action_guidance(
             "niveau_action": "surveiller",
             "fenetre_optimale": "attendre",
             "risque_gazon": "faible",
+            "watering_window_start_minute": morning_start_minute,
+            "watering_window_end_minute": morning_end_minute,
+            "watering_evening_start_minute": EVENING_START_HOUR * 60,
+            "watering_evening_end_minute": EVENING_END_HOUR * 60,
+            "watering_window_profile": temperature_band,
+            "watering_evening_allowed": False,
+        }
+
+    if is_active_rain_weather(advanced_context):
+        return {
+            "niveau_action": "surveiller" if phase_dominante != "Normal" else "aucune_action",
+            "fenetre_optimale": "apres_pluie",
+            "risque_gazon": "modere" if phase_dominante == "Sursemis" else "faible",
             "watering_window_start_minute": morning_start_minute,
             "watering_window_end_minute": morning_end_minute,
             "watering_evening_start_minute": EVENING_START_HOUR * 60,
@@ -369,10 +436,18 @@ def compute_next_reevaluation(
     fenetre_optimale: str,
     risque_gazon: str,
     pluie_demain: float | None = None,
+    pluie_j2: float | None = None,
+    pluie_3j: float | None = None,
+    pluie_probabilite_max_3j: float | None = None,
 ) -> str:
     pluie_demain = pluie_demain or 0.0
+    pluie_j2 = pluie_j2 or 0.0
+    pluie_3j = pluie_3j or 0.0
+    pluie_probabilite_max_3j = pluie_probabilite_max_3j or 0.0
 
-    if fenetre_optimale == "apres_pluie" and pluie_demain > 0:
+    if fenetre_optimale == "apres_pluie" and (
+        pluie_demain > 0 or pluie_j2 > 0 or pluie_3j > 0 or pluie_probabilite_max_3j > 0
+    ):
         return "apres_pluie"
     if fenetre_optimale == "ce_matin":
         return "dans quelques heures"
@@ -405,27 +480,3 @@ def compute_tonte_statut(
     if score_tonte >= 45 or risque_gazon == "modere":
         return "autorisee_avec_precaution"
     return "autorisee"
-
-
-def compute_legacy_urgence(
-    phase_dominante: str,
-    arrosage_recommande: bool,
-    niveau_action: str,
-    risque_gazon: str,
-    score_hydrique: int,
-    score_stress: int,
-) -> str:
-    """Retourne l'ancien niveau d'urgence pour compatibilité Home Assistant."""
-    if phase_dominante in {"Traitement", "Hivernage"}:
-        return "faible"
-    if not arrosage_recommande:
-        return "faible"
-    if phase_dominante == "Sursemis":
-        if niveau_action == "critique" or risque_gazon == "eleve" or score_hydrique >= 45:
-            return "haute"
-        return "moyenne"
-    if niveau_action == "critique" or score_hydrique >= 75 or score_stress >= 80 or risque_gazon == "eleve":
-        return "haute"
-    if niveau_action in {"a_faire", "surveiller"} or score_hydrique >= 40 or score_stress >= 55 or risque_gazon == "modere":
-        return "moyenne"
-    return "faible"

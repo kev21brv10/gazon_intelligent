@@ -215,7 +215,12 @@ def compute_etp(
         return etp_capteur
     weather_profile = weather_profile or {}
     if temperature is None:
-        temperature = weather_profile.get("weather_temperature") or weather_profile.get("weather_apparent_temperature")
+        weather_temperature = weather_profile.get("weather_temperature")
+        weather_apparent_temperature = weather_profile.get("weather_apparent_temperature")
+        if weather_temperature is not None:
+            temperature = weather_temperature
+        elif weather_apparent_temperature is not None:
+            temperature = weather_apparent_temperature
     if temperature is None:
         return None
     temperature = float(temperature)
@@ -250,6 +255,7 @@ def compute_water_balance(
     etp: float | None = None,
     pluie_24h: float | None = None,
     pluie_demain: float | None = None,
+    pluie_j2: float | None = None,
     type_sol: str = "limoneux",
     recent_watering_mm_override: float | None = None,
     advanced_context: dict[str, Any] | None = None,
@@ -261,6 +267,7 @@ def compute_water_balance(
     etp_j = max(0.0, etp or 0.0)
     pluie_j = max(0.0, pluie_24h or 0.0)
     pluie_j1 = max(0.0, pluie_demain or 0.0)
+    pluie_j2 = max(0.0, pluie_j2 or 0.0)
     pluie_source = advanced_context.get("pluie_source", "capteur_pluie_24h")
 
     reserve_sol = {
@@ -273,7 +280,7 @@ def compute_water_balance(
     soil_factor *= float(advanced_context.get("dew_factor", 1.0))
 
     pluie_factor = float(advanced_context.get("rain_factor", 0.85))
-    pluie_efficace = _round_half_up_1((pluie_j * pluie_factor) + (pluie_j1 * 0.55))
+    pluie_efficace = _round_half_up_1((pluie_j * pluie_factor) + (pluie_j1 * 0.55) + (pluie_j2 * 0.25))
     arrosage_recent = (
         recent_watering_mm_override
         if recent_watering_mm_override is not None
@@ -305,6 +312,7 @@ def compute_water_balance(
         "deficit_3j": _round_half_up_1(deficit_3j),
         "deficit_7j": _round_half_up_1(deficit_7j),
         "pluie_efficace": pluie_efficace,
+        "pluie_j2": pluie_j2,
         "arrosage_recent": _round_half_up_1(arrosage_recent_7j),
         "arrosage_recent_jour": _round_half_up_1(arrosage_recent_jour),
         "arrosage_recent_3j": _round_half_up_1(arrosage_recent_3j),

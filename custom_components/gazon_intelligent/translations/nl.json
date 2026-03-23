@@ -20,21 +20,21 @@
         }
       },
       "sensors": {
-        "title": "Geavanceerde opties",
-        "description": "Vul hier de weerentiteit, extra sensoren en maaierinstellingen in als je ze hebt. Sommige waarden kunnen uit een weather.*-entiteit komen als die ze aanbiedt, andere worden automatisch berekend als je ze leeg laat.",
+        "title": "Hoofdweer en aanvullende sensoren",
+        "description": "Vul hier één hoofdweerentiteit in en daarna aanvullende sensoren als je die hebt. Weer heeft prioriteit en aanwezige sensoren overschrijven of vullen ontbrekende waarden aan.",
         "data": {
-          "entite_meteo": "Weer (verplicht)",
-          "capteur_pluie_24h": "Regen 24u (optioneel, het weer geeft de waarde niet altijd)",
-          "capteur_pluie_demain": "Regen morgen (optioneel, het weer geeft de waarde niet altijd)",
-          "capteur_temperature": "Temperatuur (optioneel als het weer de waarde levert)",
+          "entite_meteo": "Hoofdweer (verplicht)",
+          "capteur_pluie_24h": "Lokale regen 24u (optioneel, wordt eerst gebruikt indien aanwezig)",
+          "capteur_pluie_demain": "Lokale regen morgen (optioneel, wordt eerst gebruikt indien aanwezig)",
+          "capteur_temperature": "Lokale temperatuur (optioneel, wordt eerst gebruikt indien aanwezig)",
           "capteur_etp": "Dagelijkse ETP (optioneel, automatische berekening als niet ingevuld)",
-          "capteur_humidite": "Vochtigheid (optioneel als het weer de waarde levert)",
+          "capteur_humidite": "Lokale vochtigheid (optioneel, wordt eerst gebruikt indien aanwezig)",
           "capteur_hauteur_gazon": "Grashoogte (aanbevolen als beschikbaar)",
           "hauteur_min_tondeuse_cm": "Minimale maaihoogte (cm)",
           "hauteur_max_tondeuse_cm": "Maximale maaihoogte (cm)",
           "capteur_retour_arrosage": "Terugkeer van besproeiing (optioneel, automatisch of geschat uit zonegeschiedenis)",
           "capteur_humidite_sol": "Bodemvocht (%) (aanbevolen als beschikbaar)",
-          "capteur_vent": "Wind (optioneel als het weer de waarde levert)",
+          "capteur_vent": "Lokale wind (optioneel, wordt eerst gebruikt indien aanwezig)",
           "capteur_rosee": "Dauw / bladnat (optioneel, automatische berekening als niet ingevuld)"
         }
       }
@@ -46,21 +46,21 @@
   "options": {
     "step": {
       "user": {
-        "title": "Geavanceerde opties",
-        "description": "Vul hier de weerentiteit, extra sensoren en maaierinstellingen in als je ze hebt. Sommige waarden kunnen uit een weather.*-entiteit komen als die ze aanbiedt, andere worden automatisch berekend als je ze leeg laat.",
+        "title": "Hoofdweer en aanvullende sensoren",
+        "description": "Vul hier één hoofdweerentiteit in en daarna aanvullende sensoren als je die hebt. Weer heeft prioriteit en aanwezige sensoren overschrijven of vullen ontbrekende waarden aan.",
         "data": {
-          "entite_meteo": "Weer (verplicht)",
-          "capteur_pluie_24h": "Regen 24 uur (optioneel, het weer geeft de waarde niet altijd)",
-          "capteur_pluie_demain": "Regen morgen (optioneel, het weer geeft de waarde niet altijd)",
-          "capteur_temperature": "Temperatuur (optioneel als het weer de waarde levert)",
+          "entite_meteo": "Hoofdweer (verplicht)",
+          "capteur_pluie_24h": "Lokale regen 24 uur (optioneel, wordt eerst gebruikt indien aanwezig)",
+          "capteur_pluie_demain": "Lokale regen morgen (optioneel, wordt eerst gebruikt indien aanwezig)",
+          "capteur_temperature": "Lokale temperatuur (optioneel, wordt eerst gebruikt indien aanwezig)",
           "capteur_etp": "Dagelijkse ETP (optioneel, automatische berekening als niet ingevuld)",
-          "capteur_humidite": "Vochtigheid (optioneel als het weer de waarde levert)",
+          "capteur_humidite": "Lokale vochtigheid (optioneel, wordt eerst gebruikt indien aanwezig)",
           "capteur_hauteur_gazon": "Grashoogte (aanbevolen als beschikbaar)",
           "hauteur_min_tondeuse_cm": "Minimale maaihoogte (cm)",
           "hauteur_max_tondeuse_cm": "Maximale maaihoogte (cm)",
           "capteur_retour_arrosage": "Terugkeer van besproeiing (optioneel, automatisch of geschat uit zonegeschiedenis)",
           "capteur_humidite_sol": "Bodemvocht (%) (aanbevolen als beschikbaar)",
-          "capteur_vent": "Wind (optioneel als het weer de waarde levert)",
+          "capteur_vent": "Lokale wind (optioneel, wordt eerst gebruikt indien aanwezig)",
           "capteur_rosee": "Dauw / bladnat (optioneel, automatische berekening als niet ingevuld)"
         }
       }
@@ -143,7 +143,7 @@
         },
         "source": {
           "name": "Uitvoeringsbron (optioneel)",
-          "description": "auto_irrigation voor automatische uitvoering, manual_plan voor het handmatig starten van het plan."
+          "description": "auto_irrigation voor automatische uitvoering, handmatig voor een handgestarte lancering."
         }
       }
     },

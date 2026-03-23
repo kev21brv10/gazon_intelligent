@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 PHASE_DURATIONS_DAYS: dict[str, int] = {
@@ -149,15 +149,22 @@ def compute_subphase(
     date_debut: date | None,
     date_fin: date | None,
     today: date | None = None,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     today = today or date.today()
+    if now is None:
+        now = datetime.combine(today, datetime.min.time())
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=datetime.now().astimezone().tzinfo)
     age_jours = 0
-    progression = 0
+    progression = 0.0
     if date_debut is not None:
         age_jours = max((today - date_debut).days, 0)
     if date_debut is not None and date_fin is not None:
         total = max((date_fin - date_debut).days, 1)
-        progression = int(max(0.0, min(100.0, round((age_jours / total) * 100.0))))
+        start_dt = datetime.combine(date_debut, datetime.min.time(), tzinfo=now.tzinfo)
+        elapsed_days = max((now - start_dt).total_seconds(), 0.0) / 86400.0
+        progression = round(max(0.0, min(100.0, (elapsed_days / total) * 100.0)), 1)
 
     rules = SUBPHASE_RULES.get(phase_dominante, [(999, phase_dominante)])
     sous_phase = rules[-1][1]

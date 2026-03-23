@@ -43,6 +43,7 @@ def build_water_bundle(
         etp=etp,
         pluie_24h=context.pluie_24h,
         pluie_demain=context.pluie_demain,
+        pluie_j2=context.pluie_j2,
         type_sol=context.type_sol,
         recent_watering_mm_override=context.retour_arrosage,
         advanced_context=advanced_context,
@@ -70,6 +71,10 @@ def build_water_bundle(
         temperature=context.temperature,
         etp=etp,
         type_sol=context.type_sol,
+        weather_profile=context.weather_profile,
+        pluie_j2=context.pluie_j2,
+        pluie_3j=context.pluie_3j,
+        pluie_probabilite_max_3j=context.pluie_probabilite_max_3j,
     )
     return {
         "etp": etp,
@@ -184,10 +189,7 @@ def _watering_style_text(
         objectif_mm,
         stress_level,
     )
-    soil_profile = (type_sol or "limoneux").strip().lower()
     if passages <= 1:
-        if soil_profile == "sableux":
-            return "en un passage profond tôt le matin"
         return "en un passage profond tôt le matin"
     if passages == 2:
         return "en 2 passages courts espacés de 20 à 30 min"

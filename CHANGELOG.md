@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.2
+- Nettoie le moteur interne en supprimant du code mort et des helpers devenus redondants.
+- Stabilise le calcul et le déclenchement de l'arrosage automatique avec des gardes métier plus lisibles.
+- Simplifie les docs utilisateur en retirant le blueprint historique au profit du flux interne de l'intégration.
+- Clarifie le README et les entités exposées pour refléter l'état réel de la release.
+
 ## 0.4.1
 - Clarifie l'UX des boutons et des capteurs affichés dans Home Assistant.
 - Ajoute un résumé lisible du plan d'arrosage et supprime les valeurs vides ambiguës.
@@ -41,13 +47,13 @@
 - Exploite l'entité `weather` comme source de secours pour la pluie, la température, l'humidité, le vent et l'ETP.
 - Reconstruit l'arrosage réel à partir des changements d'état des zones.
 - Simplifie l'UI et aligne le README, les traductions et les calculs internes sur la même structure.
-- Simplifie le blueprint d'arrosage et clarifie l'expérience utilisateur.
+- Simplifie l'automatisation d'arrosage de l'époque et clarifie l'expérience utilisateur.
 
 ## 0.3.13
 - Corrige le bouton `Date action = aujourd'hui` pour enregistrer une date même sans intervention déjà présente.
 - Harmonise le `Mode expert` avec le device commun de l'intégration.
-- Durcit le blueprint d'arrosage pour ignorer les capteurs `unknown` / `unavailable` et éviter les déclenchements sur objectif nul.
-- Ajoute des notifications persistantes quand le blueprint bloque volontairement l'arrosage ou n'exécute aucune branche.
+- Durcit l'automatisation d'arrosage historique pour ignorer les capteurs `unknown` / `unavailable` et éviter les déclenchements sur objectif nul.
+- Ajoute des notifications persistantes quand cette automatisation historique bloque volontairement l'arrosage ou n'exécute aucune branche.
 - Nettoie le README et ajoute `tests/__init__.py` pour rendre la découverte automatique des tests fonctionnelle.
 
 ## 0.3.11

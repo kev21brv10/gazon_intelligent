@@ -23,6 +23,9 @@ def build_risk_bundle(
         advanced_context=water_bundle["advanced_context"],
         pluie_24h=context.pluie_24h,
         pluie_demain=context.pluie_demain,
+        pluie_j2=context.pluie_j2,
+        pluie_3j=context.pluie_3j,
+        pluie_probabilite_max_3j=context.pluie_probabilite_max_3j,
         humidite=context.humidite,
         temperature=context.temperature,
         etp=water_bundle["etp"],
@@ -34,6 +37,9 @@ def build_risk_bundle(
         advanced_context=water_bundle["advanced_context"],
         pluie_24h=context.pluie_24h,
         pluie_demain=context.pluie_demain,
+        pluie_j2=context.pluie_j2,
+        pluie_3j=context.pluie_3j,
+        pluie_probabilite_max_3j=context.pluie_probabilite_max_3j,
         humidite=context.humidite,
         temperature=context.temperature,
         etp=water_bundle["etp"],
@@ -46,6 +52,9 @@ def build_risk_bundle(
         fenetre_optimale=action_guidance["fenetre_optimale"],
         risque_gazon=action_guidance["risque_gazon"],
         pluie_demain=context.pluie_demain,
+        pluie_j2=context.pluie_j2,
+        pluie_3j=context.pluie_3j,
+        pluie_probabilite_max_3j=context.pluie_probabilite_max_3j,
     )
     urgence = _decision_urgence(
         phase_bundle["phase_dominante"],
@@ -54,6 +63,9 @@ def build_risk_bundle(
         action_guidance["risque_gazon"],
         water_bundle["water_balance"].get("bilan_hydrique_mm", 0.0),
         context.pluie_demain,
+        context.pluie_j2,
+        context.pluie_3j,
+        context.pluie_probabilite_max_3j,
     )
     return {
         "scores": scores,
@@ -79,12 +91,18 @@ def _decision_urgence(
     risque_gazon: str,
     bilan_hydrique_mm: float,
     pluie_demain: float | None,
+    pluie_j2: float | None = None,
+    pluie_3j: float | None = None,
+    pluie_probabilite_max_3j: float | None = None,
 ) -> str:
     pluie_demain = pluie_demain or 0.0
+    pluie_j2 = pluie_j2 or 0.0
+    pluie_3j = pluie_3j or 0.0
+    pluie_probabilite_max_3j = pluie_probabilite_max_3j or 0.0
     if phase_dominante in {"Traitement", "Hivernage"}:
         return "faible"
     if not arrosage_recommande:
-        if pluie_demain >= 2.0 or bilan_hydrique_mm >= 0.0:
+        if pluie_demain >= 2.0 or pluie_j2 >= 2.0 or pluie_3j >= 4.0 or pluie_probabilite_max_3j >= 80.0 or bilan_hydrique_mm >= 0.0:
             return "faible"
         return "moyenne" if niveau_action == "surveiller" or bilan_hydrique_mm < 0 else "faible"
     if bilan_hydrique_mm <= -2.5 or niveau_action == "critique" or risque_gazon == "eleve":

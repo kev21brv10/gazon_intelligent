@@ -20,21 +20,21 @@
         }
       },
       "sensors": {
-        "title": "Erweiterte Optionen",
-        "description": "Trage hier die Wetterentität, zusätzliche Sensoren und Mähereinstellungen ein, falls du sie hast. Einige Werte können von einer weather.*-Entität kommen, wenn sie sie bereitstellt, andere werden automatisch berechnet, wenn du sie leer lässt.",
+        "title": "Hauptwetter und Zusatzsensoren",
+        "description": "Trage hier ein Haupt-Wetterobjekt und danach zusätzliche Sensoren ein, falls du sie hast. Das Wetter hat Priorität, und vorhandene Sensoren überschreiben oder ergänzen fehlende Werte.",
         "data": {
-          "entite_meteo": "Wetter (erforderlich)",
-          "capteur_pluie_24h": "Regen 24 h (optional, Wetter liefert den Wert nicht immer)",
-          "capteur_pluie_demain": "Regen morgen (optional, Wetter liefert den Wert nicht immer)",
-          "capteur_temperature": "Temperatur (optional, wenn Wetter den Wert liefert)",
+          "entite_meteo": "Hauptwetter (erforderlich)",
+          "capteur_pluie_24h": "Lokaler Regen 24 h (optional, wird zuerst genutzt, wenn vorhanden)",
+          "capteur_pluie_demain": "Lokaler Regen morgen (optional, wird zuerst genutzt, wenn vorhanden)",
+          "capteur_temperature": "Lokale Temperatur (optional, wird zuerst genutzt, wenn vorhanden)",
           "capteur_etp": "ETP des Tages (optional, automatische Berechnung wenn leer)",
-          "capteur_humidite": "Feuchtigkeit (optional, wenn Wetter den Wert liefert)",
+          "capteur_humidite": "Lokale Feuchtigkeit (optional, wird zuerst genutzt, wenn vorhanden)",
           "capteur_hauteur_gazon": "Rasenhöhe (empfohlen, wenn verfügbar)",
           "hauteur_min_tondeuse_cm": "Minimale Mäherhöhe (cm)",
           "hauteur_max_tondeuse_cm": "Maximale Mäherhöhe (cm)",
           "capteur_retour_arrosage": "Rücklaufbewässerung (optional, automatisch oder aus der Zonenhistorie geschätzt)",
           "capteur_humidite_sol": "Bodenfeuchte (%) (empfohlen, wenn verfügbar)",
-          "capteur_vent": "Wind (optional, wenn Wetter den Wert liefert)",
+          "capteur_vent": "Lokaler Wind (optional, wird zuerst genutzt, wenn vorhanden)",
           "capteur_rosee": "Tau / Blattnässe (optional, automatische Berechnung wenn nicht angegeben)"
         }
       }
@@ -46,21 +46,21 @@
   "options": {
     "step": {
       "user": {
-        "title": "Erweiterte Optionen",
-        "description": "Trage hier die Wetterentität, zusätzliche Sensoren und Mähereinstellungen ein, falls du sie hast. Einige Werte können von einer weather.*-Entität kommen, wenn sie sie bereitstellt, andere werden automatisch berechnet, wenn du sie leer lässt.",
+        "title": "Hauptwetter und Zusatzsensoren",
+        "description": "Trage hier ein Haupt-Wetterobjekt und danach zusätzliche Sensoren ein, falls du sie hast. Das Wetter hat Priorität, und vorhandene Sensoren überschreiben oder ergänzen fehlende Werte.",
         "data": {
-          "entite_meteo": "Wetter (erforderlich)",
-          "capteur_pluie_24h": "Regen 24 h (optional, Wetter liefert den Wert nicht immer)",
-          "capteur_pluie_demain": "Regen morgen (optional, Wetter liefert den Wert nicht immer)",
-          "capteur_temperature": "Temperatur (optional, wenn Wetter den Wert liefert)",
+          "entite_meteo": "Hauptwetter (erforderlich)",
+          "capteur_pluie_24h": "Lokaler Regen 24 h (optional, wird zuerst genutzt, wenn vorhanden)",
+          "capteur_pluie_demain": "Lokaler Regen morgen (optional, wird zuerst genutzt, wenn vorhanden)",
+          "capteur_temperature": "Lokale Temperatur (optional, wird zuerst genutzt, wenn vorhanden)",
           "capteur_etp": "ETP des Tages (optional, automatische Berechnung wenn leer)",
-          "capteur_humidite": "Feuchtigkeit (optional, wenn Wetter den Wert liefert)",
+          "capteur_humidite": "Lokale Feuchtigkeit (optional, wird zuerst genutzt, wenn vorhanden)",
           "capteur_hauteur_gazon": "Rasenhöhe (empfohlen, wenn verfügbar)",
           "hauteur_min_tondeuse_cm": "Minimale Mäherhöhe (cm)",
           "hauteur_max_tondeuse_cm": "Maximale Mäherhöhe (cm)",
           "capteur_retour_arrosage": "Rücklaufbewässerung (optional, automatisch oder aus der Zonenhistorie geschätzt)",
           "capteur_humidite_sol": "Bodenfeuchte (%) (empfohlen, wenn verfügbar)",
-          "capteur_vent": "Wind (optional, wenn Wetter den Wert liefert)",
+          "capteur_vent": "Lokaler Wind (optional, wird zuerst genutzt, wenn vorhanden)",
           "capteur_rosee": "Tau / Blattnässe (optional, automatische Berechnung wenn nicht angegeben)"
         }
       }
@@ -143,7 +143,7 @@
         },
         "source": {
           "name": "Ausführungsquelle (optional)",
-          "description": "auto_irrigation für die automatische Ausführung, manual_plan für den manuellen Planstart."
+          "description": "auto_irrigation für die automatische Ausführung, manuell für einen per Hand ausgelösten Start."
         }
       }
     },

@@ -105,7 +105,22 @@ class DecisionEngineTests(unittest.TestCase):
 
         self.assertEqual(subphase["sous_phase"], "Enracinement")
         self.assertEqual(subphase["age_jours"], 10)
-        self.assertEqual(subphase["progression"], 48)
+        self.assertEqual(subphase["progression"], 47.6)
+        self.assertEqual(subphase["detail"], "Sursemis / Enracinement")
+
+    def test_compute_subphase_progression_moves_with_time(self) -> None:
+        subphase = decision.compute_subphase(
+            phase_dominante="Sursemis",
+            date_debut=date(2026, 3, 7),
+            date_fin=date(2026, 3, 28),
+            today=date(2026, 3, 17),
+            now=datetime(2026, 3, 17, 6, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(subphase["sous_phase"], "Enracinement")
+        self.assertEqual(subphase["age_jours"], 10)
+        self.assertGreater(subphase["progression"], 48)
+        self.assertLess(subphase["progression"], 49)
         self.assertEqual(subphase["detail"], "Sursemis / Enracinement")
 
     def test_compute_water_balance_returns_detailed_metrics(self) -> None:
@@ -366,6 +381,29 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertEqual(snapshot["prochaine_reevaluation"], "dans 24 h")
         self.assertEqual(snapshot["objectif_mm"], 0.0)
 
+    def test_build_decision_snapshot_blocks_watering_and_mowing_when_raining(self) -> None:
+        snapshot = decision.build_decision_snapshot(
+            history=[],
+            today=date(2026, 3, 17),
+            hour_of_day=7,
+            temperature=18,
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            humidite=55,
+            type_sol="limoneux",
+            etp_capteur=2.0,
+            weather_profile={
+                "weather_condition": "rainy",
+                "weather_precipitation_probability": 90.0,
+            },
+        )
+
+        self.assertEqual(snapshot["objectif_mm"], 0.0)
+        self.assertFalse(snapshot["arrosage_recommande"])
+        self.assertEqual(snapshot["fenetre_optimale"], "apres_pluie")
+        self.assertFalse(snapshot["tonte_autorisee"])
+        self.assertIn("pluie", snapshot["raison_decision"].lower())
+
     def test_build_decision_snapshot_foliar_application_blocks_auto_watering(self) -> None:
         now = datetime.now(timezone.utc)
         snapshot = decision.build_decision_snapshot(
@@ -576,6 +614,50 @@ class DecisionEngineTests(unittest.TestCase):
 
         self.assertEqual(objectif, 0.5)
 
+    def test_compute_objectif_mm_returns_zero_when_weather_is_rainy(self) -> None:
+        objectif = decision.compute_objectif_mm(
+            phase_dominante="Normal",
+            sous_phase="Normal",
+            water_balance={
+                "bilan_hydrique_mm": -1.2,
+                "deficit_3j": 2.0,
+                "deficit_7j": 3.5,
+            },
+            today=date(2026, 3, 17),
+            pluie_demain=0.0,
+            humidite=55.0,
+            temperature=18.0,
+            etp=2.0,
+            type_sol="limoneux",
+            weather_profile={
+                "weather_condition": "rainy",
+                "weather_precipitation_probability": 90.0,
+            },
+        )
+
+        self.assertEqual(objectif, 0.0)
+
+    def test_compute_objectif_mm_blocks_when_three_day_rain_horizon_is_significant(self) -> None:
+        objectif = decision.compute_objectif_mm(
+            phase_dominante="Normal",
+            sous_phase="Normal",
+            water_balance={
+                "bilan_hydrique_mm": -0.6,
+                "deficit_3j": 2.1,
+                "deficit_7j": 3.5,
+            },
+            today=date(2026, 3, 17),
+            pluie_demain=0.0,
+            humidite=55.0,
+            temperature=18.0,
+            etp=2.0,
+            type_sol="limoneux",
+            pluie_j2=1.8,
+            pluie_3j=4.8,
+        )
+
+        self.assertEqual(objectif, 0.0)
+
     def test_compute_action_guidance_sursemis_waits_until_6am(self) -> None:
         base_kwargs = dict(
             phase_dominante="Sursemis",
@@ -663,6 +745,34 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertTrue(guidance["watering_evening_allowed"])
         self.assertEqual(guidance["watering_evening_start_minute"], 1080)
         self.assertEqual(guidance["watering_evening_end_minute"], 1260)
+
+    def test_compute_action_guidance_prefers_after_rain_when_three_day_horizon_is_wet(self) -> None:
+        guidance = decision.compute_action_guidance(
+            phase_dominante="Normal",
+            sous_phase="Normal",
+            water_balance={
+                "bilan_hydrique_mm": -1.0,
+                "deficit_3j": 2.4,
+                "deficit_7j": 4.2,
+            },
+            advanced_context={
+                "vent": 6,
+                "rosee": 0.0,
+                "hauteur_gazon": 7.0,
+            },
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            pluie_j2=2.2,
+            pluie_3j=5.0,
+            pluie_probabilite_max_3j=85.0,
+            humidite=55.0,
+            temperature=18.0,
+            etp=1.2,
+            objectif_mm=0.5,
+            hour_of_day=6,
+        )
+
+        self.assertEqual(guidance["fenetre_optimale"], "apres_pluie")
 
     def test_fractionation_expands_above_two_mm(self) -> None:
         passages = decision_watering._soil_fractionation_passages(
@@ -1067,6 +1177,23 @@ class DecisionEngineTests(unittest.TestCase):
 
         self.assertIsNotNone(etp)
         self.assertGreater(etp, 0.0)
+
+    def test_compute_etp_can_use_zero_weather_temperature(self) -> None:
+        etp = decision.compute_etp(
+            temperature=None,
+            pluie_24h=0.0,
+            etp_capteur=None,
+            weather_profile={
+                "weather_temperature": 0.0,
+                "weather_apparent_temperature": 24.0,
+                "weather_humidity": 50.0,
+                "weather_wind_speed": 0.0,
+                "weather_cloud_coverage": 0.0,
+                "weather_precipitation_probability": 0.0,
+            },
+        )
+
+        self.assertEqual(etp, 0.5)
 
 
 if __name__ == "__main__":

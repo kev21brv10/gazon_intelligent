@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from .const import DEFAULT_AUTO_IRRIGATION_ENABLED, DEFAULT_MODE, DEFAULT_TYPE_SOL, INTERVENTIONS_ACTIONS
+from .const import DEFAULT_AUTO_IRRIGATION_ENABLED, DEFAULT_MODE, INTERVENTIONS_ACTIONS
 from .decision import (
     DecisionContext,
     build_decision_result,
@@ -16,7 +16,6 @@ from .decision_models import DecisionResult
 from .memory import (
     APPLICATION_DEFAULTS,
     _normalize_user_action_summary,
-    compute_application_state,
     normalize_product_id,
     normalize_product_record,
 )
@@ -439,6 +438,9 @@ class GazonBrain:
         hauteur_min_tondeuse_cm: float | None = None,
         hauteur_max_tondeuse_cm: float | None = None,
         hour_of_day: int | None = None,
+        pluie_j2: float | None = None,
+        pluie_3j: float | None = None,
+        pluie_probabilite_max_3j: float | None = None,
     ) -> dict[str, Any]:
         weather_profile = weather_profile or {}
         etp = compute_etp(
@@ -463,6 +465,9 @@ class GazonBrain:
             temperature=temperature,
             pluie_24h=pluie_24h,
             pluie_demain=pluie_demain,
+            pluie_j2=pluie_j2,
+            pluie_3j=pluie_3j,
+            pluie_probabilite_max_3j=pluie_probabilite_max_3j,
             humidite=humidite,
             type_sol=type_sol,
             etp_capteur=etp_capteur,
@@ -524,6 +529,9 @@ class GazonBrain:
                 "hauteur_gazon": advanced_context.get("hauteur_gazon"),
                 "retour_arrosage": advanced_context.get("retour_arrosage"),
                 "pluie_source": advanced_context.get("pluie_source"),
+                "forecast_pluie_j2": pluie_j2,
+                "forecast_pluie_3j": pluie_3j,
+                "forecast_probabilite_max_3j": pluie_probabilite_max_3j,
                 "water_balance": water_balance,
                 "deficit_jour": water_balance.get("deficit_jour"),
                 "deficit_3j": water_balance.get("deficit_3j"),

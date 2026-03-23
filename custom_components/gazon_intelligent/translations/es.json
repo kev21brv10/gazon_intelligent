@@ -20,21 +20,21 @@
         }
       },
       "sensors": {
-        "title": "Opciones avanzadas",
-        "description": "Rellena aquí la entidad meteorológica, los sensores adicionales y los ajustes del cortacésped si los tienes. Algunos valores pueden venir de una entidad weather.* si los expone, y otros se calculan automáticamente si los dejas vacíos.",
+        "title": "Meteorología principal y sensores complementarios",
+        "description": "Rellena aquí una meteorología principal y, después, los sensores complementarios si los tienes. La meteorología tiene prioridad y los sensores proporcionados sustituyen o completan los valores que falten.",
         "data": {
-          "entite_meteo": "Meteorología (obligatoria)",
-          "capteur_pluie_24h": "Lluvia 24 h (opcional, el tiempo puede no dar el dato)",
-          "capteur_pluie_demain": "Lluvia mañana (opcional, el tiempo puede no dar el dato)",
-          "capteur_temperature": "Temperatura (opcional si el tiempo expone el dato)",
+          "entite_meteo": "Meteorología principal (obligatoria)",
+          "capteur_pluie_24h": "Lluvia local 24 h (opcional, se usa primero si existe)",
+          "capteur_pluie_demain": "Lluvia local mañana (opcional, se usa primero si existe)",
+          "capteur_temperature": "Temperatura local (opcional, se usa primero si existe)",
           "capteur_etp": "ETP diario (opcional, cálculo automático si no se indica)",
-          "capteur_humidite": "Humedad (opcional si el tiempo expone el dato)",
+          "capteur_humidite": "Humedad local (opcional, se usa primero si existe)",
           "capteur_hauteur_gazon": "Altura del césped (recomendado si está disponible)",
           "hauteur_min_tondeuse_cm": "Altura mínima del cortacésped (cm)",
           "hauteur_max_tondeuse_cm": "Altura máxima del cortacésped (cm)",
           "capteur_retour_arrosage": "Retorno de riego (opcional, automático o estimado desde el historial de zonas)",
           "capteur_humidite_sol": "Humedad del suelo (%) (recomendado si está disponible)",
-          "capteur_vent": "Viento (opcional si el tiempo expone el dato)",
+          "capteur_vent": "Viento local (opcional, se usa primero si existe)",
           "capteur_rosee": "Rocío / humedad foliar (opcional, cálculo automático si no se indica)"
         }
       }
@@ -46,21 +46,21 @@
   "options": {
     "step": {
       "user": {
-        "title": "Opciones avanzadas",
-        "description": "Rellena aquí la entidad meteorológica, los sensores adicionales y los ajustes del cortacésped si los tienes. Algunos valores pueden venir de una entidad weather.* si los expone, y otros se calculan automáticamente si los dejas vacíos.",
+        "title": "Meteorología principal y sensores complementarios",
+        "description": "Rellena aquí una meteorología principal y, después, los sensores complementarios si los tienes. La meteorología tiene prioridad y los sensores proporcionados sustituyen o completan los valores que falten.",
         "data": {
-          "entite_meteo": "Meteorología (obligatoria)",
-          "capteur_pluie_24h": "Lluvia 24 h (opcional, el tiempo puede no dar el dato)",
-          "capteur_pluie_demain": "Lluvia mañana (opcional, el tiempo puede no dar el dato)",
-          "capteur_temperature": "Temperatura (opcional si el tiempo expone el dato)",
+          "entite_meteo": "Meteorología principal (obligatoria)",
+          "capteur_pluie_24h": "Lluvia local 24 h (opcional, se usa primero si existe)",
+          "capteur_pluie_demain": "Lluvia local mañana (opcional, se usa primero si existe)",
+          "capteur_temperature": "Temperatura local (opcional, se usa primero si existe)",
           "capteur_etp": "ETP diario (opcional, cálculo automático si no se indica)",
-          "capteur_humidite": "Humedad (opcional si el tiempo expone el dato)",
+          "capteur_humidite": "Humedad local (opcional, se usa primero si existe)",
           "capteur_hauteur_gazon": "Altura del césped (recomendado si está disponible)",
           "hauteur_min_tondeuse_cm": "Altura mínima del cortacésped (cm)",
           "hauteur_max_tondeuse_cm": "Altura máxima del cortacésped (cm)",
           "capteur_retour_arrosage": "Retorno de riego (opcional, automático o estimado desde el historial de zonas)",
           "capteur_humidite_sol": "Humedad del suelo (%) (recomendado si está disponible)",
-          "capteur_vent": "Viento (opcional si el tiempo expone el dato)",
+          "capteur_vent": "Viento local (opcional, se usa primero si existe)",
           "capteur_rosee": "Rocío / humedad foliar (opcional, cálculo automático si no se indica)"
         }
       }
@@ -143,7 +143,7 @@
         },
         "source": {
           "name": "Origen de ejecución (opcional)",
-          "description": "auto_irrigation para la ejecución automática, manual_plan para el lanzamiento manual del plan."
+          "description": "auto_irrigation para la ejecución automática, manual para un lanzamiento iniciado a mano."
         }
       }
     },
