@@ -199,7 +199,7 @@ class GazonObjectifMmSensor(GazonEntityBase, SensorEntity):
 
 
 class GazonTypeArrosageSensor(GazonEntityBase, SensorEntity):
-    _attr_name = "Type d'arrosage"
+    _attr_name = "Profil d'arrosage"
     _attr_has_entity_name = True
     _attr_icon = "mdi:sprinkler"
 
@@ -226,7 +226,7 @@ class GazonTypeArrosageSensor(GazonEntityBase, SensorEntity):
 
 
 class GazonDernierArrosageDetecteSensor(GazonEntityBase, SensorEntity):
-    _attr_name = "Dernier arrosage détecté"
+    _attr_name = "Dernière session détectée"
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_native_unit_of_measurement = "mm"
@@ -482,7 +482,7 @@ class GazonDerniereApplicationSensor(GazonEntityBase, SensorEntity):
 
 
 class GazonDerniereActionUtilisateurSensor(GazonEntityBase, SensorEntity):
-    _attr_name = "Dernière action utilisateur"
+    _attr_name = "Dernière exécution"
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:gesture-tap-button"
@@ -523,7 +523,7 @@ class GazonDerniereActionUtilisateurSensor(GazonEntityBase, SensorEntity):
         action = str(summary.get("action") or "Action").strip()
         state = str(summary.get("state") or "").strip()
         when_text = GazonDerniereActionUtilisateurSensor._action_when_text(summary)
-        details: list[str] = [f"Dernière action: {action}"]
+        details: list[str] = [f"Dernière exécution: {action}"]
         if when_text:
             details.append(f"le {when_text}")
         if state:
@@ -551,7 +551,7 @@ class GazonDerniereActionUtilisateurSensor(GazonEntityBase, SensorEntity):
 
 
 class GazonPlanArrosageSensor(GazonEntityBase, SensorEntity):
-    _attr_name = "Plan d'arrosage"
+    _attr_name = "Cycle calculé"
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:timer-outline"
@@ -637,7 +637,7 @@ class GazonPlanArrosageSensor(GazonEntityBase, SensorEntity):
                 "source": "no_plan",
                 "reason": reason,
                 "plan_type": "no_plan",
-                "summary": "Aucun plan d'arrosage",
+                "summary": "Aucun cycle calculé",
             }
 
         if objective is None or objective <= 0:

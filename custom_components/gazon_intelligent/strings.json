@@ -137,8 +137,8 @@
           "description": "Quantité d'eau en mm. Si omis, prend l'objectif calculé par le mode courant."
         },
         "plan_arrosage_entity": {
-          "name": "Entité du plan d'arrosage (optionnelle)",
-          "description": "Capteur du plan calculé à lancer manuellement."
+          "name": "Entité du cycle calculé (optionnelle)",
+          "description": "Capteur du cycle calculé à lancer manuellement."
         },
         "source": {
           "name": "Source d'exécution (optionnelle)",
@@ -320,7 +320,7 @@
   "entity": {
     "switch": {
       "auto_irrigation_enabled": {
-        "name": "Arrosage automatique autorisé"
+        "name": "Arrosage auto autorisé"
       }
     }
   }
