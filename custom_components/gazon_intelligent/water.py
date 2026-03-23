@@ -17,6 +17,82 @@ def _round_half_up_1(value: float) -> float:
     return float(int(value * 10.0 + 0.5)) / 10.0
 
 
+_SOIL_MODEL_BASES: dict[str, dict[str, float]] = {
+    "sableux": {
+        "retention_factor": 0.84,
+        "drainage_factor": 1.16,
+        "infiltration_factor": 1.08,
+    },
+    "limoneux": {
+        "retention_factor": 1.0,
+        "drainage_factor": 1.0,
+        "infiltration_factor": 1.0,
+    },
+    "argileux": {
+        "retention_factor": 1.14,
+        "drainage_factor": 0.88,
+        "infiltration_factor": 0.92,
+    },
+}
+
+
+def _compute_soil_profile(
+    type_sol: str,
+    humidite_sol: float | None = None,
+    vent: float | None = None,
+    rosee: float | None = None,
+) -> dict[str, float | str]:
+    soil_type = (type_sol or "limoneux").strip().lower()
+    base = _SOIL_MODEL_BASES.get(soil_type, _SOIL_MODEL_BASES["limoneux"])
+    retention_factor = float(base["retention_factor"])
+    drainage_factor = float(base["drainage_factor"])
+    infiltration_factor = float(base["infiltration_factor"])
+
+    if humidite_sol is not None:
+        if humidite_sol <= 25:
+            retention_factor += 0.04
+            drainage_factor += 0.05
+            infiltration_factor += 0.03
+        elif humidite_sol <= 40:
+            retention_factor += 0.02
+        elif humidite_sol >= 80:
+            retention_factor -= 0.05
+            drainage_factor -= 0.04
+            infiltration_factor -= 0.04
+        elif humidite_sol >= 65:
+            retention_factor -= 0.03
+            drainage_factor -= 0.02
+
+    if vent is not None:
+        if vent >= 25:
+            drainage_factor += 0.08
+            infiltration_factor += 0.04
+        elif vent >= 15:
+            drainage_factor += 0.05
+        elif vent >= 8:
+            drainage_factor += 0.02
+
+    if rosee is not None and rosee > 0:
+        retention_factor += 0.01
+
+    retention_factor = max(0.75, min(retention_factor, 1.25))
+    drainage_factor = max(0.75, min(drainage_factor, 1.25))
+    infiltration_factor = max(0.75, min(infiltration_factor, 1.25))
+    need_factor = 1.0
+    need_factor += max(0.0, 1.0 - retention_factor) * 0.6
+    need_factor += max(0.0, drainage_factor - 1.0) * 0.4
+    need_factor += max(0.0, 1.0 - infiltration_factor) * 0.25
+    need_factor = max(0.8, min(need_factor, 1.35))
+
+    return {
+        "soil_type": soil_type,
+        "retention_factor": _round_half_up_1(retention_factor),
+        "drainage_factor": _round_half_up_1(drainage_factor),
+        "infiltration_factor": _round_half_up_1(infiltration_factor),
+        "need_factor": _round_half_up_1(need_factor),
+    }
+
+
 def _watering_item_mm(item: dict[str, Any] | None) -> float | None:
     if not isinstance(item, dict):
         return None
@@ -127,6 +203,32 @@ def compute_recent_watering_mm(
     return total
 
 
+def compute_recent_watering_count(
+    history: list[dict[str, Any]],
+    today: date | None = None,
+    days: int = 7,
+) -> int:
+    today = today or date.today()
+    count = 0
+    for item in history:
+        if not isinstance(item, dict) or item.get("type") != "arrosage":
+            continue
+        raw_date = item.get("date")
+        if not raw_date:
+            continue
+        try:
+            d = date.fromisoformat(str(raw_date))
+        except ValueError:
+            continue
+        delta = (today - d).days
+        if delta < 0 or delta > days:
+            continue
+        if _watering_item_mm(item) is None:
+            continue
+        count += 1
+    return count
+
+
 def compute_advanced_context(
     humidite_sol: float | None = None,
     vent: float | None = None,
@@ -134,6 +236,7 @@ def compute_advanced_context(
     hauteur_gazon: float | None = None,
     retour_arrosage: float | None = None,
     pluie_source: str = "capteur_pluie_24h",
+    type_sol: str = "limoneux",
     weather_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     weather_profile = weather_profile or {}
@@ -142,6 +245,12 @@ def compute_advanced_context(
     rosee = _to_float(rosee)
     hauteur_gazon = _to_float(hauteur_gazon)
     retour_arrosage = max(0.0, _to_float(retour_arrosage) or 0.0)
+    soil_profile = _compute_soil_profile(
+        type_sol=type_sol,
+        humidite_sol=humidite_sol,
+        vent=vent,
+        rosee=rosee,
+    )
     weather_precipitation_probability = _to_float(
         weather_profile.get("weather_precipitation_probability")
     )
@@ -188,6 +297,11 @@ def compute_advanced_context(
         "retour_arrosage": retour_arrosage if retour_arrosage > 0 else None,
         "pluie_source": pluie_source,
         "soil_factor": soil_factor,
+        "soil_profile": soil_profile,
+        "soil_retention_factor": soil_profile["retention_factor"],
+        "soil_drainage_factor": soil_profile["drainage_factor"],
+        "soil_infiltration_factor": soil_profile["infiltration_factor"],
+        "soil_need_factor": soil_profile["need_factor"],
         "wind_factor": wind_factor,
         "dew_factor": dew_factor,
         "rain_factor": rain_factor,
@@ -275,7 +389,8 @@ def compute_water_balance(
         "limoneux": 12.0,
         "argileux": 16.0,
     }.get(type_sol, 12.0)
-    soil_factor = (12.0 / reserve_sol) * float(advanced_context.get("soil_factor", 1.0))
+    soil_need_factor = float(advanced_context.get("soil_need_factor", advanced_context.get("soil_factor", 1.0)))
+    soil_factor = (12.0 / reserve_sol) * soil_need_factor
     soil_factor *= float(advanced_context.get("wind_factor", 1.0))
     soil_factor *= float(advanced_context.get("dew_factor", 1.0))
 
@@ -325,4 +440,9 @@ def compute_water_balance(
         "hauteur_gazon": advanced_context.get("hauteur_gazon"),
         "retour_arrosage": advanced_context.get("retour_arrosage"),
         "soil_factor": _round_half_up_1(soil_factor),
+        "soil_profile": advanced_context.get("soil_profile"),
+        "soil_retention_factor": advanced_context.get("soil_retention_factor"),
+        "soil_drainage_factor": advanced_context.get("soil_drainage_factor"),
+        "soil_infiltration_factor": advanced_context.get("soil_infiltration_factor"),
+        "soil_need_factor": advanced_context.get("soil_need_factor"),
     }

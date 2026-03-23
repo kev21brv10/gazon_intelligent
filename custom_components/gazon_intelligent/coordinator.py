@@ -191,6 +191,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             pluie_3j=forecast_pluie_3j,
             pluie_probabilite_max_3j=forecast_probabilite_max_3j,
         )
+        _LOGGER.debug("Gazon Intelligent V2 observability: %s", self._build_observability_payload(snapshot))
         await self._async_save_state()
         self._maybe_schedule_auto_irrigation(snapshot)
 
@@ -237,6 +238,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "auto_irrigation_enabled",
                 self.auto_irrigation_enabled,
             ),
+            "feedback_observation": snapshot.get("feedback_observation"),
         }
 
     @property
@@ -368,6 +370,56 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if weather_profile.get("weather_condition") in {"fog", "rainy", "pouring"}:
             return 1.0
         return None
+
+    def _extract_block_reason(self, snapshot: dict[str, Any]) -> str | None:
+        reason = str(snapshot.get("block_reason") or snapshot.get("raison_decision") or "").strip()
+        if not reason:
+            return None
+        lowered = reason.lower()
+        for marker in (
+            "pluie prévue suffisante",
+            "pluie prévue",
+            "humidité élevée",
+            "garde-fou hebdomadaire",
+            "mode bloqué",
+            "arrosage bloqué",
+            "application",
+        ):
+            if marker in lowered:
+                return marker
+        return reason
+
+    def _build_observability_payload(self, snapshot: dict[str, Any]) -> dict[str, Any]:
+        today = date.today()
+        payload = {
+            "phase": snapshot.get("phase_active"),
+            "sous_phase": snapshot.get("sous_phase"),
+            "type_arrosage": snapshot.get("type_arrosage"),
+            "deficit_brut_mm": snapshot.get("deficit_brut_mm"),
+            "deficit_mm_ajuste": snapshot.get("deficit_mm_ajuste"),
+            "mm_cible": snapshot.get("mm_cible"),
+            "mm_final": snapshot.get("mm_final"),
+            "mm_requested": snapshot.get("mm_requested"),
+            "mm_applied": snapshot.get("mm_applied"),
+            "mm_detected": snapshot.get("mm_detected"),
+            "mm_applied_today": round(compute_recent_watering_mm(self.history, today=today, days=0), 1),
+            "mm_detected_24h": round(compute_recent_watering_mm(self.history, today=today, days=1), 1),
+            "mm_detected_48h": round(compute_recent_watering_mm(self.history, today=today, days=2), 1),
+            "heat_stress_level": snapshot.get("heat_stress_level"),
+            "heat_stress_phase": snapshot.get("heat_stress_phase"),
+            "confidence_level": snapshot.get("niveau_confiance"),
+            "confidence_score": snapshot.get("confidence_score"),
+            "block_reason": self._extract_block_reason(snapshot),
+            "weekly_guardrail_mm_min": snapshot.get("weekly_guardrail_mm_min"),
+            "weekly_guardrail_mm_max": snapshot.get("weekly_guardrail_mm_max"),
+            "soil_profile": snapshot.get("soil_profile"),
+            "soil_retention_factor": snapshot.get("soil_retention_factor"),
+            "soil_drainage_factor": snapshot.get("soil_drainage_factor"),
+            "soil_infiltration_factor": snapshot.get("soil_infiltration_factor"),
+            "soil_need_factor": snapshot.get("soil_need_factor"),
+            "feedback_observation": self.memory.get("feedback_observation"),
+        }
+        return {key: value for key, value in payload.items() if value is not None}
 
     async def _get_weather_forecast_summary(self, weather_entity_id: str | None) -> dict[str, Any]:
         """Récupère les prévisions météo utiles du jour et de demain via weather.get_forecasts."""
@@ -1777,7 +1829,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "planned_total_seconds": max(0.0, float(planned_total_seconds or 0.0)),
             }
 
-        async def _run_legacy_sequence():
+        async def _run_fallback_sequence():
             session_zones: list[dict[str, Any]] = []
             error_reason: str | None = None
             cancelled = False
@@ -1957,7 +2009,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     else:
                         await _finalize_user_action("refuse", error_reason)
 
-        sequence = _run_plan_sequence if plan is not None else _run_legacy_sequence
+        sequence = _run_plan_sequence if plan is not None else _run_fallback_sequence
         self._auto_irrigation_task = self.hass.async_create_task(
             sequence(), "gazon_intelligent_auto_irrigation_sequence"
         )

@@ -180,6 +180,14 @@ class DecisionResult:
     arrosage_conseille: str = "personnalise"
     watering_passages: int = 1
     watering_pause_minutes: int = 25
+    deficit_brut_mm: float | None = None
+    deficit_mm_ajuste: float | None = None
+    mm_cible: float | None = None
+    mm_final_recommande: float | None = None
+    mm_final: float | None = None
+    fractionnement: dict[str, Any] | None = None
+    niveau_confiance: str | None = None
+    heat_stress_level: str | None = None
     phase_dominante_source: str | None = None
     sous_phase_detail: str | None = None
     sous_phase_age_days: int | None = None
@@ -209,6 +217,15 @@ class DecisionResult:
     @property
     def objectif_mm(self) -> float:
         """Alias de compatibilité pour l'ancien snapshot."""
+        return self.objectif_arrosage
+
+    @property
+    def mm_a_appliquer(self) -> float | None:
+        """Alias lisible pour le moteur d'arrosage refondu."""
+        if self.mm_final is not None:
+            return self.mm_final
+        if self.mm_final_recommande is not None:
+            return self.mm_final_recommande
         return self.objectif_arrosage
 
     @property
@@ -270,6 +287,14 @@ class DecisionResult:
             "arrosage_conseille": self.arrosage_conseille,
             "watering_passages": self.watering_passages,
             "watering_pause_minutes": self.watering_pause_minutes,
+            "deficit_brut_mm": self.deficit_brut_mm,
+            "deficit_mm_ajuste": self.deficit_mm_ajuste,
+            "mm_cible": self.mm_cible,
+            "mm_final_recommande": self.mm_final_recommande,
+            "mm_final": self.mm_final,
+            "fractionnement": self.fractionnement,
+            "niveau_confiance": self.niveau_confiance,
+            "heat_stress_level": self.heat_stress_level,
             "conseil_principal": self.conseil_principal,
             "action_recommandee": self.action_recommandee,
             "action_a_eviter": self.action_a_eviter,

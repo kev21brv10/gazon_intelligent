@@ -15,14 +15,15 @@ Gazon Intelligent est une intégration Home Assistant qui transforme les donnée
 
 ---
 
-## ✨ Version 0.4.2
+## ✨ Version 0.4.3
 
-Cette release recentre l'intégration sur un cœur plus propre et plus lisible :
+Cette release finalise la V2 du moteur d'arrosage et renforce sa lisibilité opérationnelle :
 
-- moteur interne nettoyé et stabilisé
-- arrosage automatique plus robuste
+- observabilité enrichie sur les décisions hydriques
+- score de confiance et motifs de blocage mieux tracés
+- canicule, sol et fréquence glissante intégrés plus proprement
 - documentation alignée sur le flux réel de l'intégration
-- suppression du blueprint historique au profit des services natifs Home Assistant
+- compatibilité Home Assistant conservée sans nouvelle entité obligatoire
 
 ---
 
@@ -126,12 +127,15 @@ Le système :
 
 Ces principes viennent des bonnes pratiques d'irrigation du gazon et du sursemis :
 
-- arroser tôt le matin plutôt qu'en pleine journée
+- arroser tôt le matin, avec une fenêtre optimale autour de `04:00–08:00`
+- rester acceptable jusqu'à `10:00` si le contexte le permet
+- éviter les arrosages tardifs en soirée ou juste avant la nuit, car l'humectation nocturne prolongée augmente le risque de maladies foliaires
 - garder la couche superficielle humide pour le sursemis
 - éviter la saturation du sol
 - privilégier des apports légers et fréquents au démarrage
 - espacer progressivement les arrosages à mesure que l'enracinement progresse
 - en conditions chaudes, sèches ou venteuses, plusieurs petits arrosages peuvent être nécessaires
+- en mode normal, viser une logique profonde et peu fréquente, avec un ordre de grandeur hebdomadaire d'environ `20 à 25 mm/semaine` selon le contexte
 - certains produits de type sol peuvent nécessiter un arrosage technique après application
 - certains traitements foliaires doivent au contraire rester protégés avant tout arrosage
 
@@ -153,14 +157,15 @@ Ce sont des choix d'implémentation Home Assistant, pas des vérités universell
 - `plan_type` décrit la composition du plan: `single_zone` ou `multi_zone`
 - `fractionation` décrit uniquement le fractionnement temporel réel: `true` seulement si `passages > 1`
 - un plan multi-zone peut rester sans fractionnement temporel quand `passages = 1`
+- la soirée n'est qu'un rattrapage exceptionnel, jamais un créneau par défaut
 
 ### 📋 Tableau de fonctionnement
 
 | Mode | Fenêtre cible | Objectif mm | Fréquence | Fractionnement |
 | --- | --- | --- | --- | --- |
-| Sursemis / Germination | Matin prioritaire, dès 6h côté moteur | Faible, léger et fréquent | Plusieurs petits apports si sec / chaud / venteux | Oui si l'objectif dépasse 1 à 2 mm |
-| Sursemis / Enracinement | Matin prioritaire, plus souple | Faible à modéré | On espace progressivement | Oui si l'objectif dépasse 2 mm |
-| Normal | Matin tôt prioritaire | Plus profond | Plus rare, plus dense en eau | Oui si l'objectif est élevé |
+| Sursemis / Germination | Matin prioritaire, tôt et régulier | Faible, léger et fréquent | Plusieurs petits apports si sec / chaud / venteux | Oui si l'objectif dépasse 1 à 2 mm |
+| Sursemis / Enracinement | Matin prioritaire, puis plus souple | Faible à modéré | On espace progressivement et on augmente la profondeur | Oui si l'objectif dépasse 2 mm |
+| Normal | Matin tôt prioritaire (`04:00–08:00`, acceptable jusqu'à `10:00`) | Plus profond | Plus rare, avec un vrai apport utile | Oui si l'objectif est élevé |
 | Fertilisation / Biostimulant | Matin tôt, arrosage technique après application si requis | Technique, modéré | Ponctuel | Oui si le plan l'exige |
 | Agent Mouillant / Scarification | Matin tôt prioritaire | Technique, modéré | Ponctuel | Oui si l'objectif l'exige |
 | Application sol avec `application_irrigation_mode=manuel` | Après délai applicatif, via service ou bouton manuel interne | Technique, léger | Déclenchement manuel contrôlé | Oui selon le plan calculé |
@@ -412,9 +417,9 @@ python3 -m pytest
 
 ## 🧾 Version
 
-- manifest : `0.4.1`
-- README : `0.4.1`
-- changelog : `0.4.1`
+- manifest : `0.4.3`
+- README : `0.4.3`
+- changelog : `0.4.3`
 
 
 ## 📄 Licence
