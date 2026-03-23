@@ -283,6 +283,7 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertEqual(snapshot["risque_gazon"], "modere")
         self.assertEqual(snapshot["prochaine_reevaluation"], "dans 24 h")
         self.assertGreater(snapshot["objectif_mm"], 0)
+        self.assertLessEqual(snapshot["objectif_mm"], snapshot["objectif_mm_brut"])
         self.assertLess(snapshot["bilan_hydrique_mm"], 0)
         self.assertEqual(snapshot["decision_resume"]["action"], "arrosage")
         self.assertTrue(snapshot["tonte_autorisee"])
@@ -362,6 +363,7 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertFalse(snapshot["arrosage_recommande"])
         self.assertFalse(snapshot["arrosage_auto_autorise"])
         self.assertEqual(snapshot["fenetre_optimale"], "apres_pluie")
+        self.assertEqual(snapshot["block_reason"], "pluie_prevue_suffisante")
         self.assertIn("pluie prévue suffisante", snapshot["raison_decision"])
 
     def test_build_decision_snapshot_normal_uses_soil_fractionation(self) -> None:
@@ -750,6 +752,56 @@ class DecisionEngineTests(unittest.TestCase):
 
         self.assertEqual(objectif, 0.0)
 
+    def test_build_decision_snapshot_normal_blocks_with_24h_cooldown(self) -> None:
+        now = datetime.now(timezone.utc)
+        snapshot = decision.build_decision_snapshot(
+            history=[
+                {"type": "Normal", "date": date.today().isoformat()},
+                {
+                    "type": "arrosage",
+                    "date": date.today().isoformat(),
+                    "recorded_at": (now - timedelta(hours=12)).isoformat(),
+                    "total_mm": 12.0,
+                },
+            ],
+            today=date.today(),
+            hour_of_day=8,
+            temperature=18.0,
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            humidite=55.0,
+            type_sol="limoneux",
+            etp_capteur=2.0,
+        )
+
+        self.assertEqual(snapshot["phase_active"], "Normal")
+        self.assertEqual(snapshot["type_arrosage"], "bloque")
+        self.assertEqual(snapshot["block_reason"], "cooldown_24h")
+        self.assertEqual(snapshot["objectif_mm"], 0.0)
+        self.assertIn("Cooldown 24h", snapshot["raison_decision"])
+        self.assertIn("cooldown_24h", snapshot["raison_decision"])
+
+    def test_build_decision_snapshot_blocks_when_soil_is_already_saturated(self) -> None:
+        snapshot = decision.build_decision_snapshot(
+            history=[{"type": "Normal", "date": date.today().isoformat()}],
+            today=date.today(),
+            hour_of_day=8,
+            temperature=18.0,
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            humidite=55.0,
+            type_sol="limoneux",
+            etp_capteur=2.0,
+            soil_balance={"reserve_mm": 6.0},
+        )
+
+        self.assertEqual(snapshot["phase_active"], "Normal")
+        self.assertEqual(snapshot["type_arrosage"], "bloque")
+        self.assertEqual(snapshot["block_reason"], "sol_deja_humide")
+        self.assertEqual(snapshot["objectif_mm"], 0.0)
+        self.assertIn("Sol déjà humide", snapshot["raison_decision"])
+        self.assertIn("sol_deja_humide", snapshot["raison_decision"])
+
     def test_compute_objectif_mm_blocks_when_three_day_rain_horizon_is_significant(self) -> None:
         objectif = decision.compute_objectif_mm(
             phase_dominante="Normal",
@@ -770,6 +822,28 @@ class DecisionEngineTests(unittest.TestCase):
         )
 
         self.assertEqual(objectif, 0.0)
+
+    def test_build_decision_snapshot_sursemis_is_capped_by_mode_floor(self) -> None:
+        snapshot = decision.build_decision_snapshot(
+            history=[{"type": "Sursemis", "date": date.today().isoformat()}],
+            today=date.today(),
+            hour_of_day=10,
+            temperature=18.0,
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            humidite=60.0,
+            type_sol="limoneux",
+            etp_capteur=0.0,
+            soil_balance={"reserve_mm": -1.0},
+        )
+
+        self.assertEqual(snapshot["phase_active"], "Sursemis")
+        self.assertEqual(snapshot["type_arrosage"], "manuel_frequent")
+        self.assertEqual(snapshot["objectif_mm"], 0.5)
+        self.assertFalse(snapshot["arrosage_auto_autorise"])
+        self.assertIsNone(snapshot.get("block_reason"))
+        self.assertLessEqual(snapshot["objectif_mm"], max(snapshot["objectif_mm_brut"], 0.5))
+        self.assertIn("micro-apports légers", snapshot["raison_decision"])
 
     def test_compute_action_guidance_sursemis_waits_until_optimal_morning(self) -> None:
         base_kwargs = dict(

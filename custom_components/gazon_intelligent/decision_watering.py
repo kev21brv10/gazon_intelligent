@@ -115,6 +115,7 @@ def build_water_bundle(
         "weekly_guardrail_mm_min": watering_profile.get("weekly_guardrail_mm_min"),
         "weekly_guardrail_mm_max": watering_profile.get("weekly_guardrail_mm_max"),
         "weekly_guardrail_reason": watering_profile.get("weekly_guardrail_reason"),
+        "cooldown_24h_hours": watering_profile.get("cooldown_24h_hours"),
         "soil_profile": watering_profile.get("soil_profile"),
         "soil_retention_factor": watering_profile.get("soil_retention_factor"),
         "soil_drainage_factor": watering_profile.get("soil_drainage_factor"),
@@ -458,6 +459,7 @@ def build_watering_bundle(
         "Agent Mouillant",
         "Scarification",
     }
+    block_reason_value = water_bundle.get("block_reason")
     watering_passages = 1
     watering_pause_minutes = 0
 
@@ -935,7 +937,13 @@ def build_watering_bundle(
         }
 
     if not recommande:
-        watering_blocked = pluie_compensatrice or pluie_proche or humidite_haute or pluie_significative
+        watering_blocked = (
+            pluie_compensatrice
+            or pluie_proche
+            or humidite_haute
+            or pluie_significative
+            or block_reason_value in {"cooldown_24h", "sol_deja_humide"}
+        )
         conseil_principal = f"Phase {phase_dominante}: n'arrose pas pour l'instant."
         action_recommandee = "Surveille les capteurs et l'évolution météo."
         action_a_eviter = "Éviter tout arrosage inutile."
@@ -1141,6 +1149,7 @@ def build_watering_bundle(
     soil_profile_value = water_bundle.get("soil_profile")
     confidence_score_value = water_bundle.get("confidence_score")
     block_reason_value = water_bundle.get("block_reason")
+    cooldown_24h_hours_value = water_bundle.get("cooldown_24h_hours")
 
     raison_parts = [
         f"Mode {phase_dominante} / {sous_phase} en cours ({phase_bundle['jours_restants']} jour(s) restants).",
@@ -1200,8 +1209,16 @@ def build_watering_bundle(
         raison_parts.append(
             f"Confiance={water_bundle.get('niveau_confiance')} ({confidence_score_value}/100)."
         )
-    if block_reason_value:
+    if block_reason_value == "cooldown_24h":
+        raison_parts.append("Cooldown 24h: aucun arrosage normal dans les 24 dernières heures.")
+        raison_parts.append("Motif exact: cooldown_24h.")
+    elif block_reason_value == "sol_deja_humide":
+        raison_parts.append("Sol déjà humide: bilan hydrique au-dessus du seuil de saturation.")
+        raison_parts.append("Motif exact: sol_deja_humide.")
+    elif block_reason_value:
         raison_parts.append(f"Motif exact: {block_reason_value}.")
+    if cooldown_24h_hours_value is not None:
+        raison_parts.append(f"Cooldown mesuré={float(cooldown_24h_hours_value):.1f} h.")
     raison_parts.append(tonte_reason)
 
     confidence_score = water_bundle.get("confidence_score")
@@ -1221,6 +1238,7 @@ def build_watering_bundle(
         "confidence_level": niveau_confiance,
         "confidence_score": confidence_score,
         "block_reason": water_bundle.get("block_reason"),
+        "cooldown_24h_hours": cooldown_24h_hours_value,
         "weekly_guardrail_mm_min": water_bundle.get("weekly_guardrail_mm_min"),
         "weekly_guardrail_mm_max": water_bundle.get("weekly_guardrail_mm_max"),
         "soil_profile": water_bundle.get("soil_profile"),
