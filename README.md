@@ -96,10 +96,19 @@ Aucun calcul manuel n’est nécessaire.
 - `Dernière exécution` décrit le **mode d'exécution réel**
   - exemple: `Arrosage automatique` si l'intégration a déclenché le cycle
   - exemple: `Arrosage manuel immédiat` si l'utilisateur a lancé l'action
+- les attributs d'exécution utilisent des libellés explicites comme `execution_action`, `execution_state`, `execution_plan_type` et `executed_passages`
 - `Dernière session détectée` décrit la **dernière session physique observée**
   - généralement la dernière sous-session ou zone réellement mesurée par l'historique
+  - `total_mm` est l'attribut canonique; les doublons de volume ne sont plus exposés dans l'UI
 - `Cycle calculé` décrit le **cycle complet calculé**
   - il peut couvrir plusieurs zones et plusieurs passages
+- `next_action_date` donne la **date réelle** de la prochaine action
+  - exemple: `2026-03-24`
+- `next_action_display` donne la **date lisible**
+  - exemple: `24/03/2026`
+- `type_sol` est exposé directement sur `Phase dominante`
+- `raison_blocage_tonte` explique pourquoi la tonte n'est pas autorisée
+- `Conseil principal` garde `summary` comme texte humain principal et expose des attributs métiers comme `action_type`, `action_moment`, `objectif_mm` et `type_arrosage`
 - `Dernière application` décrit le **dernier traitement ou produit enregistré**
 
 ---
@@ -266,6 +275,8 @@ Le capteur `Fenêtre optimale` expose aussi un contexte lisible :
 
 - `status` : `auto`, `bloque`, `en_attente`
 - `next_action` : prochaine action lisible
+- `next_action_date` : prochaine date réelle
+- `next_action_display` : date lisible
 - `summary` : résumé utilisateur, par exemple `Arrosage prévu demain matin (auto)`
 
 Le flux reste compatible avec :
