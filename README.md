@@ -15,6 +15,17 @@ Gazon Intelligent est une intégration Home Assistant qui transforme les donnée
 
 ---
 
+## ✨ Version 0.4.2
+
+Cette release recentre l'intégration sur un cœur plus propre et plus lisible :
+
+- moteur interne nettoyé et stabilisé
+- arrosage automatique plus robuste
+- documentation alignée sur le flux réel de l'intégration
+- suppression du blueprint historique au profit des services natifs Home Assistant
+
+---
+
 ## 🧠 Fonctionnement
 
 Gazon Intelligent analyse en permanence :
@@ -57,7 +68,7 @@ Puis il te donne une seule chose :
 
 ## 👀 Ce que tu vois dans Home Assistant
 
-### 🧩 Entités principales
+### 🧩 Entités clés
 
 - 🎛️ Mode du gazon
 - 🌱 Phase dominante
@@ -276,15 +287,15 @@ Aucune configuration YAML obligatoire.
 
 ### Options avancées
 
-- `entite_meteo`  
-- `capteur_pluie_24h`  
-- `capteur_pluie_demain`  
-- `capteur_temperature`  
-- `capteur_etp`  
-- `capteur_humidite`  
-- `capteur_humidite_sol`  
-- `capteur_hauteur_gazon`  
-- `capteur_vent`
+- `entite_meteo` : météo principale obligatoire
+- `capteur_pluie_24h` : pluie locale 24h, prioritaire si fournie
+- `capteur_pluie_demain` : pluie locale demain, prioritaire si fournie
+- `capteur_temperature` : température locale, prioritaire si fournie
+- `capteur_etp` : ETP du jour, calcul automatique si non renseigné
+- `capteur_humidite` : humidité locale, prioritaire si fournie
+- `capteur_humidite_sol`
+- `capteur_hauteur_gazon`
+- `capteur_vent` : vent local, prioritaire si fourni
 - `capteur_rosee`
 - `capteur_retour_arrosage`
 - `hauteur_min_tondeuse_cm`
@@ -375,22 +386,6 @@ Flux recommandé :
 2. `declare_intervention`  
 
 👉 Sinon : laisse le moteur décider.
-
----
-
-## 📦 Blueprint
-
-👉 Installation en un clic :
-
-[![Importer le blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https://github.com/kev21brv10/gazon_intelligent/blob/main/blueprints/automation/gazon_intelligent/arrosage_modes_speciaux_hors_normal.yaml)
-
-### À quoi il sert
-
-- compatibilité manuelle pour le plan courant calculé
-- bloquer selon le mode (Traitement, Hivernage, etc.)
-- laisser l’intégration piloter l’automatique comme source de vérité
-- ne jamais piloter les zones directement
-- rester un fallback pour les usages avancés et la compatibilité historique
 
 ---
 

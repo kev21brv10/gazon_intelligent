@@ -93,15 +93,23 @@ class WeatherSourcesTests(unittest.TestCase):
         today = date.today()
         forecasts = [
             {
+                "datetime": (today + timedelta(days=2)).isoformat(),
+                "temperature": "15.4",
+                "precipitation": "1.2",
+                "condition": "rainy",
+            },
+            {
                 "datetime": (today + timedelta(days=1)).isoformat(),
                 "temperature": "16.2",
                 "precipitation": "3.1",
+                "precipitation_probability": "75",
             },
             {
                 "datetime": today.isoformat(),
                 "temperature": "19.4",
                 "apparent_temperature": "18.0",
                 "precipitation": "0.8",
+                "precipitation_probability": "20",
                 "condition": "cloudy",
             },
         ]
@@ -111,9 +119,16 @@ class WeatherSourcesTests(unittest.TestCase):
         self.assertEqual(summary["forecast_temperature_today"], 19.4)
         self.assertEqual(summary["forecast_pluie_24h"], 0.8)
         self.assertEqual(summary["forecast_pluie_demain"], 3.1)
+        self.assertEqual(summary["forecast_pluie_j2"], 1.2)
+        self.assertEqual(summary["forecast_pluie_3j"], 5.1)
+        self.assertEqual(summary["forecast_probabilite_max_3j"], 75.0)
         self.assertEqual(summary["forecast_condition_today"], "cloudy")
+        self.assertEqual(summary["forecast_condition_tomorrow"], None)
+        self.assertEqual(summary["forecast_condition_j2"], "rainy")
         self.assertEqual(summary["forecast_date_today"], today.isoformat())
         self.assertEqual(summary["forecast_date_tomorrow"], (today + timedelta(days=1)).isoformat())
+        self.assertEqual(summary["forecast_date_j2"], (today + timedelta(days=2)).isoformat())
+        self.assertEqual(len(summary["forecast_days"]), 3)
 
     def test_extract_weather_forecast_summary_falls_back_when_dates_missing(self) -> None:
         forecasts = [

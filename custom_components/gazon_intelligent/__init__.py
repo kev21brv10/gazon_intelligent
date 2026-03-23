@@ -12,12 +12,10 @@ from .const import (
     MODES_GAZON,
 )
 from .entity_migration import (
-    CURRENT_CONFIG_ENTRY_VERSION,
     async_cleanup_obsolete_entities,
 )
 from .coordinator import GazonIntelligentCoordinator
 from .date_utils import parse_optional_date
-from .migration import async_migrate_entry
 
 PLATFORMS = ["select", "number", "sensor", "binary_sensor", "switch", "button"]
 
@@ -42,9 +40,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
     await async_cleanup_obsolete_entities(hass, entry.entry_id)
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     await coordinator.async_start_source_monitoring()
     await coordinator.async_start_zone_monitoring()
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    await coordinator.async_start_auto_irrigation_monitoring()
     coordinator.schedule_post_start_refresh(delay_seconds=30)
 
     if not hass.services.has_service(DOMAIN, SERVICE_SET_MODE):

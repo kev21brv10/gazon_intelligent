@@ -49,9 +49,12 @@ def compute_internal_scores(
     advanced_context: dict[str, Any] | None,
     pluie_24h: float | None,
     pluie_demain: float | None,
-    humidite: float | None,
-    temperature: float | None,
-    etp: float | None,
+    pluie_j2: float | None = None,
+    pluie_3j: float | None = None,
+    pluie_probabilite_max_3j: float | None = None,
+    humidite: float | None = None,
+    temperature: float | None = None,
+    etp: float | None = None,
 ) -> dict[str, int]:
     today = today or date.today()
     advanced_context = advanced_context or {}
@@ -66,6 +69,9 @@ def compute_internal_scores(
     hauteur_gazon = advanced_context.get("hauteur_gazon")
     pluie_24h = pluie_24h or 0.0
     pluie_demain = pluie_demain or 0.0
+    pluie_j2 = pluie_j2 or 0.0
+    pluie_3j = pluie_3j or 0.0
+    pluie_probabilite_max_3j = pluie_probabilite_max_3j or 0.0
     humidite = humidite or 0.0
     temperature = temperature or 0.0
     etp = etp or 0.0
@@ -75,6 +81,12 @@ def compute_internal_scores(
         score_hydrique -= 10
     elif pluie_efficace >= 4:
         score_hydrique -= 5
+    if pluie_3j >= 8:
+        score_hydrique -= 6
+    elif pluie_3j >= 4:
+        score_hydrique -= 3
+    if pluie_probabilite_max_3j >= 80:
+        score_hydrique -= 4
     if arrosage_recent >= 8:
         score_hydrique -= 14
     elif arrosage_recent >= 4:
@@ -135,6 +147,10 @@ def compute_internal_scores(
         score_stress += 6
     if pluie_demain >= 8 and temperature >= 30:
         score_stress -= 5
+    if pluie_j2 >= 4 or pluie_3j >= 8:
+        score_stress -= 4
+    if pluie_probabilite_max_3j >= 80:
+        score_stress -= 3
     if vent is not None:
         if vent >= 25:
             score_stress += 16
@@ -154,6 +170,16 @@ def compute_internal_scores(
     if pluie_demain >= 5:
         score_tonte += 12
     elif pluie_demain >= 2:
+        score_tonte += 6
+    if pluie_j2 >= 5:
+        score_tonte += 10
+    elif pluie_j2 >= 2:
+        score_tonte += 4
+    if pluie_3j >= 8:
+        score_tonte += 10
+    elif pluie_3j >= 4:
+        score_tonte += 4
+    if pluie_probabilite_max_3j >= 80:
         score_tonte += 6
     if humidite >= 88:
         score_tonte += 16

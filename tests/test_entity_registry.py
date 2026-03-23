@@ -42,6 +42,8 @@ def _install_homeassistant_stubs() -> None:
         sensor_mod.SensorEntity = type("SensorEntity", (), {"__init__": lambda self, *args, **kwargs: None})
     if not hasattr(sensor_mod, "SensorStateClass"):
         sensor_mod.SensorStateClass = type("SensorStateClass", (), {"MEASUREMENT": "measurement"})
+    if not hasattr(sensor_mod, "SensorEntityCategory"):
+        sensor_mod.SensorEntityCategory = type("SensorEntityCategory", (), {"DIAGNOSTIC": "diagnostic"})
 
     binary_sensor_mod = ensure_module("homeassistant.components.binary_sensor")
     if not hasattr(binary_sensor_mod, "BinarySensorEntity"):
@@ -72,6 +74,7 @@ def _install_homeassistant_stubs() -> None:
     if not hasattr(helpers_entity_mod, "EntityCategory"):
         class EntityCategory:
             CONFIG = "config"
+            DIAGNOSTIC = "diagnostic"
 
         helpers_entity_mod.EntityCategory = EntityCategory
 

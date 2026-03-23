@@ -294,30 +294,6 @@ def normalize_product_record(product_id: Any, payload: dict[str, Any] | None) ->
     return clean
 
 
-def build_product_summary(product: dict[str, Any] | None) -> dict[str, Any] | None:
-    if not isinstance(product, dict):
-        return None
-    summary = {
-        "id": product.get("id"),
-        "nom": product.get("nom"),
-        "type": product.get("type"),
-        "dose_conseillee": product.get("dose_conseillee"),
-        "reapplication_after_days": _to_int(product.get("reapplication_after_days")),
-        "delai_avant_tonte_jours": _to_int(product.get("delai_avant_tonte_jours")),
-        "phase_compatible": product.get("phase_compatible"),
-        "note": product.get("note"),
-        "application_type": str(product.get("application_type") or "").strip().lower() or None,
-        "application_requires_watering_after": _to_bool(product.get("application_requires_watering_after")),
-        "application_post_watering_mm": _to_float(product.get("application_post_watering_mm")),
-        "application_irrigation_block_hours": _to_float(product.get("application_irrigation_block_hours")),
-        "application_irrigation_delay_minutes": _to_float(product.get("application_irrigation_delay_minutes")),
-        "application_irrigation_mode": _normalize_application_irrigation_mode(product.get("application_irrigation_mode")),
-        "application_label_notes": product.get("application_label_notes"),
-    }
-    clean = {key: value for key, value in summary.items() if value not in (None, "", {}, [])}
-    return clean or None
-
-
 def build_application_summary(item: dict[str, Any] | None) -> dict[str, Any] | None:
     if not item:
         return None

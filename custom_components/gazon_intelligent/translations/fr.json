@@ -20,19 +20,19 @@
         }
       },
       "sensors": {
-        "title": "Capteurs météo",
-        "description": "Renseignez ici l'entité météo et les capteurs complémentaires si vous les avez. Certaines données peuvent venir d'une entité weather.* si elle les expose, d'autres sont calculées automatiquement si vous ne les renseignez pas.",
+        "title": "Météo principale et capteurs complémentaires",
+        "description": "Renseignez ici une météo principale, puis les capteurs complémentaires si vous les avez. La météo est utilisée en priorité, et les capteurs fournis remplacent ou complètent les valeurs manquantes.",
         "data": {
-          "entite_meteo": "Météo (obligatoire)",
-          "capteur_pluie_24h": "Pluie 24h (optionnel, la météo peut ne pas fournir la donnée)",
-          "capteur_pluie_demain": "Pluie demain (optionnel, la météo peut ne pas fournir la donnée)",
-          "capteur_temperature": "Température (optionnel si la météo expose la donnée)",
+          "entite_meteo": "Météo principale (obligatoire)",
+          "capteur_pluie_24h": "Pluie 24h locale (optionnel, prioritaire si fournie)",
+          "capteur_pluie_demain": "Pluie demain locale (optionnel, prioritaire si fournie)",
+          "capteur_temperature": "Température locale (optionnel, prioritaire si fournie)",
           "capteur_etp": "ETP du jour (optionnel, calcul automatique si non renseigné)",
-          "capteur_humidite": "Humidité (optionnel si la météo expose la donnée)",
+          "capteur_humidite": "Humidité locale (optionnel, prioritaire si fournie)",
           "capteur_hauteur_gazon": "Hauteur du gazon (recommandé si disponible)",
           "capteur_retour_arrosage": "Retour arrosage (optionnel, calcul automatique ou estimation via l'historique des zones)",
           "capteur_humidite_sol": "Humidité sol (%) (recommandé si disponible)",
-          "capteur_vent": "Vent (optionnel si la météo expose la donnée)",
+          "capteur_vent": "Vent local (optionnel, prioritaire si fourni)",
           "capteur_rosee": "Rosée / humidité foliaire (optionnel, calcul automatique si non renseigné)"
         }
       }
@@ -44,19 +44,19 @@
   "options": {
     "step": {
       "user": {
-        "title": "Options avancées dans l'UI",
-        "description": "Renseignez ici l'entité météo et les capteurs complémentaires si vous les avez. Certaines données peuvent venir d'une entité weather.* si elle les expose, d'autres sont calculées automatiquement si vous ne les renseignez pas.",
+        "title": "Météo principale et capteurs complémentaires",
+        "description": "Renseignez ici une météo principale, puis les capteurs complémentaires si vous les avez. La météo est utilisée en priorité, et les capteurs fournis remplacent ou complètent les valeurs manquantes.",
         "data": {
-          "entite_meteo": "Météo (obligatoire)",
-          "capteur_pluie_24h": "Pluie 24h (optionnel, la météo peut ne pas fournir la donnée)",
-          "capteur_pluie_demain": "Pluie demain (optionnel, la météo peut ne pas fournir la donnée)",
-          "capteur_temperature": "Température (optionnel si la météo expose la donnée)",
+          "entite_meteo": "Météo principale (obligatoire)",
+          "capteur_pluie_24h": "Pluie 24h locale (optionnel, prioritaire si fournie)",
+          "capteur_pluie_demain": "Pluie demain locale (optionnel, prioritaire si fournie)",
+          "capteur_temperature": "Température locale (optionnel, prioritaire si fournie)",
           "capteur_etp": "ETP du jour (optionnel, calcul automatique si non renseigné)",
-          "capteur_humidite": "Humidité (optionnel si la météo expose la donnée)",
+          "capteur_humidite": "Humidité locale (optionnel, prioritaire si fournie)",
           "capteur_hauteur_gazon": "Hauteur du gazon (recommandé si disponible)",
           "capteur_retour_arrosage": "Retour arrosage (optionnel, calcul automatique ou estimation via l'historique des zones)",
           "capteur_humidite_sol": "Humidité sol (%) (recommandé si disponible)",
-          "capteur_vent": "Vent (optionnel si la météo expose la donnée)",
+          "capteur_vent": "Vent local (optionnel, prioritaire si fourni)",
           "capteur_rosee": "Rosée / humidité foliaire (optionnel, calcul automatique si non renseigné)"
         }
       }
@@ -139,7 +139,7 @@
         },
         "source": {
           "name": "Source d'exécution (optionnelle)",
-          "description": "auto_irrigation pour l'automatique, manual_plan pour le lancement manuel du plan."
+          "description": "auto_irrigation pour l'automatique, manuel pour un lancement déclenché à la main."
         }
       }
     },

@@ -68,6 +68,9 @@ def compute_decision(
     hauteur_min_tondeuse_cm: float | None = None,
     hauteur_max_tondeuse_cm: float | None = None,
     memory: dict[str, Any] | None = None,
+    pluie_j2: float | None = None,
+    pluie_3j: float | None = None,
+    pluie_probabilite_max_3j: float | None = None,
 ) -> DecisionResult:
     """Retourne un résultat typé, compatible avec le snapshot historique."""
     today = today or date.today()
@@ -78,6 +81,9 @@ def compute_decision(
         temperature=temperature,
         pluie_24h=pluie_24h,
         pluie_demain=pluie_demain,
+        pluie_j2=pluie_j2,
+        pluie_3j=pluie_3j,
+        pluie_probabilite_max_3j=pluie_probabilite_max_3j,
         humidite=humidite,
         hauteur_min_tondeuse_cm=hauteur_min_tondeuse_cm,
         hauteur_max_tondeuse_cm=hauteur_max_tondeuse_cm,
@@ -225,6 +231,9 @@ def build_decision_snapshot(
     hauteur_min_tondeuse_cm: float | None = None,
     hauteur_max_tondeuse_cm: float | None = None,
     memory: dict[str, Any] | None = None,
+    pluie_j2: float | None = None,
+    pluie_3j: float | None = None,
+    pluie_probabilite_max_3j: float | None = None,
 ) -> dict[str, Any]:
     """Construit le snapshot historique complet utilisé par les entités HA."""
     context = DecisionContext.from_legacy_args(
@@ -234,6 +243,9 @@ def build_decision_snapshot(
         temperature=temperature,
         pluie_24h=pluie_24h,
         pluie_demain=pluie_demain,
+        pluie_j2=pluie_j2,
+        pluie_3j=pluie_3j,
+        pluie_probabilite_max_3j=pluie_probabilite_max_3j,
         humidite=humidite,
         type_sol=type_sol,
         etp_capteur=etp_capteur,

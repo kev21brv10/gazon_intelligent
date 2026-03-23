@@ -70,46 +70,9 @@ class GazonApplicationArrosageAutoriseBinarySensor(GazonEntityBase, BinarySensor
         super().__init__(coordinator)
         self._attr_unique_id = f"{coordinator.entry.entry_id}_arrosage_apres_application_autorise"
 
-    def _application_state(self) -> dict[str, object]:
-        memory = getattr(self.coordinator, "memory", None)
-        if isinstance(memory, dict):
-            state = {
-                "derniere_application": memory.get("derniere_application"),
-                "application_type": memory.get("application_type"),
-                "application_requires_watering_after": memory.get("application_requires_watering_after"),
-                "application_post_watering_mm": memory.get("application_post_watering_mm"),
-                "application_irrigation_block_hours": memory.get("application_irrigation_block_hours"),
-                "application_irrigation_delay_minutes": memory.get("application_irrigation_delay_minutes"),
-                "application_irrigation_mode": memory.get("application_irrigation_mode"),
-                "application_label_notes": memory.get("application_label_notes"),
-                "declared_at": memory.get("declared_at"),
-                "application_block_until": memory.get("application_block_until"),
-                "application_block_active": memory.get("application_block_active"),
-                "application_block_remaining_minutes": memory.get("application_block_remaining_minutes"),
-                "application_post_watering_pending": memory.get("application_post_watering_pending"),
-                "application_post_watering_ready_at": memory.get("application_post_watering_ready_at"),
-                "application_post_watering_delay_remaining_minutes": memory.get(
-                    "application_post_watering_delay_remaining_minutes"
-                ),
-                "application_post_watering_ready": memory.get("application_post_watering_ready"),
-                "application_post_watering_remaining_mm": memory.get("application_post_watering_remaining_mm"),
-                "auto_irrigation_enabled": memory.get("auto_irrigation_enabled"),
-            }
-            summary = state.get("derniere_application")
-            if isinstance(summary, dict) and summary:
-                return state
-        else:
-            memory = None
-        history = getattr(self.coordinator, "history", None)
-        if isinstance(history, list):
-            state = compute_application_state(history)
-            if isinstance(memory, dict):
-                state["auto_irrigation_enabled"] = memory.get(
-                    "auto_irrigation_enabled",
-                    state.get("auto_irrigation_enabled", True),
-                )
-            return state
-        state = {
+    @staticmethod
+    def _empty_application_state() -> dict[str, object]:
+        return {
             "derniere_application": None,
             "application_type": None,
             "application_requires_watering_after": False,
@@ -129,6 +92,57 @@ class GazonApplicationArrosageAutoriseBinarySensor(GazonEntityBase, BinarySensor
             "application_post_watering_remaining_mm": 0.0,
             "auto_irrigation_enabled": True,
         }
+
+    def _application_state_keys(self) -> tuple[str, ...]:
+        return (
+            "derniere_application",
+            "application_type",
+            "application_requires_watering_after",
+            "application_post_watering_mm",
+            "application_irrigation_block_hours",
+            "application_irrigation_delay_minutes",
+            "application_irrigation_mode",
+            "application_label_notes",
+            "declared_at",
+            "application_block_until",
+            "application_block_active",
+            "application_block_remaining_minutes",
+            "application_post_watering_pending",
+            "application_post_watering_ready_at",
+            "application_post_watering_delay_remaining_minutes",
+            "application_post_watering_ready",
+            "application_post_watering_remaining_mm",
+            "auto_irrigation_enabled",
+        )
+
+    def _state_from_memory(self, memory: dict[str, object]) -> dict[str, object]:
+        state = {
+            key: memory.get(key)
+            for key in self._application_state_keys()
+        }
+        summary = state.get("derniere_application")
+        if isinstance(summary, dict) and summary:
+            return state
+        return {}
+
+    def _application_state(self) -> dict[str, object]:
+        memory = getattr(self.coordinator, "memory", None)
+        if isinstance(memory, dict):
+            state = self._state_from_memory(memory)
+            if state:
+                return state
+        else:
+            memory = None
+        history = getattr(self.coordinator, "history", None)
+        if isinstance(history, list):
+            state = compute_application_state(history)
+            if isinstance(memory, dict):
+                state["auto_irrigation_enabled"] = memory.get(
+                    "auto_irrigation_enabled",
+                    state.get("auto_irrigation_enabled", True),
+                )
+            return state
+        state = self._empty_application_state()
         if isinstance(memory, dict):
             state["auto_irrigation_enabled"] = memory.get("auto_irrigation_enabled", True)
         return state
@@ -156,26 +170,7 @@ class GazonApplicationArrosageAutoriseBinarySensor(GazonEntityBase, BinarySensor
     def extra_state_attributes(self):
         state = self._application_state()
         attrs: dict[str, object] = {}
-        for key in (
-            "derniere_application",
-            "application_type",
-            "application_requires_watering_after",
-            "application_post_watering_mm",
-            "application_irrigation_block_hours",
-            "application_irrigation_delay_minutes",
-            "application_irrigation_mode",
-            "application_label_notes",
-            "declared_at",
-            "application_block_until",
-            "application_block_active",
-            "application_block_remaining_minutes",
-            "application_post_watering_pending",
-            "application_post_watering_ready_at",
-            "application_post_watering_delay_remaining_minutes",
-            "application_post_watering_ready",
-            "application_post_watering_remaining_mm",
-            "auto_irrigation_enabled",
-        ):
+        for key in self._application_state_keys():
             value = state.get(key)
             if value not in (None, "", [], {}):
                 attrs[key] = value

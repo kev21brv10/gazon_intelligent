@@ -67,6 +67,9 @@ class DecisionContext:
     temperature: float | None = None
     pluie_24h: float | None = None
     pluie_demain: float | None = None
+    pluie_j2: float | None = None
+    pluie_3j: float | None = None
+    pluie_probabilite_max_3j: float | None = None
     humidite: float | None = None
     type_sol: str = DEFAULT_TYPE_SOL
     hauteur_min_tondeuse_cm: float | None = None
@@ -94,6 +97,9 @@ class DecisionContext:
         temperature: float | None = None,
         pluie_24h: float | None = None,
         pluie_demain: float | None = None,
+        pluie_j2: float | None = None,
+        pluie_3j: float | None = None,
+        pluie_probabilite_max_3j: float | None = None,
         humidite: float | None = None,
         type_sol: str = DEFAULT_TYPE_SOL,
         hauteur_min_tondeuse_cm: float | None = None,
@@ -118,6 +124,9 @@ class DecisionContext:
             temperature=temperature,
             pluie_24h=pluie_24h,
             pluie_demain=pluie_demain,
+            pluie_j2=pluie_j2,
+            pluie_3j=pluie_3j,
+            pluie_probabilite_max_3j=pluie_probabilite_max_3j,
             humidite=humidite,
             type_sol=type_sol,
             hauteur_min_tondeuse_cm=hauteur_min_tondeuse_cm,
@@ -134,17 +143,17 @@ class DecisionContext:
             memory=memory,
             config={"type_sol": type_sol},
             weather_today={
-                "date": today.isoformat(),
-                "temperature": temperature,
-                "pluie_24h": pluie_24h,
-                "humidite": humidite,
-                "etp_capteur": etp_capteur,
-            },
-            weather_tomorrow={
-                "date": (today + timedelta(days=1)).isoformat(),
-                "pluie_demain": pluie_demain,
-            },
-        )
+            "date": today.isoformat(),
+            "temperature": temperature,
+            "pluie_24h": pluie_24h,
+            "humidite": humidite,
+            "etp_capteur": etp_capteur,
+        },
+        weather_tomorrow={
+            "date": (today + timedelta(days=1)).isoformat(),
+            "pluie_demain": pluie_demain,
+        },
+    )
 
 
 @dataclass
@@ -174,7 +183,7 @@ class DecisionResult:
     phase_dominante_source: str | None = None
     sous_phase_detail: str | None = None
     sous_phase_age_days: int | None = None
-    sous_phase_progression: int | None = None
+    sous_phase_progression: float | None = None
     prochaine_reevaluation: str | None = None
     urgence: str | None = None
     raison_decision: str | None = None

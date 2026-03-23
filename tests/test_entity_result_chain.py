@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 import sys
 import types
@@ -39,6 +39,8 @@ def _install_homeassistant_stubs() -> None:
         sensor_mod.SensorEntity = type("SensorEntity", (), {"__init__": lambda self, *args, **kwargs: None})
     if not hasattr(sensor_mod, "SensorStateClass"):
         sensor_mod.SensorStateClass = type("SensorStateClass", (), {"MEASUREMENT": "measurement"})
+    if not hasattr(sensor_mod, "SensorEntityCategory"):
+        sensor_mod.SensorEntityCategory = type("SensorEntityCategory", (), {"DIAGNOSTIC": "diagnostic"})
 
     binary_sensor_mod = ensure_module("homeassistant.components.binary_sensor")
     if not hasattr(binary_sensor_mod, "BinarySensorEntity"):
@@ -50,6 +52,12 @@ def _install_homeassistant_stubs() -> None:
             pass
 
         helpers_entity_mod.DeviceInfo = DeviceInfo
+    if not hasattr(helpers_entity_mod, "EntityCategory"):
+        class EntityCategory:
+            CONFIG = "config"
+            DIAGNOSTIC = "diagnostic"
+
+        helpers_entity_mod.EntityCategory = EntityCategory
 
     update_coordinator_mod = ensure_module("homeassistant.helpers.update_coordinator")
     if not hasattr(update_coordinator_mod, "CoordinatorEntity"):
@@ -138,11 +146,16 @@ def _make_result():
     )
 
 
+def _local_text(iso_value: str) -> str:
+    return datetime.fromisoformat(iso_value).astimezone().strftime("%d/%m/%Y à %H:%M")
+
+
 class DecisionResultChainTests(unittest.TestCase):
     def test_watering_sensors_return_explicit_defaults_without_history(self) -> None:
         coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=None, history=[], memory={})
 
         plan_sensor = sensor.GazonPlanArrosageSensor(coordinator)
+        watering_progress_sensor = sensor.GazonArrosageEnCoursSensor(coordinator)
         last_watering_sensor = sensor.GazonDernierArrosageDetecteSensor(coordinator)
         last_application_sensor = sensor.GazonDerniereApplicationSensor(coordinator)
         last_user_action_sensor = sensor.GazonDerniereActionUtilisateurSensor(coordinator)
@@ -159,16 +172,56 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(plan_sensor.extra_state_attributes["summary"], "Aucun plan d'arrosage")
         self.assertFalse(plan_sensor.extra_state_attributes["fractionation"])
 
+        self.assertEqual(watering_progress_sensor.native_value, 0.0)
+        self.assertFalse(watering_progress_sensor.extra_state_attributes["active"])
+        self.assertEqual(watering_progress_sensor.extra_state_attributes["summary"], "Aucun arrosage en cours")
+        self.assertEqual(watering_progress_sensor.extra_state_attributes["detail"], "Aucune session active")
+
         self.assertEqual(last_watering_sensor.native_value, 0.0)
         self.assertEqual(last_watering_sensor.extra_state_attributes["source"], "none")
         self.assertEqual(last_watering_sensor.extra_state_attributes["zone_count"], 0)
         self.assertEqual(last_watering_sensor.extra_state_attributes["objectif_mm"], 0.0)
         self.assertEqual(last_watering_sensor.extra_state_attributes["total_mm"], 0.0)
+        self.assertEqual(last_watering_sensor.extra_state_attributes["summary"], "Aucun arrosage détecté")
         self.assertEqual(last_application_sensor.native_value, "Aucune application")
+        self.assertEqual(last_application_sensor.extra_state_attributes["summary"], "Aucune application détectée")
         self.assertEqual(last_user_action_sensor.native_value, "none")
         self.assertEqual(last_user_action_sensor.extra_state_attributes["summary"], "Aucune action récente")
         self.assertFalse(application_allowed_sensor.is_on)
         self.assertNotIn("application_type", application_allowed_sensor.extra_state_attributes)
+
+    def test_watering_progress_sensor_exposes_active_session(self) -> None:
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=None, history=[], memory={})
+        started_at = datetime(2026, 3, 21, 8, 0, tzinfo=timezone.utc)
+        coordinator._watering_session = {
+            "started_at": started_at,
+            "last_activity_at": started_at,
+            "last_inactive_at": None,
+            "zones": {
+                "switch.zone_1": {
+                    "order": 1,
+                    "zone": "switch.zone_1",
+                    "entity_id": "switch.zone_1",
+                    "rate_mm_h": 10.0,
+                    "duration_seconds": 180.0,
+                    "mm": 0.5,
+                    "started_at": started_at,
+                    "ended_at": None,
+                }
+            },
+            "active_zones": {"switch.zone_1": started_at},
+            "zone_order": 1,
+        }
+
+        progress_sensor = sensor.GazonArrosageEnCoursSensor(coordinator)
+
+        self.assertEqual(progress_sensor.native_value, 0.0)
+        self.assertTrue(progress_sensor.extra_state_attributes["active"])
+        self.assertEqual(progress_sensor.extra_state_attributes["active_zone_count"], 1)
+        self.assertEqual(progress_sensor.extra_state_attributes["zone_count"], 1)
+        self.assertEqual(progress_sensor.extra_state_attributes["started_at_utc"], started_at.isoformat())
+        self.assertIn("Démarré", progress_sensor.extra_state_attributes["detail"])
+        self.assertTrue(progress_sensor.extra_state_attributes["summary"].startswith("Arrosage en cours"))
 
     def test_plan_sensor_distinguishes_single_zone_without_fractionation(self) -> None:
         coordinator = _FakeCoordinator(
@@ -362,8 +415,73 @@ class DecisionResultChainTests(unittest.TestCase):
         application_allowed_sensor = binary_sensor.GazonApplicationArrosageAutoriseBinarySensor(coordinator)
 
         self.assertEqual(last_application_sensor.native_value, "Engrais printemps")
+        self.assertEqual(
+            last_application_sensor.extra_state_attributes["summary"],
+            f"Dernière application: Engrais printemps - le {_local_text('2026-03-18T08:00:00+00:00')} - type sol - mode auto",
+        )
+        self.assertEqual(
+            last_application_sensor.extra_state_attributes["last_application_when"],
+            _local_text("2026-03-18T08:00:00+00:00"),
+        )
         self.assertTrue(application_allowed_sensor.is_on)
         self.assertEqual(application_allowed_sensor.extra_state_attributes["application_type"], "sol")
+
+    def test_user_action_sensor_exposes_human_readable_summary(self) -> None:
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={},
+            result=None,
+            history=[],
+            memory={
+                "derniere_action_utilisateur": {
+                    "state": "en_attente",
+                    "action": "Arrosage manuel",
+                    "triggered_at": "2026-03-18T08:15:00+00:00",
+                    "reason": "Séquence lancée",
+                    "plan_type": "single_zone",
+                    "zone_count": 1,
+                    "passages": 1,
+                }
+            },
+        )
+
+        action_sensor = sensor.GazonDerniereActionUtilisateurSensor(coordinator)
+
+        self.assertEqual(action_sensor.native_value, "en_attente")
+        self.assertEqual(
+            action_sensor.extra_state_attributes["summary"],
+            f"Dernière action: Arrosage manuel - le {_local_text('2026-03-18T08:15:00+00:00')} - état en_attente",
+        )
+        self.assertEqual(
+            action_sensor.extra_state_attributes["last_action_when"],
+            _local_text("2026-03-18T08:15:00+00:00"),
+        )
+        self.assertEqual(action_sensor.extra_state_attributes["action"], "Arrosage manuel")
+
+    def test_conseil_principal_sensor_surfaces_summary_in_attributes(self) -> None:
+        result = _make_result()
+        result.decision_resume = {
+            "faire": True,
+            "action": "arrosage",
+            "moment": "demain_matin",
+            "objectif_mm": 1.2,
+            "type_arrosage": "manuel_frequent",
+            "niveau_action": "a_faire",
+            "risque_gazon": "eleve",
+        }
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={},
+            result=result,
+            history=[],
+        )
+
+        advice_sensor = sensor.GazonConseilPrincipalSensor(coordinator)
+
+        self.assertEqual(advice_sensor.native_value, "arrosage")
+        self.assertEqual(advice_sensor.extra_state_attributes["summary"], "Arroser demain matin.")
+        self.assertEqual(advice_sensor.extra_state_attributes["decision_action"], "arrosage")
+        self.assertEqual(advice_sensor.extra_state_attributes["decision_moment"], "demain_matin")
 
     def test_entities_read_decision_result_before_legacy_snapshot(self) -> None:
         coordinator = _FakeCoordinator(
@@ -489,7 +607,16 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(last_watering_sensor.native_value, 4.0)
         self.assertEqual(last_watering_sensor.extra_state_attributes["source"], "zone_session")
         self.assertEqual(last_watering_sensor.extra_state_attributes["date_action"], "2026-03-18")
-        self.assertEqual(last_watering_sensor.extra_state_attributes["detected_at"], "2026-03-18T06:14:00+00:00")
+        self.assertEqual(last_watering_sensor.extra_state_attributes["detected_at"], _local_text("2026-03-18T06:14:00+00:00"))
+        self.assertEqual(last_watering_sensor.extra_state_attributes["detected_at_utc"], "2026-03-18T06:14:00+00:00")
+        self.assertEqual(
+            last_watering_sensor.extra_state_attributes["last_watering_when"],
+            _local_text("2026-03-18T06:14:00+00:00"),
+        )
+        self.assertIn(
+            f"Dernier arrosage: 4.0 mm le {_local_text('2026-03-18T06:14:00+00:00')}",
+            last_watering_sensor.extra_state_attributes["summary"],
+        )
         self.assertEqual(last_watering_sensor.extra_state_attributes["zone_count"], 2)
         self.assertEqual(last_watering_sensor.extra_state_attributes["zones_used"], ["switch.zone_1", "switch.zone_2"])
         self.assertEqual(last_watering_sensor.extra_state_attributes["zones"][0]["order"], 1)
