@@ -44,7 +44,7 @@ class GazonTonteAutoriseeBinarySensor(GazonEntityBase, BinarySensorEntity):
 
 
 class GazonArrosageRecommandeBinarySensor(GazonEntityBase, BinarySensorEntity):
-    _attr_name = "Arrosage recommandé"
+    _attr_name = "Arrosage conseillé"
     _attr_has_entity_name = True
     _attr_icon = "mdi:water-check"
 

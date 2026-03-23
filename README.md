@@ -81,16 +81,29 @@ Aucun calcul manuel n’est nécessaire.
 - ✂️ État de tonte
 - 📏 Hauteur de tonte conseillée
 - ✂️ Tonte autorisée
-- 💧 Arrosage recommandé
+- 💧 Arrosage conseillé
 - 🎯 Objectif d'arrosage
-- 🧾 Plan d'arrosage
-- 🕘 Dernier arrosage détecté
+- 🧾 Cycle calculé
+- 🕘 Dernière session détectée
 - 🧴 Dernière application
-- 👆 Dernière action utilisateur
+- 👆 Dernière exécution
 - 🔓 Arrosage après application autorisé
-- 🔘 Arrosage automatique autorisé
-- 🚿 Type d'arrosage
+- 🔘 Arrosage auto autorisé
+- 🚿 Profil d'arrosage
 - 🖲️ Bouton `Arrosage manuel immédiat`
+
+### 🔎 Sémantique des états
+
+- `type_arrosage` décrit le **profil agronomique** retenu par le moteur
+  - exemple: `manuel_frequent` pour un sursemis
+- `Dernière exécution` décrit le **mode d'exécution réel**
+  - exemple: `Arrosage automatique` si l'intégration a déclenché le cycle
+  - exemple: `Arrosage manuel immédiat` si l'utilisateur a lancé l'action
+- `Dernière session détectée` décrit la **dernière session physique observée**
+  - généralement la dernière sous-session ou zone réellement mesurée par l'historique
+- `Cycle calculé` décrit le **cycle complet calculé**
+  - il peut couvrir plusieurs zones et plusieurs passages
+- `Dernière application` décrit le **dernier traitement ou produit enregistré**
 
 ---
 
@@ -187,7 +200,7 @@ Le résumé hydrique affiché dans `raison_decision` suit le format:
 
 - `Déficit: brut=X mm, ajusté=Y mm, final=Z mm`
 
-### 🧮 Plan d'arrosage: composition vs fractionnement
+### 🧮 Cycle calculé: composition vs fractionnement
 
 - `plan_type = single_zone` quand une seule zone compose le plan
 - `plan_type = multi_zone` quand le plan couvre plusieurs zones
@@ -215,15 +228,15 @@ Les champs applicatifs disponibles sont :
 Les capteurs utiles :
 
 - `Dernière application`
-- `Dernière action utilisateur`
-- `Plan d'arrosage`
+- `Dernière exécution`
+- `Cycle calculé`
 - `Arrosage après application autorisé`
 - `application_block_remaining_minutes`
 - `application_post_watering_ready_at`
 - `application_post_watering_delay_remaining_minutes`
 - `application_post_watering_ready`
 
-Le capteur `Dernière action utilisateur` utilise ces états lisibles :
+Le capteur `Dernière exécution` utilise ces états lisibles :
 
 - `ok` : action acceptée et envoyée au moteur
 - `en_attente` : action reconnue mais différée
@@ -233,9 +246,9 @@ Le capteur `Dernière action utilisateur` utilise ces états lisibles :
 Le champ `action` reprend le libellé utilisateur, par exemple :
 
 - `Arrosage manuel immédiat`
-- `Plan d'arrosage lancé`
+- `Cycle calculé lancé`
 
-À vide, `Dernière action utilisateur` affiche `none` avec le résumé `Aucune action récente`.
+À vide, `Dernière exécution` affiche `none` avec le résumé `Aucune action récente`.
 
 Le bouton visible dans l'interface principale :
 
@@ -243,11 +256,11 @@ Le bouton visible dans l'interface principale :
 - déclenche un arrosage manuel immédiat contrôlé
 - reste l'unique action manuelle visible pour l'utilisateur
 
-Le plan d'arrosage reste géré automatiquement par le scheduler interne.
+Le cycle calculé reste géré automatiquement par le scheduler interne.
 
 Le switch global :
 
-- `Arrosage automatique autorisé`
+- `Arrosage auto autorisé`
 - bloque ou autorise l'exécution automatique
 - laisse les calculs visibles même quand il est coupé
 - le scheduler interne réévalue périodiquement le contexte via le coordinator; un léger décalage peut exister selon le cycle de refresh
@@ -267,7 +280,7 @@ Le flux reste compatible avec :
 - exécution séquentielle des zones configurées
 - fractionnement en plusieurs passages si nécessaire
 - détection automatique des sessions réelles d'arrosage
-- historique lisible via `Plan d'arrosage`, `Dernier arrosage détecté` et `Dernière application`
+- historique lisible via `Cycle calculé`, `Dernière session détectée` et `Dernière application`
 - blocage explicite si le type d'application est inconnu
 - blocage / délai / suggestion pilotés par `application_irrigation_mode`
 
@@ -341,8 +354,8 @@ Aucune configuration YAML obligatoire.
 - Action recommandée  
 - Action à éviter  
 - État de tonte  
-- Arrosage recommandé  
-- Arrosage automatique autorisé
+- Arrosage conseillé
+- Arrosage auto autorisé
 
 👉 Tu ne réfléchis pas. Tu appliques.
 
