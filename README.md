@@ -414,6 +414,36 @@ Aucune configuration YAML obligatoire.
 
 ---
 
+## 🛠️ Services exposés
+
+### Services métier principaux
+
+- `gazon_intelligent.set_mode`
+- `gazon_intelligent.reset_mode`
+- `gazon_intelligent.set_date_action`
+- `gazon_intelligent.start_auto_irrigation`
+- `gazon_intelligent.start_manual_irrigation`
+- `gazon_intelligent.start_application_irrigation`
+
+### Services d’intervention et de mémoire
+
+- `gazon_intelligent.declare_intervention`
+- `gazon_intelligent.declare_mowing`
+- `gazon_intelligent.declare_watering`
+- `gazon_intelligent.register_product`
+- `gazon_intelligent.remove_product`
+
+Notes:
+
+- `set_mode` et `reset_mode` restent les raccourcis stables pour piloter le mode du gazon.
+- `set_date_action` enregistre la date métier réelle.
+- `start_manual_irrigation` lance un arrosage manuel contrôlé à partir d’un objectif explicite.
+- `start_auto_irrigation` exécute le cycle calculé ou un objectif fourni, sans contourner les garde-fous.
+- `declare_intervention` reste le point d’entrée principal pour les interventions.
+- `declare_mowing` et `declare_watering` sont des raccourcis de compatibilité utiles.
+
+---
+
 ## 🧭 Utilisation au quotidien
 
 Le principe est simple:
@@ -448,36 +478,6 @@ Le principe est simple:
 - mémoire des actions
 - suivi des interventions
 - verrou global d'arrosage automatique
-
----
-
-## 🛠️ Services exposés
-
-### Services métier principaux
-
-- `gazon_intelligent.set_mode`
-- `gazon_intelligent.reset_mode`
-- `gazon_intelligent.set_date_action`
-- `gazon_intelligent.start_auto_irrigation`
-- `gazon_intelligent.start_manual_irrigation`
-- `gazon_intelligent.start_application_irrigation`
-
-### Services d’intervention et de mémoire
-
-- `gazon_intelligent.declare_intervention`
-- `gazon_intelligent.declare_mowing`
-- `gazon_intelligent.declare_watering`
-- `gazon_intelligent.register_product`
-- `gazon_intelligent.remove_product`
-
-Notes:
-
-- `set_mode` et `reset_mode` restent les raccourcis stables pour piloter le mode du gazon.
-- `set_date_action` enregistre la date métier réelle.
-- `start_manual_irrigation` lance un arrosage manuel contrôlé à partir d’un objectif explicite.
-- `start_auto_irrigation` exécute le cycle calculé ou un objectif fourni, sans contourner les garde-fous.
-- `declare_intervention` reste le point d’entrée principal pour les interventions.
-- `declare_mowing` et `declare_watering` sont des raccourcis de compatibilité utiles.
 
 ---
 
