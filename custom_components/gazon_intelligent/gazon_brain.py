@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -249,6 +250,15 @@ class GazonBrain:
             raise ValueError(f"Intervention non supportée: {intervention}")
         target_date = date_action or date.today()
         product_record = self._resolve_product_record(produit_id, produit)
+        product_query = normalize_product_id(produit_id) or normalize_product_id(produit)
+        if product_query and product_record is None:
+            raise ValueError(
+                "Produit introuvable ou ambigu. Utilise l'ID exact ou le nom exact d'un produit enregistré."
+            )
+        if not product_query and product_record is None and len(self.products) > 1:
+            raise ValueError(
+                "Plusieurs produits sont enregistrés. Sélectionne un produit enregistré par ID ou nom exact."
+            )
         if product_record:
             produit = produit or product_record.get("nom")
             if dose is None:
@@ -294,7 +304,7 @@ class GazonBrain:
         }
         if product_record:
             item["produit_id"] = product_record.get("id")
-            item["produit_catalogue"] = product_record
+            item["produit_catalogue"] = copy.deepcopy(product_record)
         if produit:
             item["produit"] = produit
         if dose is not None:

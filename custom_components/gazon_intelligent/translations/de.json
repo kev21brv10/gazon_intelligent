@@ -149,7 +149,7 @@
     },
     "declare_intervention": {
       "name": "Maßnahme melden",
-      "description": "Erfasst eine echte Maßnahme. Die Produkteinstellungen werden in \"Produkt registrieren\" festgelegt; hier wählst du nur das bereits registrierte Produkt, das Datum, die Zone und bei Bedarf eine Notiz.",
+      "description": "Erfasst eine echte Maßnahme. Die Produkteinstellungen werden in \"Produkt registrieren\" festgelegt; hier wählst du nur das bereits registrierte Produkt, das Datum, die Zone und bei Bedarf eine Notiz. Wenn mehrere Produkte existieren, ist eine exakte ID oder ein exakter Name erforderlich.",
       "fields": {
         "intervention": {
           "name": "Maßnahme",

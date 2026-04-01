@@ -149,7 +149,7 @@
     },
     "declare_intervention": {
       "name": "Actie melden",
-      "description": "Legt een echte actie vast. De productinstellingen worden vastgelegd in \"Product registreren\"; hier kies je alleen het al geregistreerde product, de datum, de zone en eventueel een opmerking.",
+      "description": "Legt een echte actie vast. De productinstellingen worden vastgelegd in \"Product registreren\"; hier kies je alleen het al geregistreerde product, de datum, de zone en eventueel een opmerking. Als er meerdere producten zijn, is een exact ID of exacte naam verplicht.",
       "fields": {
         "intervention": {
           "name": "Actie",
