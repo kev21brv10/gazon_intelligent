@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta
 from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.helpers.entity import EntityCategory
 
+from .assistant import build_assistant_decision
 from .const import DOMAIN
 from .entity_base import GazonEntityBase
 from .memory import compute_application_state
@@ -89,9 +90,11 @@ def _hydric_strategy(balance_mm: float | None, deficit_3j: float | None, deficit
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
+    await _async_ensure_assistant_entity_id(hass, entry)
     coordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
         [
+            GazonAssistantSensor(coordinator),
             GazonTonteEtatSensor(coordinator),
             GazonHauteurTonteSensor(coordinator),
             GazonConseilPrincipalSensor(coordinator),
@@ -111,6 +114,31 @@ async def async_setup_entry(hass, entry, async_add_entities):
             GazonDerniereActionUtilisateurSensor(coordinator),
         ]
     )
+
+
+async def _async_ensure_assistant_entity_id(hass, entry) -> None:
+    from homeassistant.helpers import entity_registry as er
+
+    desired_entity_id = f"sensor.{DOMAIN}_assistant"
+    desired_unique_id = f"{entry.entry_id}_assistant"
+    registry = er.async_get(hass)
+    current_entity = None
+    for entity in registry.entities.values():
+        if getattr(entity, "config_entry_id", None) != entry.entry_id:
+            continue
+        if getattr(entity, "unique_id", None) != desired_unique_id:
+            continue
+        current_entity = entity
+        break
+
+    if current_entity is None or current_entity.entity_id == desired_entity_id:
+        return
+
+    existing = registry.entities.get(desired_entity_id)
+    if existing is not None and getattr(existing, "unique_id", None) != desired_unique_id:
+        return
+
+    registry.async_update_entity(current_entity.entity_id, new_entity_id=desired_entity_id)
 
 
 class GazonPhaseActiveSensor(GazonEntityBase, SensorEntity):
@@ -285,6 +313,18 @@ class GazonTypeArrosageSensor(GazonEntityBase, SensorEntity):
     def native_value(self):
         result = self.decision_result
         if result is not None:
+            objective = self._decision_value("objectif_mm", 0.0)
+            try:
+                objective = float(objective or 0.0)
+            except (TypeError, ValueError):
+                objective = 0.0
+            decision_resume = self._decision_value("decision_resume")
+            if (
+                objective <= 0.0
+                and isinstance(decision_resume, dict)
+                and str(decision_resume.get("action") or "").strip() in {"aucune_action", "none"}
+            ):
+                return "Aucune action"
             return result.display_label_for("type_arrosage")
         return self._decision_value("type_arrosage")
 
@@ -293,10 +333,23 @@ class GazonTypeArrosageSensor(GazonEntityBase, SensorEntity):
         result = self.decision_result
         if result is None:
             return self._possible_values_attr("type_arrosage")
-        possible_values = result.possible_display_values_for("type_arrosage")
+        possible_values = list(result.possible_display_values_for("type_arrosage") or [])
+        objective = self._decision_value("objectif_mm", 0.0)
+        try:
+            objective = float(objective or 0.0)
+        except (TypeError, ValueError):
+            objective = 0.0
+        decision_resume = self._decision_value("decision_resume")
+        if (
+            objective <= 0.0
+            and isinstance(decision_resume, dict)
+            and str(decision_resume.get("action") or "").strip() in {"aucune_action", "none"}
+            and "Aucune action" not in possible_values
+        ):
+            possible_values.insert(0, "Aucune action")
         if not possible_values:
             return None
-        return {"possible_values": list(possible_values)}
+        return {"possible_values": possible_values}
 
 
 class GazonDernierArrosageDetecteSensor(GazonEntityBase, SensorEntity):
@@ -617,8 +670,11 @@ class GazonDerniereActionUtilisateurSensor(GazonEntityBase, SensorEntity):
     def native_value(self):
         summary = self._latest_action()
         if not summary:
-            return "none"
-        return summary.get("state")
+            return "aucune_action"
+        state = str(summary.get("state") or "").strip()
+        if not state or state == "none":
+            return "aucune_action"
+        return state
 
     @property
     def extra_state_attributes(self):
@@ -708,6 +764,7 @@ class GazonPlanArrosageSensor(GazonEntityBase, SensorEntity):
         def _empty_plan(reason: str) -> dict[str, object]:
             return {
                 "objective_mm": round(max(0.0, objective or 0.0), 1),
+                "objectif_mm": round(max(0.0, objective or 0.0), 1),
                 "zones": [],
                 "zone_count": 0,
                 "total_duration_min": 0.0,
@@ -777,6 +834,7 @@ class GazonPlanArrosageSensor(GazonEntityBase, SensorEntity):
 
         return {
             "objective_mm": round(objective, 1),
+            "objectif_mm": round(objective, 1),
             "zones": zones,
             "zone_count": len(zones),
             "total_duration_min": total_duration_min,
@@ -948,9 +1006,93 @@ class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):
         return attrs or None
 
 
+class GazonAssistantSensor(GazonEntityBase, SensorEntity):
+    _attr_name = "Assistant"
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:account-tie-hat-outline"
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_assistant"
+
+    def _assistant_payload(self) -> dict[str, object]:
+        assistant = self._decision_value("assistant")
+        if isinstance(assistant, dict) and assistant:
+            return assistant
+
+        snapshot = getattr(self.coordinator, "data", None)
+        if isinstance(snapshot, dict):
+            assistant = build_assistant_decision(snapshot)
+            if isinstance(assistant, dict) and assistant:
+                return assistant
+
+        return {
+            "action": "none",
+            "moment": "none",
+            "quantity_mm": 0.0,
+            "status": "ok",
+            "reason": "conditions optimales",
+        }
+
+    @property
+    def native_value(self):
+        action = str(self._assistant_payload().get("action") or "none").strip() or "none"
+        if action == "none":
+            return "aucune_action"
+        return action
+
+    @property
+    def extra_state_attributes(self):
+        payload = self._assistant_payload()
+        action = str(payload.get("action") or "none").strip() or "none"
+        public_action = "aucune_action" if action == "none" else action
+        moment = str(payload.get("moment") or "none").strip() or "none"
+        if action == "none" and moment == "none":
+            moment = "attendre"
+        status = str(payload.get("status") or "ok").strip() or "ok"
+        reason = str(payload.get("reason") or "").strip()
+        try:
+            quantity_mm = round(float(payload.get("quantity_mm") or 0.0), 1)
+        except (TypeError, ValueError):
+            quantity_mm = 0.0
+        if not reason:
+            if action == "none":
+                reason = "conditions optimales"
+            elif status == "blocked":
+                reason = "action bloquée"
+            else:
+                reason = "action requise"
+        attrs = {
+            "action": public_action,
+            "moment": moment,
+            "quantity_mm": quantity_mm,
+            "status": status,
+            "reason": reason,
+        }
+        target_date = (
+            payload.get("next_action_date")
+            or payload.get("watering_target_date")
+            or self._decision_value("next_action_date")
+            or self._decision_value("watering_target_date")
+        )
+        if target_date not in (None, "", [], {}):
+            attrs["next_action_date"] = target_date
+            display_date = payload.get("next_action_display") or payload.get("watering_target_display")
+            if display_date in (None, "", [], {}):
+                display_date = self._decision_value("next_action_display")
+            if display_date in (None, "", [], {}):
+                display_date = self._decision_value("watering_target_display")
+            if display_date in (None, "", [], {}):
+                display_date = _human_date_text(target_date)
+            if display_date not in (None, "", [], {}):
+                attrs["next_action_display"] = display_date
+        return attrs
+
+
 class GazonConseilPrincipalSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Conseil principal"
     _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:message-text-outline"
 
     def __init__(self, coordinator):
@@ -959,23 +1101,10 @@ class GazonConseilPrincipalSensor(GazonEntityBase, SensorEntity):
 
     @property
     def native_value(self):
-        decision_resume = self._decision_value("decision_resume")
-        if isinstance(decision_resume, dict):
-            action = str(decision_resume.get("action") or "").strip()
-            if action:
-                return action
         conseil = self._decision_value("conseil_principal")
         if conseil is None:
             return None
-        if isinstance(conseil, str):
-            lower = conseil.lower()
-            if "arros" in lower:
-                return "arrosage"
-            if "tont" in lower:
-                return "tonte"
-            if "surveill" in lower:
-                return "surveillance"
-        return conseil
+        return str(conseil).strip() or None
 
     @property
     def extra_state_attributes(self):
@@ -1068,7 +1197,21 @@ class GazonNiveauActionSensor(GazonEntityBase, SensorEntity):
 
     @property
     def native_value(self):
-        return self._decision_value("niveau_action")
+        niveau_action = self._decision_value("niveau_action")
+        decision_resume = self._decision_value("decision_resume")
+        objectif_mm = self._decision_value("objectif_mm", 0.0)
+        try:
+            objectif_mm = float(objectif_mm or 0.0)
+        except (TypeError, ValueError):
+            objectif_mm = 0.0
+        if (
+            niveau_action == "surveiller"
+            and objectif_mm <= 0.0
+            and isinstance(decision_resume, dict)
+            and str(decision_resume.get("action") or "").strip() in {"aucune_action", "none"}
+        ):
+            return "aucune_action"
+        return niveau_action
 
     @property
     def extra_state_attributes(self):

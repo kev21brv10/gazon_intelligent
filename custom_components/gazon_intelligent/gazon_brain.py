@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from .const import DEFAULT_AUTO_IRRIGATION_ENABLED, DEFAULT_MODE, INTERVENTIONS_ACTIONS
+from .assistant import build_assistant_decision
 from .decision import (
     DecisionContext,
     build_decision_result,
@@ -589,4 +590,5 @@ class GazonBrain:
         self.memory["hauteur_tonte_recommandee_cm"] = snapshot.get("hauteur_tonte_recommandee_cm")
         self.memory["hauteur_tonte_recommandee_date"] = today.isoformat()
         self.memory["catalogue_produits"] = len(self.products)
+        snapshot["assistant"] = build_assistant_decision(snapshot)
         return snapshot

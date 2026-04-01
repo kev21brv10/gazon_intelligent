@@ -230,6 +230,11 @@ class GazonBrainTests(unittest.TestCase):
         self.assertEqual(brain.last_result.phase_active, snapshot["phase_active"])
         self.assertEqual(brain.last_result.extra["configuration"]["type_sol"], "limoneux")
         self.assertEqual(brain.last_result.extra["pluie_demain_source"], "meteo_forecast")
+        self.assertIn("assistant", snapshot)
+        self.assertEqual(
+            set(snapshot["assistant"].keys()),
+            {"action", "moment", "quantity_mm", "status", "reason"},
+        )
 
     def test_compute_snapshot_adds_temperature_note_to_watering_conseil(self) -> None:
         brain = GazonBrain()

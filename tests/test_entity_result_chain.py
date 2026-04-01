@@ -186,10 +186,31 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertNotIn("session_total_mm", last_watering_sensor.extra_state_attributes)
         self.assertEqual(last_application_sensor.native_value, "Aucune application")
         self.assertEqual(last_application_sensor.extra_state_attributes["summary"], "Aucune application détectée")
-        self.assertEqual(last_user_action_sensor.native_value, "none")
+        self.assertEqual(last_user_action_sensor.native_value, "aucune_action")
         self.assertEqual(last_user_action_sensor.extra_state_attributes["summary"], "Aucune action récente")
         self.assertFalse(application_allowed_sensor.is_on)
         self.assertNotIn("application_type", application_allowed_sensor.extra_state_attributes)
+
+    def test_niveau_action_sensor_uses_friendly_state_for_no_action(self) -> None:
+        result = _make_result()
+        result.niveau_action = "surveiller"
+        result.objectif_arrosage = 0.0
+        result.arrosage_recommande = False
+        result.decision_resume = {
+            "action": "aucune_action",
+            "moment": "attendre",
+            "objectif_mm": 0.0,
+            "type_arrosage": "personnalise",
+        }
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=result, history=[], memory={})
+
+        niveau_sensor = sensor.GazonNiveauActionSensor(coordinator)
+        type_sensor = sensor.GazonTypeArrosageSensor(coordinator)
+
+        self.assertEqual(niveau_sensor.native_value, "aucune_action")
+        self.assertIn("aucune_action", niveau_sensor.extra_state_attributes["possible_values"])
+        self.assertEqual(type_sensor.native_value, "Aucune action")
+        self.assertIn("Aucune action", type_sensor.extra_state_attributes["possible_values"])
 
     def test_watering_progress_sensor_exposes_active_session(self) -> None:
         coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=None, history=[], memory={})
@@ -497,7 +518,7 @@ class DecisionResultChainTests(unittest.TestCase):
 
         advice_sensor = sensor.GazonConseilPrincipalSensor(coordinator)
 
-        self.assertEqual(advice_sensor.native_value, "arrosage")
+        self.assertEqual(advice_sensor.native_value, "Arroser demain matin.")
         self.assertEqual(advice_sensor.extra_state_attributes["summary"], "Arroser demain matin.")
         self.assertEqual(advice_sensor.extra_state_attributes["action_type"], "arrosage")
         self.assertEqual(advice_sensor.extra_state_attributes["action_moment"], "demain_matin")
@@ -645,6 +666,7 @@ class DecisionResultChainTests(unittest.TestCase):
         )
         self.assertEqual(plan_sensor.native_value, 3.5)
         self.assertEqual(plan_sensor.extra_state_attributes["objective_mm"], 1.2)
+        self.assertEqual(plan_sensor.extra_state_attributes["objectif_mm"], 1.2)
         self.assertEqual(plan_sensor.extra_state_attributes["zone_count"], 2)
         self.assertTrue(plan_sensor.extra_state_attributes["fractionation"])
         self.assertEqual(plan_sensor.extra_state_attributes["plan_type"], "multi_zone")

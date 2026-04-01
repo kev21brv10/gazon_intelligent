@@ -53,6 +53,9 @@ class EntityMigrationTests(unittest.TestCase):
         self.assertFalse(
             entity_migration.is_obsolete_entity_unique_id("entry123_phase_active", "entry123")
         )
+        self.assertFalse(
+            entity_migration.is_obsolete_entity_unique_id("entry123_assistant", "entry123")
+        )
 
     def test_legacy_entities_are_marked_obsolete(self) -> None:
         self.assertTrue(
@@ -69,6 +72,7 @@ class EntityMigrationTests(unittest.TestCase):
         registry = _FakeEntityRegistry(
             [
                 _FakeEntity("sensor.gazon_intelligent_phase_active", "entry123_phase_active", "entry123"),
+                _FakeEntity("sensor.gazon_intelligent_assistant", "entry123_assistant", "entry123"),
                 _FakeEntity("sensor.gazon_intelligent_bilan_hydrique", "entry123_bilan_hydrique", "entry123"),
                 _FakeEntity("sensor.gazon_intelligent_score_tonte", "entry123_score_tonte", "entry123"),
                 _FakeEntity("sensor.other", "other_entry_mode", "other_entry"),
@@ -82,6 +86,7 @@ class EntityMigrationTests(unittest.TestCase):
             ["sensor.gazon_intelligent_bilan_hydrique", "sensor.gazon_intelligent_score_tonte"],
         )
         self.assertIn("sensor.gazon_intelligent_phase_active", registry.entities)
+        self.assertIn("sensor.gazon_intelligent_assistant", registry.entities)
         self.assertNotIn("sensor.gazon_intelligent_bilan_hydrique", registry.entities)
         self.assertNotIn("sensor.gazon_intelligent_score_tonte", registry.entities)
 

@@ -16,7 +16,7 @@ from .const import (
     DEFAULT_APPLICATION_POST_WATERING_MM,
     DEFAULT_AUTO_IRRIGATION_ENABLED,
 )
-from .water import _watering_item_mm
+from .water import _watering_item_mm, compute_recent_watering_mm
 
 PHASE_DURATIONS_DAYS: dict[str, int] = {
     "Normal": 0,
