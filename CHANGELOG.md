@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.6
+- Aligne la façade `sensor.gazon_intelligent_assistant` avec le comportement réel et les nouveaux attributs publics.
+- Ajoute `next_action_date` et `next_action_display` pour rendre la prochaine action estimée plus lisible dans Home Assistant.
+- Consolide les diagnostics intégrés et la cohérence des libellés public-facing autour de la décision d'arrosage.
+- Clarifie la documentation pour refléter l'état actuel du moteur, des entités et des services exposés.
+
 ## 0.4.5
 - Ajoute une projection de reprise de tonte avec `next_mowing_date` et `next_mowing_display`.
 - Structure les attributs visibles pour mieux séparer décision, exécution, plan calculé et session détectée.
