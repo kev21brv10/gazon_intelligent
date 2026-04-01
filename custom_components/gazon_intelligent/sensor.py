@@ -112,6 +112,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
             GazonDernierArrosageDetecteSensor(coordinator),
             GazonDerniereApplicationSensor(coordinator),
             GazonDerniereActionUtilisateurSensor(coordinator),
+            GazonCatalogueProduitsSensor(coordinator),
         ]
     )
 
@@ -687,6 +688,78 @@ class GazonDerniereActionUtilisateurSensor(GazonEntityBase, SensorEntity):
             attrs["last_action_when"] = when_text
         attrs["summary"] = self._action_summary_text(summary)
         return attrs
+
+
+class GazonCatalogueProduitsSensor(GazonEntityBase, SensorEntity):
+    _attr_name = "Catalogue produits"
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:package-variant-closed"
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_catalogue_produits"
+
+    def _products(self) -> list[dict[str, object]]:
+        products = getattr(self.coordinator, "products", None)
+        if not isinstance(products, dict):
+            return []
+        ordered: list[dict[str, object]] = []
+        for product_id in sorted(products.keys()):
+            product = products.get(product_id)
+            if isinstance(product, dict):
+                ordered.append(product)
+        return ordered
+
+    @staticmethod
+    def _compact_product(product: dict[str, object]) -> dict[str, object]:
+        keys = (
+            "id",
+            "nom",
+            "type",
+            "dose_conseillee",
+            "reapplication_after_days",
+            "delai_avant_tonte_jours",
+            "phase_compatible",
+            "application_type",
+            "application_requires_watering_after",
+            "application_post_watering_mm",
+            "application_irrigation_block_hours",
+            "application_irrigation_delay_minutes",
+            "application_irrigation_mode",
+            "application_label_notes",
+            "note",
+        )
+        return {key: product.get(key) for key in keys if product.get(key) not in (None, "", [], {})}
+
+    @property
+    def native_value(self):
+        return len(self._products())
+
+    @property
+    def extra_state_attributes(self):
+        products = self._products()
+        if not products:
+            return {
+                "products_count": 0,
+                "product_ids": [],
+                "product_names": [],
+                "products_summary": [],
+                "summary": "Aucun produit enregistré",
+            }
+        product_ids = [str(product.get("id") or "").strip() for product in products if str(product.get("id") or "").strip()]
+        product_names = [str(product.get("nom") or product.get("id") or "").strip() for product in products if str(product.get("nom") or product.get("id") or "").strip()]
+        return {
+            "products_count": len(products),
+            "product_ids": product_ids,
+            "product_names": product_names,
+            "products_summary": [self._compact_product(product) for product in products],
+            "summary": (
+                "1 produit enregistré"
+                if len(products) == 1
+                else f"{len(products)} produits enregistrés"
+            ),
+        }
 
 
 class GazonPlanArrosageSensor(GazonEntityBase, SensorEntity):
