@@ -323,7 +323,8 @@ Les états de `Dernière exécution` sont simples:
 3. Renseigne le nom, le type et tous les réglages utiles du produit
 4. Lors d’une intervention réelle, utilise le service `gazon_intelligent.declare_intervention`
 5. Choisis simplement le produit déjà enregistré, puis la date, la zone et une note si besoin
-6. Si le produit n’est plus utile, retire-le avec `gazon_intelligent.remove_product`
+6. Le moteur n’accepte qu’un produit exact: si plusieurs produits existent et qu’aucun choix clair n’est fourni, il renvoie une erreur explicite
+7. Si le produit n’est plus utile, retire-le avec `gazon_intelligent.remove_product`
 
 #### Quand utiliser un produit enregistré
 
@@ -433,6 +434,7 @@ Notes:
 - `start_auto_irrigation` exécute le cycle calculé ou un objectif fourni, sans contourner les garde-fous.
 - `declare_intervention` reste le point d’entrée principal pour les interventions.
 - `declare_intervention` reste volontairement simple: on choisit le produit déjà enregistré, puis la date, la zone et une note si besoin.
+- si plusieurs produits sont enregistrés, il faut un produit exact: ID ou nom exact, sinon le moteur renvoie une erreur explicite.
 - tous les réglages du produit se trouvent dans `register_product`.
 - `declare_mowing` et `declare_watering` sont des raccourcis de compatibilité utiles.
 
@@ -483,6 +485,8 @@ Si tu utilises souvent les mêmes produits:
 2. déclare ensuite l’intervention réelle avec `declare_intervention`
 3. le moteur reprend automatiquement tous les réglages enregistrés pour ce produit
 4. retire le produit avec `remove_product` si tu n’en as plus besoin
+
+Si plusieurs produits existent, utilise l’ID ou le nom exact du produit voulu. Sinon, l’intégration refuse de deviner.
 
 👉 Cela évite de retaper les mêmes paramètres à chaque fois.
 

@@ -149,7 +149,7 @@
     },
     "declare_intervention": {
       "name": "Declarar una intervención",
-      "description": "Registra una intervención real. Los ajustes del producto se definen en \"Registrar un producto\"; aquí solo eliges el producto ya registrado, la fecha, la zona y una nota opcional.",
+      "description": "Registra una intervención real. Los ajustes del producto se definen en \"Registrar un producto\"; aquí solo eliges el producto ya registrado, la fecha, la zona y una nota opcional. Si existen varios productos, se requiere un ID o un nombre exacto.",
       "fields": {
         "intervention": {
           "name": "Intervención",

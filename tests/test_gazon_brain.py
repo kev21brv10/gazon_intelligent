@@ -143,6 +143,19 @@ class GazonBrainTests(unittest.TestCase):
 
     def test_declare_intervention_persists_application_fields(self) -> None:
         brain = GazonBrain()
+        brain.register_product(
+            "fungi-x",
+            "Fongicide X",
+            "Traitement",
+            dose_conseillee="12 ml",
+            application_type="foliaire",
+            application_requires_watering_after=False,
+            application_post_watering_mm=0.0,
+            application_irrigation_block_hours=24.0,
+            application_irrigation_delay_minutes=0.0,
+            application_irrigation_mode="suggestion",
+            application_label_notes="Ne pas arroser pendant 24h",
+        )
         item = brain.declare_intervention(
             "Traitement",
             date_action=date(2026, 3, 18),
@@ -232,6 +245,74 @@ class GazonBrainTests(unittest.TestCase):
         self.assertEqual(item["application_irrigation_mode"], "suggestion")
         self.assertIn("produit_catalogue", item)
         self.assertEqual(item["produit_catalogue"]["id"], "engrais-printemps")
+
+    def test_declare_intervention_requires_exact_product_match(self) -> None:
+        brain = GazonBrain()
+        brain.register_product("bio-1", "Bio Boost", "Biostimulant")
+        brain.register_product("engrais-printemps", "Engrais Printemps", "Fertilisation")
+
+        with self.assertRaises(ValueError) as ctx:
+            brain.declare_intervention(
+                "Fertilisation",
+                date_action=date(2026, 3, 18),
+                produit="Boost",
+                zone="zone_2",
+            )
+
+        self.assertIn("ID exact ou le nom exact", str(ctx.exception))
+
+        with self.assertRaises(ValueError) as ctx_no_choice:
+            brain.declare_intervention(
+                "Fertilisation",
+                date_action=date(2026, 3, 18),
+                zone="zone_2",
+            )
+
+        self.assertIn("Plusieurs produits sont enregistrés", str(ctx_no_choice.exception))
+
+    def test_declare_intervention_keeps_catalog_snapshot_frozen(self) -> None:
+        brain = GazonBrain()
+        brain.register_product(
+            "bio-1",
+            "Bio Boost",
+            "Biostimulant",
+            dose_conseillee="3.0 ml / L",
+            application_type="sol",
+            application_requires_watering_after=True,
+            application_post_watering_mm=1.2,
+            application_irrigation_block_hours=0.0,
+            application_irrigation_delay_minutes=30.0,
+            application_irrigation_mode="auto",
+            application_label_notes="Arrosage léger après application",
+        )
+
+        item = brain.declare_intervention(
+            "Biostimulant",
+            date_action=date(2026, 3, 18),
+            produit_id="bio-1",
+            zone="zone_1",
+        )
+
+        original_snapshot = dict(item["produit_catalogue"])
+        brain.register_product(
+            "bio-1",
+            "Bio Boost 2",
+            "Biostimulant",
+            dose_conseillee="1.0 ml / L",
+            application_type="foliaire",
+            application_requires_watering_after=False,
+            application_post_watering_mm=0.0,
+            application_irrigation_block_hours=12.0,
+            application_irrigation_delay_minutes=0.0,
+            application_irrigation_mode="suggestion",
+            application_label_notes="Nouvelle version",
+        )
+
+        self.assertEqual(item["produit_catalogue"], original_snapshot)
+        self.assertEqual(item["produit_catalogue"]["nom"], "Bio Boost")
+        self.assertEqual(item["produit_catalogue"]["application_type"], "sol")
+        self.assertEqual(brain.products["bio-1"]["nom"], "Bio Boost 2")
+        self.assertEqual(brain.products["bio-1"]["application_type"], "foliaire")
 
     def test_record_user_action_is_persisted(self) -> None:
         brain = GazonBrain()

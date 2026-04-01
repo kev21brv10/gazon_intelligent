@@ -149,7 +149,7 @@
     },
     "declare_intervention": {
       "name": "Declare an intervention",
-      "description": "Logs a real intervention. Product settings live in \"Register a product\"; here you only choose the already registered product, the date, the zone, and an optional note.",
+      "description": "Logs a real intervention. Product settings live in \"Register a product\"; here you only choose the already registered product, the date, the zone, and an optional note. If several products exist, an exact ID or name is required.",
       "fields": {
         "intervention": {
           "name": "Intervention",
