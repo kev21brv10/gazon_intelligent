@@ -14,14 +14,19 @@
 
 ---
 
-## TL;DR
+## En bref
 
-- une seule intégration
-- un seul moteur
-- une seule décision à la fois
-- Sursemis strict (0.5 mm)
-- une façade canonique `assistant` avec prochain jour estimé
-- priorité à la stabilité et à la sécurité
+- une seule intégration, un seul moteur
+- une décision lisible à la fois
+- Sursemis strict plafonné à `0.5 mm`
+- une façade canonique: `sensor.gazon_intelligent_assistant`
+- des entités complémentaires pour le contexte, l’historique, la tonte et le debug
+
+En clair:
+
+- l’intégration regarde les données utiles
+- elle dit quoi faire, quand le faire, et combien appliquer
+- Home Assistant affiche la décision de façon simple
 
 ---
 
@@ -37,126 +42,141 @@
 - quand le faire
 - combien appliquer
 
-La façade canonique est `sensor.gazon_intelligent_assistant`; les autres entités détaillent le contexte, l'historique, la tonte et le debug.
+La façade canonique est `sensor.gazon_intelligent_assistant`.
+Les autres entités détaillent le contexte, l'historique, la tonte et le debug.
 
 ---
 
-## ✨ Version 0.4.6
+## ✨ Release 0.4.6
 
-Cette release finalise une passe de cohérence métier, d'UX et de lisibilité publique:
+Cette version apporte surtout trois choses:
 
-- arrosage plus intelligent en Sursemis, avec une prise en compte plus fine des sous-phases
-- façade canonique `sensor.gazon_intelligent_assistant` alignée avec le comportement réel
-- ajout de `next_action_date` et `next_action_display` pour mieux lire la prochaine action estimée
-- diagnostics intégrés pour mieux comprendre les décisions et les blocages
-- documentation et entités publiques réalignées pour supprimer les ambiguïtés visibles
+- un Sursemis plus sensible aux sous-phases
+- une façade publique plus lisible et cohérente
+- des diagnostics plus utiles pour comprendre les décisions et les blocages
 
 ---
 
-## 🧠 Fonctionnement
+## 🧠 Ce que fait l’intégration
 
-Gazon Intelligent analyse en permanence :
+Gazon Intelligent centralise le calcul dans l’intégration et transforme ces données en décision:
 
-- la météo
+- météo
+- arrosage récent
+- type de sol
+- phase dominante et sous-phase
+- historique des interventions
+
+Il répond ensuite à des questions simples:
+
+- quoi faire
+- quand le faire
+- combien appliquer
+- pourquoi
+- quoi éviter
+
+En pratique, l’intégration gère:
+
 - l’arrosage
-- le type de sol
-- les phases du gazon
-- l’historique des actions
-
-Il fournit ensuite une décision claire :
-
-- quoi faire  
-- quand le faire  
-- pourquoi  
-- quoi éviter  
-
-Aucun calcul manuel n’est nécessaire.
-
----
-
-## 🚀 Ce que fait Gazon Intelligent
-
-- 💧 Détermine quand arroser et quelle quantité appliquer
-- ✂️ Recommande la hauteur de tonte idéale
-- 🌱 S’adapte aux phases du gazon (sursemis, reprise…)
-- 🌦️ Analyse météo + sol + historique
-- 🧠 Évite les erreurs (tonte trop basse, arrosage inutile…)
-- 📊 Rend les décisions lisibles dans Home Assistant
+- la tonte
+- les blocages météo ou applicatifs
+- la mémoire métier
+- les diagnostics
 
 ---
 
 ## 📸 Aperçu
 
-*(Ajoute ici une capture de ton dashboard Lovelace pour booster l’impact)*
+*Capture prochainement.*
+
+---
+## 👀 Entités principales
+
+### Façade canonique
+
+- `sensor.gazon_intelligent_assistant`
+  - c’est l’entité à regarder en premier
+  - elle dit ce qu’il faut faire
+  - elle affiche aussi la prochaine date estimée
+  - quand il n’y a rien à faire, elle affiche `aucune_action`
+
+### Entités de lecture
+
+- `sensor.gazon_intelligent_conseil_principal`
+  - petit résumé facile à lire
+  - utile pour comprendre pourquoi la décision a été prise
+- `sensor.gazon_intelligent_fenetre_optimale`
+  - indique le meilleur moment pour agir
+- `sensor.gazon_intelligent_objectif_d_arrosage`
+  - indique combien arroser
+- `sensor.gazon_intelligent_plan_d_arrosage`
+  - détaille le cycle d’arrosage calculé
+- `sensor.gazon_intelligent_niveau_d_action`
+  - indique si on peut attendre, surveiller, agir ou traiter en priorité
+- `sensor.gazon_intelligent_type_d_arrosage`
+  - indique le profil d’arrosage retenu
+
+### Entités métier complémentaires
+
+- `sensor.gazon_intelligent_phase_dominante`
+- `sensor.gazon_intelligent_sous_phase`
+- `sensor.gazon_intelligent_risque_gazon`
+- `sensor.gazon_intelligent_etat_de_tonte`
+- `sensor.gazon_intelligent_hauteur_de_tonte_conseillee`
+- `sensor.gazon_intelligent_dernier_arrosage_detecte`
+- `sensor.gazon_intelligent_derniere_application`
+- `sensor.gazon_intelligent_derniere_action_utilisateur`
+- `binary_sensor.gazon_intelligent_arrosage_recommande`
+- `binary_sensor.gazon_intelligent_tonte_autorisee`
+- `binary_sensor.gazon_intelligent_arrosage_apres_application_autorise`
+
+### Interface utilisateur
+
+- `button.gazon_intelligent_arroser_maintenant`
+- `button.gazon_intelligent_noter_la_date_du_jour`
+- `button.gazon_intelligent_retour_au_mode_normal`
+- `switch.gazon_intelligent_arrosage_automatique_autorise`
+- `select.gazon_intelligent_mode_du_gazon`
+
+### Debug
+
+- diagnostics téléchargeables via l’intégration
+- logs du module `custom_components.gazon_intelligent`
 
 ---
 
-## 👀 Ce que tu vois dans Home Assistant
+## 🔎 Comment lire les états
 
-### 🧩 Entités clés
+Les libellés restent simples à lire:
 
-- 🤖 `sensor.gazon_intelligent_assistant`
-- 🎛️ Mode du gazon
-- 🌱 Phase dominante
-- 🌱 Sous-phase
-- 💡 Conseil principal
-- ✅ Action recommandée
-- ⛔ Action à éviter
-- 📶 Niveau d'action
-- ⏱️ Fenêtre optimale
-- 🛡️ Risque gazon
-- ✂️ État de tonte
-- 📏 Hauteur de tonte conseillée
-- ✂️ Tonte autorisée
-- 💧 Arrosage conseillé
-- 🎯 Objectif d'arrosage
-- 🧾 Cycle calculé
-- 🕘 Dernière session détectée
-- 🧴 Dernière application
-- 👆 Dernière exécution
-- 🔓 Arrosage après application autorisé
-- 🔘 Arrosage auto autorisé
-- 🚿 Profil d'arrosage
-- 🖲️ Bouton `Arrosage manuel immédiat`
-- 🧪 Diagnostic téléchargeable via l’intégration
+- `assistant`
+  - la décision principale
+- `conseil_principal`
+  - l’explication courte
+- `fenetre_optimale`
+  - quand agir si besoin
+- `objectif_d_arrosage`
+  - combien arroser
+- `next_action_date`
+  - la date estimée de la prochaine action
+- `next_action_display`
+  - la même date en format lisible
+- `Dernière exécution`
+  - ce que l’intégration a réellement lancé
+- `Dernière session détectée`
+  - la dernière session d’arrosage observée
+- `Dernière application`
+  - le dernier traitement enregistré
+- `niveau_d_action`
+  - le niveau d’urgence
 
-### 🔎 Sémantique des états
+### Valeurs à retenir
 
-- `assistant` est la façade publique canonique: elle expose `action`, `moment`, `quantity_mm`, `status`, `reason`, ainsi que `next_action_date` et `next_action_display`
-- à vide, `assistant` affiche `action = aucune_action`, `moment = attendre`, `quantity_mm = 0`, `status = ok`
-- `type_arrosage` décrit le **profil agronomique** retenu par le moteur
-  - exemple: `manuel_frequent` pour un sursemis
-  - exemple: `Aucune action` quand aucune intervention n’est nécessaire
-- `Dernière exécution` décrit le **mode d'exécution réel**
-  - exemple: `Arrosage automatique` si l'intégration a déclenché le cycle
-  - exemple: `Arrosage manuel immédiat` si l'utilisateur a lancé l'action
-  - les attributs d'exécution utilisent des libellés explicites comme `execution_action`, `execution_state`, `execution_plan_type` et `executed_passages`
-- `Dernière session détectée` décrit la **dernière session physique observée**
-  - généralement la dernière sous-session ou zone réellement mesurée par l'historique
-  - `total_mm` est l'attribut canonique; les doublons de volume ne sont plus exposés dans l'UI
-- `Cycle calculé` décrit le **cycle complet calculé**
-  - il peut couvrir plusieurs zones et plusieurs passages
-- `next_action_date` donne la **date réelle** de la prochaine action
-  - exemple: `2026-03-24`
-- `next_action_display` donne la **date lisible**
-  - exemple: `24/03/2026`
-- `niveau_d_action` peut afficher `aucune_action`, `surveiller`, `a_faire` ou `critique`
-- `type_sol` est exposé directement sur `Phase dominante`
-- `raison_blocage_tonte` explique pourquoi la tonte n'est pas autorisée
-- `Conseil principal` est un résumé secondaire lisible, non contractuel; il expose des attributs métiers de détail mais ne concurrence pas la façade canonique `sensor.gazon_intelligent_assistant`
-- `Dernière application` décrit le **dernier traitement ou produit enregistré**
-
-### 🔬 Debug et diagnostics
-
-L’intégration expose aussi un export de diagnostics Home Assistant via `diagnostics.py`.
-Il regroupe:
-
-- la configuration courante
-- l’état runtime du coordinator
-- le snapshot de décision
-- l’historique récent compacté
-
-Le logger `custom_components.gazon_intelligent` est également activé dans le manifest pour faciliter le debug.
+- `aucune_action` = rien à faire pour l’instant
+- `attendre` = on réévalue plus tard
+- `surveiller` = pas d’action immédiate, mais contexte à suivre
+- `a_faire` = action utile à exécuter
+- `critique` = action à traiter en priorité
 
 ---
 
@@ -169,6 +189,11 @@ L'entité **État de tonte** expose :
 - `hauteur_tonte_max_cm`  
 
 L'entité **Hauteur de tonte conseillée** affiche directement la hauteur recommandée.
+
+En pratique:
+
+- si la tonte est autorisée, tu peux t’en servir comme repère
+- si la tonte est interdite, le gazon a besoin de temps ou les conditions ne sont pas bonnes
 
 ### ⚙️ Réglages tondeuse
 
@@ -185,45 +210,25 @@ Le système :
 
 ---
 
-## 💧 Gestion de l’arrosage
+## 💧 Détails avancés sur l’arrosage
 
-### 📚 Règles agronomiques sourcées
+### Comment l’intégration décide
 
-Ces principes viennent des bonnes pratiques d'irrigation du gazon et du sursemis :
+L’intégration essaie d’arroser:
 
-- arroser tôt le matin, avec une fenêtre optimale autour de `04:00–08:00`
-- rester acceptable jusqu'à `10:00` si le contexte le permet
-- éviter les arrosages tardifs en soirée ou juste avant la nuit, car l'humectation nocturne prolongée augmente le risque de maladies foliaires
-- garder la couche superficielle humide pour le sursemis
-- éviter la saturation du sol
-- privilégier des apports légers et fréquents au démarrage
-- espacer progressivement les arrosages à mesure que l'enracinement progresse
-- en conditions chaudes, sèches ou venteuses, plusieurs petits arrosages peuvent être nécessaires
-- en mode normal, viser une logique profonde et peu fréquente, avec un ordre de grandeur hebdomadaire d'environ `20 à 25 mm/semaine` selon le contexte
-- certains produits de type sol peuvent nécessiter un arrosage technique après application
-- certains traitements foliaires doivent au contraire rester protégés avant tout arrosage
+- tôt le matin quand c’est possible
+- un peu plus souvent en Sursemis
+- plus profondément et moins souvent en mode Normal
+- seulement quand le sol a vraiment besoin d’eau
+- jamais si une pluie importante ou un blocage l’empêche
 
-### 🛠️ Conventions internes de l’intégration
+Elle peut aussi:
 
-Ce sont des choix d’implémentation propres à cette intégration, pas des vérités universelles :
+- attendre après une application
+- empêcher un arrosage trop proche du précédent
+- fractionner un arrosage si un seul passage serait trop important
 
-- Sursemis plus restrictif que les autres modes
-- fenêtre matinale dynamique selon la température
-- fractionnement automatique au-delà d'un objectif jugé trop élevé pour un seul passage
-- autorisation du soir seulement si la journée a été chaude, sèche et sans arrosage récent
-- blocage d'un nouvel arrosage si une session réelle récente a déjà atteint l'objectif
-- traitement applicatif séparé en `sol` et `foliaire`
-- arrosage technique possible après certaines applications `sol`
-- blocage automatique après certaines applications `foliaire`
-- type d'application inconnu = aucun arrosage automatique
-- délai applicatif configurable avant arrosage post-application
-- mode applicatif configurable: `auto`, `manuel`, `suggestion`
-- `plan_type` décrit la composition du plan: `single_zone` ou `multi_zone`
-- `fractionation` décrit uniquement le fractionnement temporel réel: `true` seulement si `passages > 1`
-- un plan multi-zone peut rester sans fractionnement temporel quand `passages = 1`
-- la soirée n'est qu'un rattrapage exceptionnel, jamais un créneau par défaut
-
-### 📋 Tableau de fonctionnement
+### Exemple de comportement
 
 | Mode | Fenêtre cible | Objectif mm | Fréquence | Fractionnement |
 | --- | --- | --- | --- | --- |
@@ -237,9 +242,9 @@ Ce sont des choix d’implémentation propres à cette intégration, pas des vé
 | Application foliaire | Bloqué pendant la fenêtre de protection | 0 | 0 | Non |
 | Type d'application inconnu | Bloqué | 0 | 0 | Non |
 
-### 🔍 Traçabilité V2
+### 🔍 Informations utiles
 
-Le moteur expose aussi des champs de debug lisibles pour comprendre la décision:
+Le moteur expose aussi quelques champs utiles pour comprendre la décision:
 
 - `deficit_brut_mm`
 - `deficit_mm_ajuste`
@@ -253,22 +258,22 @@ Le résumé hydrique affiché dans `raison_decision` suit le format:
 
 - `Déficit: brut=X mm, ajusté=Y mm, final=Z mm`
 
-### 🧮 Cycle calculé: composition vs fractionnement
+### 🧮 Comment le plan est construit
 
 - `plan_type = single_zone` quand une seule zone compose le plan
 - `plan_type = multi_zone` quand le plan couvre plusieurs zones
-- `fractionation = true` uniquement quand l'arrosage est réellement découpé dans le temps
+- `fractionation = true` seulement si l’arrosage est vraiment découpé en plusieurs passages
 - `zone_count` indique le nombre de zones
-- `passages` indique le nombre de cycles temporels
+- `passages` indique le nombre de passages
 
-### 🧪 Arrosage applicatif
+### 🧪 Cas des produits / applications
 
-Le moteur distingue maintenant :
+Le moteur distingue:
 
-- `sol` : application pouvant nécessiter un arrosage technique juste après
-- `foliaire` : application qui bloque l'arrosage automatique pendant une durée label-driven
+- `sol` : produit qui peut nécessiter un arrosage technique juste après
+- `foliaire` : produit qui doit rester protégé avant arrosage
 
-Les champs applicatifs disponibles sont :
+Les champs utiles sont:
 
 - `application_type`
 - `application_requires_watering_after`
@@ -309,14 +314,14 @@ Le bouton visible dans l'interface principale :
 - déclenche un arrosage manuel immédiat contrôlé
 - reste l'unique action manuelle visible pour l'utilisateur
 
-Le cycle calculé reste géré automatiquement par le scheduler interne.
+Le cycle calculé reste géré automatiquement par l’intégration.
 
 Le switch global :
 
 - `Arrosage auto autorisé`
 - bloque ou autorise l'exécution automatique
 - laisse les calculs visibles même quand il est coupé
-- le scheduler interne réévalue périodiquement le contexte via le coordinator; un léger décalage peut exister selon le cycle de refresh
+- l’intégration réévalue régulièrement le contexte; un léger décalage peut exister selon le cycle de mise à jour
 
 Le capteur `Fenêtre optimale` expose aussi un contexte lisible :
 
@@ -336,7 +341,7 @@ Le capteur `Assistant` expose la synthèse la plus directe:
 - `next_action_date`
 - `next_action_display`
 
-Quand aucune action n’est nécessaire, l’interface affiche `aucune_action` et `attendre`, ce qui évite les libellés techniques en lecture utilisateur.
+Quand aucune action n’est nécessaire, l’interface affiche `aucune_action` et `attendre`, ce qui évite les libellés techniques.
 
 Le flux reste compatible avec :
 
@@ -345,7 +350,7 @@ Le flux reste compatible avec :
 - adaptation selon la phase du gazon
 - conversion automatique du besoin en mm vers une durée par zone
 - exécution séquentielle des zones configurées
-- fractionnement en plusieurs passages si nécessaire
+- découpage en plusieurs passages si nécessaire
 - détection automatique des sessions réelles d'arrosage
 - historique lisible via `Cycle calculé`, `Dernière session détectée` et `Dernière application`
 - blocage explicite si le type d'application est inconnu
@@ -411,44 +416,37 @@ Aucune configuration YAML obligatoire.
 
 ## 🧭 Utilisation au quotidien
 
-1. Home Assistant calcule  
-2. Tu regardes  
-3. Tu agis  
+Le principe est simple:
+
+1. Home Assistant calcule la décision
+2. Tu lis la façade `assistant`
+3. Tu appliques ou tu laisses faire
 
 ### À consulter en priorité
 
-- Conseil principal  
-- Action recommandée  
-- Action à éviter  
-- État de tonte  
-- Arrosage conseillé
-- Arrosage auto autorisé
+- `sensor.gazon_intelligent_assistant`
+- `sensor.gazon_intelligent_conseil_principal`
+- `sensor.gazon_intelligent_fenetre_optimale`
+- `sensor.gazon_intelligent_objectif_d_arrosage`
+- `sensor.gazon_intelligent_etat_de_tonte`
+- `binary_sensor.gazon_intelligent_arrosage_recommande`
+- `binary_sensor.gazon_intelligent_tonte_autorisee`
 
-👉 Tu ne réfléchis pas. Tu appliques.
+### Lecture rapide
 
----
+- si `assistant = aucune_action`, il n’y a rien à faire
+- si `fenetre_optimale = attendre`, le moteur réévalue plus tard
+- si `objectif_d_arrosage > 0`, un arrosage est potentiellement utile
+- si `tonte_autorisee = off`, la tonte est bloquée pour une bonne raison
 
-## 📊 Exemple concret
+### Ce que le système automatise
 
-Le matin :
-
-- Phase dominante = Sursemis
-- Conseil principal = Arroser demain matin
-- Action recommandée = Appliquer 1.1 mm en un ou plusieurs passages selon le plan
-- État de tonte = interdite
-
-👉 Tu appliques. Le système s’adapte.
-
----
-
-## 🤖 Ce que le système automatise
-
-- bilan hydrique complet  
-- comparaison pluie / arrosage / ETP  
-- gestion des phases et sous-phases  
-- décisions arrosage / tonte  
-- mémoire des actions  
-- suivi des interventions  
+- bilan hydrique complet
+- comparaison pluie / arrosage / ETP
+- gestion des phases et sous-phases
+- décisions arrosage / tonte
+- mémoire des actions
+- suivi des interventions
 - verrou global d'arrosage automatique
 
 ---
@@ -517,9 +515,9 @@ python3 -m pytest
 
 ## 🧾 Version
 
-- manifest : `0.4.5`
-- README : `0.4.5`
-- changelog : `0.4.5`
+- manifest : `0.4.6`
+- README : `0.4.6`
+- changelog : `0.4.6`
 
 
 ## 📄 Licence
