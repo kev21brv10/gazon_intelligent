@@ -45,6 +45,10 @@ def build_risk_bundle(
         etp=water_bundle["etp"],
         objectif_mm=water_bundle["objectif_mm"],
         hour_of_day=context.hour_of_day,
+        history=context.history,
+        sous_phase_age_days=phase_bundle.get("sous_phase_age_days"),
+        sous_phase_progression=phase_bundle.get("sous_phase_progression"),
+        hauteur_gazon=water_bundle["advanced_context"].get("hauteur_gazon"),
     )
     prochaine_reevaluation = compute_next_reevaluation(
         phase_dominante=phase_bundle["phase_dominante"],

@@ -26,6 +26,7 @@ ACTIVE_ENTITY_SUFFIXES: set[str] = {
     "objectif_mm",
     "tonte_etat",
     "conseil_principal",
+    "assistant",
     "action_recommandee",
     "action_a_eviter",
     "niveau_action",

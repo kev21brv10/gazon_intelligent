@@ -41,6 +41,53 @@ RAINY_WEATHER_CONDITIONS = {
     "snowy-rainy",
 }
 
+SURSEMIS_POLICY_CONFIGS: dict[str, dict[str, float | str]] = {
+    "germination_stricte": {
+        "surface_bilan_max": 3.0,
+        "pluie_24h_max": 1.0,
+        "pluie_demain_max": 1.0,
+        "pluie_probabilite_max": 70.0,
+        "mm_detected_24h_max": 0.5,
+        "temperature_min": 8.0,
+        "risk_level": "modere",
+        "niveau_action": "a_faire",
+        "fenetre_si_ok": "ce_matin",
+    },
+    "enracinement_prudent": {
+        "surface_bilan_max": 2.0,
+        "pluie_24h_max": 0.75,
+        "pluie_demain_max": 0.75,
+        "pluie_probabilite_max": 60.0,
+        "mm_detected_24h_max": 0.25,
+        "temperature_min": 8.0,
+        "risk_level": "modere",
+        "niveau_action": "surveiller",
+        "fenetre_si_ok": "demain_matin",
+    },
+    "reprise_prudente": {
+        "surface_bilan_max": 1.8,
+        "pluie_24h_max": 0.75,
+        "pluie_demain_max": 0.75,
+        "pluie_probabilite_max": 55.0,
+        "mm_detected_24h_max": 0.25,
+        "temperature_min": 8.0,
+        "risk_level": "faible",
+        "niveau_action": "surveiller",
+        "fenetre_si_ok": "attendre",
+    },
+    "reprise_transition": {
+        "surface_bilan_max": 1.2,
+        "pluie_24h_max": 0.5,
+        "pluie_demain_max": 0.5,
+        "pluie_probabilite_max": 45.0,
+        "mm_detected_24h_max": 0.25,
+        "temperature_min": 8.0,
+        "risk_level": "faible",
+        "niveau_action": "surveiller",
+        "fenetre_si_ok": "attendre",
+    },
+}
+
 
 def is_active_rain_weather(weather_profile: dict[str, Any] | None) -> bool:
     weather_profile = weather_profile or {}
@@ -110,6 +157,96 @@ def _latest_watering_datetime(history: list[dict[str, Any]]) -> datetime | None:
     return latest
 
 
+def _latest_phase_start_index(history: list[dict[str, Any]], phase_name: str) -> int | None:
+    for index in range(len(history) - 1, -1, -1):
+        item = history[index]
+        if isinstance(item, dict) and item.get("type") == phase_name:
+            return index
+    return None
+
+
+def _count_tonte_events_since_latest_phase_start(history: list[dict[str, Any]], phase_name: str) -> int:
+    start_index = _latest_phase_start_index(history, phase_name)
+    if start_index is None:
+        return 0
+    count = 0
+    for item in history[start_index + 1 :]:
+        if isinstance(item, dict) and item.get("type") == "tonte":
+            count += 1
+    return count
+
+
+def _compute_transition_sursemis_pret(
+    *,
+    history: list[dict[str, Any]],
+    sous_phase: str,
+    sous_phase_age_days: int | None,
+    sous_phase_progression: float | None,
+    hauteur_gazon: float | None,
+    water_balance: dict[str, float],
+    pluie_24h: float,
+    pluie_demain: float,
+    pluie_probabilite_24h: float,
+    temperature: float,
+) -> tuple[bool, int]:
+    if sous_phase != "Reprise":
+        return False, 0
+
+    tonte_count = _count_tonte_events_since_latest_phase_start(history, "Sursemis")
+    age_ok = (sous_phase_age_days or 0) >= 16
+    progression_ok = (sous_phase_progression or 0.0) >= 70.0
+    tonte_ok = tonte_count >= 2
+    height_ok = hauteur_gazon is None or hauteur_gazon >= 6.0
+    weather_ok = (
+        water_balance.get("bilan_hydrique_mm", 0.0) <= 2.0
+        and pluie_24h < 1.0
+        and pluie_demain < 1.0
+        and pluie_probabilite_24h < 65.0
+        and temperature >= 8.0
+    )
+    return age_ok and progression_ok and tonte_ok and height_ok and weather_ok, tonte_count
+
+
+def _select_sursemis_policy(
+    *,
+    history: list[dict[str, Any]],
+    sous_phase: str,
+    sous_phase_age_days: int | None,
+    sous_phase_progression: float | None,
+    hauteur_gazon: float | None,
+    water_balance: dict[str, float],
+    pluie_24h: float,
+    pluie_demain: float,
+    pluie_probabilite_24h: float,
+    temperature: float,
+) -> tuple[str, dict[str, Any], bool, int]:
+    transition_ready, tonte_count = _compute_transition_sursemis_pret(
+        history=history,
+        sous_phase=sous_phase,
+        sous_phase_age_days=sous_phase_age_days,
+        sous_phase_progression=sous_phase_progression,
+        hauteur_gazon=hauteur_gazon,
+        water_balance=water_balance,
+        pluie_24h=pluie_24h,
+        pluie_demain=pluie_demain,
+        pluie_probabilite_24h=pluie_probabilite_24h,
+        temperature=temperature,
+    )
+    if sous_phase == "Germination":
+        policy_key = "germination_stricte"
+    elif sous_phase == "Enracinement":
+        policy_key = "enracinement_prudent"
+    elif sous_phase == "Reprise":
+        policy_key = "reprise_transition" if transition_ready else "reprise_prudente"
+    else:
+        policy_key = "enracinement_prudent"
+    policy = dict(SURSEMIS_POLICY_CONFIGS[policy_key])
+    policy["policy_key"] = policy_key
+    policy["transition_ready"] = transition_ready
+    policy["tonte_count_since_sursemis"] = tonte_count
+    return policy_key, policy, transition_ready, tonte_count
+
+
 def _mode_min_watering_mm(phase_dominante: str) -> float:
     return float(MODE_MIN_WATERING_MM.get(phase_dominante, 0.0))
 
@@ -123,6 +260,85 @@ def _apply_mode_watering_constraints(candidate_mm: float, deficit_mm_brut: float
         value = max(value, floor_mm)
     value = min(value, max(deficit_mm_brut, floor_mm))
     return round(max(0.0, value), 1)
+
+
+def _sursemis_micro_apport_decision(
+    *,
+    policy: dict[str, Any],
+    pluie_24h: float,
+    pluie_demain: float,
+    pluie_probabilite_24h: float,
+    bilan_hydrique_mm: float,
+    mm_detected_24h: float,
+    temperature: float,
+) -> dict[str, Any]:
+    policy_key = str(policy.get("policy_key") or "enracinement_prudent")
+    surface_bilan_max = float(policy.get("surface_bilan_max") or 2.0)
+    pluie_24h_max = float(policy.get("pluie_24h_max") or 1.0)
+    pluie_demain_max = float(policy.get("pluie_demain_max") or 1.0)
+    pluie_probabilite_max = float(policy.get("pluie_probabilite_max") or 70.0)
+    mm_detected_24h_max = float(policy.get("mm_detected_24h_max") or 0.5)
+    temperature_min = float(policy.get("temperature_min") or 8.0)
+    surface_sec = (
+        pluie_24h <= pluie_24h_max
+        and pluie_demain <= pluie_demain_max
+        and pluie_probabilite_24h < pluie_probabilite_max
+        and mm_detected_24h < mm_detected_24h_max
+        and bilan_hydrique_mm <= surface_bilan_max
+        and temperature > temperature_min
+    )
+    seuil_declencheur = (
+        f"policy={policy_key}, pluie_24h<={pluie_24h_max:.1f}, pluie_demain<={pluie_demain_max:.1f}, "
+        f"pluie_probabilite_24h<{pluie_probabilite_max:.0f}%, bilan_hydrique_mm<={surface_bilan_max:.1f}, "
+        f"mm_detected_24h<{mm_detected_24h_max:.2f}, temperature>{temperature_min:.1f}"
+    )
+    allowed = surface_sec
+    if allowed:
+        return {
+            "allowed": True,
+            "surface_sec": surface_sec,
+            "seuil_declencheur": seuil_declencheur,
+            "block_reason": None,
+            "reason": (
+                "micro-apport utile, surface en cours de séchage."
+                if surface_sec
+                else "micro-apport utile, maintien humide nécessaire."
+            ),
+            "pluie_probabilite_24h": round(pluie_probabilite_24h, 1),
+            "mm_detected_24h": round(mm_detected_24h, 1),
+            "policy_key": policy_key,
+        }
+
+    block_reason = "pluie_prevue_suffisante"
+    reason = "pluie récente ou prévue, pas de micro-apport nécessaire."
+    if temperature <= temperature_min:
+        block_reason = "temperature_trop_basse"
+        reason = "température trop basse, arrosage inutile."
+    elif mm_detected_24h >= mm_detected_24h_max:
+        block_reason = "arrosage_recent"
+        reason = "arrosage récent détecté, éviter la répétition."
+    elif bilan_hydrique_mm > surface_bilan_max:
+        block_reason = "sol_deja_humide"
+        reason = "sol déjà humide, pas de micro-apport nécessaire."
+    elif pluie_probabilite_24h >= pluie_probabilite_max:
+        block_reason = "pluie_probabilite_elevee"
+        reason = "pluie probable à court terme, pas de micro-apport nécessaire."
+    elif pluie_24h >= pluie_24h_max or pluie_demain >= pluie_demain_max:
+        block_reason = "pluie_prevue_suffisante"
+        reason = "pluie récente ou prévue, pas de micro-apport nécessaire."
+    elif surface_sec:
+        block_reason = "surface_non_seche"
+        reason = "surface pas encore assez sèche pour un micro-apport."
+    return {
+        "allowed": False,
+        "surface_sec": surface_sec,
+        "seuil_declencheur": seuil_declencheur,
+        "block_reason": block_reason,
+        "reason": reason,
+        "pluie_probabilite_24h": round(pluie_probabilite_24h, 1),
+        "mm_detected_24h": round(mm_detected_24h, 1),
+        "policy_key": policy_key,
+    }
 
 
 def _morning_window_bounds(phase_dominante: str, temperature: float | None) -> tuple[int, int, int, str]:
@@ -398,6 +614,9 @@ def compute_watering_profile(
     type_sol: str = "limoneux",
     weather_profile: dict[str, Any] | None = None,
     history: list[dict[str, Any]] | None = None,
+    sous_phase_age_days: int | None = None,
+    sous_phase_progression: float | None = None,
+    hauteur_gazon: float | None = None,
 ) -> dict[str, Any]:
     today = today or date.today()
     weather_profile = weather_profile or {}
@@ -407,9 +626,12 @@ def compute_watering_profile(
     pluie_3j = pluie_3j or 0.0
     pluie_probabilite_max_3j = pluie_probabilite_max_3j or 0.0
     pluie_24h = pluie_24h or 0.0
+    pluie_probabilite_24h = _to_float(weather_profile.get("weather_precipitation_probability"))
+    pluie_probabilite_24h = pluie_probabilite_24h if pluie_probabilite_24h is not None else 0.0
     humidite = humidite or 0.0
     temperature = temperature or 0.0
     etp = etp or 0.0
+    vent = _to_float(weather_profile.get("weather_wind_speed"))
     soil_profile = (type_sol or "limoneux").strip().lower()
     recent_watering_count = compute_recent_watering_count(history, today=today, days=7) if history else 0
     latest_watering_dt = _latest_watering_datetime(history) if history else None
@@ -561,26 +783,71 @@ def compute_watering_profile(
         heat_stress_level=heat_stress_level,
     )
     if phase_dominante == "Sursemis":
-        if sous_phase == "Germination":
-            mm_cible = _clamp((besoin_court * 0.5) + (besoin_tendance * 0.1), 0.6, 1.8)
-        elif sous_phase == "Enracinement":
-            mm_cible = _clamp((besoin_court * 0.45) + (besoin_tendance * 0.08), 0.5, 2.1)
-        else:
-            mm_cible = _clamp((besoin_court * 0.7) + (besoin_tendance * 0.12), 0.5, 2.5)
-        if humidite >= 85 and temperature < 28:
-            mm_cible *= 0.9
-        block_reason = None
-        if pluie_compensatrice or pluie_proche:
-            block_reason = "pluie_prevue_suffisante"
-        elif humidite >= 85:
-            block_reason = "humidite_elevee"
-        if block_reason is None:
-            mm_cible = _apply_mode_watering_constraints(mm_cible, deficit_mm_brut, phase_dominante)
-        mm_final = 0.0 if block_reason else mm_cible
+        policy_key, sursemis_policy, transition_ready, tonte_count = _select_sursemis_policy(
+            history=history,
+            sous_phase=sous_phase,
+            sous_phase_age_days=sous_phase_age_days,
+            sous_phase_progression=sous_phase_progression,
+            hauteur_gazon=hauteur_gazon,
+            water_balance=water_balance,
+            pluie_24h=pluie_24h,
+            pluie_demain=pluie_demain,
+            pluie_probabilite_24h=pluie_probabilite_24h,
+            temperature=temperature,
+        )
+        sursemis_state = _sursemis_micro_apport_decision(
+            policy=sursemis_policy,
+            pluie_24h=pluie_24h,
+            pluie_demain=pluie_demain,
+            pluie_probabilite_24h=pluie_probabilite_24h,
+            bilan_hydrique_mm=bilan_hydrique_mm,
+            mm_detected_24h=float(water_balance.get("arrosage_recent_jour", 0.0) or 0.0),
+            temperature=temperature,
+        )
+        mm_cible = 0.5 if sursemis_state["allowed"] else 0.0
+        block_reason = sursemis_state["block_reason"]
+        mm_final = mm_cible
         type_arrosage = "manuel_frequent" if mm_final > 0 else "personnalise"
         arrosage_auto = False
-        passages = 1 if mm_final <= 1.0 else 2
-        pause_minutes = 25 if passages > 1 else 0
+        passages = 1
+        pause_minutes = 0
+        if policy_key == "reprise_transition":
+            if not sursemis_state["allowed"]:
+                fenetre_optimale = "attendre"
+            elif now_minutes < optimal_start_minute:
+                fenetre_optimale = "ce_matin"
+            elif now_minutes < acceptable_end_minute and (vent is None or vent < 15):
+                fenetre_optimale = "maintenant"
+            else:
+                fenetre_optimale = "attendre"
+            niveau_action = "surveiller"
+            risque_gazon = "modere" if transition_ready else "faible"
+        elif policy_key == "germination_stricte":
+            fenetre_optimale = "apres_pluie" if pluie_compensatrice or pluie_proche else (
+                "ce_matin"
+                if now_minutes < optimal_start_minute
+                else "maintenant"
+                if now_minutes < acceptable_end_minute and (vent is None or vent < 15)
+                else "demain_matin"
+            )
+            niveau_action = "critique" if bilan_hydrique_mm <= -1.0 or pression_hydrique >= 1.8 else "a_faire"
+            risque_gazon = "eleve" if bilan_hydrique_mm <= -1.0 or pression_hydrique >= 2.0 else "modere"
+        else:
+            fenetre_optimale = "apres_pluie" if pluie_compensatrice or pluie_proche else (
+                "ce_matin"
+                if now_minutes < optimal_start_minute
+                else "maintenant"
+                if now_minutes < acceptable_end_minute and (vent is None or vent < 15)
+                else "demain_matin"
+            )
+            niveau_action = "critique" if pression_hydrique >= 2.2 or bilan_hydrique_mm <= -1.5 else "a_faire"
+            risque_gazon = "eleve" if bilan_hydrique_mm <= -1.5 or pression_hydrique >= 2.5 else "modere"
+        if heat_stress_level in {"canicule", "extreme"}:
+            risque_gazon = _risk_from_rank(min(_risk_rank(risque_gazon) + 1, 2))
+        if vent is not None and vent >= 20:
+            risque_gazon = "eleve"
+        if hauteur_gazon is not None and hauteur_gazon >= 12:
+            risque_gazon = "eleve"
         confidence_score, confidence_level, confidence_reasons = _confidence_assessment(
             phase_dominante=phase_dominante,
             temperature=temperature,
@@ -603,6 +870,16 @@ def compute_watering_profile(
             "mm_requested": round(mm_cible, 1),
             "mm_applied": round(mm_final, 1),
             "mm_detected": round(recent_watering_mm_7j, 1),
+            "mm_detected_24h": sursemis_state["mm_detected_24h"],
+            "pluie_probabilite_24h": sursemis_state["pluie_probabilite_24h"],
+            "surface_sec": sursemis_state["surface_sec"],
+            "sursemis_micro_apport_allowed": sursemis_state["allowed"],
+            "sursemis_block_reason": block_reason,
+            "sursemis_reason": sursemis_state["reason"],
+            "sursemis_seuil_declencheur": sursemis_state["seuil_declencheur"],
+            "sursemis_policy": policy_key,
+            "sursemis_transition_ready": transition_ready,
+            "sursemis_tonte_count": tonte_count,
             "type_arrosage": type_arrosage,
             "arrosage_recommande": mm_final > 0,
             "arrosage_auto_autorise": False,
@@ -610,22 +887,20 @@ def compute_watering_profile(
             "watering_passages": passages,
             "watering_pause_minutes": pause_minutes,
             "fractionnement": {
-                "enabled": passages > 1,
+                "enabled": False,
                 "passages": passages,
                 "pause_minutes": pause_minutes,
                 "max_mm_per_passage": round(mm_final / passages, 1) if passages > 0 and mm_final > 0 else 0.0,
-                "reason": "sursemis_micro_apports",
+                "reason": "sursemis_micro_apport_0_5_mm",
             },
             "niveau_confiance": confidence_level,
             "confidence_score": confidence_score,
             "confidence_reasons": confidence_reasons,
-            "raison_decision_base": "Sursemis: micro-apports fréquents et fractionnés.",
+            "raison_decision_base": f"Sursemis / {sous_phase}: micro-apport 0.5 mm adapté à la sous-phase.",
             "block_reason": block_reason,
-            "fenetre_optimale": "maintenant"
-            if morning_start_minute <= now_minutes < acceptable_end_minute
-            else "ce_matin",
-            "niveau_action": "a_faire" if mm_final > 0 else "surveiller",
-            "risque_gazon": "modere",
+            "fenetre_optimale": fenetre_optimale,
+            "niveau_action": niveau_action,
+            "risque_gazon": risque_gazon,
             "heat_stress_level": heat_stress_level,
             "heat_stress_phase": heat_stress_phase,
             "watering_window_start_minute": morning_start_minute,
@@ -1018,6 +1293,10 @@ def compute_action_guidance(
     etp: float | None = None,
     objectif_mm: float = 0.0,
     hour_of_day: int | None = None,
+    history: list[dict[str, Any]] | None = None,
+    sous_phase_age_days: int | None = None,
+    sous_phase_progression: float | None = None,
+    hauteur_gazon: float | None = None,
 ) -> dict[str, Any]:
     advanced_context = advanced_context or {}
     pluie_24h = pluie_24h or 0.0
@@ -1121,16 +1400,47 @@ def compute_action_guidance(
         )
 
     if phase_dominante == "Sursemis":
-        niveau_action = "critique" if pression_hydrique >= 2.2 or bilan_hydrique_mm <= -1.5 else "a_faire"
+        policy_key, _, transition_ready, tonte_count = _select_sursemis_policy(
+            history=[item for item in (history or []) if isinstance(item, dict)],
+            sous_phase=sous_phase,
+            sous_phase_age_days=sous_phase_age_days,
+            sous_phase_progression=sous_phase_progression,
+            hauteur_gazon=hauteur_gazon,
+            water_balance=water_balance,
+            pluie_24h=pluie_24h,
+            pluie_demain=pluie_demain,
+            pluie_probabilite_24h=pluie_probabilite_max_3j,
+            temperature=temperature,
+        )
+        if policy_key == "germination_stricte":
+            niveau_action = "critique" if pression_hydrique >= 1.8 or bilan_hydrique_mm <= -1.0 else "a_faire"
+        elif policy_key == "reprise_transition":
+            niveau_action = "surveiller" if transition_ready else "a_faire"
+        else:
+            niveau_action = "critique" if pression_hydrique >= 2.2 or bilan_hydrique_mm <= -1.5 else "a_faire"
         if pluie_compensatrice or pluie_proche:
             fenetre_optimale = "apres_pluie"
+        elif policy_key == "reprise_transition":
+            if transition_ready and (now_minutes >= acceptable_end_minute or pression_hydrique < 1.0):
+                fenetre_optimale = "attendre"
+            elif now_minutes < optimal_start_minute:
+                fenetre_optimale = "ce_matin"
+            elif now_minutes < acceptable_end_minute and (vent is None or vent < 15):
+                fenetre_optimale = "maintenant"
+            else:
+                fenetre_optimale = "attendre"
         elif now_minutes < optimal_start_minute:
             fenetre_optimale = "ce_matin"
         elif now_minutes < acceptable_end_minute and (vent is None or vent < 15):
             fenetre_optimale = "maintenant"
         else:
             fenetre_optimale = "demain_matin"
-        risque_gazon = "eleve" if bilan_hydrique_mm <= -1.5 or pression_hydrique >= 2.5 else "modere"
+        if policy_key == "germination_stricte":
+            risque_gazon = "eleve" if bilan_hydrique_mm <= -1.0 or pression_hydrique >= 2.0 else "modere"
+        elif policy_key == "reprise_transition" and transition_ready:
+            risque_gazon = "modere" if pression_hydrique < 2.0 else "eleve"
+        else:
+            risque_gazon = "eleve" if bilan_hydrique_mm <= -1.5 or pression_hydrique >= 2.5 else "modere"
         if heat_stress_level in {"canicule", "extreme"}:
             risque_gazon = _risk_from_rank(min(_risk_rank(risque_gazon) + 1, 2))
         if vent is not None and vent >= 20:

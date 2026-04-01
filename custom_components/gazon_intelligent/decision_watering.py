@@ -13,7 +13,7 @@ from .const import (
     DEFAULT_AUTO_IRRIGATION_ENABLED,
 )
 from .decision_models import DecisionContext
-from .guidance import compute_watering_profile, is_fertilization_window_open
+from .guidance import _confidence_assessment, compute_watering_profile, is_fertilization_window_open
 from .memory import compute_application_state
 from .scores import classify_stress_level
 from .water import compute_advanced_context, compute_etp, compute_water_balance
@@ -78,6 +78,9 @@ def build_water_bundle(
         type_sol=context.type_sol,
         weather_profile=context.weather_profile,
         history=context.history,
+        sous_phase_age_days=phase_bundle.get("sous_phase_age_days"),
+        sous_phase_progression=phase_bundle.get("sous_phase_progression"),
+        hauteur_gazon=context.hauteur_gazon,
         pluie_j2=context.pluie_j2,
         pluie_3j=context.pluie_3j,
         pluie_probabilite_max_3j=context.pluie_probabilite_max_3j,
@@ -116,6 +119,16 @@ def build_water_bundle(
         "weekly_guardrail_mm_max": watering_profile.get("weekly_guardrail_mm_max"),
         "weekly_guardrail_reason": watering_profile.get("weekly_guardrail_reason"),
         "cooldown_24h_hours": watering_profile.get("cooldown_24h_hours"),
+        "pluie_probabilite_24h": watering_profile.get("pluie_probabilite_24h"),
+        "mm_detected_24h": watering_profile.get("mm_detected_24h"),
+        "surface_sec": watering_profile.get("surface_sec"),
+        "sursemis_micro_apport_allowed": watering_profile.get("sursemis_micro_apport_allowed"),
+        "sursemis_block_reason": watering_profile.get("sursemis_block_reason"),
+        "sursemis_reason": watering_profile.get("sursemis_reason"),
+        "sursemis_seuil_declencheur": watering_profile.get("sursemis_seuil_declencheur"),
+        "sursemis_policy": watering_profile.get("sursemis_policy"),
+        "sursemis_transition_ready": watering_profile.get("sursemis_transition_ready"),
+        "sursemis_tonte_count": watering_profile.get("sursemis_tonte_count"),
         "soil_profile": watering_profile.get("soil_profile"),
         "soil_retention_factor": watering_profile.get("soil_retention_factor"),
         "soil_drainage_factor": watering_profile.get("soil_drainage_factor"),
@@ -483,7 +496,7 @@ def build_watering_bundle(
             ),
             "decision_resume": {
                 "faire": False,
-                "action": "surveillance",
+                "action": "aucune_action",
                 "moment": "attendre",
                 "objectif_mm": objectif_mm,
                 "type_arrosage": "bloque",
@@ -520,7 +533,7 @@ def build_watering_bundle(
             ),
             "decision_resume": {
                 "faire": False,
-                "action": "surveillance",
+                "action": "aucune_action",
                 "moment": "attendre",
                 "objectif_mm": 0.0,
                 "type_arrosage": "bloque",
@@ -558,7 +571,7 @@ def build_watering_bundle(
             ),
             "decision_resume": {
                 "faire": False,
-                "action": "surveillance",
+                "action": "aucune_action",
                 "moment": "attendre",
                 "objectif_mm": 0.0,
                 "type_arrosage": "bloque",
@@ -599,7 +612,7 @@ def build_watering_bundle(
             ),
             "decision_resume": {
                 "faire": False,
-                "action": "surveillance",
+                "action": "aucune_action",
                 "moment": "attendre",
                 "objectif_mm": 0.0,
                 "type_arrosage": "bloque",
@@ -640,7 +653,7 @@ def build_watering_bundle(
                 ),
                 "decision_resume": {
                     "faire": False,
-                    "action": "surveillance",
+                    "action": "aucune_action",
                     "moment": "attendre",
                     "objectif_mm": 0.0,
                     "type_arrosage": "personnalise",
@@ -688,7 +701,7 @@ def build_watering_bundle(
                 ),
                 "decision_resume": {
                     "faire": False,
-                    "action": "surveillance",
+                    "action": "aucune_action",
                     "moment": "attendre",
                     "objectif_mm": 0.0,
                     "type_arrosage": "personnalise",
@@ -768,7 +781,7 @@ def build_watering_bundle(
             ),
             "decision_resume": {
                 "faire": False,
-                "action": "surveillance",
+                "action": "aucune_action",
                 "moment": "attendre",
                 "objectif_mm": objectif_mm,
                 "type_arrosage": "bloque",
@@ -804,7 +817,7 @@ def build_watering_bundle(
             ),
             "decision_resume": {
                 "faire": False,
-                "action": "surveillance",
+                "action": "aucune_action",
                 "moment": "attendre",
                 "objectif_mm": 0.0,
                 "type_arrosage": "bloque",
@@ -821,118 +834,123 @@ def build_watering_bundle(
         }
 
     if phase_dominante == "Sursemis":
-        passages = _soil_fractionation_passages(
-            phase_dominante,
-            sous_phase,
-            soil_style,
-            objectif_mm,
-            stress_level,
-            temperature=temperature,
-            humidite=humidite,
-            etp=etp,
-        )
-        passage_spacing = _passage_spacing_text(passages)
-        if objectif_mm <= 0:
-            conseil_principal = "Aucun arrosage nécessaire pour le sursemis."
-            action_recommandee = "Surveille l'humidité et réévalue au prochain créneau."
-            action_a_eviter = _watering_needed_text()
-            return {
-                "objectif_mm": 0.0,
-                "objectif_mm_brut": objectif_mm_brut,
-                "tonte_autorisee": False,
-                "tonte_statut": "interdite",
-                "arrosage_auto_autorise": False,
-                "arrosage_recommande": False,
-                "type_arrosage": "personnalise",
-                "arrosage_conseille": "personnalise",
-                "conseil_principal": conseil_principal,
-                "action_recommandee": action_recommandee,
-                "action_a_eviter": action_a_eviter,
-                "raison_decision": (
-                    f"Sursemis / {sous_phase}: objectif nul, bilan={bilan_hydrique_mm:.1f} mm, "
-                    f"tendance 3j={bilan_hydrique_3j:.1f} mm, 7j={bilan_hydrique_7j:.1f} mm. "
-                    f"{_hydric_summary_text(objectif_mm_brut, deficit_mm_ajuste, 0.0)}"
-                ),
-                "decision_resume": {
-                    "faire": False,
-                    "action": "surveillance",
-                    "moment": "attendre",
-                    "objectif_mm": objectif_mm,
-                    "type_arrosage": "personnalise",
-                    "niveau_action": "surveiller",
-                    "risque_gazon": risque_gazon,
-                },
-                "niveau_action": "surveiller",
-                "fenetre_optimale": "attendre",
-                "risque_gazon": risque_gazon,
-                "prochaine_reevaluation": prochaine_reevaluation,
-                "tonte_autorisee": False,
-                "tonte_statut": "interdite",
-                "watering_passages": watering_passages,
-                "watering_pause_minutes": watering_pause_minutes,
-                "watering_target_date": watering_target_date,
-                **application_payload,
-            }
-        if pluie_demain >= 2 and bilan_hydrique_mm >= -0.5:
-            conseil_principal = "Réduis ou reporte l'arrosage: la pluie de demain peut compenser une grande partie du déficit."
-            reduction_mm = round(objectif_mm * 0.4, 1)
-            if reduction_mm >= 0.5:
-                objectif_mm = reduction_mm
-                action_recommandee = f"Réduis l'apport à {objectif_mm:.1f} mm maximum."
-            else:
-                objectif_mm = 0.0
-                arrosage_recommande = False
-                arrosage_auto_autorise = False
-                type_arrosage = "personnalise"
-                arrosage_conseille = "personnalise"
-                action_recommandee = _watering_needed_text()
-            action_a_eviter = "Lancer un cycle complet avant la pluie."
-        elif humidite_haute:
-            conseil_principal = "Attends un léger ressuyage avant d'arroser."
+        sursemis_allowed = bool(water_bundle.get("sursemis_micro_apport_allowed"))
+        surface_sec = bool(water_bundle.get("surface_sec"))
+        pluie_probabilite_24h = float(water_bundle.get("pluie_probabilite_24h") or 0.0)
+        mm_detected_24h = float(water_bundle.get("mm_detected_24h") or 0.0)
+        sursemis_reason = str(water_bundle.get("sursemis_reason") or "")
+        sursemis_thresholds = str(water_bundle.get("sursemis_seuil_declencheur") or "")
+        sursemis_block_reason = water_bundle.get("sursemis_block_reason")
+
+        if sursemis_allowed and objectif_mm > 0:
+            objectif_mm = 0.5
+            arrosage_recommande = True
+            arrosage_auto_autorise = False
+            type_arrosage = "manuel_frequent"
+            arrosage_conseille = "personnalise"
+            conseil_principal = f"Arrose {fenetre_texte} en un passage (micro-apport de 0.5 mm)."
+            action_recommandee = "Appliquer 0.5 mm en un passage."
+            action_a_eviter = "Répéter un micro-arrosage ou arroser plus fort."
+        else:
             objectif_mm = 0.0
             arrosage_recommande = False
             arrosage_auto_autorise = False
             type_arrosage = "personnalise"
             arrosage_conseille = "personnalise"
-            action_recommandee = "Reporte l'arrosage au prochain créneau sec."
-            action_a_eviter = "Arroser immédiatement sur pelouse saturée."
-        else:
-            conseil_principal = f"Arroser {fenetre_texte} {passage_spacing}."
-            if passages <= 1:
-                action_recommandee = f"Appliquer {objectif_mm:.1f} mm en un passage."
-            else:
-                action_recommandee = f"Appliquer {objectif_mm:.1f} mm fractionnés ({passages}x, 20 à 30 min entre les passages)."
-            action_a_eviter = "Tondre avant levée complète."
+            conseil_principal = sursemis_reason or "Sursemis: micro-apport non nécessaire."
+            action_recommandee = "Surveille l'humidité et réévalue au prochain créneau."
+            action_a_eviter = "Multiplier les petits cycles."
+        watering_passages = 1
+        watering_pause_minutes = 0
+        confidence_score, confidence_level, confidence_reasons = _confidence_assessment(
+            phase_dominante=phase_dominante,
+            temperature=temperature,
+            humidite=humidite,
+            etp=etp,
+            weather_profile=context.weather_profile,
+            soil_profile=soil_style,
+            heat_stress_level=heat_stress_level,
+            heat_stress_phase=heat_stress_phase,
+            block_reason=sursemis_block_reason,
+            mm_final=objectif_mm,
+        )
+        raison_decision_sursemis = (
+            f"Sursemis / {sous_phase}: micro-apport 0.5 mm conditionné par pluie, humidité et température. "
+            f"pluie_24h={pluie_24h:.1f} mm, pluie_demain={pluie_demain:.1f} mm, "
+            f"pluie_probabilite_24h={pluie_probabilite_24h:.1f}%, bilan_hydrique_mm={bilan_hydrique_mm:.1f} mm, "
+            f"mm_detected_24h={mm_detected_24h:.1f} mm, temperature={temperature:.1f}°C, "
+            f"surface_sec={surface_sec}. "
+            f"{sursemis_reason} "
+            f"Seuil={sursemis_thresholds}. "
+            f"{_hydric_summary_text(objectif_mm_brut, deficit_mm_ajuste, objectif_mm)}"
+        )
         return {
             "objectif_mm": objectif_mm,
             "objectif_mm_brut": objectif_mm_brut,
+            "deficit_brut_mm": deficit_mm_brut,
+            "deficit_mm_brut": deficit_mm_brut,
+            "deficit_mm_ajuste": deficit_mm_ajuste,
+            "mm_cible": objectif_mm,
+            "mm_final_recommande": objectif_mm,
+            "mm_final": objectif_mm,
+            "mm_requested": objectif_mm,
+            "mm_applied": objectif_mm,
+            "mm_detected": water_bundle.get("mm_detected"),
             "tonte_autorisee": False,
             "tonte_statut": "interdite",
             "arrosage_auto_autorise": False,
             "arrosage_recommande": objectif_mm > 0,
-            "type_arrosage": "manuel_frequent",
-            "arrosage_conseille": "personnalise",
+            "type_arrosage": type_arrosage,
+            "arrosage_conseille": arrosage_conseille,
             "conseil_principal": conseil_principal,
             "action_recommandee": action_recommandee,
             "action_a_eviter": action_a_eviter,
-            "raison_decision": (
-                f"Sursemis / {sous_phase}: type=manuel_frequent, matin prioritaire, micro-apports légers et fractionnés. "
-                f"Bilan={bilan_hydrique_mm:.1f} mm, tendance 3j={bilan_hydrique_3j:.1f} mm, 7j={bilan_hydrique_7j:.1f} mm. "
-                f"Pluie efficace={pluie_efficace:.1f} mm. "
-                f"{_hydric_summary_text(objectif_mm_brut, deficit_mm_ajuste, objectif_mm)}"
-            ),
+            "raison_decision": raison_decision_sursemis,
+            "niveau_confiance": niveau_confiance,
+            "confidence_score": confidence_score,
+            "confidence_reasons": confidence_reasons,
+            "heat_stress_level": heat_stress_level,
+            "heat_stress_phase": heat_stress_phase,
+            "weekly_guardrail_mm_min": water_bundle.get("weekly_guardrail_mm_min"),
+            "weekly_guardrail_mm_max": water_bundle.get("weekly_guardrail_mm_max"),
+            "weekly_guardrail_reason": water_bundle.get("weekly_guardrail_reason"),
+            "soil_profile": water_bundle.get("soil_profile"),
+            "soil_retention_factor": water_bundle.get("soil_retention_factor"),
+            "soil_drainage_factor": water_bundle.get("soil_drainage_factor"),
+            "soil_infiltration_factor": water_bundle.get("soil_infiltration_factor"),
+            "soil_need_factor": water_bundle.get("soil_need_factor"),
             "decision_resume": {
                 "faire": objectif_mm > 0,
-                "action": "arrosage",
-                "moment": fenetre_optimale,
+                "action": "arrosage" if objectif_mm > 0 else "aucune_action",
+                "moment": fenetre_optimale if objectif_mm > 0 else "attendre",
                 "objectif_mm": objectif_mm,
-                "type_arrosage": "manuel_frequent",
-                "niveau_action": niveau_action,
+                "type_arrosage": type_arrosage,
+                "niveau_action": "a_faire" if objectif_mm > 0 else "surveiller",
                 "risque_gazon": risque_gazon,
             },
-            "watering_passages": passages,
-            "watering_pause_minutes": _watering_pause_minutes(passages),
+            "niveau_action": "a_faire" if objectif_mm > 0 else "surveiller",
+            "fenetre_optimale": fenetre_optimale if objectif_mm > 0 else "attendre",
+            "risque_gazon": risque_gazon,
+            "prochaine_reevaluation": prochaine_reevaluation,
+            "tonte_autorisee": False,
+            "tonte_statut": "interdite",
+            "watering_passages": watering_passages,
+            "watering_pause_minutes": watering_pause_minutes,
             "watering_target_date": watering_target_date,
+            "surface_sec": surface_sec,
+            "pluie_probabilite_24h": pluie_probabilite_24h,
+            "mm_detected_24h": mm_detected_24h,
+            "sursemis_micro_apport_allowed": sursemis_allowed,
+            "sursemis_block_reason": sursemis_block_reason,
+            "sursemis_reason": sursemis_reason,
+            "sursemis_seuil_declencheur": sursemis_thresholds,
+            "fractionnement": {
+                "enabled": False,
+                "passages": watering_passages,
+                "pause_minutes": watering_pause_minutes,
+                "max_mm_per_passage": round(objectif_mm / watering_passages, 1) if objectif_mm > 0 else 0.0,
+                "reason": "sursemis_micro_apport_0_5_mm" if objectif_mm > 0 else "sursemis_aucune_action",
+            },
             **application_payload,
         }
 
@@ -1135,7 +1153,7 @@ def build_watering_bundle(
 
     decision_resume = {
         "faire": arrosage_recommande,
-        "action": "arrosage" if arrosage_recommande else ("aucune_action" if mowing_bundle["tonte_autorisee"] else "surveillance"),
+        "action": "arrosage" if arrosage_recommande else "aucune_action",
         "moment": fenetre_optimale,
         "objectif_mm": objectif_mm,
         "type_arrosage": type_arrosage,

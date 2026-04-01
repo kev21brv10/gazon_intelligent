@@ -9,9 +9,35 @@
 ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2026.3.2+-blue)
 ![License](https://img.shields.io/github/license/kev21brv10/gazon_intelligent?style=flat-square)
 
-> Un système autonome qui décide pour ton gazon à ta place.
 
-Gazon Intelligent est une intégration Home Assistant qui transforme les données du jardin en décisions claires, lisibles et directement actionnables.
+> Gazon Intelligent transforme vos données météo et d’arrosage en décisions simples, fiables et automatisables, avec une façade canonique lisible dans `sensor.gazon_intelligent_assistant`.
+
+---
+
+## TL;DR
+
+- une seule intégration
+- un seul moteur
+- une seule décision à la fois
+- Sursemis strict (0.5 mm)
+- une façade canonique `assistant` avec prochain jour estimé
+- priorité à la stabilité et à la sécurité
+
+---
+
+## 🚀 Démarrage rapide
+
+1. Installer l’intégration `gazon_intelligent`
+2. Configurer le type de sol et les zones
+3. Consulter `sensor.gazon_intelligent_assistant`
+4. Ouvrir `sensor.gazon_intelligent_conseil_principal`, `sensor.gazon_intelligent_fenetre_optimale` et `sensor.gazon_intelligent_objectif_d_arrosage` si besoin
+
+👉 Vous obtenez immédiatement :
+- quoi faire
+- quand le faire
+- combien appliquer
+
+La façade canonique est `sensor.gazon_intelligent_assistant`; les autres entités détaillent le contexte, l'historique, la tonte et le debug.
 
 ---
 
@@ -20,7 +46,7 @@ Gazon Intelligent est une intégration Home Assistant qui transforme les donnée
 Cette release finalise une passe de cohérence métier et d'UX:
 
 - projection de reprise de tonte avec `next_mowing_date` et `next_mowing_display`
-- structuration des attributs visibles pour séparer décision, exécution et plan
+- structuration des attributs visibles pour séparer décision, exécution, plan et prochaine action estimée
 - nettoyage des libellés UI et suppression des doublons visibles
 
 ---
@@ -29,11 +55,11 @@ Cette release finalise une passe de cohérence métier et d'UX:
 
 Gazon Intelligent analyse en permanence :
 
-- la météo  
-- l’arrosage  
-- le type de sol  
-- les phases du gazon  
-- l’historique des actions  
+- la météo
+- l’arrosage
+- le type de sol
+- les phases du gazon
+- l’historique des actions
 
 Il fournit ensuite une décision claire :
 
@@ -49,10 +75,10 @@ Aucun calcul manuel n’est nécessaire.
 ## 🚀 Ce que fait Gazon Intelligent
 
 - 💧 Détermine quand arroser et quelle quantité appliquer
-- ✂️ Recommande la hauteur de tonte idéale  
-- 🌱 S’adapte aux phases du gazon (sursemis, reprise…)  
-- 🌦️ Analyse météo + sol + historique  
-- 🧠 Évite les erreurs (tonte trop basse, arrosage inutile…)  
+- ✂️ Recommande la hauteur de tonte idéale
+- 🌱 S’adapte aux phases du gazon (sursemis, reprise…)
+- 🌦️ Analyse météo + sol + historique
+- 🧠 Évite les erreurs (tonte trop basse, arrosage inutile…)
 - 📊 Rend les décisions lisibles dans Home Assistant
 
 ---
@@ -67,6 +93,7 @@ Aucun calcul manuel n’est nécessaire.
 
 ### 🧩 Entités clés
 
+- 🤖 `sensor.gazon_intelligent_assistant`
 - 🎛️ Mode du gazon
 - 🌱 Phase dominante
 - 🌱 Sous-phase
@@ -89,15 +116,19 @@ Aucun calcul manuel n’est nécessaire.
 - 🔘 Arrosage auto autorisé
 - 🚿 Profil d'arrosage
 - 🖲️ Bouton `Arrosage manuel immédiat`
+- 🧪 Diagnostic téléchargeable via l’intégration
 
 ### 🔎 Sémantique des états
 
+- `assistant` est la façade publique canonique: elle expose `action`, `moment`, `quantity_mm`, `status`, `reason`, ainsi que `next_action_date` et `next_action_display`
+- à vide, `assistant` affiche `action = aucune_action`, `moment = attendre`, `quantity_mm = 0`, `status = ok`
 - `type_arrosage` décrit le **profil agronomique** retenu par le moteur
   - exemple: `manuel_frequent` pour un sursemis
+  - exemple: `Aucune action` quand aucune intervention n’est nécessaire
 - `Dernière exécution` décrit le **mode d'exécution réel**
   - exemple: `Arrosage automatique` si l'intégration a déclenché le cycle
   - exemple: `Arrosage manuel immédiat` si l'utilisateur a lancé l'action
-- les attributs d'exécution utilisent des libellés explicites comme `execution_action`, `execution_state`, `execution_plan_type` et `executed_passages`
+  - les attributs d'exécution utilisent des libellés explicites comme `execution_action`, `execution_state`, `execution_plan_type` et `executed_passages`
 - `Dernière session détectée` décrit la **dernière session physique observée**
   - généralement la dernière sous-session ou zone réellement mesurée par l'historique
   - `total_mm` est l'attribut canonique; les doublons de volume ne sont plus exposés dans l'UI
@@ -107,10 +138,23 @@ Aucun calcul manuel n’est nécessaire.
   - exemple: `2026-03-24`
 - `next_action_display` donne la **date lisible**
   - exemple: `24/03/2026`
+- `niveau_d_action` peut afficher `aucune_action`, `surveiller`, `a_faire` ou `critique`
 - `type_sol` est exposé directement sur `Phase dominante`
 - `raison_blocage_tonte` explique pourquoi la tonte n'est pas autorisée
-- `Conseil principal` garde `summary` comme texte humain principal et expose des attributs métiers comme `action_type`, `action_moment`, `objectif_mm` et `type_arrosage`
+- `Conseil principal` est un résumé secondaire lisible, non contractuel; il expose des attributs métiers de détail mais ne concurrence pas la façade canonique `sensor.gazon_intelligent_assistant`
 - `Dernière application` décrit le **dernier traitement ou produit enregistré**
+
+### 🔬 Debug et diagnostics
+
+L’intégration expose aussi un export de diagnostics Home Assistant via `diagnostics.py`.
+Il regroupe:
+
+- la configuration courante
+- l’état runtime du coordinator
+- le snapshot de décision
+- l’historique récent compacté
+
+Le logger `custom_components.gazon_intelligent` est également activé dans le manifest pour faciliter le debug.
 
 ---
 
@@ -255,7 +299,7 @@ Le champ `action` reprend le libellé utilisateur, par exemple :
 - `Arrosage manuel immédiat`
 - `Cycle calculé lancé`
 
-À vide, `Dernière exécution` affiche `none` avec le résumé `Aucune action récente`.
+À vide, `Dernière exécution` affiche `aucune_action` avec le résumé `Aucune action récente`.
 
 Le bouton visible dans l'interface principale :
 
@@ -279,6 +323,18 @@ Le capteur `Fenêtre optimale` expose aussi un contexte lisible :
 - `next_action_date` : prochaine date réelle
 - `next_action_display` : date lisible
 - `summary` : résumé utilisateur, par exemple `Arrosage prévu demain matin (auto)`
+
+Le capteur `Assistant` expose la synthèse la plus directe:
+
+- `action`
+- `moment`
+- `quantity_mm`
+- `status`
+- `reason`
+- `next_action_date`
+- `next_action_display`
+
+Quand aucune action n’est nécessaire, l’interface affiche `aucune_action` et `attendre`, ce qui évite les libellés techniques en lecture utilisateur.
 
 Le flux reste compatible avec :
 
@@ -395,27 +451,33 @@ Le matin :
 
 ---
 
-## 🛠️ Services essentiels
+## 🛠️ Services exposés
+
+### Services métier principaux
 
 - `gazon_intelligent.set_mode`
 - `gazon_intelligent.reset_mode`
-- `gazon_intelligent.start_auto_irrigation`
-- `gazon_intelligent.start_application_irrigation`
-- `gazon_intelligent.declare_intervention`
-- `gazon_intelligent.register_product`
-
-## 🛠️ Services avancés
-
 - `gazon_intelligent.set_date_action`
+- `gazon_intelligent.start_auto_irrigation`
 - `gazon_intelligent.start_manual_irrigation`
+- `gazon_intelligent.start_application_irrigation`
+
+### Services d’intervention et de mémoire
+
+- `gazon_intelligent.declare_intervention`
 - `gazon_intelligent.declare_mowing`
 - `gazon_intelligent.declare_watering`
+- `gazon_intelligent.register_product`
 - `gazon_intelligent.remove_product`
 
 Notes:
 
-- `start_manual_irrigation` reste un outil avancé pour lancer un arrosage manuel contrôlé, mais ce n'est pas le chemin principal d'usage.
-- `declare_mowing` et `declare_watering` sont des raccourcis de compatibilité qui restent utiles, mais `declare_intervention` est le point d'entrée principal pour les interventions.
+- `set_mode` et `reset_mode` restent les raccourcis stables pour piloter le mode du gazon.
+- `set_date_action` enregistre la date métier réelle.
+- `start_manual_irrigation` lance un arrosage manuel contrôlé à partir d’un objectif explicite.
+- `start_auto_irrigation` exécute le cycle calculé ou un objectif fourni, sans contourner les garde-fous.
+- `declare_intervention` reste le point d’entrée principal pour les interventions.
+- `declare_mowing` et `declare_watering` sont des raccourcis de compatibilité utiles.
 
 ---
 

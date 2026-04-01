@@ -592,11 +592,11 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertEqual(snapshot["watering_target_date"], "2026-03-18")
         self.assertEqual(snapshot["next_action_date"], "2026-03-18")
         self.assertEqual(snapshot["next_action_display"], "18/03/2026")
-        self.assertIn("manuel_frequent", snapshot["raison_decision"])
-        self.assertIn("matin prioritaire", snapshot["raison_decision"])
+        self.assertIn("micro-apport 0.5 mm", snapshot["raison_decision"])
+        self.assertIn("surface en cours de séchage", snapshot["raison_decision"])
         self.assertIn("demain matin", snapshot["conseil_principal"])
         self.assertNotIn("ce matin", snapshot["conseil_principal"])
-        self.assertIn("20 à 30 min", snapshot["action_recommandee"])
+        self.assertEqual(snapshot["action_recommandee"], "Appliquer 0.5 mm en un passage.")
 
     def test_build_decision_snapshot_sursemis_projects_next_mowing_date(self) -> None:
         snapshot = decision.build_decision_snapshot(
@@ -698,23 +698,8 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertIn("saison=winter", winter_water["weekly_guardrail_reason"])
         self.assertIn("saison=summer", summer_water["weekly_guardrail_reason"])
 
-    def test_compute_objectif_mm_sursemis_germination_is_more_humid(self) -> None:
-        germination = decision.compute_objectif_mm(
-            phase_dominante="Sursemis",
-            sous_phase="Germination",
-            water_balance={
-                "bilan_hydrique_mm": 0.8,
-                "deficit_3j": 1.5,
-                "deficit_7j": 3.0,
-            },
-            today=date(2026, 3, 17),
-            pluie_demain=0,
-            humidite=60,
-            temperature=18.0,
-            etp=1.2,
-            type_sol="limoneux",
-        )
-        enracinement = decision.compute_objectif_mm(
+    def test_compute_objectif_mm_sursemis_returns_micro_apport_when_conditions_are_met(self) -> None:
+        objectif = decision.compute_objectif_mm(
             phase_dominante="Sursemis",
             sous_phase="Enracinement",
             water_balance={
@@ -723,17 +708,20 @@ class DecisionEngineTests(unittest.TestCase):
                 "deficit_7j": 3.0,
             },
             today=date(2026, 3, 17),
+            pluie_24h=0.0,
             pluie_demain=0,
-            humidite=60,
+            humidite=50,
             temperature=18.0,
-            etp=1.2,
+            etp=1.4,
             type_sol="limoneux",
+            weather_profile={
+                "weather_precipitation_probability": 40.0,
+            },
         )
 
-        self.assertGreater(germination, enracinement)
-        self.assertGreater(germination, 0.0)
+        self.assertEqual(objectif, 0.5)
 
-    def test_compute_objectif_mm_keeps_small_sursemis_watering_floor(self) -> None:
+    def test_compute_objectif_mm_blocks_sursemis_when_balance_is_high(self) -> None:
         objectif = decision.compute_objectif_mm(
             phase_dominante="Sursemis",
             sous_phase="Enracinement",
@@ -743,14 +731,18 @@ class DecisionEngineTests(unittest.TestCase):
                 "deficit_7j": 8.6,
             },
             today=date(2026, 3, 17),
+            pluie_24h=0.0,
             pluie_demain=0,
             humidite=50,
             temperature=18.7,
             etp=1.4,
             type_sol="limoneux",
+            weather_profile={
+                "weather_precipitation_probability": 20.0,
+            },
         )
 
-        self.assertEqual(objectif, 0.5)
+        self.assertEqual(objectif, 0.0)
 
     def test_compute_objectif_mm_returns_zero_when_weather_is_rainy(self) -> None:
         objectif = decision.compute_objectif_mm(
@@ -866,7 +858,8 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertFalse(snapshot["arrosage_auto_autorise"])
         self.assertIsNone(snapshot.get("block_reason"))
         self.assertLessEqual(snapshot["objectif_mm"], max(snapshot["objectif_mm_brut"], 0.5))
-        self.assertIn("micro-apports légers", snapshot["raison_decision"])
+        self.assertIn("micro-apport 0.5 mm", snapshot["raison_decision"])
+        self.assertIn("surface en cours de séchage", snapshot["raison_decision"])
 
     def test_compute_action_guidance_sursemis_waits_until_optimal_morning(self) -> None:
         base_kwargs = dict(
@@ -1019,10 +1012,258 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertEqual(snapshot["objectif_mm"], 0.0)
         self.assertFalse(snapshot["arrosage_recommande"])
         self.assertEqual(snapshot["niveau_action"], "surveiller")
-        self.assertEqual(snapshot["decision_resume"]["action"], "surveillance")
+        self.assertEqual(snapshot["decision_resume"]["action"], "aucune_action")
         self.assertNotIn("0.0 mm", snapshot["action_recommandee"])
         self.assertNotIn("0.0 mm", snapshot["conseil_principal"])
-        self.assertEqual(snapshot["action_a_eviter"], "Éviter tout arrosage inutile.")
+        self.assertEqual(snapshot["action_a_eviter"], "Multiplier les petits cycles.")
+
+    def test_build_decision_snapshot_sursemis_micro_apport_rules(self) -> None:
+        cases = [
+            (
+                "dry_surface",
+                dict(
+                    history=[{"type": "Sursemis", "date": "2026-03-17"}],
+                    today=date(2026, 3, 17),
+                    hour_of_day=8,
+                    temperature=18.0,
+                    pluie_24h=0.0,
+                    pluie_demain=0.0,
+                    humidite=55.0,
+                    type_sol="limoneux",
+                    etp_capteur=1.2,
+                    weather_profile={"weather_precipitation_probability": 20.0},
+                    soil_balance={"reserve_mm": 2.0},
+                ),
+                0.5,
+                True,
+                None,
+                True,
+            ),
+            (
+                "recent_rain",
+                dict(
+                    history=[{"type": "Sursemis", "date": "2026-03-17"}],
+                    today=date(2026, 3, 17),
+                    hour_of_day=8,
+                    temperature=18.0,
+                    pluie_24h=1.2,
+                    pluie_demain=0.0,
+                    humidite=55.0,
+                    type_sol="limoneux",
+                    etp_capteur=1.2,
+                    weather_profile={"weather_precipitation_probability": 20.0},
+                    soil_balance={"reserve_mm": 2.0},
+                ),
+                0.0,
+                False,
+                "pluie_prevue_suffisante",
+                False,
+            ),
+            (
+                "tomorrow_rain",
+                dict(
+                    history=[{"type": "Sursemis", "date": "2026-03-17"}],
+                    today=date(2026, 3, 17),
+                    hour_of_day=8,
+                    temperature=18.0,
+                    pluie_24h=0.0,
+                    pluie_demain=1.2,
+                    humidite=55.0,
+                    type_sol="limoneux",
+                    etp_capteur=1.2,
+                    weather_profile={"weather_precipitation_probability": 20.0},
+                    soil_balance={"reserve_mm": 2.0},
+                ),
+                0.0,
+                False,
+                "pluie_prevue_suffisante",
+                False,
+            ),
+            (
+                "j2_rain_only",
+                dict(
+                    history=[{"type": "Sursemis", "date": "2026-03-17"}],
+                    today=date(2026, 3, 17),
+                    hour_of_day=8,
+                    temperature=18.0,
+                    pluie_24h=0.0,
+                    pluie_demain=0.0,
+                    humidite=55.0,
+                    type_sol="limoneux",
+                    etp_capteur=1.2,
+                    pluie_j2=1.8,
+                    pluie_3j=4.8,
+                    weather_profile={"weather_precipitation_probability": 20.0},
+                    soil_balance={"reserve_mm": 2.0},
+                ),
+                0.5,
+                True,
+                None,
+                True,
+            ),
+            (
+                "high_balance",
+                dict(
+                    history=[{"type": "Sursemis", "date": "2026-03-17"}],
+                    today=date(2026, 3, 17),
+                    hour_of_day=8,
+                    temperature=18.0,
+                    pluie_24h=0.0,
+                    pluie_demain=0.0,
+                    humidite=55.0,
+                    type_sol="limoneux",
+                    etp_capteur=1.2,
+                    weather_profile={"weather_precipitation_probability": 20.0},
+                    soil_balance={"reserve_mm": 5.5},
+                ),
+                0.0,
+                False,
+                "sol_deja_humide",
+                False,
+            ),
+            (
+                "recent_watering",
+                dict(
+                    history=[
+                        {"type": "Sursemis", "date": "2026-03-17"},
+                        {"type": "arrosage", "date": date(2026, 3, 17).isoformat(), "objectif_mm": 0.5},
+                    ],
+                    today=date(2026, 3, 17),
+                    hour_of_day=8,
+                    temperature=18.0,
+                    pluie_24h=0.0,
+                    pluie_demain=0.0,
+                    humidite=55.0,
+                    type_sol="limoneux",
+                    etp_capteur=1.2,
+                    weather_profile={"weather_precipitation_probability": 20.0},
+                    soil_balance={"reserve_mm": 2.0},
+                ),
+                0.0,
+                False,
+                "arrosage_recent",
+                False,
+            ),
+            (
+                "low_temperature",
+                dict(
+                    history=[{"type": "Sursemis", "date": "2026-03-17"}],
+                    today=date(2026, 3, 17),
+                    hour_of_day=8,
+                    temperature=8.0,
+                    pluie_24h=0.0,
+                    pluie_demain=0.0,
+                    humidite=55.0,
+                    type_sol="limoneux",
+                    etp_capteur=1.2,
+                    weather_profile={"weather_precipitation_probability": 20.0},
+                    soil_balance={"reserve_mm": 2.0},
+                ),
+                0.0,
+                False,
+                "temperature_trop_basse",
+                False,
+            ),
+        ]
+
+        for name, kwargs, expected_mm, expected_allowed, expected_block_reason, expected_surface_sec in cases:
+            with self.subTest(name):
+                snapshot = decision.build_decision_snapshot(**kwargs)
+                self.assertEqual(snapshot["phase_active"], "Sursemis")
+                self.assertEqual(snapshot["objectif_mm"], expected_mm)
+                self.assertEqual(snapshot["arrosage_recommande"], expected_allowed)
+                self.assertEqual(snapshot.get("sursemis_micro_apport_allowed"), expected_allowed)
+                self.assertEqual(snapshot.get("surface_sec"), expected_surface_sec)
+                self.assertEqual(snapshot.get("sursemis_block_reason"), expected_block_reason)
+                self.assertIn("pluie_probabilite_24h", snapshot)
+                self.assertIn("mm_detected_24h", snapshot)
+                self.assertIn("sursemis_reason", snapshot)
+                self.assertIn("Sursemis", snapshot["raison_decision"])
+
+    def test_build_decision_snapshot_sursemis_germination_is_more_permissive_than_enracinement(self) -> None:
+        germination = decision.build_decision_snapshot(
+            history=[{"type": "Sursemis", "date": "2026-03-17"}],
+            today=date(2026, 3, 17),
+            hour_of_day=8,
+            temperature=18.0,
+            pluie_24h=0.0,
+            pluie_demain=0.6,
+            humidite=55.0,
+            type_sol="limoneux",
+            etp_capteur=1.2,
+            weather_profile={"weather_precipitation_probability": 20.0},
+            soil_balance={"reserve_mm": 2.4},
+        )
+        enracinement = decision.build_decision_snapshot(
+            history=[{"type": "Sursemis", "date": "2026-03-07"}],
+            today=date(2026, 3, 17),
+            hour_of_day=8,
+            temperature=18.0,
+            pluie_24h=0.0,
+            pluie_demain=0.6,
+            humidite=55.0,
+            type_sol="limoneux",
+            etp_capteur=1.2,
+            weather_profile={"weather_precipitation_probability": 20.0},
+            soil_balance={"reserve_mm": 2.4},
+        )
+
+        self.assertEqual(germination["phase_active"], "Sursemis")
+        self.assertEqual(enracinement["phase_active"], "Sursemis")
+        self.assertEqual(germination["objectif_mm"], 0.5)
+        self.assertEqual(enracinement["objectif_mm"], 0.0)
+        self.assertTrue(germination["arrosage_recommande"])
+        self.assertFalse(enracinement["arrosage_recommande"])
+        self.assertIsNone(germination.get("block_reason"))
+        self.assertFalse(enracinement.get("sursemis_micro_apport_allowed"))
+        self.assertIn("micro-apport 0.5 mm", germination["raison_decision"])
+        self.assertIn("Sursemis / Germination", germination["raison_decision"])
+        self.assertIn("Sursemis / Enracinement", enracinement["raison_decision"])
+
+    def test_compute_action_guidance_sursemis_reprise_transition_ready_waits_more(self) -> None:
+        base_kwargs = dict(
+            phase_dominante="Sursemis",
+            sous_phase="Reprise",
+            water_balance={
+                "bilan_hydrique_mm": 1.4,
+                "deficit_3j": 0.8,
+                "deficit_7j": 1.2,
+            },
+            advanced_context={
+                "vent": 6,
+                "rosee": 0.0,
+                "hauteur_gazon": 7.0,
+            },
+            pluie_24h=0.0,
+            pluie_demain=0.2,
+            humidite=55.0,
+            temperature=18.0,
+            etp=1.2,
+            objectif_mm=0.5,
+            hour_of_day=9,
+            sous_phase_age_days=19,
+            sous_phase_progression=82.0,
+        )
+
+        not_ready = decision.compute_action_guidance(
+            history=[{"type": "Sursemis", "date": "2026-03-01"}],
+            **base_kwargs,
+        )
+        ready = decision.compute_action_guidance(
+            history=[
+                {"type": "Sursemis", "date": "2026-03-01"},
+                {"type": "tonte", "date": "2026-03-15"},
+                {"type": "tonte", "date": "2026-03-18"},
+            ],
+            **base_kwargs,
+        )
+
+        self.assertEqual(not_ready["fenetre_optimale"], "maintenant")
+        self.assertEqual(ready["fenetre_optimale"], "attendre")
+        self.assertEqual(not_ready["niveau_action"], "a_faire")
+        self.assertEqual(ready["niveau_action"], "surveiller")
+        self.assertEqual(not_ready["risque_gazon"], "modere")
+        self.assertEqual(ready["risque_gazon"], "modere")
 
     def test_build_decision_snapshot_fertilisation_uses_application_technique(self) -> None:
         snapshot = decision.build_decision_snapshot(

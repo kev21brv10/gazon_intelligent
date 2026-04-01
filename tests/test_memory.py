@@ -208,3 +208,42 @@ class MemoryCatalogTests(unittest.TestCase):
         )
 
         self.assertEqual(next_date, "2026-04-04")
+
+    def test_compute_memory_builds_feedback_observation_without_name_error(self) -> None:
+        history = [
+            {
+                "type": "arrosage",
+                "date": "2026-03-18",
+                "objectif_mm": 1.2,
+                "source": "auto",
+            }
+        ]
+
+        memory_state = memory.compute_memory(
+            history,
+            today=date(2026, 3, 19),
+            previous_memory={
+                "dernier_conseil": {
+                    "date": "2026-03-18",
+                    "objectif_mm": 1.2,
+                },
+                "date_derniere_mise_a_jour": "2026-03-18",
+            },
+            decision={
+                "deficit_mm_ajuste": 0.8,
+                "deficit_brut_mm": 1.0,
+                "objectif_mm": 0.8,
+                "type_arrosage": "auto",
+                "risque_gazon": "modere",
+                "heat_stress_level": "normal",
+                "mm_final": 0.8,
+            },
+        )
+
+        self.assertIsNotNone(memory_state["feedback_observation"])
+        assert memory_state["feedback_observation"] is not None
+        self.assertEqual(memory_state["feedback_observation"]["window"], "24h")
+        self.assertEqual(memory_state["feedback_observation"]["recommended_mm"], 1.2)
+        self.assertEqual(memory_state["feedback_observation"]["observed_mm"], 1.2)
+        self.assertEqual(memory_state["feedback_observation"]["delta_mm"], 0.0)
+        self.assertEqual(memory_state["feedback_observation"]["source"], "observation_only")
