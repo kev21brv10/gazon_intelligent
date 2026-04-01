@@ -146,14 +146,36 @@ class GazonBrain:
         self.history.append(item)
         self.history = self.history[-300:]
 
-    def _resolve_product_record(self, product_id: str | None) -> dict[str, Any] | None:
-        normalized = normalize_product_id(product_id)
-        if not normalized:
-            return None
-        product = self.products.get(normalized)
-        if not isinstance(product, dict):
-            return None
-        return product
+    def _resolve_product_record(
+        self,
+        product_id: str | None,
+        product_name: str | None = None,
+    ) -> dict[str, Any] | None:
+        normalized_id = normalize_product_id(product_id)
+        if normalized_id:
+            product = self.products.get(normalized_id)
+            if isinstance(product, dict):
+                return product
+        normalized_name = normalize_product_id(product_name)
+        if normalized_name:
+            matches = [
+                product
+                for product in self.products.values()
+                if isinstance(product, dict)
+                and (
+                    normalize_product_id(product.get("id")) == normalized_name
+                    or normalize_product_id(product.get("nom")) == normalized_name
+                )
+            ]
+            if len(matches) == 1:
+                return matches[0]
+            if len(matches) > 1:
+                return None
+        if not normalized_id and not normalized_name and len(self.products) == 1:
+            only_product = next(iter(self.products.values()))
+            if isinstance(only_product, dict):
+                return only_product
+        return None
 
     def _is_history_item_expired(self, item: dict[str, Any], today: date) -> bool:
         item_type = item.get("type")
@@ -226,7 +248,7 @@ class GazonBrain:
         if intervention not in INTERVENTIONS_ACTIONS:
             raise ValueError(f"Intervention non supportée: {intervention}")
         target_date = date_action or date.today()
-        product_record = self._resolve_product_record(produit_id)
+        product_record = self._resolve_product_record(produit_id, produit)
         if product_record:
             produit = produit or product_record.get("nom")
             if dose is None:

@@ -315,7 +315,8 @@ Les états de `Dernière exécution` sont simples:
 2. Donne un `product_id` unique
 3. Renseigne le nom, le type et, si besoin, les réglages d’application
 4. Lors d’une intervention réelle, utilise le service `gazon_intelligent.declare_intervention`
-5. Si le produit n’est plus utile, retire-le avec `gazon_intelligent.remove_product`
+5. Si tu renseignes l’ID ou le nom du produit, l’intégration peut reprendre automatiquement le produit déjà enregistré
+6. Si le produit n’est plus utile, retire-le avec `gazon_intelligent.remove_product`
 
 #### Quand utiliser un produit enregistré
 
@@ -422,6 +423,7 @@ Notes:
 - `start_manual_irrigation` lance un arrosage manuel contrôlé à partir d’un objectif explicite.
 - `start_auto_irrigation` exécute le cycle calculé ou un objectif fourni, sans contourner les garde-fous.
 - `declare_intervention` reste le point d’entrée principal pour les interventions.
+- `declare_intervention` peut retrouver automatiquement un produit déjà enregistré à partir de son ID ou de son nom.
 - `declare_mowing` et `declare_watering` sont des raccourcis de compatibilité utiles.
 
 ---
