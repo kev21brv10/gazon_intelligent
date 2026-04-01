@@ -60,6 +60,7 @@ start_auto_irrigation:
 start_application_irrigation: {}
 
 declare_intervention:
+  description: "Déclare une intervention réelle. Les réglages du produit se configurent dans \"Enregistrer un produit\" ; ici, il suffit de choisir le produit déjà enregistré, la date, la zone et une note si besoin. Si plusieurs produits existent et qu'aucun produit explicite n'est fourni, l'intégration utilise la sélection courante de l'UI ou renvoie une erreur claire."
   fields:
     intervention:
       required: true

@@ -90,6 +90,13 @@ def _install_homeassistant_stubs() -> None:
     if not hasattr(const_mod, "EVENT_HOMEASSISTANT_STARTED"):
         const_mod.EVENT_HOMEASSISTANT_STARTED = "homeassistant_started"
 
+    exceptions_mod = ensure_module("homeassistant.exceptions")
+    if not hasattr(exceptions_mod, "HomeAssistantError"):
+        class HomeAssistantError(Exception):
+            pass
+
+        exceptions_mod.HomeAssistantError = HomeAssistantError
+
 
 _install_homeassistant_stubs()
 
@@ -125,6 +132,7 @@ class EntityRegistryTests(unittest.TestCase):
             sensor.GazonDernierArrosageDetecteSensor(coordinator),
             sensor.GazonDerniereApplicationSensor(coordinator),
             sensor.GazonDerniereActionUtilisateurSensor(coordinator),
+            sensor.GazonCatalogueProduitsSensor(coordinator),
             sensor.GazonTonteEtatSensor(coordinator),
             sensor.GazonHauteurTonteSensor(coordinator),
             sensor.GazonConseilPrincipalSensor(coordinator),
@@ -142,6 +150,7 @@ class EntityRegistryTests(unittest.TestCase):
             button.RetourModeNormalButton(coordinator),
             button.DateActionAujourdhuiButton(coordinator),
             select.GazonModeSelect(coordinator),
+            select.GazonInterventionProductSelect(coordinator),
             number.GazonDebitZoneNumber(coordinator, 1, "debit_zone_1"),
             number.GazonDebitZoneNumber(coordinator, 2, "debit_zone_2"),
             number.GazonDebitZoneNumber(coordinator, 3, "debit_zone_3"),

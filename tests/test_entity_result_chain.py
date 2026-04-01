@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import unittest
 from dataclasses import dataclass
+import asyncio
 from datetime import date, datetime, timezone
 from pathlib import Path
 import sys
 import types
+from unittest.mock import AsyncMock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -67,6 +69,13 @@ def _install_homeassistant_stubs() -> None:
 
         update_coordinator_mod.CoordinatorEntity = CoordinatorEntity
 
+    exceptions_mod = ensure_module("homeassistant.exceptions")
+    if not hasattr(exceptions_mod, "HomeAssistantError"):
+        class HomeAssistantError(Exception):
+            pass
+
+        exceptions_mod.HomeAssistantError = HomeAssistantError
+
 
 _ensure_package("custom_components", PACKAGE_DIR.parent)
 _ensure_package("custom_components.gazon_intelligent", PACKAGE_DIR)
@@ -75,6 +84,7 @@ _install_homeassistant_stubs()
 decision_models = __import__("custom_components.gazon_intelligent.decision_models", fromlist=["DecisionResult"])
 sensor = __import__("custom_components.gazon_intelligent.sensor", fromlist=["GazonPhaseActiveSensor"])
 binary_sensor = __import__("custom_components.gazon_intelligent.binary_sensor", fromlist=["GazonTonteAutoriseeBinarySensor"])
+select = __import__("custom_components.gazon_intelligent.select", fromlist=["GazonModeSelect"])
 
 
 @dataclass
@@ -159,6 +169,7 @@ class DecisionResultChainTests(unittest.TestCase):
         last_watering_sensor = sensor.GazonDernierArrosageDetecteSensor(coordinator)
         last_application_sensor = sensor.GazonDerniereApplicationSensor(coordinator)
         last_user_action_sensor = sensor.GazonDerniereActionUtilisateurSensor(coordinator)
+        catalogue_sensor = sensor.GazonCatalogueProduitsSensor(coordinator)
         application_allowed_sensor = binary_sensor.GazonApplicationArrosageAutoriseBinarySensor(coordinator)
 
         self.assertEqual(plan_sensor.native_value, 0.0)
@@ -188,8 +199,79 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(last_application_sensor.extra_state_attributes["summary"], "Aucune application détectée")
         self.assertEqual(last_user_action_sensor.native_value, "aucune_action")
         self.assertEqual(last_user_action_sensor.extra_state_attributes["summary"], "Aucune action récente")
+        self.assertEqual(catalogue_sensor.native_value, 0)
+        self.assertEqual(catalogue_sensor.extra_state_attributes["products_count"], 0)
+        self.assertEqual(catalogue_sensor.extra_state_attributes["summary"], "Aucun produit enregistré")
         self.assertFalse(application_allowed_sensor.is_on)
         self.assertNotIn("application_type", application_allowed_sensor.extra_state_attributes)
+
+    def test_intervention_product_select_reflects_catalogue_and_selection(self) -> None:
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=None, history=[], memory={})
+        coordinator.products = {
+            "bio-1": {"id": "bio-1", "nom": "Bio Boost"},
+            "engrais-printemps": {"id": "engrais-printemps", "nom": "Engrais Printemps"},
+        }
+        coordinator.selected_product_id = "engrais-printemps"
+
+        product_select = select.GazonInterventionProductSelect(coordinator)
+
+        self.assertEqual(product_select.options, ["Bio Boost", "Engrais Printemps"])
+        self.assertEqual(product_select.current_option, "Engrais Printemps")
+        self.assertEqual(product_select.extra_state_attributes["selected_product_id"], "engrais-printemps")
+        self.assertEqual(product_select.extra_state_attributes["selected_product_name"], "Engrais Printemps")
+        self.assertEqual(product_select.extra_state_attributes["summary"], "Produit sélectionné : Engrais Printemps")
+
+    def test_intervention_product_select_handles_empty_catalogue(self) -> None:
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=None, history=[], memory={})
+
+        product_select = select.GazonInterventionProductSelect(coordinator)
+
+        self.assertEqual(product_select.options, [])
+        self.assertIsNone(product_select.current_option)
+        self.assertIsNone(product_select.extra_state_attributes["selected_product_id"])
+        self.assertIsNone(product_select.extra_state_attributes["selected_product_name"])
+        self.assertEqual(product_select.extra_state_attributes["summary"], "Aucun produit enregistré")
+
+    def test_intervention_product_select_maps_label_to_product_id(self) -> None:
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=None, history=[], memory={})
+        coordinator.products = {
+            "bio-1": {"id": "bio-1", "nom": "Bio Boost"},
+        }
+        coordinator.async_set_selected_product = AsyncMock()
+
+        product_select = select.GazonInterventionProductSelect(coordinator)
+        asyncio.run(product_select.async_select_option("Bio Boost"))
+
+        coordinator.async_set_selected_product.assert_awaited_once_with("bio-1")
+
+    def test_intervention_product_select_handles_duplicate_names(self) -> None:
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=None, history=[], memory={})
+        coordinator.products = {
+            "bio-1": {"id": "bio-1", "nom": "Produit Standard"},
+            "bio-2": {"id": "bio-2", "nom": "Produit Standard"},
+        }
+
+        product_select = select.GazonInterventionProductSelect(coordinator)
+
+        self.assertEqual(
+            product_select.options,
+            ["Produit Standard — bio-1", "Produit Standard — bio-2"],
+        )
+        self.assertIsNone(product_select.current_option)
+        self.assertEqual(product_select.extra_state_attributes["summary"], "Aucun produit sélectionné")
+
+    def test_intervention_product_select_defaults_to_single_product(self) -> None:
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=None, history=[], memory={})
+        coordinator.products = {
+            "bio-1": {"id": "bio-1", "nom": "Bio Boost"},
+        }
+
+        product_select = select.GazonInterventionProductSelect(coordinator)
+
+        self.assertEqual(product_select.options, ["Bio Boost"])
+        self.assertEqual(product_select.current_option, "Bio Boost")
+        self.assertEqual(product_select.extra_state_attributes["selected_product_id"], "bio-1")
+        self.assertEqual(product_select.extra_state_attributes["summary"], "Produit sélectionné : Bio Boost")
 
     def test_niveau_action_sensor_uses_friendly_state_for_no_action(self) -> None:
         result = _make_result()
@@ -452,6 +534,46 @@ class DecisionResultChainTests(unittest.TestCase):
         )
         self.assertTrue(application_allowed_sensor.is_on)
         self.assertEqual(application_allowed_sensor.extra_state_attributes["application_type"], "sol")
+
+    def test_catalogue_products_sensor_lists_registered_products(self) -> None:
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=None, history=[], memory={})
+        coordinator.products = {
+            "bio-1": {
+                "id": "bio-1",
+                "nom": "Bio Boost",
+                "type": "Biostimulant",
+                "application_type": "sol",
+                "application_requires_watering_after": True,
+            },
+            "engrais-printemps": {
+                "id": "engrais-printemps",
+                "nom": "Engrais Printemps",
+                "type": "Fertilisation",
+                "application_type": "sol",
+                "application_irrigation_mode": "suggestion",
+            },
+        }
+
+        catalogue_sensor = sensor.GazonCatalogueProduitsSensor(coordinator)
+
+        self.assertEqual(catalogue_sensor.native_value, 2)
+        self.assertEqual(catalogue_sensor.extra_state_attributes["products_count"], 2)
+        self.assertEqual(
+            catalogue_sensor.extra_state_attributes["product_ids"],
+            ["bio-1", "engrais-printemps"],
+        )
+        self.assertEqual(
+            catalogue_sensor.extra_state_attributes["product_names"],
+            ["Bio Boost", "Engrais Printemps"],
+        )
+        self.assertEqual(
+            catalogue_sensor.extra_state_attributes["products_summary"][0]["id"],
+            "bio-1",
+        )
+        self.assertEqual(
+            catalogue_sensor.extra_state_attributes["products_summary"][1]["application_irrigation_mode"],
+            "suggestion",
+        )
 
     def test_user_action_sensor_exposes_human_readable_summary(self) -> None:
         coordinator = _FakeCoordinator(

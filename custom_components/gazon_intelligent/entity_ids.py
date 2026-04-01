@@ -37,6 +37,8 @@ ACTIVE_ENTITY_SUFFIXES: set[str] = {
     "dernier_arrosage_detecte",
     "derniere_application",
     "derniere_action_utilisateur",
+    "catalogue_produits",
+    "produit_intervention",
     "arrosage_apres_application_autorise",
     "arrosage_automatique",
     "arroser_maintenant",

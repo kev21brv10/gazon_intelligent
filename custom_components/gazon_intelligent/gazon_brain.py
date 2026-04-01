@@ -44,6 +44,7 @@ class GazonBrain:
             "feedback_observation": None,
             "prochaine_reapplication": None,
             "catalogue_produits": 0,
+            "selected_product_id": None,
             "date_derniere_mise_a_jour": None,
             "auto_irrigation_enabled": DEFAULT_AUTO_IRRIGATION_ENABLED,
         }
@@ -119,21 +120,25 @@ class GazonBrain:
                 "feedback_observation": None,
                 "prochaine_reapplication": None,
                 "catalogue_produits": len(self.products),
+                "selected_product_id": None,
                 "date_derniere_mise_a_jour": None,
                 "auto_irrigation_enabled": DEFAULT_AUTO_IRRIGATION_ENABLED,
             }
         self.memory.setdefault("historique_total", len(self.history))
         self.memory.setdefault("derniere_phase_active", self.mode)
         self.memory.setdefault("catalogue_produits", len(self.products))
+        self.memory.setdefault("selected_product_id", None)
         self.memory.setdefault("derniere_action_utilisateur", None)
         self.memory.setdefault("auto_irrigation_enabled", DEFAULT_AUTO_IRRIGATION_ENABLED)
         self.memory.setdefault("feedback_observation", None)
         self.memory["historique_total"] = len(self.history)
         self.memory["catalogue_produits"] = len(self.products)
+        self._normalize_selected_product_id()
 
     def dump_state(self) -> dict[str, Any]:
         self.memory["historique_total"] = len(self.history)
         self.memory["catalogue_produits"] = len(self.products)
+        self._normalize_selected_product_id()
         return {
             "mode": self.mode,
             "date_action": self.date_action.isoformat() if self.date_action else None,
@@ -146,6 +151,52 @@ class GazonBrain:
     def _append_history(self, item: dict[str, Any]) -> None:
         self.history.append(item)
         self.history = self.history[-300:]
+
+    def _single_product_record(self) -> dict[str, Any] | None:
+        if len(self.products) != 1:
+            return None
+        only_product = next(iter(self.products.values()))
+        if isinstance(only_product, dict):
+            return only_product
+        return None
+
+    @property
+    def selected_product_id(self) -> str | None:
+        value = normalize_product_id(self.memory.get("selected_product_id"))
+        if value and value in self.products:
+            return value
+        if len(self.products) == 1:
+            single_product = self._single_product_record()
+            if single_product is not None:
+                return normalize_product_id(single_product.get("id"))
+        return None
+
+    @selected_product_id.setter
+    def selected_product_id(self, value: str | None) -> None:
+        self.memory["selected_product_id"] = normalize_product_id(value)
+        self._normalize_selected_product_id()
+
+    @property
+    def selected_product_name(self) -> str | None:
+        selected_id = self.selected_product_id
+        if not selected_id:
+            return None
+        product = self.products.get(selected_id)
+        if not isinstance(product, dict):
+            return None
+        name = str(product.get("nom") or product.get("id") or "").strip()
+        return name or None
+
+    def _normalize_selected_product_id(self) -> None:
+        selected_product_id = normalize_product_id(self.memory.get("selected_product_id"))
+        if selected_product_id and selected_product_id in self.products:
+            self.memory["selected_product_id"] = selected_product_id
+            return
+        single_product = self._single_product_record()
+        if single_product is not None:
+            self.memory["selected_product_id"] = normalize_product_id(single_product.get("id"))
+            return
+        self.memory["selected_product_id"] = None
 
     def _resolve_product_record(
         self,
@@ -173,9 +224,7 @@ class GazonBrain:
             if len(matches) > 1:
                 return None
         if not normalized_id and not normalized_name and len(self.products) == 1:
-            only_product = next(iter(self.products.values()))
-            if isinstance(only_product, dict):
-                return only_product
+            return self._single_product_record()
         return None
 
     def _is_history_item_expired(self, item: dict[str, Any], today: date) -> bool:
@@ -245,16 +294,22 @@ class GazonBrain:
         application_irrigation_mode: str | None = None,
         application_label_notes: str | None = None,
         note: str | None = None,
-    ) -> dict[str, Any]:
+        ) -> dict[str, Any]:
         if intervention not in INTERVENTIONS_ACTIONS:
             raise ValueError(f"Intervention non supportée: {intervention}")
         target_date = date_action or date.today()
-        product_record = self._resolve_product_record(produit_id, produit)
         product_query = normalize_product_id(produit_id) or normalize_product_id(produit)
+        product_record = self._resolve_product_record(produit_id, produit)
         if product_query and product_record is None:
             raise ValueError(
                 "Produit introuvable ou ambigu. Utilise l'ID exact ou le nom exact d'un produit enregistré."
             )
+        if not product_query and product_record is None:
+            selected_product_id = self.selected_product_id
+            if selected_product_id:
+                product_record = self._resolve_product_record(selected_product_id)
+        if not product_query and product_record is None:
+            product_record = self._single_product_record()
         if not product_query and product_record is None and len(self.products) > 1:
             raise ValueError(
                 "Plusieurs produits sont enregistrés. Sélectionne un produit enregistré par ID ou nom exact."
@@ -441,6 +496,7 @@ class GazonBrain:
             raise ValueError("Identifiant ou produit invalide.")
         self.products[record["id"]] = record
         self.memory["catalogue_produits"] = len(self.products)
+        self._normalize_selected_product_id()
         return record
 
     def remove_product(self, product_id: str) -> str:
@@ -449,6 +505,7 @@ class GazonBrain:
             raise ValueError("Identifiant produit invalide.")
         self.products.pop(normalized, None)
         self.memory["catalogue_produits"] = len(self.products)
+        self._normalize_selected_product_id()
         return normalized
 
     def compute_snapshot(

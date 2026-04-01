@@ -298,6 +298,12 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._async_save_state()
         await self.async_request_refresh()
 
+    async def async_set_selected_product(self, product_id: str | None) -> None:
+        """Sélectionne le produit d'intervention courant."""
+        self.brain.selected_product_id = product_id
+        await self._async_save_state()
+        await self.async_request_refresh()
+
     @property
     def products(self) -> dict[str, dict[str, Any]]:
         return self.brain.products
@@ -305,6 +311,18 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     @products.setter
     def products(self, value: dict[str, dict[str, Any]]) -> None:
         self.brain.products = value
+
+    @property
+    def selected_product_id(self) -> str | None:
+        return self.brain.selected_product_id
+
+    @selected_product_id.setter
+    def selected_product_id(self, value: str | None) -> None:
+        self.brain.selected_product_id = value
+
+    @property
+    def selected_product_name(self) -> str | None:
+        return self.brain.selected_product_name
 
     @property
     def soil_balance(self) -> dict[str, Any]:
