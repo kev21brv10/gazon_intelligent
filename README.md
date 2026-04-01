@@ -266,14 +266,22 @@ Le résumé hydrique affiché dans `raison_decision` suit le format:
 - `zone_count` indique le nombre de zones
 - `passages` indique le nombre de passages
 
-### 🧪 Cas des produits / applications
+### 🧪 Produits et applications
 
-Le moteur distingue:
+Cette partie sert à mémoriser un produit ou un traitement, puis à laisser l’intégration gérer ce qui doit se passer après.
 
-- `sol` : produit qui peut nécessiter un arrosage technique juste après
-- `foliaire` : produit qui doit rester protégé avant arrosage
+#### Deux types d’application
 
-Les champs utiles sont:
+- `sol`
+  - produit appliqué sur le sol
+  - peut demander un arrosage technique après application
+- `foliaire`
+  - produit appliqué sur le feuillage
+  - bloque temporairement l’arrosage automatique pendant la protection
+
+#### Champs utiles
+
+Pour un produit ou une application, les champs les plus utiles sont:
 
 - `application_type`
 - `application_requires_watering_after`
@@ -283,78 +291,52 @@ Les champs utiles sont:
 - `application_irrigation_mode`
 - `application_label_notes`
 
-Les capteurs utiles :
+#### Ce que l’intégration affiche
 
 - `Dernière application`
+  - le dernier produit ou traitement enregistré
 - `Dernière exécution`
+  - ce que l’intégration a réellement lancé
 - `Cycle calculé`
+  - le plan d’arrosage calculé si un arrosage est nécessaire
 - `Arrosage après application autorisé`
-- `application_block_remaining_minutes`
-- `application_post_watering_ready_at`
-- `application_post_watering_delay_remaining_minutes`
-- `application_post_watering_ready`
+  - indique si un arrosage est permis après une application
 
-Le capteur `Dernière exécution` utilise ces états lisibles :
+Les états de `Dernière exécution` sont simples:
 
-- `ok` : action acceptée et envoyée au moteur
-- `en_attente` : action reconnue mais différée
-- `bloque` : action refusée par sécurité ou fenêtre invalide
-- `refuse` : action impossible ou incohérente
+- `ok` = action acceptée
+- `en_attente` = action reconnue mais différée
+- `bloque` = action refusée pour sécurité ou timing
+- `refuse` = action impossible ou incohérente
 
-Le champ `action` reprend le libellé utilisateur, par exemple :
+#### Comment ajouter un produit
 
-- `Arrosage manuel immédiat`
-- `Cycle calculé lancé`
+1. Utilise le service `gazon_intelligent.register_product`
+2. Donne un `product_id` unique
+3. Renseigne le nom, le type et, si besoin, les réglages d’application
+4. Lors d’une intervention réelle, utilise le service `gazon_intelligent.declare_intervention`
+5. Si le produit n’est plus utile, retire-le avec `gazon_intelligent.remove_product`
 
-À vide, `Dernière exécution` affiche `aucune_action` avec le résumé `Aucune action récente`.
+#### Quand utiliser un produit enregistré
 
-Le bouton visible dans l'interface principale :
+Un produit enregistré sert à:
 
-- `Arrosage manuel immédiat`
-- déclenche un arrosage manuel immédiat contrôlé
-- reste l'unique action manuelle visible pour l'utilisateur
+- réutiliser les mêmes réglages à chaque fois
+- éviter de retaper les paramètres à la main
+- garder une trace claire dans l’historique
 
-Le cycle calculé reste géré automatiquement par l’intégration.
+#### Exemples simples
 
-Le switch global :
+- un produit de sol peut demander un arrosage léger après application
+- un produit foliaire peut bloquer l’arrosage pendant quelques heures
+- un produit inconnu ne déclenche rien d’automatique
 
-- `Arrosage auto autorisé`
-- bloque ou autorise l'exécution automatique
-- laisse les calculs visibles même quand il est coupé
-- l’intégration réévalue régulièrement le contexte; un léger décalage peut exister selon le cycle de mise à jour
+#### Ce qu’il faut retenir
 
-Le capteur `Fenêtre optimale` expose aussi un contexte lisible :
-
-- `status` : `auto`, `bloque`, `en_attente`
-- `next_action` : prochaine action lisible
-- `next_action_date` : prochaine date réelle
-- `next_action_display` : date lisible
-- `summary` : résumé utilisateur, par exemple `Arrosage prévu demain matin (auto)`
-
-Le capteur `Assistant` expose la synthèse la plus directe:
-
-- `action`
-- `moment`
-- `quantity_mm`
-- `status`
-- `reason`
-- `next_action_date`
-- `next_action_display`
-
-Quand aucune action n’est nécessaire, l’interface affiche `aucune_action` et `attendre`, ce qui évite les libellés techniques.
-
-Le flux reste compatible avec :
-
-- calcul du besoin réel en eau
-- prise en compte pluie / ETP / humidité
-- adaptation selon la phase du gazon
-- conversion automatique du besoin en mm vers une durée par zone
-- exécution séquentielle des zones configurées
-- découpage en plusieurs passages si nécessaire
-- détection automatique des sessions réelles d'arrosage
-- historique lisible via `Cycle calculé`, `Dernière session détectée` et `Dernière application`
-- blocage explicite si le type d'application est inconnu
-- blocage / délai / suggestion pilotés par `application_irrigation_mode`
+- le produit se mémorise avec `register_product`
+- l’intervention réelle se déclare avec `declare_intervention`
+- `remove_product` nettoie la base locale
+- le moteur garde la main sur les garde-fous d’arrosage
 
 ---
 
@@ -483,12 +465,13 @@ Le principe est simple:
 
 ## 🌿 Produits personnalisés
 
-Flux recommandé :
+Si tu utilises souvent les mêmes produits:
 
-1. `register_product`  
-2. `declare_intervention`  
+1. enregistre le produit avec `register_product`
+2. déclare ensuite l’intervention réelle avec `declare_intervention`
+3. retire le produit avec `remove_product` si tu n’en as plus besoin
 
-👉 Sinon : laisse le moteur décider.
+👉 Cela évite de retaper les mêmes paramètres à chaque fois.
 
 ---
 
