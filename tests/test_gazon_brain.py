@@ -171,6 +171,68 @@ class GazonBrainTests(unittest.TestCase):
         self.assertIn("declared_at", item)
         self.assertIsNotNone(item["declared_at"])
 
+    def test_declare_intervention_resolves_registered_product_by_name(self) -> None:
+        brain = GazonBrain()
+        brain.register_product(
+            "bio-1",
+            "Bio Boost",
+            "Biostimulant",
+            dose_conseillee="3.0 ml / L",
+            application_type="sol",
+            application_requires_watering_after=True,
+            application_post_watering_mm=1.2,
+            application_irrigation_block_hours=0.0,
+            application_irrigation_delay_minutes=30.0,
+            application_irrigation_mode="auto",
+            application_label_notes="Arrosage léger après application",
+        )
+
+        item = brain.declare_intervention(
+            "Biostimulant",
+            date_action=date(2026, 3, 18),
+            produit="Bio Boost",
+            zone="zone_1",
+        )
+
+        self.assertEqual(item["produit_id"], "bio-1")
+        self.assertEqual(item["produit"], "Bio Boost")
+        self.assertEqual(item["application_type"], "sol")
+        self.assertTrue(item["application_requires_watering_after"])
+        self.assertEqual(item["application_post_watering_mm"], 1.2)
+        self.assertEqual(item["application_irrigation_mode"], "auto")
+        self.assertIn("produit_catalogue", item)
+        self.assertEqual(item["produit_catalogue"]["id"], "bio-1")
+
+    def test_declare_intervention_uses_unique_registered_product_without_identifier(self) -> None:
+        brain = GazonBrain()
+        brain.register_product(
+            "engrais-printemps",
+            "Engrais Printemps",
+            "Fertilisation",
+            dose_conseillee="2 g / m²",
+            application_type="sol",
+            application_requires_watering_after=False,
+            application_post_watering_mm=0.0,
+            application_irrigation_block_hours=12.0,
+            application_irrigation_delay_minutes=0.0,
+            application_irrigation_mode="suggestion",
+            application_label_notes="Produit saisonnier",
+        )
+
+        item = brain.declare_intervention(
+            "Fertilisation",
+            date_action=date(2026, 3, 18),
+            zone="zone_2",
+        )
+
+        self.assertEqual(item["produit_id"], "engrais-printemps")
+        self.assertEqual(item["produit"], "Engrais Printemps")
+        self.assertEqual(item["application_type"], "sol")
+        self.assertFalse(item["application_requires_watering_after"])
+        self.assertEqual(item["application_irrigation_mode"], "suggestion")
+        self.assertIn("produit_catalogue", item)
+        self.assertEqual(item["produit_catalogue"]["id"], "engrais-printemps")
+
     def test_record_user_action_is_persisted(self) -> None:
         brain = GazonBrain()
         summary = brain.record_user_action(

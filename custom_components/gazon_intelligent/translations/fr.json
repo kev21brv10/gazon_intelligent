@@ -149,7 +149,7 @@
     },
     "declare_intervention": {
       "name": "Déclarer une intervention",
-      "description": "Déclare une intervention réelle et peut mémoriser le produit, la dose, le type d'application et la prochaine réapplication.",
+      "description": "Déclare une intervention réelle. Si un produit a déjà été enregistré, l'intégration peut le retrouver automatiquement par son ID ou son nom et reprendre ses réglages.",
       "fields": {
         "intervention": {
           "name": "Intervention",
