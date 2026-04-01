@@ -149,7 +149,7 @@
     },
     "declare_intervention": {
       "name": "Actie melden",
-      "description": "Legt een echte actie vast en kan product, dosis en volgende herhaling onthouden.",
+      "description": "Legt een echte actie vast. De productinstellingen worden vastgelegd in \"Product registreren\"; hier kies je alleen het al geregistreerde product, de datum, de zone en eventueel een opmerking.",
       "fields": {
         "intervention": {
           "name": "Actie",
@@ -161,23 +161,15 @@
         },
         "produit_id": {
           "name": "Product-ID (optioneel)",
-          "description": "Identifier van een lokaal opgeslagen product."
+          "description": "Identifier van een al lokaal opgeslagen product."
         },
         "produit": {
           "name": "Product (optioneel)",
           "description": "Naam van het product of de toegepaste referentie."
         },
-        "dose": {
-          "name": "Dosis (optioneel)",
-          "description": "Toegepaste dosis, eventueel vrije tekst."
-        },
         "zone": {
           "name": "Zone (optioneel)",
           "description": "Zone waarop de actie van toepassing is."
-        },
-        "reapplication_after_days": {
-          "name": "Opnieuw toepassen over X dagen (optioneel)",
-          "description": "Termijn voor herbeoordeling of herhaling."
         },
         "note": {
           "name": "Opmerking (optioneel)",
@@ -187,7 +179,7 @@
     },
     "register_product": {
       "name": "Product registreren",
-      "description": "Voegt een aangepast product toe aan de lokale database of werkt het bij.",
+      "description": "Voegt een aangepast product toe aan de lokale database of werkt het bij. Alle productinstellingen worden hier vastgelegd en later opnieuw gebruikt in declare_intervention.",
       "fields": {
         "product_id": {
           "name": "Product-ID",

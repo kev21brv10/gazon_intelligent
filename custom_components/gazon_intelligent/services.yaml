@@ -86,66 +86,7 @@ declare_intervention:
       required: false
       selector:
         text:
-    dose:
-      required: false
-      selector:
-        text:
     zone:
-      required: false
-      selector:
-        text:
-    reapplication_after_days:
-      required: false
-      selector:
-        number:
-          min: 0
-          max: 365
-          step: 1
-          unit_of_measurement: j
-    application_type:
-      required: false
-      selector:
-        select:
-          options:
-            - sol
-            - foliaire
-    application_requires_watering_after:
-      required: false
-      selector:
-        boolean:
-    application_post_watering_mm:
-      required: false
-      selector:
-        number:
-          min: 0
-          max: 10
-          step: 0.1
-          unit_of_measurement: mm
-    application_irrigation_block_hours:
-      required: false
-      selector:
-        number:
-          min: 0
-          max: 72
-          step: 1
-          unit_of_measurement: h
-    application_irrigation_delay_minutes:
-      required: false
-      selector:
-        number:
-          min: 0
-          max: 1440
-          step: 1
-          unit_of_measurement: min
-    application_irrigation_mode:
-      required: false
-      selector:
-        select:
-          options:
-            - auto
-            - manuel
-            - suggestion
-    application_label_notes:
       required: false
       selector:
         text:

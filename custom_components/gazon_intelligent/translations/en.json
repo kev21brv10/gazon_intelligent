@@ -149,7 +149,7 @@
     },
     "declare_intervention": {
       "name": "Declare an intervention",
-      "description": "Logs a real intervention and can remember the product, dose, and next reapplication.",
+      "description": "Logs a real intervention. Product settings live in \"Register a product\"; here you only choose the already registered product, the date, the zone, and an optional note.",
       "fields": {
         "intervention": {
           "name": "Intervention",
@@ -161,23 +161,15 @@
         },
         "produit_id": {
           "name": "Product ID (optional)",
-          "description": "Identifier of a product saved in the local database."
+          "description": "Identifier of a product already saved in the local database."
         },
         "produit": {
           "name": "Product (optional)",
           "description": "Name of the product or reference applied."
         },
-        "dose": {
-          "name": "Dose (optional)",
-          "description": "Applied dose, free text if needed."
-        },
         "zone": {
           "name": "Zone (optional)",
           "description": "Zone affected by the intervention."
-        },
-        "reapplication_after_days": {
-          "name": "Reapply in X days (optional)",
-          "description": "Delay before re-evaluating or reapplying."
         },
         "note": {
           "name": "Note (optional)",
@@ -187,7 +179,7 @@
     },
     "register_product": {
       "name": "Register a product",
-      "description": "Adds or updates a custom product in the local database.",
+      "description": "Adds or updates a custom product in the local database. All product settings are defined here and reused later by declare_intervention.",
       "fields": {
         "product_id": {
           "name": "Product ID",

@@ -149,7 +149,7 @@
     },
     "declare_intervention": {
       "name": "Declarar una intervención",
-      "description": "Registra una intervención real y puede recordar el producto, la dosis y la siguiente reaplicación.",
+      "description": "Registra una intervención real. Los ajustes del producto se definen en \"Registrar un producto\"; aquí solo eliges el producto ya registrado, la fecha, la zona y una nota opcional.",
       "fields": {
         "intervention": {
           "name": "Intervención",
@@ -161,23 +161,15 @@
         },
         "produit_id": {
           "name": "ID de producto (opcional)",
-          "description": "Identificador de un producto guardado en la base local."
+          "description": "Identificador de un producto ya guardado en la base local."
         },
         "produit": {
           "name": "Producto (opcional)",
           "description": "Nombre del producto o referencia aplicada."
         },
-        "dose": {
-          "name": "Dosis (opcional)",
-          "description": "Dosis aplicada, texto libre si hace falta."
-        },
         "zone": {
           "name": "Zona (opcional)",
           "description": "Zona afectada por la intervención."
-        },
-        "reapplication_after_days": {
-          "name": "Reaplicar en X días (opcional)",
-          "description": "Plazo antes de reevaluar o reaplicar."
         },
         "note": {
           "name": "Nota (opcional)",
@@ -187,7 +179,7 @@
     },
     "register_product": {
       "name": "Registrar un producto",
-      "description": "Añade o actualiza un producto personalizado en la base local.",
+      "description": "Añade o actualiza un producto personalizado en la base local. Todos los ajustes del producto se definen aquí y luego se reutilizan en declare_intervention.",
       "fields": {
         "product_id": {
           "name": "ID de producto",
