@@ -149,7 +149,7 @@
     },
     "declare_intervention": {
       "name": "Maßnahme melden",
-      "description": "Erfasst eine echte Maßnahme und kann Produkt, Dosis und nächste Wiederanwendung merken.",
+      "description": "Erfasst eine echte Maßnahme. Die Produkteinstellungen werden in \"Produkt registrieren\" festgelegt; hier wählst du nur das bereits registrierte Produkt, das Datum, die Zone und bei Bedarf eine Notiz.",
       "fields": {
         "intervention": {
           "name": "Maßnahme",
@@ -161,23 +161,15 @@
         },
         "produit_id": {
           "name": "Produkt-ID (optional)",
-          "description": "Kennung eines lokal gespeicherten Produkts."
+          "description": "Kennung eines bereits lokal gespeicherten Produkts."
         },
         "produit": {
           "name": "Produkt (optional)",
           "description": "Name des Produkts oder der angewendeten Referenz."
         },
-        "dose": {
-          "name": "Dosis (optional)",
-          "description": "Angewendete Dosis, bei Bedarf als Freitext."
-        },
         "zone": {
           "name": "Zone (optional)",
           "description": "Von der Maßnahme betroffene Zone."
-        },
-        "reapplication_after_days": {
-          "name": "In X Tagen erneut anwenden (optional)",
-          "description": "Frist bis zur Neubewertung oder erneuten Anwendung."
         },
         "note": {
           "name": "Notiz (optional)",
@@ -187,7 +179,7 @@
     },
     "register_product": {
       "name": "Produkt registrieren",
-      "description": "Fügt ein benutzerdefiniertes Produkt zur lokalen Datenbank hinzu oder aktualisiert es.",
+      "description": "Fügt ein benutzerdefiniertes Produkt zur lokalen Datenbank hinzu oder aktualisiert es. Alle Produkteinstellungen werden hier festgelegt und später in declare_intervention wiederverwendet.",
       "fields": {
         "product_id": {
           "name": "Produkt-ID",

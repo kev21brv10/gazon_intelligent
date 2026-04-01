@@ -149,7 +149,7 @@
     },
     "declare_intervention": {
       "name": "Déclarer une intervention",
-      "description": "Déclare une intervention réelle. Si un produit a déjà été enregistré, l'intégration peut le retrouver automatiquement par son ID ou son nom et reprendre ses réglages.",
+      "description": "Déclare une intervention réelle. Les réglages du produit se configurent dans \"Enregistrer un produit\" ; ici, il suffit de choisir le produit déjà enregistré, la date, la zone et une note si besoin.",
       "fields": {
         "intervention": {
           "name": "Intervention",
@@ -161,51 +161,15 @@
         },
         "produit_id": {
           "name": "ID produit (optionnel)",
-          "description": "Identifiant d'un produit enregistré dans la base locale."
+          "description": "Identifiant d'un produit déjà enregistré dans la base locale."
         },
         "produit": {
           "name": "Produit (optionnel)",
           "description": "Nom du produit ou de la référence appliquée."
         },
-        "dose": {
-          "name": "Dose (optionnelle)",
-          "description": "Dose appliquée, en texte libre si besoin."
-        },
         "zone": {
           "name": "Zone (optionnelle)",
           "description": "Zone concernée par l'intervention."
-        },
-        "reapplication_after_days": {
-          "name": "Réapplication dans X jours (optionnel)",
-          "description": "Délai avant de réévaluer ou de refaire l'application."
-        },
-        "application_type": {
-          "name": "Type d'application (optionnel)",
-          "description": "sol ou foliaire."
-        },
-        "application_requires_watering_after": {
-          "name": "Arrosage après application requis (optionnel)",
-          "description": "Indique si un arrosage technique doit suivre."
-        },
-        "application_post_watering_mm": {
-          "name": "Arrosage après application (mm, optionnel)",
-          "description": "Quantité d'eau technique à apporter après l'application."
-        },
-        "application_irrigation_block_hours": {
-          "name": "Blocage arrosage (h, optionnel)",
-          "description": "Durée de blocage automatique après application."
-        },
-        "application_irrigation_delay_minutes": {
-          "name": "Délai avant arrosage (min, optionnel)",
-          "description": "Temps d'attente avant d'autoriser l'arrosage post-application."
-        },
-        "application_irrigation_mode": {
-          "name": "Mode arrosage post-application (optionnel)",
-          "description": "auto, manuel ou suggestion."
-        },
-        "application_label_notes": {
-          "name": "Notes étiquette (optionnel)",
-          "description": "Notes informatives liées à l'étiquette produit."
         },
         "note": {
           "name": "Note (optionnelle)",
@@ -215,7 +179,7 @@
     },
     "register_product": {
       "name": "Enregistrer un produit",
-      "description": "Ajoute ou met à jour un produit personnalisé dans la base locale.",
+      "description": "Ajoute ou met à jour un produit personnalisé dans la base locale. Tous les réglages du produit se définissent ici et sont réutilisés ensuite par declare_intervention.",
       "fields": {
         "product_id": {
           "name": "ID produit",

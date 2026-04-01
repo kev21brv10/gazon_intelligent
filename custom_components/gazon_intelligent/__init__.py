@@ -123,28 +123,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     vol.Optional("date_action"): str,
                     vol.Optional("produit_id"): vol.Coerce(str),
                     vol.Optional("produit"): vol.Coerce(str),
-                    vol.Optional("dose"): vol.Coerce(str),
                     vol.Optional("zone"): vol.Coerce(str),
-                    vol.Optional("reapplication_after_days"): vol.All(
-                        vol.Coerce(int),
-                        vol.Range(min=0, max=365),
-                    ),
-                    vol.Optional("application_type"): vol.In(["sol", "foliaire"]),
-                    vol.Optional("application_requires_watering_after"): vol.Coerce(bool),
-                    vol.Optional("application_post_watering_mm"): vol.All(
-                        vol.Coerce(float),
-                        vol.Range(min=0, max=10),
-                    ),
-                    vol.Optional("application_irrigation_block_hours"): vol.All(
-                        vol.Coerce(float),
-                        vol.Range(min=0, max=72),
-                    ),
-                    vol.Optional("application_irrigation_delay_minutes"): vol.All(
-                        vol.Coerce(float),
-                        vol.Range(min=0, max=1440),
-                    ),
-                    vol.Optional("application_irrigation_mode"): vol.In(["auto", "manuel", "suggestion"]),
-                    vol.Optional("application_label_notes"): vol.Coerce(str),
                     vol.Optional("note"): vol.Coerce(str),
                 }
             ),
@@ -322,21 +301,12 @@ async def _handle_declare_intervention(call: ServiceCall) -> None:
     coordinator = _get_first_coordinator(hass)
     try:
         await coordinator.async_declare_intervention(
-            call.data["intervention"],
-            parse_optional_date(call.data.get("date_action")),
-            call.data.get("produit_id"),
-            call.data.get("produit"),
-            call.data.get("dose"),
-            call.data.get("zone"),
-            call.data.get("reapplication_after_days"),
-            call.data.get("application_type"),
-            call.data.get("application_requires_watering_after"),
-            call.data.get("application_post_watering_mm"),
-            call.data.get("application_irrigation_block_hours"),
-            call.data.get("application_irrigation_delay_minutes"),
-            call.data.get("application_irrigation_mode"),
-            call.data.get("application_label_notes"),
-            call.data.get("note"),
+            intervention=call.data["intervention"],
+            date_action=parse_optional_date(call.data.get("date_action")),
+            produit_id=call.data.get("produit_id"),
+            produit=call.data.get("produit"),
+            zone=call.data.get("zone"),
+            note=call.data.get("note"),
         )
     except ValueError as err:
         raise HomeAssistantError(str(err) or "La date doit être au format JJ/MM/AAAA.") from err
