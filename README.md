@@ -322,9 +322,10 @@ Les états de `Dernière exécution` sont simples:
 2. Donne un `product_id` unique
 3. Renseigne le nom, le type et tous les réglages utiles du produit
 4. Lors d’une intervention réelle, utilise le service `gazon_intelligent.declare_intervention`
-5. Choisis simplement le produit déjà enregistré, puis la date, la zone et une note si besoin
-6. Le moteur n’accepte qu’un produit exact: si plusieurs produits existent et qu’aucun choix clair n’est fourni, il renvoie une erreur explicite
-7. Si le produit n’est plus utile, retire-le avec `gazon_intelligent.remove_product`
+5. Choisis le produit déjà enregistré par ID ou par nom exact, puis la date, la zone et une note si besoin
+6. S’il n’y a qu’un seul produit enregistré, l’intégration peut le reprendre automatiquement
+7. Si plusieurs produits existent et qu’aucun choix clair n’est fourni, le moteur renvoie une erreur explicite
+8. Si le produit n’est plus utile, retire-le avec `gazon_intelligent.remove_product`
 
 #### Quand utiliser un produit enregistré
 
@@ -444,7 +445,7 @@ Notes:
 
 Le principe est simple:
 
-1. Home Assistant calcule la décision
+1. L’intégration calcule la décision
 2. Tu lis la façade `assistant`
 3. Tu appliques ou tu laisses faire
 
@@ -481,10 +482,10 @@ Le principe est simple:
 
 Si tu utilises souvent les mêmes produits:
 
-1. enregistre le produit avec `register_product`
-2. déclare ensuite l’intervention réelle avec `declare_intervention`
+1. `register_product` sert à enregistrer la fiche produit
+2. `declare_intervention` sert à déclarer l’action réelle
 3. le moteur reprend automatiquement tous les réglages enregistrés pour ce produit
-4. retire le produit avec `remove_product` si tu n’en as plus besoin
+4. `remove_product` retire le produit s’il n’est plus utile
 
 Si plusieurs produits existent, utilise l’ID ou le nom exact du produit voulu. Sinon, l’intégration refuse de deviner.
 
