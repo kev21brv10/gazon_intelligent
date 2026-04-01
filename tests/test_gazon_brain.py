@@ -246,10 +246,76 @@ class GazonBrainTests(unittest.TestCase):
         self.assertIn("produit_catalogue", item)
         self.assertEqual(item["produit_catalogue"]["id"], "engrais-printemps")
 
+    def test_load_state_restores_selected_product_id_only_when_valid(self) -> None:
+        brain = GazonBrain()
+        brain.load_state(
+            {
+                "products": {
+                    "bio-1": {"id": "bio-1", "nom": "Bio Boost"},
+                },
+                "memory": {
+                    "selected_product_id": "bio-1",
+                },
+            }
+        )
+
+        self.assertEqual(brain.selected_product_id, "bio-1")
+        self.assertEqual(brain.selected_product_name, "Bio Boost")
+        self.assertEqual(brain.dump_state()["memory"]["selected_product_id"], "bio-1")
+
+        brain.load_state(
+            {
+                "products": {
+                    "bio-1": {"id": "bio-1", "nom": "Bio Boost"},
+                    "engrais-printemps": {"id": "engrais-printemps", "nom": "Engrais Printemps"},
+                },
+                "memory": {
+                    "selected_product_id": "unknown",
+                },
+            }
+        )
+
+        self.assertIsNone(brain.selected_product_id)
+        self.assertIsNone(brain.selected_product_name)
+        self.assertIsNone(brain.dump_state()["memory"]["selected_product_id"])
+
+    def test_selected_product_id_normalizes_after_product_removal(self) -> None:
+        brain = GazonBrain()
+        brain.register_product("bio-1", "Bio Boost", "Biostimulant")
+        brain.register_product("engrais-printemps", "Engrais Printemps", "Fertilisation")
+        brain.selected_product_id = "bio-1"
+
+        brain.remove_product("bio-1")
+
+        self.assertEqual(brain.selected_product_id, "engrais-printemps")
+        self.assertEqual(brain.selected_product_name, "Engrais Printemps")
+
+        brain.remove_product("engrais-printemps")
+
+        self.assertIsNone(brain.selected_product_id)
+        self.assertIsNone(brain.selected_product_name)
+
+    def test_declare_intervention_uses_persisted_selected_product(self) -> None:
+        brain = GazonBrain()
+        brain.register_product("bio-1", "Bio Boost", "Biostimulant")
+        brain.register_product("engrais-printemps", "Engrais Printemps", "Fertilisation")
+        brain.selected_product_id = "bio-1"
+
+        item = brain.declare_intervention(
+            "Biostimulant",
+            date_action=date(2026, 3, 18),
+            zone="zone_1",
+        )
+
+        self.assertEqual(item["produit_id"], "bio-1")
+        self.assertEqual(item["produit"], "Bio Boost")
+        self.assertEqual(item["produit_catalogue"]["id"], "bio-1")
+
     def test_declare_intervention_requires_exact_product_match(self) -> None:
         brain = GazonBrain()
         brain.register_product("bio-1", "Bio Boost", "Biostimulant")
         brain.register_product("engrais-printemps", "Engrais Printemps", "Fertilisation")
+        brain.selected_product_id = None
 
         with self.assertRaises(ValueError) as ctx:
             brain.declare_intervention(

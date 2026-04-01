@@ -126,6 +126,7 @@ En pratique, l’intégration gère:
 - `sensor.gazon_intelligent_dernier_arrosage_detecte`
 - `sensor.gazon_intelligent_derniere_application`
 - `sensor.gazon_intelligent_derniere_action_utilisateur`
+- `sensor.gazon_intelligent_catalogue_produits`
 - `binary_sensor.gazon_intelligent_arrosage_recommande`
 - `binary_sensor.gazon_intelligent_tonte_autorisee`
 - `binary_sensor.gazon_intelligent_arrosage_apres_application_autorise`
@@ -142,6 +143,7 @@ En pratique, l’intégration gère:
 
 - diagnostics téléchargeables via l’intégration
 - logs du module `custom_components.gazon_intelligent`
+- `sensor.gazon_intelligent_catalogue_produits` pour voir rapidement les produits enregistrés
 
 ---
 
@@ -304,10 +306,27 @@ Tu peux aussi y enregistrer:
   - le dernier produit ou traitement enregistré
 - `Dernière exécution`
   - ce que l’intégration a réellement lancé
+- `Catalogue produits`
+  - le nombre de produits enregistrés et leurs détails
+- `Produit d’intervention`
+  - le produit actuellement choisi pour une prochaine intervention
+  - la liste est remplie automatiquement à partir des produits enregistrés
+  - si un seul produit existe, il peut être repris automatiquement
 - `Cycle calculé`
   - le plan d’arrosage calculé si un arrosage est nécessaire
 - `Arrosage après application autorisé`
   - indique si un arrosage est permis après une application
+
+#### Choisir un produit pour une intervention
+
+Le plus simple est de:
+
+1. Enregistrer d’abord le produit avec `register_product`
+2. Le choisir ensuite dans `select.gazon_intelligent_produit_intervention`
+3. Déclarer l’intervention réelle avec `declare_intervention`
+
+Le sélecteur affiche les noms lisibles. Si plusieurs produits ont le même nom, le libellé devient `Nom — product_id` pour éviter toute ambiguïté.
+Quand aucun produit ne correspond plus, la sélection se vide proprement.
 
 Les états de `Dernière exécution` sont simples:
 
@@ -321,10 +340,10 @@ Les états de `Dernière exécution` sont simples:
 1. Utilise le service `gazon_intelligent.register_product`
 2. Donne un `product_id` unique
 3. Renseigne le nom, le type et tous les réglages utiles du produit
-4. Lors d’une intervention réelle, utilise le service `gazon_intelligent.declare_intervention`
-5. Choisis le produit déjà enregistré par ID ou par nom exact, puis la date, la zone et une note si besoin
+4. Lors d’une intervention réelle, choisis le produit dans `select.gazon_intelligent_produit_intervention` ou précise son ID exact
+5. Lance `gazon_intelligent.declare_intervention` avec la date, la zone et une note si besoin
 6. S’il n’y a qu’un seul produit enregistré, l’intégration peut le reprendre automatiquement
-7. Si plusieurs produits existent et qu’aucun choix clair n’est fourni, le moteur renvoie une erreur explicite
+7. Si plusieurs produits existent, il faut une sélection claire: le sélecteur ou un ID / nom exact
 8. Si le produit n’est plus utile, retire-le avec `gazon_intelligent.remove_product`
 
 #### Quand utiliser un produit enregistré
@@ -345,8 +364,9 @@ Un produit enregistré sert à:
 #### Ce qu’il faut retenir
 
 - le produit se mémorise avec `register_product`
+- le choix du produit pour l’intervention se fait avec `select.gazon_intelligent_produit_intervention`
 - l’intervention réelle se déclare avec `declare_intervention`
-- `declare_intervention` reste simple: produit, date, zone, note
+- `declare_intervention` reste simple: produit choisi, date, zone, note
 - `remove_product` nettoie la base locale
 - le moteur garde la main sur les garde-fous d’arrosage
 
@@ -434,8 +454,8 @@ Notes:
 - `start_manual_irrigation` lance un arrosage manuel contrôlé à partir d’un objectif explicite.
 - `start_auto_irrigation` exécute le cycle calculé ou un objectif fourni, sans contourner les garde-fous.
 - `declare_intervention` reste le point d’entrée principal pour les interventions.
-- `declare_intervention` reste volontairement simple: on choisit le produit déjà enregistré, puis la date, la zone et une note si besoin.
-- si plusieurs produits sont enregistrés, il faut un produit exact: ID ou nom exact, sinon le moteur renvoie une erreur explicite.
+- `declare_intervention` reste volontairement simple: on choisit le produit dans le sélecteur dédié, puis la date, la zone et une note si besoin.
+- si plusieurs produits sont enregistrés, il faut une sélection claire: le sélecteur, ou un ID / nom exact, sinon le moteur renvoie une erreur explicite.
 - tous les réglages du produit se trouvent dans `register_product`.
 - `declare_mowing` et `declare_watering` sont des raccourcis de compatibilité utiles.
 
@@ -483,9 +503,10 @@ Le principe est simple:
 Si tu utilises souvent les mêmes produits:
 
 1. `register_product` sert à enregistrer la fiche produit
-2. `declare_intervention` sert à déclarer l’action réelle
-3. le moteur reprend automatiquement tous les réglages enregistrés pour ce produit
-4. `remove_product` retire le produit s’il n’est plus utile
+2. `select.gazon_intelligent_produit_intervention` sert à choisir le produit pour la prochaine intervention
+3. `declare_intervention` sert à déclarer l’action réelle
+4. le moteur reprend automatiquement tous les réglages enregistrés pour ce produit
+5. `remove_product` retire le produit s’il n’est plus utile
 
 Si plusieurs produits existent, utilise l’ID ou le nom exact du produit voulu. Sinon, l’intégration refuse de deviner.
 

@@ -149,7 +149,7 @@
     },
     "declare_intervention": {
       "name": "Déclarer une intervention",
-      "description": "Déclare une intervention réelle. Les réglages du produit se configurent dans \"Enregistrer un produit\" ; ici, il suffit de choisir le produit déjà enregistré, la date, la zone et une note si besoin. Si plusieurs produits existent, il faut un ID ou un nom exact.",
+      "description": "Déclare une intervention réelle. Les réglages du produit se configurent dans \"Enregistrer un produit\" ; ici, il suffit de choisir le produit déjà enregistré, la date, la zone et une note si besoin. Si aucun produit explicite n'est fourni, l'intégration peut utiliser la sélection courante de l'UI.",
       "fields": {
         "intervention": {
           "name": "Intervention",
