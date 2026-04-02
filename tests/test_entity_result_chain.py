@@ -221,6 +221,27 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(product_select.extra_state_attributes["selected_product_name"], "Engrais Printemps")
         self.assertEqual(product_select.extra_state_attributes["summary"], "Produit sélectionné : Engrais Printemps")
 
+    def test_intervention_product_select_includes_application_months(self) -> None:
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=None, history=[], memory={})
+        coordinator.products = {
+            "humuslight": {
+                "id": "humuslight",
+                "nom": "Humuslight",
+                "application_months": [3, 4, 5, 9, 10],
+                "application_months_label": "Mars à Mai, Septembre à Octobre",
+            }
+        }
+        coordinator.selected_product_id = "humuslight"
+
+        product_select = select.GazonInterventionProductSelect(coordinator)
+
+        self.assertEqual(product_select.options, ["Humuslight · Mars à Mai, Septembre à Octobre"])
+        self.assertEqual(product_select.current_option, "Humuslight · Mars à Mai, Septembre à Octobre")
+        self.assertEqual(
+            product_select.extra_state_attributes["selected_product_months_label"],
+            "Mars à Mai, Septembre à Octobre",
+        )
+
     def test_intervention_product_select_handles_empty_catalogue(self) -> None:
         coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=None, history=[], memory={})
 

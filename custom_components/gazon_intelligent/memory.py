@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ast
+import re
+import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -274,6 +276,168 @@ def _split_csv_values(value: Any) -> list[str]:
     return clean
 
 
+_MONTH_LABELS_FR: dict[int, str] = {
+    1: "Janvier",
+    2: "Février",
+    3: "Mars",
+    4: "Avril",
+    5: "Mai",
+    6: "Juin",
+    7: "Juillet",
+    8: "Août",
+    9: "Septembre",
+    10: "Octobre",
+    11: "Novembre",
+    12: "Décembre",
+}
+
+_MONTH_ALIASES: dict[str, int] = {
+    "janvier": 1,
+    "janv": 1,
+    "jan": 1,
+    "feb": 2,
+    "fev": 2,
+    "fevr": 2,
+    "fevrier": 2,
+    "février": 2,
+    "mars": 3,
+    "mar": 3,
+    "avr": 4,
+    "avril": 4,
+    "apr": 4,
+    "mai": 5,
+    "may": 5,
+    "juin": 6,
+    "jun": 6,
+    "juil": 7,
+    "juillet": 7,
+    "jul": 7,
+    "aout": 8,
+    "août": 8,
+    "sep": 9,
+    "sept": 9,
+    "septembre": 9,
+    "oct": 10,
+    "octobre": 10,
+    "nov": 11,
+    "novembre": 11,
+    "dec": 12,
+    "decembre": 12,
+    "décembre": 12,
+}
+
+
+def _normalize_text(value: object | None) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    normalized = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in normalized if not unicodedata.combining(ch))
+
+
+def _month_token_to_int(value: object | None) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and 1 <= value <= 12:
+        return value
+    try:
+        number = int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        number = None
+    if number is not None and 1 <= number <= 12:
+        return number
+    normalized = _normalize_text(value)
+    if not normalized:
+        return None
+    return _MONTH_ALIASES.get(normalized)
+
+
+def normalize_application_months(value: Any) -> list[int]:
+    if value in (None, "", [], {}):
+        return []
+
+    items: list[object]
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        if text.startswith("[") and text.endswith("]"):
+            try:
+                parsed = ast.literal_eval(text)
+            except (ValueError, SyntaxError):
+                parsed = None
+            if isinstance(parsed, (list, tuple, set)):
+                items = list(parsed)
+            else:
+                items = re.split(r"[,+;/|]", text)
+        else:
+            items = re.split(r"[,+;/|]", text)
+    elif isinstance(value, (list, tuple, set)):
+        items = list(value)
+    else:
+        items = [value]
+
+    months: list[int] = []
+    for item in items:
+        if item in (None, "", [], {}):
+            continue
+        if isinstance(item, (list, tuple, set)):
+            months.extend(normalize_application_months(item))
+            continue
+        if isinstance(item, str):
+            token = item.strip()
+            if not token:
+                continue
+            range_match = re.fullmatch(r"(.+?)\s*(?:-|–|à|au|to)\s*(.+)", token, flags=re.IGNORECASE)
+            if range_match:
+                start = _month_token_to_int(range_match.group(1))
+                end = _month_token_to_int(range_match.group(2))
+                if start is not None and end is not None:
+                    if start <= end:
+                        months.extend(range(start, end + 1))
+                    else:
+                        months.extend(list(range(start, 13)) + list(range(1, end + 1)))
+                    continue
+            month = _month_token_to_int(token)
+            if month is not None:
+                months.append(month)
+            continue
+        month = _month_token_to_int(item)
+        if month is not None:
+            months.append(month)
+
+    return sorted(dict.fromkeys(months))
+
+
+def format_application_months_label(value: Any) -> str | None:
+    months = normalize_application_months(value)
+    if not months:
+        return None
+
+    ranges: list[tuple[int, int]] = []
+    start = months[0]
+    previous = months[0]
+    for month in months[1:]:
+        if month == previous + 1:
+            previous = month
+            continue
+        ranges.append((start, previous))
+        start = previous = month
+    ranges.append((start, previous))
+
+    parts: list[str] = []
+    for start_month, end_month in ranges:
+        if start_month == end_month:
+            parts.append(_MONTH_LABELS_FR.get(start_month, str(start_month)))
+        else:
+            parts.append(
+                f"{_MONTH_LABELS_FR.get(start_month, str(start_month))} à {_MONTH_LABELS_FR.get(end_month, str(end_month))}"
+            )
+    return ", ".join(parts)
+
+
 def normalize_product_id(value: Any) -> str | None:
     if value is None:
         return None
@@ -299,9 +463,13 @@ def normalize_product_record(product_id: Any, payload: dict[str, Any] | None) ->
         "reapplication_after_days": _to_int(payload.get("reapplication_after_days")),
         "delai_avant_tonte_jours": _to_int(payload.get("delai_avant_tonte_jours")),
         "phase_compatible": _split_csv_values(payload.get("phase_compatible")),
+        "application_months": normalize_application_months(payload.get("application_months")),
         "note": note or None,
     }
     record = _merge_application_fields(record, payload, product_type or None)
+    application_months_label = format_application_months_label(record.get("application_months"))
+    if application_months_label:
+        record["application_months_label"] = application_months_label
     clean = {key: value for key, value in record.items() if value not in (None, "", {}, [])}
     if not clean:
         return None
@@ -339,6 +507,11 @@ def build_application_summary(item: dict[str, Any] | None) -> dict[str, Any] | N
     application_label_notes = item.get("application_label_notes")
     if application_label_notes in (None, ""):
         application_label_notes = defaults.get("application_label_notes")
+    product_catalogue = item.get("produit_catalogue")
+    application_months = normalize_application_months(item.get("application_months"))
+    if not application_months and isinstance(product_catalogue, dict):
+        application_months = normalize_application_months(product_catalogue.get("application_months"))
+    application_months_label = format_application_months_label(application_months)
     declared_at = item.get("declared_at") or item.get("recorded_at")
     declared_dt = _parse_datetime(declared_at)
     application_block_until = None
@@ -367,6 +540,8 @@ def build_application_summary(item: dict[str, Any] | None) -> dict[str, Any] | N
         "application_irrigation_delay_minutes": application_irrigation_delay_minutes,
         "application_irrigation_mode": application_irrigation_mode,
         "application_label_notes": application_label_notes,
+        "application_months": application_months or None,
+        "application_months_label": application_months_label,
         "application_block_until": application_block_until,
     }
     clean = {key: value for key, value in summary.items() if value not in (None, "", {}, [])}

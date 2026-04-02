@@ -200,7 +200,7 @@
     },
     "register_product": {
       "name": "Registrar un producto",
-      "description": "Añade o actualiza un producto personalizado en la base local. La categoría se elige de una lista y la dosis puede introducirse por m². Todos los ajustes del producto se definen aquí y luego se reutilizan en declare_intervention.",
+      "description": "Añade o actualiza un producto personalizado en la base local. La categoría se elige de una lista, la dosis puede introducirse por m² y también se pueden indicar los meses permitidos de aplicación. Todos los ajustes del producto se definen aquí y luego se reutilizan en declare_intervention.",
       "fields": {
         "product_id": {
           "name": "ID de producto",
@@ -229,6 +229,10 @@
         "phase_compatible": {
           "name": "Fases compatibles (opcional)",
           "description": "Se permiten varias opciones. Ejemplo: Resiembra, Crecimiento, Mantenimiento."
+        },
+        "application_months": {
+          "name": "Meses de aplicación permitidos (opcional)",
+          "description": "Lista los meses permitidos. Ejemplo: 3,4,5,9,10 o marzo a mayo + septiembre a octubre."
         },
         "note": {
           "name": "Nota (opcional)",

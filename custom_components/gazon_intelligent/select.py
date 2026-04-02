@@ -8,6 +8,7 @@ from homeassistant.exceptions import HomeAssistantError
 
 from .const import DEFAULT_MODE, DOMAIN, MODES_GAZON
 from .entity_base import GazonEntityBase
+from .memory import format_application_months_label
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -27,11 +28,16 @@ def _catalogue_name_key(value: object) -> str:
 def _catalogue_product_label(product: dict[str, Any], duplicate_name_counts: dict[str, int]) -> str:
     product_id = str(product.get("id") or "").strip()
     product_name = str(product.get("nom") or product_id or "").strip()
+    months_label = str(product.get("application_months_label") or "").strip()
     if not product_name:
-        return product_id or "Produit"
-    if duplicate_name_counts.get(_catalogue_name_key(product_name), 0) > 1 and product_id:
-        return f"{product_name} — {product_id}"
-    return product_name
+        base_label = product_id or "Produit"
+    elif duplicate_name_counts.get(_catalogue_name_key(product_name), 0) > 1 and product_id:
+        base_label = f"{product_name} — {product_id}"
+    else:
+        base_label = product_name
+    if months_label:
+        return f"{base_label} · {months_label}"
+    return base_label
 
 
 class GazonModeSelect(GazonEntityBase, SelectEntity):
@@ -135,8 +141,16 @@ class GazonInterventionProductSelect(GazonEntityBase, SelectEntity):
         selected_product_id = self._resolved_selected_product_id()
         label_by_product_id = self._label_by_product_id()
         product_name_by_id = self._product_name_by_id()
+        product_by_id = {product_id: product for product_id, product, _label in catalogue}
         selected_product_label = label_by_product_id.get(selected_product_id) if selected_product_id else None
         selected_product_name = product_name_by_id.get(selected_product_id) if selected_product_id else None
+        selected_product_months = None
+        selected_product_months_label = None
+        if selected_product_id:
+            selected_product = product_by_id.get(selected_product_id)
+            if isinstance(selected_product, dict):
+                selected_product_months = selected_product.get("application_months")
+                selected_product_months_label = selected_product.get("application_months_label") or format_application_months_label(selected_product_months)
         if catalogue:
             if selected_product_id and selected_product_label:
                 summary = f"Produit sélectionné : {selected_product_label}"
@@ -149,6 +163,8 @@ class GazonInterventionProductSelect(GazonEntityBase, SelectEntity):
         return {
             "selected_product_id": str(selected_product_id).strip() if selected_product_id else None,
             "selected_product_name": selected_product_name,
+            "selected_product_months": selected_product_months,
+            "selected_product_months_label": selected_product_months_label,
             "summary": summary,
             "products_count": len(catalogue),
         }

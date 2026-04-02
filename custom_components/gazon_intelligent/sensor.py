@@ -8,6 +8,7 @@ from homeassistant.helpers.entity import EntityCategory
 from .assistant import build_assistant_decision
 from .const import DOMAIN
 from .entity_base import GazonEntityBase
+from .intervention_recommendation import build_intervention_recommendation
 from .memory import compute_application_state
 
 
@@ -113,6 +114,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
             GazonDerniereApplicationSensor(coordinator),
             GazonDerniereActionUtilisateurSensor(coordinator),
             GazonCatalogueProduitsSensor(coordinator),
+            GazonInterventionRecommendationSensor(coordinator),
         ]
     )
 
@@ -721,6 +723,8 @@ class GazonCatalogueProduitsSensor(GazonEntityBase, SensorEntity):
             "reapplication_after_days",
             "delai_avant_tonte_jours",
             "phase_compatible",
+            "application_months",
+            "application_months_label",
             "application_type",
             "application_requires_watering_after",
             "application_post_watering_mm",
@@ -760,6 +764,120 @@ class GazonCatalogueProduitsSensor(GazonEntityBase, SensorEntity):
                 else f"{len(products)} produits enregistrés"
             ),
         }
+
+
+class GazonInterventionRecommendationSensor(GazonEntityBase, SensorEntity):
+    _attr_name = "Prochaine intervention"
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:spray-bottle"
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_prochaine_intervention"
+
+    def _recommendation_payload(self) -> dict[str, object]:
+        recommendation = self._decision_value("intervention_recommendation")
+        if isinstance(recommendation, dict) and recommendation:
+            return recommendation
+        snapshot = getattr(self.coordinator, "data", None)
+        if isinstance(snapshot, dict):
+            recommendation = build_intervention_recommendation(
+                today=date.today(),
+                phase_active=snapshot.get("phase_active") or snapshot.get("mode"),
+                sous_phase=snapshot.get("sous_phase"),
+                selected_product_id=getattr(self.coordinator, "selected_product_id", None),
+                selected_product_name=getattr(self.coordinator, "selected_product_name", None),
+                products=getattr(self.coordinator, "products", None),
+                history=getattr(self.coordinator, "history", None),
+                application_state=snapshot,
+            )
+            if isinstance(recommendation, dict) and recommendation:
+                return recommendation
+        return {
+            "schema_version": 3,
+            "status": "unavailable",
+            "recommended_action": "add_product",
+            "priority": "none",
+            "score": 0,
+            "reason": "Aucun produit enregistré",
+            "why_now": "Ajoute au moins un produit au catalogue pour obtenir une recommandation.",
+            "reasons": [],
+            "constraints": [
+                {
+                    "code": "catalogue_empty",
+                    "label": "Aucun produit enregistré",
+                    "value": {"catalogue_count": 0},
+                    "hint": "Ajoute au moins un produit au catalogue pour obtenir une recommandation.",
+                    "blocking": True,
+                    "met": False,
+                }
+            ],
+            "missing_requirements": [
+                {
+                    "code": "catalogue_empty",
+                    "label": "Ajouter un produit au catalogue",
+                    "value": {"catalogue_count": 0},
+                    "hint": "Ajoute au moins un produit au catalogue pour obtenir une recommandation.",
+                    "blocking": True,
+                }
+            ],
+            "month_match": False,
+            "ready_to_declare": False,
+            "selected_product_ready": False,
+            "product": {
+                "id": None,
+                "name": None,
+                "type": None,
+                "months": [],
+                "months_label": None,
+                "phase_compatible": [],
+                "latest_application_date": None,
+                "next_reapplication_date": None,
+                "next_reapplication_display": None,
+                "due": False,
+                "phase_match": False,
+                "month_match": False,
+            },
+            "selection": {
+                "id": getattr(self.coordinator, "selected_product_id", None),
+                "name": getattr(self.coordinator, "selected_product_name", None),
+                "months": [],
+                "months_label": None,
+                "ready": False,
+            },
+            "context": {
+                "catalogue_count": 0,
+                "eligible_count": 0,
+                "current_month": date.today().month,
+                "current_phase": None,
+                "current_sub_phase": None,
+            },
+            "ui": {
+                "title": "Prochaine intervention indisponible",
+                "badge": "Catalogue vide",
+                "tone": "neutral",
+                "icon": "mdi:package-variant-closed",
+                "summary": "Intervention indisponible",
+                "hint": "Ajoute au moins un produit au catalogue pour obtenir une recommandation.",
+                "action_label": "Ajouter un produit",
+                "selection_summary": "Aucun produit disponible dans le catalogue.",
+                "selection_hint": "Ajoute au moins un produit avant de préparer une intervention.",
+                "declaration_summary": "Sélectionne un produit pour activer la déclaration.",
+                "declaration_hint": "Le bouton se débloque dès qu’un produit est prêt.",
+                "history_summary": "Dernière application",
+                "history_hint": "Historique local des applications enregistrées.",
+            },
+        }
+
+    @property
+    def native_value(self):
+        return str(self._recommendation_payload().get("status") or "unavailable")
+
+    @property
+    def extra_state_attributes(self):
+        payload = self._recommendation_payload()
+        return {"payload": payload}
 
 
 class GazonPlanArrosageSensor(GazonEntityBase, SensorEntity):

@@ -160,6 +160,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         vol.Range(min=0, max=3650),
                     ),
                     vol.Optional("phase_compatible"): vol.Any([vol.Coerce(str)], vol.Coerce(str)),
+                    vol.Optional("application_months"): vol.Any([vol.Coerce(int)], vol.Coerce(str)),
                     vol.Optional("application_type"): vol.In(["sol", "foliaire"]),
                     vol.Optional("application_requires_watering_after"): vol.Coerce(bool),
                     vol.Optional("application_post_watering_mm"): vol.All(
@@ -413,6 +414,7 @@ async def _handle_register_product(call: ServiceCall) -> None:
             call.data.get("reapplication_after_days"),
             call.data.get("delai_avant_tonte_jours"),
             phase_compatible,
+            call.data.get("application_months"),
             call.data.get("application_type"),
             call.data.get("application_requires_watering_after"),
             call.data.get("application_post_watering_mm"),

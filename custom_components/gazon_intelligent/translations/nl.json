@@ -200,7 +200,7 @@
     },
     "register_product": {
       "name": "Product registreren",
-      "description": "Voegt een aangepast product toe aan de lokale database of werkt het bij. De categorie wordt uit een lijst gekozen en de dosis kan per m² worden ingevoerd. Alle productinstellingen worden hier vastgelegd en later opnieuw gebruikt in declare_intervention.",
+      "description": "Voegt een aangepast product toe aan de lokale database of werkt het bij. De categorie wordt uit een lijst gekozen, de dosis kan per m² worden ingevoerd en de toegestane toepassingsmaanden kunnen ook worden vastgelegd. Alle productinstellingen worden hier vastgelegd en later opnieuw gebruikt in declare_intervention.",
       "fields": {
         "product_id": {
           "name": "Product-ID",
@@ -229,6 +229,10 @@
         "phase_compatible": {
           "name": "Compatibele fases (optioneel)",
           "description": "Meerdere keuzes mogelijk. Voorbeeld: Doorzaai, Groei, Onderhoud."
+        },
+        "application_months": {
+          "name": "Toegestane toepassingsmaanden (optioneel)",
+          "description": "Geef de toegestane maanden op. Voorbeeld: 3,4,5,9,10 of maart tot mei + september tot oktober."
         },
         "note": {
           "name": "Opmerking (optioneel)",

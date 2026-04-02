@@ -200,7 +200,7 @@
     },
     "register_product": {
       "name": "Produkt registrieren",
-      "description": "Fügt ein benutzerdefiniertes Produkt zur lokalen Datenbank hinzu oder aktualisiert es. Die Kategorie wird aus einer Liste gewählt und die Dosis kann pro m² eingegeben werden. Alle Produkteinstellungen werden hier festgelegt und später in declare_intervention wiederverwendet.",
+      "description": "Fügt ein benutzerdefiniertes Produkt zur lokalen Datenbank hinzu oder aktualisiert es. Die Kategorie wird aus einer Liste gewählt, die Dosis kann pro m² eingegeben werden und die zulässigen Anwendungsmonate können ebenfalls festgelegt werden. Alle Produkteinstellungen werden hier festgelegt und später in declare_intervention wiederverwendet.",
       "fields": {
         "product_id": {
           "name": "Produkt-ID",
@@ -229,6 +229,10 @@
         "phase_compatible": {
           "name": "Kompatible Phasen (optional)",
           "description": "Mehrfachauswahl möglich. Beispiel: Nachsaat, Wachstum, Pflege."
+        },
+        "application_months": {
+          "name": "Zulässige Anwendungsmonate (optional)",
+          "description": "Liste der erlaubten Monate. Beispiel: 3,4,5,9,10 oder März bis Mai + September bis Oktober."
         },
         "note": {
           "name": "Notiz (optional)",

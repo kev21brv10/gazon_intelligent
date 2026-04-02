@@ -200,7 +200,7 @@
     },
     "register_product": {
       "name": "Register a product",
-      "description": "Adds or updates a custom product in the local database. The category is chosen from a list and the dose can be entered per m². All product settings are defined here and reused later by declare_intervention.",
+      "description": "Adds or updates a custom product in the local database. The category is chosen from a list, the dose can be entered per m², and the allowed application months can also be specified. All product settings are defined here and reused later by declare_intervention.",
       "fields": {
         "product_id": {
           "name": "Product ID",
@@ -229,6 +229,10 @@
         "phase_compatible": {
           "name": "Compatible phases (optional)",
           "description": "Multiple choices allowed. Example: Overseeding, Growth, Maintenance."
+        },
+        "application_months": {
+          "name": "Allowed application months (optional)",
+          "description": "List the allowed months. Example: 3,4,5,9,10 or March to May + September to October."
         },
         "note": {
           "name": "Note (optional)",

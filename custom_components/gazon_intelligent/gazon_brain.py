@@ -13,6 +13,7 @@ from .const import (
 from .assistant import build_assistant_decision
 from .decision import DecisionContext, build_decision_result
 from .decision_models import DecisionResult
+from .intervention_recommendation import build_intervention_recommendation
 from .memory import (
     APPLICATION_DEFAULTS,
     _normalize_user_action_summary,
@@ -540,6 +541,7 @@ class GazonBrain:
         reapplication_after_days: int | None = None,
         delai_avant_tonte_jours: int | None = None,
         phase_compatible: str | list[str] | None = None,
+        application_months: str | list[int] | None = None,
         application_type: str | None = None,
         application_requires_watering_after: bool | None = None,
         application_post_watering_mm: float | None = None,
@@ -558,6 +560,7 @@ class GazonBrain:
                 "reapplication_after_days": reapplication_after_days,
                 "delai_avant_tonte_jours": delai_avant_tonte_jours,
                 "phase_compatible": phase_compatible,
+                "application_months": application_months,
                 "application_type": application_type,
                 "application_requires_watering_after": application_requires_watering_after,
                 "application_post_watering_mm": application_post_watering_mm,
@@ -756,4 +759,14 @@ class GazonBrain:
         self.memory["hauteur_tonte_recommandee_date"] = today.isoformat()
         self.memory["catalogue_produits"] = len(self.products)
         snapshot["assistant"] = build_assistant_decision(snapshot)
+        snapshot["intervention_recommendation"] = build_intervention_recommendation(
+            today=today,
+            phase_active=snapshot.get("phase_active"),
+            sous_phase=snapshot.get("sous_phase"),
+            selected_product_id=self.selected_product_id,
+            selected_product_name=self.selected_product_name,
+            products=self.products,
+            history=self.history,
+            application_state=snapshot,
+        )
         return snapshot

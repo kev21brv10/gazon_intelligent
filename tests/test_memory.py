@@ -27,6 +27,7 @@ _ensure_package("custom_components", PACKAGE_DIR.parent)
 _ensure_package("custom_components.gazon_intelligent", PACKAGE_DIR)
 
 memory = importlib.import_module("custom_components.gazon_intelligent.memory")
+intervention = importlib.import_module("custom_components.gazon_intelligent.intervention_recommendation")
 
 
 class MemoryCatalogTests(unittest.TestCase):
@@ -51,6 +52,7 @@ class MemoryCatalogTests(unittest.TestCase):
                 "reapplication_after_days": "21",
                 "delai_avant_tonte_jours": "2",
                 "phase_compatible": ["Sursemis", "Croissance", "Entretien"],
+                "application_months": "3,4,5,9,10",
                 "application_type": "sol",
                 "application_requires_watering_after": "true",
                 "application_post_watering_mm": "1.5",
@@ -71,6 +73,8 @@ class MemoryCatalogTests(unittest.TestCase):
         self.assertEqual(record["reapplication_after_days"], 21)
         self.assertEqual(record["delai_avant_tonte_jours"], 2)
         self.assertEqual(record["phase_compatible"], ["Sursemis", "Croissance", "Entretien"])
+        self.assertEqual(record["application_months"], [3, 4, 5, 9, 10])
+        self.assertEqual(record["application_months_label"], "Mars à Mai, Septembre à Octobre")
         self.assertEqual(record["application_type"], "sol")
         self.assertTrue(record["application_requires_watering_after"])
         self.assertEqual(record["application_post_watering_mm"], 1.5)
@@ -78,6 +82,11 @@ class MemoryCatalogTests(unittest.TestCase):
         self.assertEqual(record["application_irrigation_delay_minutes"], 15.0)
         self.assertEqual(record["application_irrigation_mode"], "manuel")
         self.assertEqual(record["application_label_notes"], "Appliquer au matin")
+
+    def test_application_months_helpers_normalize_and_format_ranges(self) -> None:
+        months = memory.normalize_application_months("mars à mai + septembre à octobre")
+        self.assertEqual(months, [3, 4, 5, 9, 10])
+        self.assertEqual(memory.format_application_months_label(months), "Mars à Mai, Septembre à Octobre")
 
     def test_build_application_summary_includes_product_id(self) -> None:
         summary = memory.build_application_summary(
@@ -98,6 +107,11 @@ class MemoryCatalogTests(unittest.TestCase):
                 "application_irrigation_delay_minutes": 30.0,
                 "application_irrigation_mode": "auto",
                 "application_label_notes": "Notes produit",
+                "produit_catalogue": {
+                    "id": "engrais_printemps",
+                    "nom": "Engrais printemps",
+                    "application_months": [3, 4, 5, 9, 10],
+                },
                 "declared_at": "2026-03-18T08:00:00+00:00",
             }
         )
@@ -114,6 +128,8 @@ class MemoryCatalogTests(unittest.TestCase):
         self.assertEqual(summary["application_irrigation_delay_minutes"], 30.0)
         self.assertEqual(summary["application_irrigation_mode"], "auto")
         self.assertEqual(summary["application_label_notes"], "Notes produit")
+        self.assertEqual(summary["application_months"], [3, 4, 5, 9, 10])
+        self.assertEqual(summary["application_months_label"], "Mars à Mai, Septembre à Octobre")
         self.assertEqual(summary["date_action"], "2026-03-18")
         self.assertEqual(summary["declared_at"], "2026-03-18T08:00:00+00:00")
 
@@ -248,3 +264,51 @@ class MemoryCatalogTests(unittest.TestCase):
         self.assertEqual(memory_state["feedback_observation"]["observed_mm"], 1.2)
         self.assertEqual(memory_state["feedback_observation"]["delta_mm"], 0.0)
         self.assertEqual(memory_state["feedback_observation"]["source"], "observation_only")
+
+    def test_build_intervention_recommendation_prefers_in_season_due_product(self) -> None:
+        recommendation = intervention.build_intervention_recommendation(
+            today=date(2026, 4, 10),
+            phase_active="Sursemis",
+            sous_phase="Reprise",
+            selected_product_id=None,
+            selected_product_name=None,
+            products={
+                "humuslight": {
+                    "id": "humuslight",
+                    "nom": "Humuslight",
+                    "type": "Biostimulant",
+                    "reapplication_after_days": 25,
+                    "phase_compatible": ["Sursemis", "Croissance", "Entretien"],
+                    "application_months": [3, 4, 5, 9, 10],
+                }
+            },
+            history=[
+                {
+                    "type": "Biostimulant",
+                    "date": "2026-03-12",
+                    "produit_id": "humuslight",
+                    "produit": "Humuslight",
+                    "reapplication_after_days": 25,
+                    "produit_catalogue": {
+                        "id": "humuslight",
+                        "nom": "Humuslight",
+                    },
+                }
+            ],
+            application_state={},
+        )
+
+        self.assertEqual(recommendation["schema_version"], 3)
+        self.assertEqual(recommendation["status"], "recommended")
+        self.assertIsInstance(recommendation["score"], int)
+        self.assertGreaterEqual(recommendation["score"], 0)
+        self.assertLessEqual(recommendation["score"], 100)
+        self.assertEqual(recommendation["product"]["id"], "humuslight")
+        self.assertEqual(recommendation["product"]["months_label"], "Mars à Mai, Septembre à Octobre")
+        self.assertTrue(recommendation["product"]["phase_match"])
+        self.assertTrue(recommendation["product"]["month_match"])
+        self.assertTrue(recommendation["product"]["due"])
+        self.assertFalse(recommendation["ready_to_declare"])
+        self.assertEqual(recommendation["selection"]["id"], None)
+        self.assertTrue(all(isinstance(item, dict) for item in recommendation["constraints"]))
+        self.assertTrue(all(isinstance(item, dict) for item in recommendation["missing_requirements"]))

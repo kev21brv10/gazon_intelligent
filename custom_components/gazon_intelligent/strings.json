@@ -199,7 +199,7 @@
     },
     "register_product": {
       "name": "Enregistrer un produit",
-      "description": "Ajoute ou met à jour un produit personnalisé dans la base locale. La catégorie se choisit dans une liste et le dosage peut être saisi au m².",
+      "description": "Ajoute ou met à jour un produit personnalisé dans la base locale. La catégorie se choisit dans une liste, le dosage peut être saisi au m² et les mois d'application peuvent être précisés.",
       "fields": {
         "product_id": {
           "name": "ID produit",
@@ -228,6 +228,10 @@
         "phase_compatible": {
           "name": "Phases compatibles (optionnel)",
           "description": "Choix multiples possibles. Exemple: Sursemis, Croissance, Entretien."
+        },
+        "application_months": {
+          "name": "Mois possibles d'application (optionnel)",
+          "description": "Liste les mois autorisés. Exemple: 3,4,5,9,10 ou mars à mai + septembre à octobre."
         },
         "application_type": {
           "name": "Type d'application (optionnel)",

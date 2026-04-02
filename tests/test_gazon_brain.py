@@ -123,6 +123,7 @@ class GazonBrainTests(unittest.TestCase):
             reapplication_after_days=14,
             delai_avant_tonte_jours=0,
             phase_compatible="Sursemis, Reprise",
+            application_months="3,4,5,9,10",
             application_type="sol",
             application_requires_watering_after=True,
             application_post_watering_mm=1.2,
@@ -140,6 +141,8 @@ class GazonBrainTests(unittest.TestCase):
         self.assertEqual(record["application_irrigation_delay_minutes"], 30.0)
         self.assertEqual(record["application_irrigation_mode"], "auto")
         self.assertEqual(record["application_label_notes"], "Arrosage léger après application")
+        self.assertEqual(record["application_months"], [3, 4, 5, 9, 10])
+        self.assertEqual(record["application_months_label"], "Mars à Mai, Septembre à Octobre")
 
     def test_register_product_accepts_multi_phase_compatibility(self) -> None:
         brain = GazonBrain()
@@ -195,6 +198,7 @@ class GazonBrainTests(unittest.TestCase):
         self.assertEqual(item["application_label_notes"], "Ne pas arroser pendant 24h")
         self.assertIn("declared_at", item)
         self.assertIsNotNone(item["declared_at"])
+        self.assertIn("produit_catalogue", item)
 
     def test_declare_intervention_resolves_registered_product_by_name(self) -> None:
         brain = GazonBrain()
