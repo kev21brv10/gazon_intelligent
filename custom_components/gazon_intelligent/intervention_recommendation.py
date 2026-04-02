@@ -564,8 +564,11 @@ def _ui_for_state(
 ) -> dict[str, str]:
     selected_name = (selected_details or {}).get("name")
     selected_months_label = (selected_details or {}).get("months_label")
+    candidate_phase = (candidate or {}).get("phase_compatible") or []
     selected_display = selected_name or (candidate or {}).get("product_name")
     today_display = today.strftime("%d/%m/%Y")
+    phase_now = str((candidate or {}).get("current_phase") or "").strip()
+    phase_id = ", ".join(candidate_phase[:3]) if candidate_phase else ""
     if state == "recommended":
         if selected_ready:
             summary = "Prête à déclarer"
@@ -580,16 +583,12 @@ def _ui_for_state(
             )
             action_label = "Choisir le produit"
     elif state == "possible":
-        summary = (
-            f"Produit conseillé : {selected_display}"
-            if selected_display
-            else f"Produit conseillé : {(candidate or {}).get('product_name')}"
-            if candidate and candidate.get("product_name")
-            else "À préparer"
-        )
+        product_name = selected_display or (candidate or {}).get("product_name")
+        summary = f"Produit conseillé : {product_name}" if product_name else "À préparer"
         hint = reason or (
-            f"Sélectionne {selected_display or (candidate or {}).get('product_name')} pour préparer la déclaration."
-            if (selected_display or (candidate or {}).get("product_name"))
+            f"Phase actuelle : {phase_now or 'Non disponible'}."
+            + (f" Phase idéale : {phase_id}." if phase_id else "")
+            if product_name
             else "Le produit est disponible, mais la déclaration attend encore un petit réglage."
         )
         action_label = "Choisir le produit"
@@ -617,7 +616,15 @@ def _ui_for_state(
                 f"Produit choisi : {selected_display}."
                 if selected_display
                 else (
-                    f"Produit conseillé : {(candidate or {}).get('product_name')}. Sélectionne-le pour préparer la déclaration."
+                    (
+                        f"Produit conseillé : {(candidate or {}).get('product_name')}."
+                        + (
+                            f" Phase actuelle : {phase_now}."
+                            if phase_now
+                            else ""
+                        )
+                        + (f" Phase idéale : {phase_id}." if phase_id else "")
+                    )
                     if candidate and candidate.get("product_name") and state in {"recommended", "possible"}
                     else "Sélectionne un produit dans la liste pour préparer la déclaration."
                 )
@@ -627,7 +634,10 @@ def _ui_for_state(
             f"Période sélectionnée: {selected_months_label}."
             if selected_months_label and selected_display
             else (
-                f"Période recommandée: {(candidate or {}).get('months_label')}."
+                (
+                    f"Période recommandée: {(candidate or {}).get('months_label')}."
+                    + (f" · Phase actuelle: {phase_now}." if phase_now else "")
+                )
                 if candidate and candidate.get("months_label")
                 else "La sélection met à jour le produit actif."
             )
@@ -639,7 +649,10 @@ def _ui_for_state(
                 f"Produit choisi : {selected_display}."
                 if selected_display
                 else (
-                    f"Produit conseillé : {(candidate or {}).get('product_name')}. Sélectionne-le pour déclencher la déclaration."
+                    (
+                        f"Produit conseillé : {(candidate or {}).get('product_name')}."
+                        + (f" Phase actuelle : {phase_now}." if phase_now else "")
+                    )
                     if candidate and candidate.get("product_name")
                     else "Sélectionne un produit pour activer la déclaration."
                 )
@@ -649,7 +662,10 @@ def _ui_for_state(
             "Tu peux déclarer l’intervention maintenant."
             if selected_ready
             else (
-                "Le produit choisi doit correspondre à la recommandation automatique."
+                (
+                    "Le produit choisi doit correspondre à la recommandation automatique."
+                    + (f" Phase actuelle : {phase_now}." if phase_now else "")
+                )
                 if selected_display
                 else "Le bouton se débloque dès qu’un produit est prêt."
             )
@@ -927,6 +943,13 @@ def build_intervention_recommendation(
         why_now = best["blocked_reason"]
     elif state == "recommended" and best["months_label"]:
         why_now = f"{reason} · Période recommandée: {best['months_label']}."
+    elif state == "possible":
+        phase_now = str(phase_active or "").strip() or "Non disponible"
+        phase_ideal = ", ".join(best["phase_compatible"][:3]) if best.get("phase_compatible") else ""
+        if phase_ideal:
+            why_now = f"{reason} · Phase actuelle: {phase_now}. · Phase idéale: {phase_ideal}."
+        else:
+            why_now = f"{reason} · Phase actuelle: {phase_now}."
     constraints, missing_requirements, _ = _constraints_for_candidate(
         candidate=best,
         state=state,
