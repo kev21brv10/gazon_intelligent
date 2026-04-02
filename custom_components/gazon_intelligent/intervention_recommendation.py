@@ -580,8 +580,18 @@ def _ui_for_state(
             )
             action_label = "Choisir le produit"
     elif state == "possible":
-        summary = "À préparer"
-        hint = reason or "Le produit est disponible, mais la déclaration attend encore un petit réglage."
+        summary = (
+            f"Produit conseillé : {selected_display}"
+            if selected_display
+            else f"Produit conseillé : {(candidate or {}).get('product_name')}"
+            if candidate and candidate.get("product_name")
+            else "À préparer"
+        )
+        hint = reason or (
+            f"Sélectionne {selected_display or (candidate or {}).get('product_name')} pour préparer la déclaration."
+            if (selected_display or (candidate or {}).get("product_name"))
+            else "Le produit est disponible, mais la déclaration attend encore un petit réglage."
+        )
         action_label = "Choisir le produit"
     elif state == "blocked":
         summary = "En pause"
@@ -607,7 +617,7 @@ def _ui_for_state(
                 f"Produit choisi : {selected_display}."
                 if selected_display
                 else (
-                    f"Produit recommandé : {(candidate or {}).get('product_name')}. Sélectionne-le pour préparer la déclaration."
+                    f"Produit conseillé : {(candidate or {}).get('product_name')}. Sélectionne-le pour préparer la déclaration."
                     if candidate and candidate.get("product_name") and state in {"recommended", "possible"}
                     else "Sélectionne un produit dans la liste pour préparer la déclaration."
                 )
@@ -628,7 +638,11 @@ def _ui_for_state(
             else (
                 f"Produit choisi : {selected_display}."
                 if selected_display
-                else "Sélectionne un produit pour activer la déclaration."
+                else (
+                    f"Produit conseillé : {(candidate or {}).get('product_name')}. Sélectionne-le pour déclencher la déclaration."
+                    if candidate and candidate.get("product_name")
+                    else "Sélectionne un produit pour activer la déclaration."
+                )
             )
         ),
         "declaration_hint": (
