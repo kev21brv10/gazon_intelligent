@@ -141,6 +141,18 @@ class GazonBrainTests(unittest.TestCase):
         self.assertEqual(record["application_irrigation_mode"], "auto")
         self.assertEqual(record["application_label_notes"], "Arrosage léger après application")
 
+    def test_register_product_accepts_multi_phase_compatibility(self) -> None:
+        brain = GazonBrain()
+        record = brain.register_product(
+            "humuslight",
+            "Humuslight",
+            "Biostimulant",
+            dose_conseillee="1.2 ml / m²",
+            phase_compatible=["Sursemis", "Croissance", "Entretien"],
+        )
+
+        self.assertEqual(record["phase_compatible"], ["Sursemis", "Croissance", "Entretien"])
+
     def test_declare_intervention_persists_application_fields(self) -> None:
         brain = GazonBrain()
         brain.register_product(
@@ -295,6 +307,50 @@ class GazonBrainTests(unittest.TestCase):
         self.assertIsNone(brain.selected_product_id)
         self.assertIsNone(brain.selected_product_name)
 
+    def test_remove_last_application_removes_latest_application_only(self) -> None:
+        brain = GazonBrain()
+        brain.register_product("bio-1", "Bio Boost", "Biostimulant")
+        brain.register_product("engrais-printemps", "Engrais Printemps", "Fertilisation")
+
+        first = brain.declare_intervention(
+            "Biostimulant",
+            date_action=date(2026, 3, 17),
+            produit_id="bio-1",
+            zone="zone_1",
+        )
+        self.assertEqual(first["produit_id"], "bio-1")
+        brain.record_watering(date(2026, 3, 18))
+        brain.selected_product_id = None
+        second = brain.declare_intervention(
+            "Fertilisation",
+            date_action=date(2026, 3, 19),
+            produit_id="engrais-printemps",
+            zone="zone_2",
+        )
+        self.assertEqual(second["produit_id"], "engrais-printemps")
+        brain.record_watering(date(2026, 3, 20))
+
+        removed = brain.remove_last_application()
+
+        self.assertEqual(removed["produit_id"], "engrais-printemps")
+        self.assertEqual(removed["type"], "Fertilisation")
+        self.assertEqual(brain.mode, "Biostimulant")
+        self.assertEqual(brain.date_action, date(2026, 3, 17))
+        self.assertEqual(brain.memory["historique_total"], 3)
+        self.assertIsNotNone(brain.memory["derniere_application"])
+        self.assertEqual(brain.memory["derniere_application"]["produit_id"], "bio-1")
+        self.assertEqual(brain.memory["derniere_application"]["type"], "Biostimulant")
+
+    def test_remove_last_application_rejects_when_no_application_exists(self) -> None:
+        brain = GazonBrain()
+        brain.record_mowing(date(2026, 3, 18))
+        brain.record_watering(date(2026, 3, 18))
+
+        with self.assertRaises(ValueError) as ctx:
+            brain.remove_last_application()
+
+        self.assertIn("Aucune application", str(ctx.exception))
+
     def test_declare_intervention_uses_persisted_selected_product(self) -> None:
         brain = GazonBrain()
         brain.register_product("bio-1", "Bio Boost", "Biostimulant")
@@ -335,6 +391,22 @@ class GazonBrainTests(unittest.TestCase):
             )
 
         self.assertIn("Plusieurs produits sont enregistrés", str(ctx_no_choice.exception))
+
+    def test_declare_intervention_rejects_conflicting_ui_selection(self) -> None:
+        brain = GazonBrain()
+        brain.register_product("bio-1", "Bio Boost", "Biostimulant")
+        brain.register_product("engrais-printemps", "Engrais Printemps", "Fertilisation")
+        brain.selected_product_id = "bio-1"
+
+        with self.assertRaises(ValueError) as ctx:
+            brain.declare_intervention(
+                "Fertilisation",
+                date_action=date(2026, 3, 18),
+                produit_id="engrais-printemps",
+                zone="zone_2",
+            )
+
+        self.assertIn("source de vérité", str(ctx.exception))
 
     def test_declare_intervention_keeps_catalog_snapshot_frozen(self) -> None:
         brain = GazonBrain()

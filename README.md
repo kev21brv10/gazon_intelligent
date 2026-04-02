@@ -285,6 +285,12 @@ Cette partie sert à mémoriser un produit ou un traitement une seule fois, puis
 
 Les réglages produits se déclarent dans `register_product`:
 
+- `type`
+  - catégorie du produit, choisie dans une liste
+  - exemple: `Biostimulant`
+- `dose_conseillee`
+  - dosage conseillé au m²
+  - exemple: `1.2 ml / m²`
 - `application_type`
 - `application_requires_watering_after`
 - `application_post_watering_mm`
@@ -295,10 +301,11 @@ Les réglages produits se déclarent dans `register_product`:
 
 Tu peux aussi y enregistrer:
 
-- `dose_conseillee`
 - `reapplication_after_days`
 - `delai_avant_tonte_jours`
 - `phase_compatible`
+  - sélection multiple possible
+  - exemple: `Sursemis`, `Croissance`, `Entretien`
 
 #### Ce que l’intégration affiche
 
@@ -322,7 +329,7 @@ Tu peux aussi y enregistrer:
 Le plus simple est de:
 
 1. Enregistrer d’abord le produit avec `register_product`
-2. Le choisir ensuite dans `select.gazon_intelligent_produit_intervention`
+2. Le choisir ensuite dans `select.gazon_intelligent_produit_d_intervention`
 3. Déclarer l’intervention réelle avec `declare_intervention`
 
 Le sélecteur affiche les noms lisibles. Si plusieurs produits ont le même nom, le libellé devient `Nom — product_id` pour éviter toute ambiguïté.
@@ -339,9 +346,9 @@ Les états de `Dernière exécution` sont simples:
 
 1. Utilise le service `gazon_intelligent.register_product`
 2. Donne un `product_id` unique
-3. Renseigne le nom, le type et tous les réglages utiles du produit
-4. Lors d’une intervention réelle, choisis le produit dans `select.gazon_intelligent_produit_intervention` ou précise son ID exact
-5. Lance `gazon_intelligent.declare_intervention` avec la date, la zone et une note si besoin
+3. Renseigne le nom, la catégorie et le dosage au m², puis tous les réglages utiles du produit
+4. Lors d’une intervention réelle, choisis le produit dans `select.gazon_intelligent_produit_d_intervention` ou précise son ID exact
+5. Lance `gazon_intelligent.declare_intervention` avec la date d'action (`date_action`), la zone et une note si besoin
 6. S’il n’y a qu’un seul produit enregistré, l’intégration peut le reprendre automatiquement
 7. Si plusieurs produits existent, il faut une sélection claire: le sélecteur ou un ID / nom exact
 8. Si le produit n’est plus utile, retire-le avec `gazon_intelligent.remove_product`
@@ -364,9 +371,9 @@ Un produit enregistré sert à:
 #### Ce qu’il faut retenir
 
 - le produit se mémorise avec `register_product`
-- le choix du produit pour l’intervention se fait avec `select.gazon_intelligent_produit_intervention`
+- le choix du produit pour l’intervention se fait avec `select.gazon_intelligent_produit_d_intervention`
 - l’intervention réelle se déclare avec `declare_intervention`
-- `declare_intervention` reste simple: produit choisi, date, zone, note
+- `declare_intervention` reste simple: produit choisi, date d'action (`date_action`), zone, note
 - `remove_product` nettoie la base locale
 - le moteur garde la main sur les garde-fous d’arrosage
 
@@ -442,6 +449,7 @@ Aucune configuration YAML obligatoire.
 ### Services d’intervention et de mémoire
 
 - `gazon_intelligent.declare_intervention`
+- `gazon_intelligent.remove_last_application`
 - `gazon_intelligent.declare_mowing`
 - `gazon_intelligent.declare_watering`
 - `gazon_intelligent.register_product`
@@ -457,6 +465,7 @@ Notes:
 - `declare_intervention` reste volontairement simple: on choisit le produit dans le sélecteur dédié, puis la date, la zone et une note si besoin.
 - si plusieurs produits sont enregistrés, il faut une sélection claire: le sélecteur, ou un ID / nom exact, sinon le moteur renvoie une erreur explicite.
 - tous les réglages du produit se trouvent dans `register_product`.
+- si une application a été enregistrée par erreur, `remove_last_application` supprime la dernière application de l’historique local.
 - `declare_mowing` et `declare_watering` sont des raccourcis de compatibilité utiles.
 
 ---
@@ -503,10 +512,12 @@ Le principe est simple:
 Si tu utilises souvent les mêmes produits:
 
 1. `register_product` sert à enregistrer la fiche produit
-2. `select.gazon_intelligent_produit_intervention` sert à choisir le produit pour la prochaine intervention
+2. `select.gazon_intelligent_produit_d_intervention` sert à choisir le produit pour la prochaine intervention
 3. `declare_intervention` sert à déclarer l’action réelle
 4. le moteur reprend automatiquement tous les réglages enregistrés pour ce produit
 5. `remove_product` retire le produit s’il n’est plus utile
+6. `remove_last_application` supprime la dernière application si elle a été déclarée par erreur
+7. si plusieurs instances Gazon Intelligent existent, la carte transmet automatiquement `entity_id` pour viser la bonne instance
 
 Si plusieurs produits existent, utilise l’ID ou le nom exact du produit voulu. Sinon, l’intégration refuse de deviner.
 

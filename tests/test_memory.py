@@ -50,7 +50,7 @@ class MemoryCatalogTests(unittest.TestCase):
                 "dose_conseillee": "12.5",
                 "reapplication_after_days": "21",
                 "delai_avant_tonte_jours": "2",
-                "phase_compatible": "Normal, Reprise",
+                "phase_compatible": ["Sursemis", "Croissance", "Entretien"],
                 "application_type": "sol",
                 "application_requires_watering_after": "true",
                 "application_post_watering_mm": "1.5",
@@ -70,7 +70,7 @@ class MemoryCatalogTests(unittest.TestCase):
         self.assertEqual(record["dose_conseillee"], "12.5")
         self.assertEqual(record["reapplication_after_days"], 21)
         self.assertEqual(record["delai_avant_tonte_jours"], 2)
-        self.assertEqual(record["phase_compatible"], ["Normal", "Reprise"])
+        self.assertEqual(record["phase_compatible"], ["Sursemis", "Croissance", "Entretien"])
         self.assertEqual(record["application_type"], "sol")
         self.assertTrue(record["application_requires_watering_after"])
         self.assertEqual(record["application_post_watering_mm"], 1.5)
@@ -114,6 +114,7 @@ class MemoryCatalogTests(unittest.TestCase):
         self.assertEqual(summary["application_irrigation_delay_minutes"], 30.0)
         self.assertEqual(summary["application_irrigation_mode"], "auto")
         self.assertEqual(summary["application_label_notes"], "Notes produit")
+        self.assertEqual(summary["date_action"], "2026-03-18")
         self.assertEqual(summary["declared_at"], "2026-03-18T08:00:00+00:00")
 
     def test_compute_application_state_tracks_block_and_pending_water(self) -> None:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.helpers.entity import EntityCategory
@@ -500,9 +500,9 @@ class GazonDerniereApplicationSensor(GazonEntityBase, SensorEntity):
 
     @staticmethod
     def _application_when_text(summary: dict[str, object]) -> str | None:
-        for key in ("declared_at", "date", "recorded_at"):
+        for key in ("date_action", "date", "declared_at", "recorded_at"):
             value = summary.get(key)
-            human = _human_datetime_text(value)
+            human = _human_date_text(value) if key in {"date_action", "date"} else _human_datetime_text(value)
             if human:
                 return human
         return None

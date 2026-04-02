@@ -92,6 +92,23 @@
         "Scarification": "Vertikutierung",
         "Hivernage": "Wintermodus"
       }
+    },
+    "gazon_product_category": {
+      "options": {
+        "Traitement": "Behandlung",
+        "Fertilisation": "Düngung",
+        "Biostimulant": "Biostimulans",
+        "Agent Mouillant": "Netzmittel",
+        "Scarification": "Vertikutierung",
+        "Hivernage": "Wintermodus"
+      }
+    },
+    "gazon_phase_compatible": {
+      "options": {
+        "Sursemis": "Nachsaat",
+        "Croissance": "Wachstum",
+        "Entretien": "Pflege"
+      }
     }
   },
   "services": {
@@ -177,9 +194,13 @@
         }
       }
     },
+    "remove_last_application": {
+      "name": "Letzte Anwendung entfernen",
+      "description": "Entfernt die zuletzt erfasste Anwendung aus der lokalen Historie."
+    },
     "register_product": {
       "name": "Produkt registrieren",
-      "description": "Fügt ein benutzerdefiniertes Produkt zur lokalen Datenbank hinzu oder aktualisiert es. Alle Produkteinstellungen werden hier festgelegt und später in declare_intervention wiederverwendet.",
+      "description": "Fügt ein benutzerdefiniertes Produkt zur lokalen Datenbank hinzu oder aktualisiert es. Die Kategorie wird aus einer Liste gewählt und die Dosis kann pro m² eingegeben werden. Alle Produkteinstellungen werden hier festgelegt und später in declare_intervention wiederverwendet.",
       "fields": {
         "product_id": {
           "name": "Produkt-ID",
@@ -190,12 +211,12 @@
           "description": "Lesbarer Produktname."
         },
         "type": {
-          "name": "Typ",
-          "description": "Produktkategorie."
+          "name": "Produktkategorie",
+          "description": "Wähle die Produktkategorie aus der Liste."
         },
         "dose_conseillee": {
-          "name": "Empfohlene Dosis (optional)",
-          "description": "Standarddosis, die vorgeschlagen wird."
+          "name": "Empfohlene Dosis pro m² (optional)",
+          "description": "Beispiel: 1.2 ml / m². Der Text bleibt unverändert gespeichert."
         },
         "reapplication_after_days": {
           "name": "In X Tagen erneut anwenden (optional)",
@@ -207,7 +228,7 @@
         },
         "phase_compatible": {
           "name": "Kompatible Phasen (optional)",
-          "description": "Durch Kommas getrennte Liste."
+          "description": "Mehrfachauswahl möglich. Beispiel: Nachsaat, Wachstum, Pflege."
         },
         "note": {
           "name": "Notiz (optional)",

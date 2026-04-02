@@ -40,13 +40,10 @@ from .const import (
     WATERING_SESSION_MIN_DURATION_SECONDS,
     WATERING_SESSION_MIN_SEGMENT_SECONDS,
 )
-from .decision import (
-    build_decision_snapshot,
-    compute_recent_watering_mm,
-)
 from .decision_models import DecisionResult
 from .gazon_brain import GazonBrain
 from .memory import compute_application_state
+from .water import compute_recent_watering_mm
 from .weather_adapter import WeatherAdapter
 
 _LOGGER = logging.getLogger(__name__)
@@ -511,6 +508,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             date_action=date_action,
             produit_id=produit_id,
             produit=produit,
+            selected_product_id=self.selected_product_id,
             dose=dose,
             zone=zone,
             reapplication_after_days=reapplication_after_days,
@@ -1410,7 +1408,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         dose_conseillee: str | None = None,
         reapplication_after_days: int | None = None,
         delai_avant_tonte_jours: int | None = None,
-        phase_compatible: str | None = None,
+        phase_compatible: str | list[str] | None = None,
         application_type: str | None = None,
         application_requires_watering_after: bool | None = None,
         application_post_watering_mm: float | None = None,
@@ -1442,6 +1440,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_remove_product(self, product_id: str) -> None:
         self.brain.remove_product(product_id)
+        await self._async_save_state()
+        await self.async_request_refresh()
+
+    async def async_remove_last_application(self) -> None:
+        self.brain.remove_last_application()
         await self._async_save_state()
         await self.async_request_refresh()
 

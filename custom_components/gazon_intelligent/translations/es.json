@@ -92,6 +92,23 @@
         "Scarification": "Escarificación",
         "Hivernage": "Modo invierno"
       }
+    },
+    "gazon_product_category": {
+      "options": {
+        "Traitement": "Tratamiento",
+        "Fertilisation": "Fertilización",
+        "Biostimulant": "Bioestimulante",
+        "Agent Mouillant": "Agente humectante",
+        "Scarification": "Escarificación",
+        "Hivernage": "Modo invierno"
+      }
+    },
+    "gazon_phase_compatible": {
+      "options": {
+        "Sursemis": "Resiembra",
+        "Croissance": "Crecimiento",
+        "Entretien": "Mantenimiento"
+      }
     }
   },
   "services": {
@@ -177,9 +194,13 @@
         }
       }
     },
+    "remove_last_application": {
+      "name": "Eliminar la última aplicación",
+      "description": "Elimina la última aplicación registrada del historial local."
+    },
     "register_product": {
       "name": "Registrar un producto",
-      "description": "Añade o actualiza un producto personalizado en la base local. Todos los ajustes del producto se definen aquí y luego se reutilizan en declare_intervention.",
+      "description": "Añade o actualiza un producto personalizado en la base local. La categoría se elige de una lista y la dosis puede introducirse por m². Todos los ajustes del producto se definen aquí y luego se reutilizan en declare_intervention.",
       "fields": {
         "product_id": {
           "name": "ID de producto",
@@ -190,12 +211,12 @@
           "description": "Nombre legible del producto."
         },
         "type": {
-          "name": "Tipo",
-          "description": "Categoría del producto."
+          "name": "Categoría del producto",
+          "description": "Elige la categoría del producto de la lista."
         },
         "dose_conseillee": {
-          "name": "Dosis recomendada (opcional)",
-          "description": "Dosis por defecto a sugerir."
+          "name": "Dosis recomendada por m² (opcional)",
+          "description": "Ej: 1.2 ml / m². El texto se conserva tal cual."
         },
         "reapplication_after_days": {
           "name": "Reaplicar en X días (opcional)",
@@ -207,7 +228,7 @@
         },
         "phase_compatible": {
           "name": "Fases compatibles (opcional)",
-          "description": "Lista separada por comas."
+          "description": "Se permiten varias opciones. Ejemplo: Resiembra, Crecimiento, Mantenimiento."
         },
         "note": {
           "name": "Nota (opcional)",

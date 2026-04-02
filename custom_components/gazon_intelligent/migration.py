@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Migration et nettoyage des entrées de configuration."""
 
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover
     from homeassistant.config_entries import ConfigEntry
