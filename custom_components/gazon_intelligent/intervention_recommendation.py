@@ -134,37 +134,37 @@ def _clamp_score(value: int | float | None) -> int:
 def _state_metadata(state: str) -> dict[str, str]:
     if state == "recommended":
         return {
-            "title": "Prochaine intervention recommandée",
+            "title": "Intervention recommandée",
             "badge": "Choisie automatiquement",
             "tone": "success",
             "icon": "mdi:spray-bottle",
-            "summary": "Intervention recommandée",
+            "summary": "Prête à déclarer",
             "action_label": "Déclarer maintenant",
         }
     if state == "possible":
         return {
-            "title": "Prochaine intervention à préparer",
+            "title": "Intervention à préparer",
             "badge": "À préparer",
             "tone": "warning",
             "icon": "mdi:package-variant-closed",
-            "summary": "Intervention à préparer",
+            "summary": "Produit conseillé",
             "action_label": "Choisir le produit",
         }
     if state == "blocked":
         return {
-            "title": "Prochaine intervention bloquée",
+            "title": "Intervention en pause",
             "badge": "En attente",
             "tone": "danger",
             "icon": "mdi:pause-circle-outline",
-            "summary": "Intervention bloquée",
+            "summary": "Déclaration verrouillée",
             "action_label": "Attendre",
         }
     return {
-        "title": "Prochaine intervention indisponible",
-        "badge": "Catalogue vide",
+        "title": "Catalogue vide",
+        "badge": "À compléter",
         "tone": "neutral",
         "icon": "mdi:package-variant-closed",
-        "summary": "Intervention indisponible",
+        "summary": "Aucun produit enregistré",
         "action_label": "Ajouter un produit",
     }
 
@@ -568,27 +568,27 @@ def _ui_for_state(
     today_display = today.strftime("%d/%m/%Y")
     if state == "recommended":
         if selected_ready:
-            summary = "Intervention recommandée"
-            hint = reason or "Le produit sélectionné est prêt à être déclaré."
+            summary = "Prête à déclarer"
+            hint = reason or f"{selected_display or 'Le produit'} est prêt à être déclaré."
             action_label = "Déclarer maintenant"
         else:
-            summary = "Intervention recommandée"
+            summary = "Produit conseillé"
             hint = reason or (
-                f"Sélectionne {selected_display} pour déclarer cette intervention."
+                f"Sélectionne {selected_display} pour lancer la déclaration."
                 if selected_display
                 else "Sélectionne ce produit pour préparer la déclaration."
             )
             action_label = "Choisir le produit"
     elif state == "possible":
-        summary = "Intervention à préparer"
-        hint = reason or "Le produit est disponible, mais certains critères restent moins favorables."
+        summary = "À préparer"
+        hint = reason or "Le produit est disponible, mais la déclaration attend encore un petit réglage."
         action_label = "Choisir le produit"
     elif state == "blocked":
-        summary = "Intervention bloquée"
+        summary = "En pause"
         hint = block_reason or reason or "La réapplication n'est pas encore possible."
         action_label = "Attendre"
     else:
-        summary = "Intervention indisponible"
+        summary = "Catalogue vide"
         hint = reason or "Ajoute au moins un produit au catalogue pour obtenir une recommandation."
         action_label = "Ajouter un produit"
 
@@ -601,10 +601,10 @@ def _ui_for_state(
         "hint": why_now or hint,
         "action_label": action_label,
         "selection_summary": (
-            f"Produit sélectionné : {selected_display}. Date d'action : {today_display}."
+            f"Produit choisi : {selected_display}. Date d'action : {today_display}."
             if selected_display and selected_ready
             else (
-                f"Produit sélectionné : {selected_display}."
+                f"Produit choisi : {selected_display}."
                 if selected_display
                 else (
                     f"Produit recommandé : {(candidate or {}).get('product_name')}. Sélectionne-le pour préparer la déclaration."
@@ -623,10 +623,10 @@ def _ui_for_state(
             )
         ),
         "declaration_summary": (
-            f"Produit sélectionné : {selected_display}. Date d'action : {today_display}."
+            f"Produit choisi : {selected_display}. Date d'action : {today_display}."
             if selected_ready and selected_display
             else (
-                f"Produit sélectionné : {selected_display}."
+                f"Produit choisi : {selected_display}."
                 if selected_display
                 else "Sélectionne un produit pour activer la déclaration."
             )
@@ -635,7 +635,7 @@ def _ui_for_state(
             "Tu peux déclarer l’intervention maintenant."
             if selected_ready
             else (
-                "Le produit sélectionné doit correspondre à la recommandation automatique."
+                "Le produit choisi doit correspondre à la recommandation automatique."
                 if selected_display
                 else "Le bouton se débloque dès qu’un produit est prêt."
             )
