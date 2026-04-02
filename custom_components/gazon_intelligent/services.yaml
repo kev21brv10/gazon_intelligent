@@ -119,7 +119,7 @@ remove_last_application:
             - switch
 
 register_product:
-  description: "Ajoute ou met à jour un produit personnalisé dans la base locale. La catégorie se choisit dans une liste et le dosage peut être saisi au m²."
+  description: "Ajoute ou met à jour un produit personnalisé dans la base locale. La catégorie se choisit dans une liste, le dosage peut être saisi au m² et les mois d'application peuvent être précisés."
   fields:
     product_id:
       required: true
@@ -172,6 +172,10 @@ register_product:
             - Sursemis
             - Croissance
             - Entretien
+    application_months:
+      required: false
+      selector:
+        text:
     application_type:
       required: false
       selector:

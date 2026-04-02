@@ -298,6 +298,10 @@ Les réglages produits se déclarent dans `register_product`:
 - `application_irrigation_delay_minutes`
 - `application_irrigation_mode`
 - `application_label_notes`
+- `application_months`
+  - mois ou périodes d’application recommandés
+  - critère souple pour guider la recommandation, pas un blocage absolu
+  - exemple: `3,4,5,9,10` ou `mars à mai + septembre à octobre`
 
 Tu peux aussi y enregistrer:
 
@@ -315,6 +319,8 @@ Tu peux aussi y enregistrer:
   - ce que l’intégration a réellement lancé
 - `Catalogue produits`
   - le nombre de produits enregistrés et leurs détails
+- `Prochaine intervention`
+  - la recommandation calculée par l’algorithme à partir du catalogue, de la phase, du mois et de l’historique
 - `Produit d’intervention`
   - le produit actuellement choisi pour une prochaine intervention
   - la liste est remplie automatiquement à partir des produits enregistrés
@@ -372,6 +378,13 @@ Un produit enregistré sert à:
 
 - le produit se mémorise avec `register_product`
 - le choix du produit pour l’intervention se fait avec `select.gazon_intelligent_produit_d_intervention`
+- la prochaine intervention recommandée est exposée par `sensor.gazon_intelligent_prochaine_intervention`
+- ce capteur expose un `payload` structuré et versionné (`schema_version: 3`) qui devient la source de vérité pour la carte
+- le contrat conserve toujours les mêmes champs racine, avec `null`, `[]` ou `{}` quand une donnée n’est pas disponible
+- `status` vaut `recommended`, `possible`, `blocked` ou `unavailable`
+- `score` est un entier borné entre `0` et `100`
+- `constraints` et `missing_requirements` sont des listes d’objets structurés, jamais des listes de chaînes
+- `unavailable` couvre le cas catalogue vide, sans ajouter de statut fantôme
 - l’intervention réelle se déclare avec `declare_intervention`
 - `declare_intervention` reste simple: produit choisi, date d'action (`date_action`), zone, note
 - `remove_product` nettoie la base locale
