@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -251,7 +252,20 @@ def _split_csv_values(value: Any) -> list[str]:
     if isinstance(value, (list, tuple, set)):
         items = value
     else:
-        items = str(value).split(",")
+        text = str(value).strip()
+        if not text:
+            return []
+        if text.startswith("[") and text.endswith("]"):
+            try:
+                parsed = ast.literal_eval(text)
+            except (ValueError, SyntaxError):
+                parsed = None
+            if isinstance(parsed, (list, tuple, set)):
+                items = parsed
+            else:
+                items = text.split(",")
+        else:
+            items = text.split(",")
     clean: list[str] = []
     for item in items:
         text = str(item).strip()
@@ -338,6 +352,7 @@ def build_application_summary(item: dict[str, Any] | None) -> dict[str, Any] | N
         "libelle": libelle,
         "type": item.get("type"),
         "date": item.get("date"),
+        "date_action": item.get("date"),
         "declared_at": declared_dt.isoformat() if declared_dt is not None else None,
         "produit": item.get("produit"),
         "dose": dose,
@@ -493,6 +508,7 @@ def compute_application_state(
         "application_irrigation_delay_minutes": round(float(application_irrigation_delay_minutes or 0.0), 1),
         "application_irrigation_mode": application_irrigation_mode,
         "application_label_notes": application_label_notes,
+        "date_action": latest_item.get("date"),
         "declared_at": declared_dt.isoformat() if declared_dt is not None else None,
         "application_block_until": application_block_until,
         "application_block_active": application_block_active,

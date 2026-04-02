@@ -60,7 +60,7 @@ start_auto_irrigation:
 start_application_irrigation: {}
 
 declare_intervention:
-  description: "Déclare une intervention réelle. Les réglages du produit se configurent dans \"Enregistrer un produit\" ; ici, il suffit de choisir le produit déjà enregistré, la date, la zone et une note si besoin. Si plusieurs produits existent et qu'aucun produit explicite n'est fourni, l'intégration utilise la sélection courante de l'UI ou renvoie une erreur claire."
+  description: "Déclare une intervention réelle. Les réglages du produit se configurent dans \"Enregistrer un produit\" ; ici, il suffit de choisir le produit déjà enregistré, la date, la zone et une note si besoin. Si plusieurs produits existent et qu'aucun produit explicite n'est fourni, l'intégration utilise la sélection courante de l'UI ou renvoie une erreur claire. Quand plusieurs instances Gazon Intelligent existent, fournis aussi entity_id pour cibler la bonne instance."
   fields:
     intervention:
       required: true
@@ -87,6 +87,15 @@ declare_intervention:
       required: false
       selector:
         text:
+    entity_id:
+      required: false
+      selector:
+        entity:
+          domain:
+            - sensor
+            - select
+            - binary_sensor
+            - switch
     zone:
       required: false
       selector:
@@ -96,7 +105,21 @@ declare_intervention:
       selector:
         text:
 
+remove_last_application:
+  description: "Supprime la dernière application enregistrée dans l'historique local. Si plusieurs instances existent, fournir entity_id permet de cibler la bonne instance."
+  fields:
+    entity_id:
+      required: false
+      selector:
+        entity:
+          domain:
+            - sensor
+            - select
+            - binary_sensor
+            - switch
+
 register_product:
+  description: "Ajoute ou met à jour un produit personnalisé dans la base locale. La catégorie se choisit dans une liste et le dosage peut être saisi au m²."
   fields:
     product_id:
       required: true
@@ -109,9 +132,18 @@ register_product:
     type:
       required: true
       selector:
-        text:
+        select:
+          translation_key: gazon_product_category
+          options:
+            - Traitement
+            - Fertilisation
+            - Biostimulant
+            - Agent Mouillant
+            - Scarification
+            - Hivernage
     dose_conseillee:
       required: false
+      example: "1.2 ml / m²"
       selector:
         text:
     reapplication_after_days:
@@ -133,7 +165,13 @@ register_product:
     phase_compatible:
       required: false
       selector:
-        text:
+        select:
+          translation_key: gazon_phase_compatible
+          multiple: true
+          options:
+            - Sursemis
+            - Croissance
+            - Entretien
     application_type:
       required: false
       selector:

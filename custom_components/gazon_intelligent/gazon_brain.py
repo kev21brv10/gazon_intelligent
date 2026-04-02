@@ -4,25 +4,25 @@ import copy
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from .const import DEFAULT_AUTO_IRRIGATION_ENABLED, DEFAULT_MODE, INTERVENTIONS_ACTIONS
-from .assistant import build_assistant_decision
-from .decision import (
-    DecisionContext,
-    build_decision_result,
-    compute_etp,
-    compute_memory,
-    compute_recent_watering_mm,
-    phase_duration_days,
+from .const import (
+    APPLICATION_INTERVENTIONS,
+    DEFAULT_AUTO_IRRIGATION_ENABLED,
+    DEFAULT_MODE,
+    INTERVENTIONS_ACTIONS,
 )
+from .assistant import build_assistant_decision
+from .decision import DecisionContext, build_decision_result
 from .decision_models import DecisionResult
 from .memory import (
     APPLICATION_DEFAULTS,
     _normalize_user_action_summary,
+    compute_memory,
     normalize_product_id,
     normalize_product_record,
 )
+from .phases import phase_duration_days
 from .soil_balance import normalize_soil_balance_state, update_soil_balance
-from .water import build_watering_session_summary
+from .water import compute_etp, compute_recent_watering_mm, build_watering_session_summary
 
 
 class GazonBrain:
@@ -198,6 +198,54 @@ class GazonBrain:
             return
         self.memory["selected_product_id"] = None
 
+    def _latest_intervention_history_item(self) -> dict[str, Any] | None:
+        for item in reversed(self.history):
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") in INTERVENTIONS_ACTIONS:
+                return item
+        return None
+
+    def _is_application_history_item(self, item: dict[str, Any]) -> bool:
+        if not isinstance(item, dict):
+            return False
+        item_type = item.get("type")
+        if item_type in APPLICATION_INTERVENTIONS:
+            return True
+        return any(
+            item.get(key) not in (None, "", [], {})
+            for key in (
+                "application_type",
+                "application_requires_watering_after",
+                "application_post_watering_mm",
+                "application_irrigation_block_hours",
+                "application_irrigation_delay_minutes",
+                "application_irrigation_mode",
+                "application_label_notes",
+                "produit",
+                "dose",
+                "reapplication_after_days",
+            )
+        )
+
+    def _sync_mode_from_history(self) -> None:
+        latest = self._latest_intervention_history_item()
+        if latest is None:
+            self.mode = DEFAULT_MODE
+            self.date_action = None
+            return
+
+        latest_mode = str(latest.get("type") or DEFAULT_MODE).strip() or DEFAULT_MODE
+        self.mode = latest_mode
+        raw_date = latest.get("date")
+        if not raw_date:
+            self.date_action = None
+            return
+        try:
+            self.date_action = date.fromisoformat(str(raw_date))
+        except ValueError:
+            self.date_action = None
+
     def _resolve_product_record(
         self,
         product_id: str | None,
@@ -277,12 +325,34 @@ class GazonBrain:
         self.mode = "Normal"
         self.date_action = None
 
+    def remove_last_application(self) -> dict[str, Any]:
+        for idx in range(len(self.history) - 1, -1, -1):
+            item = self.history[idx]
+            if not self._is_application_history_item(item):
+                continue
+            removed = self.history.pop(idx)
+            self.history = self.history[-300:]
+            self._sync_mode_from_history()
+            updated_memory = compute_memory(
+                history=self.history,
+                current_phase=self.mode,
+                previous_memory=self.memory,
+                today=date.today(),
+            )
+            self.memory.update(updated_memory)
+            self.memory["historique_total"] = len(self.history)
+            self.memory["catalogue_produits"] = len(self.products)
+            self._normalize_selected_product_id()
+            return removed
+        raise ValueError("Aucune application enregistrée à supprimer.")
+
     def declare_intervention(
         self,
         intervention: str,
         date_action: date | None = None,
         produit_id: str | None = None,
         produit: str | None = None,
+        selected_product_id: str | None = None,
         dose: str | None = None,
         zone: str | None = None,
         reapplication_after_days: int | None = None,
@@ -300,12 +370,18 @@ class GazonBrain:
         target_date = date_action or date.today()
         product_query = normalize_product_id(produit_id) or normalize_product_id(produit)
         product_record = self._resolve_product_record(produit_id, produit)
+        selected_product_id = normalize_product_id(selected_product_id) or self.selected_product_id
+        if product_query and selected_product_id and product_record:
+            if normalize_product_id(product_record.get("id")) != selected_product_id:
+                raise ValueError(
+                    "Le produit sélectionné dans l'UI ne correspond pas au produit explicitement fourni. "
+                    "Choisis une seule source de vérité."
+                )
         if product_query and product_record is None:
             raise ValueError(
                 "Produit introuvable ou ambigu. Utilise l'ID exact ou le nom exact d'un produit enregistré."
             )
         if not product_query and product_record is None:
-            selected_product_id = self.selected_product_id
             if selected_product_id:
                 product_record = self._resolve_product_record(selected_product_id)
         if not product_query and product_record is None:
@@ -463,7 +539,7 @@ class GazonBrain:
         dose_conseillee: str | None = None,
         reapplication_after_days: int | None = None,
         delai_avant_tonte_jours: int | None = None,
-        phase_compatible: str | None = None,
+        phase_compatible: str | list[str] | None = None,
         application_type: str | None = None,
         application_requires_watering_after: bool | None = None,
         application_post_watering_mm: float | None = None,

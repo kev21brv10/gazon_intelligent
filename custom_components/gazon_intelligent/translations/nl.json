@@ -92,6 +92,23 @@
         "Scarification": "Verticuteren",
         "Hivernage": "Wintermodus"
       }
+    },
+    "gazon_product_category": {
+      "options": {
+        "Traitement": "Behandeling",
+        "Fertilisation": "Bemesting",
+        "Biostimulant": "Biostimulant",
+        "Agent Mouillant": "Bevochtigingsmiddel",
+        "Scarification": "Verticuteren",
+        "Hivernage": "Wintermodus"
+      }
+    },
+    "gazon_phase_compatible": {
+      "options": {
+        "Sursemis": "Doorzaai",
+        "Croissance": "Groei",
+        "Entretien": "Onderhoud"
+      }
     }
   },
   "services": {
@@ -177,9 +194,13 @@
         }
       }
     },
+    "remove_last_application": {
+      "name": "Laatste toepassing verwijderen",
+      "description": "Verwijdert de laatst opgeslagen toepassing uit de lokale geschiedenis."
+    },
     "register_product": {
       "name": "Product registreren",
-      "description": "Voegt een aangepast product toe aan de lokale database of werkt het bij. Alle productinstellingen worden hier vastgelegd en later opnieuw gebruikt in declare_intervention.",
+      "description": "Voegt een aangepast product toe aan de lokale database of werkt het bij. De categorie wordt uit een lijst gekozen en de dosis kan per m² worden ingevoerd. Alle productinstellingen worden hier vastgelegd en later opnieuw gebruikt in declare_intervention.",
       "fields": {
         "product_id": {
           "name": "Product-ID",
@@ -190,12 +211,12 @@
           "description": "Leesbare productnaam."
         },
         "type": {
-          "name": "Type",
-          "description": "Productcategorie."
+          "name": "Productcategorie",
+          "description": "Kies de productcategorie uit de lijst."
         },
         "dose_conseillee": {
-          "name": "Aanbevolen dosis (optioneel)",
-          "description": "Standaarddosis om voor te stellen."
+          "name": "Aanbevolen dosis per m² (optioneel)",
+          "description": "Voorbeeld: 1.2 ml / m². De tekst blijft ongewijzigd opgeslagen."
         },
         "reapplication_after_days": {
           "name": "Opnieuw toepassen over X dagen (optioneel)",
@@ -207,7 +228,7 @@
         },
         "phase_compatible": {
           "name": "Compatibele fases (optioneel)",
-          "description": "Door komma's gescheiden lijst."
+          "description": "Meerdere keuzes mogelijk. Voorbeeld: Doorzaai, Groei, Onderhoud."
         },
         "note": {
           "name": "Opmerking (optioneel)",

@@ -92,6 +92,23 @@
         "Scarification": "Scarification",
         "Hivernage": "Winter mode"
       }
+    },
+    "gazon_product_category": {
+      "options": {
+        "Traitement": "Treatment",
+        "Fertilisation": "Fertilization",
+        "Biostimulant": "Biostimulant",
+        "Agent Mouillant": "Wetting agent",
+        "Scarification": "Scarification",
+        "Hivernage": "Winter mode"
+      }
+    },
+    "gazon_phase_compatible": {
+      "options": {
+        "Sursemis": "Overseeding",
+        "Croissance": "Growth",
+        "Entretien": "Maintenance"
+      }
     }
   },
   "services": {
@@ -149,7 +166,7 @@
     },
     "declare_intervention": {
       "name": "Declare an intervention",
-      "description": "Logs a real intervention. Product settings live in \"Register a product\"; here you only choose the already registered product, the date, the zone, and an optional note. If several products exist, an exact ID or name is required.",
+      "description": "Logs a real intervention. Product settings live in \"Register a product\"; here you only choose the already registered product, the action date, the zone, and an optional note. If several products exist, an exact ID or name is required.",
       "fields": {
         "intervention": {
           "name": "Intervention",
@@ -157,7 +174,7 @@
         },
         "date_action": {
           "name": "Action date (optional)",
-          "description": "Date in DD/MM/YYYY format. If empty, today is used."
+          "description": "Business date in DD/MM/YYYY format. If empty, today is used."
         },
         "produit_id": {
           "name": "Product ID (optional)",
@@ -177,9 +194,13 @@
         }
       }
     },
+    "remove_last_application": {
+      "name": "Remove last application",
+      "description": "Removes the last recorded application from local history."
+    },
     "register_product": {
       "name": "Register a product",
-      "description": "Adds or updates a custom product in the local database. All product settings are defined here and reused later by declare_intervention.",
+      "description": "Adds or updates a custom product in the local database. The category is chosen from a list and the dose can be entered per m². All product settings are defined here and reused later by declare_intervention.",
       "fields": {
         "product_id": {
           "name": "Product ID",
@@ -190,12 +211,12 @@
           "description": "Readable product name."
         },
         "type": {
-          "name": "Type",
-          "description": "Product category."
+          "name": "Product category",
+          "description": "Choose the product category from the list."
         },
         "dose_conseillee": {
-          "name": "Recommended dose (optional)",
-          "description": "Default dose to suggest."
+          "name": "Recommended dose per m² (optional)",
+          "description": "Example: 1.2 ml / m². The text is kept as entered."
         },
         "reapplication_after_days": {
           "name": "Reapply in X days (optional)",
@@ -207,7 +228,7 @@
         },
         "phase_compatible": {
           "name": "Compatible phases (optional)",
-          "description": "Comma-separated list."
+          "description": "Multiple choices allowed. Example: Overseeding, Growth, Maintenance."
         },
         "note": {
           "name": "Note (optional)",

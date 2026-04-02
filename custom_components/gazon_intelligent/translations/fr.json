@@ -88,6 +88,23 @@
         "Scarification": "Scarification",
         "Hivernage": "Hivernage"
       }
+    },
+    "gazon_product_category": {
+      "options": {
+        "Traitement": "Traitement",
+        "Fertilisation": "Fertilisation",
+        "Biostimulant": "Biostimulant",
+        "Agent Mouillant": "Agent Mouillant",
+        "Scarification": "Scarification",
+        "Hivernage": "Hivernage"
+      }
+    },
+    "gazon_phase_compatible": {
+      "options": {
+        "Sursemis": "Sursemis",
+        "Croissance": "Croissance",
+        "Entretien": "Entretien"
+      }
     }
   },
   "services": {
@@ -149,7 +166,7 @@
     },
     "declare_intervention": {
       "name": "Déclarer une intervention",
-      "description": "Déclare une intervention réelle. Les réglages du produit se configurent dans \"Enregistrer un produit\" ; ici, il suffit de choisir le produit déjà enregistré, la date, la zone et une note si besoin. Si aucun produit explicite n'est fourni, l'intégration peut utiliser la sélection courante de l'UI.",
+      "description": "Déclare une intervention réelle. Les réglages du produit se configurent dans \"Enregistrer un produit\" ; ici, il suffit de choisir le produit déjà enregistré, la date d'action, la zone et une note si besoin. Si aucun produit explicite n'est fourni, l'intégration peut utiliser la sélection courante de l'UI.",
       "fields": {
         "intervention": {
           "name": "Intervention",
@@ -157,7 +174,7 @@
         },
         "date_action": {
           "name": "Date d'action (optionnelle)",
-          "description": "Date au format JJ/MM/AAAA. Si vide, aujourd'hui."
+          "description": "Date métier au format JJ/MM/AAAA. Si vide, aujourd'hui."
         },
         "produit_id": {
           "name": "ID produit (optionnel)",
@@ -177,9 +194,13 @@
         }
       }
     },
+    "remove_last_application": {
+      "name": "Supprimer la dernière application",
+      "description": "Supprime la dernière application enregistrée dans l'historique local."
+    },
     "register_product": {
       "name": "Enregistrer un produit",
-      "description": "Ajoute ou met à jour un produit personnalisé dans la base locale. Tous les réglages du produit se définissent ici et sont réutilisés ensuite par declare_intervention.",
+      "description": "Ajoute ou met à jour un produit personnalisé dans la base locale. La catégorie se choisit dans une liste et le dosage peut être saisi au m². Tous les réglages du produit se définissent ici et sont réutilisés ensuite par declare_intervention.",
       "fields": {
         "product_id": {
           "name": "ID produit",
@@ -190,12 +211,12 @@
           "description": "Nom lisible du produit."
         },
         "type": {
-          "name": "Type",
-          "description": "Catégorie du produit."
+          "name": "Catégorie du produit",
+          "description": "Choisissez la catégorie du produit dans la liste."
         },
         "dose_conseillee": {
-          "name": "Dose conseillée (optionnelle)",
-          "description": "Dose par défaut à proposer."
+          "name": "Dosage au m² conseillé (optionnel)",
+          "description": "Ex: 1.2 ml / m². Le texte est conservé tel quel."
         },
         "reapplication_after_days": {
           "name": "Réapplication dans X jours (optionnel)",
@@ -207,7 +228,7 @@
         },
         "phase_compatible": {
           "name": "Phases compatibles (optionnel)",
-          "description": "Liste séparée par des virgules."
+          "description": "Choix multiples possibles. Exemple: Sursemis, Croissance, Entretien."
         },
         "application_type": {
           "name": "Type d'application (optionnel)",

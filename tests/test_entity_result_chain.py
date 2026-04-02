@@ -526,11 +526,11 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(last_application_sensor.native_value, "Engrais printemps")
         self.assertEqual(
             last_application_sensor.extra_state_attributes["summary"],
-            f"Dernière application: Engrais printemps - le {_local_text('2026-03-18T08:00:00+00:00')} - type sol - mode auto",
+            "Dernière application: Engrais printemps - le 18/03/2026 - type sol - mode auto",
         )
         self.assertEqual(
             last_application_sensor.extra_state_attributes["last_application_when"],
-            _local_text("2026-03-18T08:00:00+00:00"),
+            "18/03/2026",
         )
         self.assertTrue(application_allowed_sensor.is_on)
         self.assertEqual(application_allowed_sensor.extra_state_attributes["application_type"], "sol")
