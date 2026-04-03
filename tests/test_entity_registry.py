@@ -134,6 +134,7 @@ class EntityRegistryTests(unittest.TestCase):
             sensor.GazonDerniereActionUtilisateurSensor(coordinator),
             sensor.GazonCatalogueProduitsSensor(coordinator),
             sensor.GazonInterventionRecommendationSensor(coordinator),
+            sensor.GazonDebugInterventionSensor(coordinator),
             sensor.GazonTonteEtatSensor(coordinator),
             sensor.GazonHauteurTonteSensor(coordinator),
             sensor.GazonConseilPrincipalSensor(coordinator),

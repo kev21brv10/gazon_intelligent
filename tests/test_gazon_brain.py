@@ -120,6 +120,8 @@ class GazonBrainTests(unittest.TestCase):
             "Bio Boost",
             "Biostimulant",
             dose_conseillee="3.0 ml / L",
+            usage_mode="preventif",
+            max_applications_per_year=6,
             reapplication_after_days=14,
             delai_avant_tonte_jours=0,
             phase_compatible="Sursemis, Reprise",
@@ -132,6 +134,8 @@ class GazonBrainTests(unittest.TestCase):
             application_irrigation_mode="auto",
             application_label_notes="Arrosage léger après application",
             note="Produit test",
+            temperature_min=8.0,
+            temperature_max=28.0,
         )
 
         self.assertEqual(record["application_type"], "sol")
@@ -143,6 +147,10 @@ class GazonBrainTests(unittest.TestCase):
         self.assertEqual(record["application_label_notes"], "Arrosage léger après application")
         self.assertEqual(record["application_months"], [3, 4, 5, 9, 10])
         self.assertEqual(record["application_months_label"], "Mars à Mai, Septembre à Octobre")
+        self.assertEqual(record["usage_mode"], "preventif")
+        self.assertEqual(record["max_applications_per_year"], 6)
+        self.assertEqual(record["temperature_min"], 8.0)
+        self.assertEqual(record["temperature_max"], 28.0)
 
     def test_register_product_accepts_multi_phase_compatibility(self) -> None:
         brain = GazonBrain()
