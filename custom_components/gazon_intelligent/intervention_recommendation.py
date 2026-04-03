@@ -318,17 +318,17 @@ def _temperature_evaluation(
 def _state_metadata(state: str) -> dict[str, str]:
     if state == "recommended":
         return {
-            "title": "Intervention recommandée",
+            "title": "Recommandé",
             "badge": "Choisie automatiquement",
             "tone": "success",
             "icon": "mdi:spray-bottle",
-            "summary": "Prête à déclarer",
+            "summary": "Recommandé",
             "action_label": "Déclarer maintenant",
         }
     if state == "possible":
         return {
-            "title": "Prochaine intervention recommandée",
-            "badge": "À confirmer",
+            "title": "À préparer",
+            "badge": "À préparer",
             "tone": "warning",
             "icon": "mdi:spray-bottle",
             "summary": "À préparer",
@@ -336,19 +336,19 @@ def _state_metadata(state: str) -> dict[str, str]:
         }
     if state == "blocked":
         return {
-            "title": "Intervention en pause",
-            "badge": "En attente",
+            "title": "Bloqué",
+            "badge": "Bloqué",
             "tone": "danger",
             "icon": "mdi:pause-circle-outline",
-            "summary": "Déclaration verrouillée",
+            "summary": "Bloqué",
             "action_label": "Attendre",
         }
     return {
-        "title": "Catalogue vide",
-        "badge": "À compléter",
+        "title": "Non disponible",
+        "badge": "Non disponible",
         "tone": "neutral",
         "icon": "mdi:package-variant-closed",
-        "summary": "Aucun produit enregistré",
+        "summary": "Non disponible",
         "action_label": "Ajouter un produit",
     }
 
@@ -820,9 +820,9 @@ def _constraints_for_candidate(
         missing_requirements.append(
             _missing_requirement_entry(
                 code="select_product",
-                label="Sélectionner le produit recommandé",
+                label="Sélectionner le produit",
                 value={"product_id": candidate.get("product_id"), "product_name": candidate.get("product_name")},
-                hint="Le produit recommandé est prêt, mais il doit être sélectionné pour déclencher la déclaration.",
+                hint="Le produit est prêt, mais il doit être sélectionné pour déclencher la déclaration.",
                 blocking=False,
             )
         )
@@ -830,9 +830,9 @@ def _constraints_for_candidate(
         missing_requirements.append(
             _missing_requirement_entry(
                 code="prepare_declaration",
-                label="Préparer la déclaration avec le produit recommandé",
+                label="Préparer la déclaration",
                 value={"product_id": candidate.get("product_id"), "product_name": candidate.get("product_name")},
-                hint="La recommandation est disponible, mais la déclaration doit encore être préparée.",
+                hint="La déclaration doit encore être préparée.",
                 blocking=False,
             )
         )
@@ -924,20 +924,14 @@ def _ui_for_state(
     elif state == "possible":
         product_name = selected_display or (candidate or {}).get("product_name")
         summary = f"À préparer : {product_name}" if product_name else "À préparer"
-        hint = reason or (
-            f"Le moteur a retenu {product_name} parmi les produits enregistrés."
-            + (f" Phase actuelle : {phase_now or 'Non disponible'}." if phase_now else "")
-            + (f" Phase idéale : {phase_id}." if phase_id else "")
-            if product_name
-            else "Le produit est disponible, mais la déclaration attend encore un petit réglage."
-        )
+        hint = reason or "La prochaine intervention est à préparer."
         action_label = "Choisir le produit"
     elif state == "blocked":
-        summary = "En pause"
+        summary = "Bloqué"
         hint = block_reason or reason or "La réapplication n'est pas encore possible."
         action_label = "Attendre"
     else:
-        summary = "Catalogue vide"
+        summary = "Non disponible"
         hint = reason or "Ajoute au moins un produit au catalogue pour obtenir une recommandation."
         action_label = "Ajouter un produit"
 
@@ -957,7 +951,7 @@ def _ui_for_state(
                 if selected_display
                 else (
                     (
-                        f"{'Produit recommandé' if state == 'recommended' else 'Produit à sélectionner'} : {(candidate or {}).get('product_name')}."
+                        f"{'Produit sélectionné' if state == 'recommended' else 'Produit à sélectionner'} : {(candidate or {}).get('product_name')}."
                         + (
                             f" Phase actuelle : {phase_now}."
                             if phase_now
@@ -1002,10 +996,7 @@ def _ui_for_state(
             "Tu peux déclarer l’intervention maintenant."
             if selected_ready
             else (
-                (
-                    "Le produit choisi doit correspondre à la recommandation automatique."
-                    + (f" Phase actuelle : {phase_now}." if phase_now else "")
-                )
+                ("Le produit choisi doit correspondre à l’intervention." + (f" Phase actuelle : {phase_now}." if phase_now else ""))
                 if selected_display
                 else "Le bouton se débloque dès qu’un produit est prêt."
             )
