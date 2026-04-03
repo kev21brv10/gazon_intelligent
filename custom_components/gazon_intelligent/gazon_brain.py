@@ -538,6 +538,8 @@ class GazonBrain:
         nom: str,
         type_produit: str,
         dose_conseillee: str | None = None,
+        usage_mode: str | None = None,
+        max_applications_per_year: int | None = None,
         reapplication_after_days: int | None = None,
         delai_avant_tonte_jours: int | None = None,
         phase_compatible: str | list[str] | None = None,
@@ -550,6 +552,8 @@ class GazonBrain:
         application_irrigation_mode: str | None = None,
         application_label_notes: str | None = None,
         note: str | None = None,
+        temperature_min: float | None = None,
+        temperature_max: float | None = None,
     ) -> dict[str, Any]:
         record = normalize_product_record(
             product_id,
@@ -557,6 +561,8 @@ class GazonBrain:
                 "nom": nom,
                 "type": type_produit,
                 "dose_conseillee": dose_conseillee,
+                "usage_mode": usage_mode,
+                "max_applications_per_year": max_applications_per_year,
                 "reapplication_after_days": reapplication_after_days,
                 "delai_avant_tonte_jours": delai_avant_tonte_jours,
                 "phase_compatible": phase_compatible,
@@ -569,6 +575,8 @@ class GazonBrain:
                 "application_irrigation_mode": application_irrigation_mode,
                 "application_label_notes": application_label_notes,
                 "note": note,
+                "temperature_min": temperature_min,
+                "temperature_max": temperature_max,
             },
         )
         if record is None:
@@ -768,5 +776,8 @@ class GazonBrain:
             products=self.products,
             history=self.history,
             application_state=snapshot,
+            temperature=temperature,
+            forecast_temperature_today=forecast_temperature_today,
+            temperature_source=temperature_source,
         )
         return snapshot

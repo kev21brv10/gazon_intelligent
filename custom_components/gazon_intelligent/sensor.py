@@ -9,7 +9,7 @@ from .assistant import build_assistant_decision
 from .const import DOMAIN
 from .entity_base import GazonEntityBase
 from .intervention_recommendation import build_intervention_recommendation
-from .memory import compute_application_state
+from .memory import compute_application_state, normalize_post_application_status
 
 
 def _human_datetime_text(value: object) -> str | None:
@@ -115,6 +115,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
             GazonDerniereActionUtilisateurSensor(coordinator),
             GazonCatalogueProduitsSensor(coordinator),
             GazonInterventionRecommendationSensor(coordinator),
+            GazonDebugInterventionSensor(coordinator),
         ]
     )
 
@@ -489,6 +490,7 @@ class GazonDerniereApplicationSensor(GazonEntityBase, SensorEntity):
             "application_irrigation_delay_minutes": 0.0,
             "application_irrigation_mode": None,
             "application_label_notes": None,
+            "application_post_watering_status": "indisponible",
             "declared_at": None,
             "application_block_until": None,
             "application_block_active": False,
@@ -521,6 +523,7 @@ class GazonDerniereApplicationSensor(GazonEntityBase, SensorEntity):
                 "application_irrigation_delay_minutes": memory.get("application_irrigation_delay_minutes"),
                 "application_irrigation_mode": memory.get("application_irrigation_mode"),
                 "application_label_notes": memory.get("application_label_notes"),
+                "application_post_watering_status": memory.get("application_post_watering_status"),
                 "declared_at": memory.get("declared_at"),
                 "application_block_until": memory.get("application_block_until"),
                 "application_block_active": memory.get("application_block_active"),
@@ -533,6 +536,9 @@ class GazonDerniereApplicationSensor(GazonEntityBase, SensorEntity):
                 "application_post_watering_ready": memory.get("application_post_watering_ready"),
                 "application_post_watering_remaining_mm": memory.get("application_post_watering_remaining_mm"),
             }
+            state["application_post_watering_status"] = normalize_post_application_status(
+                memory.get("application_post_watering_status")
+            )
             summary = state.get("derniere_application")
             if isinstance(summary, dict) and summary:
                 return state
@@ -551,6 +557,7 @@ class GazonDerniereApplicationSensor(GazonEntityBase, SensorEntity):
             "application_irrigation_delay_minutes",
             "application_irrigation_mode",
             "application_label_notes",
+            "application_post_watering_status",
             "declared_at",
             "application_block_until",
             "application_block_active",
@@ -720,6 +727,8 @@ class GazonCatalogueProduitsSensor(GazonEntityBase, SensorEntity):
             "nom",
             "type",
             "dose_conseillee",
+            "usage_mode",
+            "max_applications_per_year",
             "reapplication_after_days",
             "delai_avant_tonte_jours",
             "phase_compatible",
@@ -732,6 +741,8 @@ class GazonCatalogueProduitsSensor(GazonEntityBase, SensorEntity):
             "application_irrigation_delay_minutes",
             "application_irrigation_mode",
             "application_label_notes",
+            "temperature_min",
+            "temperature_max",
             "note",
         )
         return {key: product.get(key) for key in keys if product.get(key) not in (None, "", [], {})}
@@ -791,6 +802,9 @@ class GazonInterventionRecommendationSensor(GazonEntityBase, SensorEntity):
                 products=getattr(self.coordinator, "products", None),
                 history=getattr(self.coordinator, "history", None),
                 application_state=snapshot,
+                temperature=snapshot.get("temperature"),
+                forecast_temperature_today=snapshot.get("forecast_temperature_today"),
+                temperature_source=snapshot.get("temperature_source"),
             )
             if isinstance(recommendation, dict) and recommendation:
                 return recommendation
@@ -878,6 +892,124 @@ class GazonInterventionRecommendationSensor(GazonEntityBase, SensorEntity):
     def extra_state_attributes(self):
         payload = self._recommendation_payload()
         return {"payload": payload}
+
+
+class GazonDebugInterventionSensor(GazonEntityBase, SensorEntity):
+    _attr_name = "Debug intervention"
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:bug-outline"
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_debug_intervention"
+
+    def _debug_payload(self) -> dict[str, object]:
+        payload = self._decision_value("intervention_recommendation")
+        if isinstance(payload, dict) and payload:
+            return payload
+        snapshot = getattr(self.coordinator, "data", None)
+        if isinstance(snapshot, dict):
+            payload = snapshot.get("intervention_recommendation")
+            if isinstance(payload, dict) and payload:
+                return payload
+        return {}
+
+    @staticmethod
+    def _constraint_impact(constraint: dict[str, object]) -> str:
+        if bool(constraint.get("blocking")):
+            return "bloquant"
+        if constraint.get("met") is False:
+            return "dégradant"
+        return "neutre"
+
+    def _constraint_view(self, constraint: dict[str, object]) -> dict[str, object]:
+        item = dict(constraint)
+        item["impact"] = self._constraint_impact(item)
+        return item
+
+    @property
+    def native_value(self):
+        return str(self._debug_payload().get("status") or "unavailable")
+
+    @property
+    def extra_state_attributes(self):
+        payload = self._debug_payload()
+        if not payload:
+            return {
+                "status": "unavailable",
+                "summary": "Aucune recommandation de debug disponible",
+            }
+
+        product = payload.get("product")
+        if not isinstance(product, dict):
+            product = {}
+        ui = payload.get("ui")
+        if not isinstance(ui, dict):
+            ui = {}
+        context = payload.get("context")
+        if not isinstance(context, dict):
+            context = {}
+        product_temperature = {
+            "current": product.get("temperature_value"),
+            "min": product.get("temperature_min"),
+            "max": product.get("temperature_max"),
+            "source": product.get("temperature_source"),
+            "matched": product.get("temperature_evaluation", {}).get("matched")
+            if isinstance(product.get("temperature_evaluation"), dict)
+            else None,
+        }
+        cleaned_context = {
+            "phase": context.get("current_phase"),
+            "month": context.get("current_month"),
+            "temperature": product_temperature.get("current"),
+            "temperature_source": product_temperature.get("source"),
+        }
+        cleaned_context = {key: value for key, value in cleaned_context.items() if value not in (None, "", [], {})}
+        constraints = payload.get("constraints")
+        if not isinstance(constraints, list):
+            constraints = []
+        normalized_constraints = [
+            self._constraint_view(constraint)
+            for constraint in constraints
+            if isinstance(constraint, dict)
+        ]
+        blocking_constraints = [constraint for constraint in normalized_constraints if constraint["impact"] == "bloquant"]
+        non_blocking_constraints = [constraint for constraint in normalized_constraints if constraint["impact"] != "bloquant"]
+        summary = (
+            ui.get("summary")
+            or payload.get("reason")
+            or payload.get("why_now")
+            or "Recommandation disponible"
+        )
+        return {
+            "score": payload.get("score"),
+            "status": payload.get("status"),
+            "recommended_action": payload.get("recommended_action"),
+            "product_id": product.get("id"),
+            "product_name": product.get("name"),
+            "product": {
+                "id": product.get("id"),
+                "name": product.get("name"),
+                "type": product.get("type"),
+                "months": product.get("months") or [],
+                "months_label": product.get("months_label"),
+            },
+            "constraints": normalized_constraints,
+            "blocking_constraints": blocking_constraints,
+            "non_blocking_constraints": non_blocking_constraints,
+            "reasons": payload.get("reasons") or [],
+            "missing_requirements": payload.get("missing_requirements") or [],
+            "context": cleaned_context,
+            "summary": summary,
+            "reason": payload.get("reason"),
+            "why_now": payload.get("why_now"),
+            "ready_to_declare": payload.get("ready_to_declare"),
+            "selected_product_ready": payload.get("selected_product_ready"),
+            "selection": payload.get("selection") or {},
+            "ui_summary": ui.get("summary"),
+            "ui_hint": ui.get("hint"),
+        }
 
 
 class GazonPlanArrosageSensor(GazonEntityBase, SensorEntity):
@@ -1449,8 +1581,10 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
         auto_irrigation_enabled = bool(extra.get("auto_irrigation_enabled", True))
         application_type = str(extra.get("application_type") or "").strip().lower()
         application_type_known = application_type in {"sol", "foliaire"}
+        post_status = normalize_post_application_status(extra.get("application_post_watering_status"))
         application_label = "Arrosage"
         display_window = watering_window.replace("_", " ").strip()
+        block_reason = str(extra.get("block_reason") or "").strip()
         application_summary = extra.get("derniere_application")
         if isinstance(application_summary, dict) and application_summary:
             application_label = str(
@@ -1459,6 +1593,9 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
                 or application_summary.get("type")
                 or application_label
             )
+        application_label_active = bool(application_summary) and post_status in {"bloque", "en_attente", "autorise"} and (
+            application_block_active or application_requires or application_pending or post_status == "autorise"
+        )
 
         today = date.today().isoformat()
         if application_summary and not application_type_known:
@@ -1468,18 +1605,55 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
                 "summary": f"{application_label} bloqué: type d'application inconnu",
             }
 
-        if application_block_active or type_arrosage == "bloque":
+        if post_status == "bloque" or application_block_active or type_arrosage == "bloque":
+            summary = "Arrosage bloqué"
+            show_application_label = bool(application_summary) and (application_block_active or post_status == "bloque")
+            if show_application_label:
+                summary = f"Arrosage bloqué ({application_label})"
+            if block_reason:
+                if show_application_label:
+                    summary = f"Arrosage bloqué ({application_label}): {block_reason}"
+                else:
+                    summary = f"Arrosage bloqué: {block_reason}"
             return {
                 "status": "bloque",
                 "next_action": "Attendre la fin du bloc",
-                "summary": f"Arrosage bloqué ({application_label})",
+                "summary": summary,
             }
 
-        if application_requires and not application_pending:
+        if post_status == "en_attente" or (application_requires and application_pending and not bool(extra.get("application_post_watering_ready"))):
+            summary = "Arrosage post-application en attente"
+            if application_label_active:
+                summary = f"{summary} ({application_label})"
+            if block_reason:
+                summary = f"{summary}: {block_reason}"
             return {
                 "status": "en_attente",
                 "next_action": "Attendre la fin du délai applicatif",
-                "summary": f"Arrosage technique en attente ({application_label})",
+                "summary": summary,
+            }
+
+        if post_status == "autorise":
+            if auto_irrigation_enabled and application_mode == "auto" and auto_autorise:
+                summary = "Irrigation post-application autorisée"
+                if application_label_active:
+                    summary = f"{summary} ({application_label})"
+                return {
+                    "status": "auto",
+                    "next_action": "Aucune action requise",
+                    "summary": summary,
+                }
+            summary = "Irrigation post-application autorisée"
+            if application_label_active:
+                summary = f"{summary} ({application_label})"
+            return {
+                "status": "autorise",
+                "next_action": (
+                    "Arrosage manuel immédiat"
+                    if application_mode == "manuel"
+                    else "Décider manuellement"
+                ),
+                "summary": summary,
             }
 
         if not auto_irrigation_enabled:
@@ -1589,6 +1763,7 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
             "soil_infiltration_factor",
             "soil_need_factor",
             "feedback_observation",
+            "application_post_watering_status",
             "auto_irrigation_enabled",
             "forecast_pluie_j2",
             "forecast_pluie_3j",
@@ -1625,6 +1800,7 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
             "soil_infiltration_factor",
             "soil_need_factor",
             "feedback_observation",
+            "application_post_watering_status",
             "forecast_pluie_j2",
             "forecast_pluie_3j",
             "forecast_probabilite_max_3j",

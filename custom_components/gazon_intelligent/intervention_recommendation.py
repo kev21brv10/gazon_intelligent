@@ -6,6 +6,9 @@ from typing import Any
 from .const import APPLICATION_INTERVENTIONS
 from .memory import (
     _normalize_text,
+    _normalize_usage_mode,
+    _to_float,
+    _to_int,
     format_application_months_label,
     normalize_application_months,
     normalize_product_id,
@@ -112,6 +115,63 @@ def _latest_application_for_product(
     return None
 
 
+def _application_count_for_product_year(
+    history: list[dict[str, Any]],
+    product_id: str,
+    product_name: str | None,
+    year: int,
+) -> int:
+    normalized_product_id = normalize_product_id(product_id)
+    normalized_product_name = normalize_product_id(product_name)
+    if not normalized_product_id and not normalized_product_name:
+        return 0
+
+    count = 0
+    for item in history:
+        if not isinstance(item, dict):
+            continue
+        item_type = item.get("type")
+        if item_type not in APPLICATION_INTERVENTIONS and not any(
+            item.get(key) not in (None, "", [], {})
+            for key in (
+                "application_type",
+                "application_requires_watering_after",
+                "application_post_watering_mm",
+                "application_irrigation_block_hours",
+                "application_irrigation_delay_minutes",
+                "application_irrigation_mode",
+                "application_label_notes",
+                "produit",
+                "dose",
+                "reapplication_after_days",
+            )
+        ):
+            continue
+
+        item_date = _parse_date(item.get("date") or item.get("date_action"))
+        if item_date is None or item_date.year != year:
+            continue
+
+        candidate_ids = {
+            normalize_product_id(item.get("produit_id")),
+            normalize_product_id(item.get("produit")),
+            normalize_product_id(item.get("libelle")),
+        }
+        produit_catalogue = _normalize_product_catalogue(item.get("produit_catalogue"))
+        candidate_ids.update(
+            {
+                normalize_product_id(produit_catalogue.get("id")),
+                normalize_product_id(produit_catalogue.get("nom")),
+            }
+        )
+        if normalized_product_id in candidate_ids or (
+            normalized_product_name and normalized_product_name in candidate_ids
+        ):
+            count += 1
+
+    return count
+
+
 def _format_reasons(reasons: list[str]) -> str:
     clean = [str(reason).strip() for reason in reasons if str(reason).strip()]
     if not clean:
@@ -131,6 +191,130 @@ def _clamp_score(value: int | float | None) -> int:
     return max(0, min(100, score))
 
 
+def _format_temperature_value(value: float | int | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        return f"{float(value):g}"
+    except (TypeError, ValueError):
+        return None
+
+
+def _temperature_range_label(temperature_min: float | None, temperature_max: float | None) -> str | None:
+    min_label = _format_temperature_value(temperature_min)
+    max_label = _format_temperature_value(temperature_max)
+    if min_label is None and max_label is None:
+        return None
+    if min_label is not None and max_label is not None:
+        return f"{min_label} à {max_label} °C"
+    if min_label is not None:
+        return f"≥ {min_label} °C"
+    return f"≤ {max_label} °C"
+
+
+def _temperature_evaluation(
+    *,
+    reference_temperature: float | None,
+    temperature_min: float | None,
+    temperature_max: float | None,
+) -> dict[str, Any] | None:
+    if reference_temperature is None:
+        return None
+    if temperature_min is None and temperature_max is None:
+        return None
+
+    lower = temperature_min
+    upper = temperature_max
+    if lower is not None and upper is not None and lower > upper:
+        lower, upper = upper, lower
+
+    current = float(reference_temperature)
+    current_label = _format_temperature_value(current) or f"{current:.1f}"
+    expected_label = _temperature_range_label(lower, upper) or "non disponible"
+    matched = True
+    blocking = False
+    score_delta = 0
+    delta = 0.0
+
+    if lower is not None and upper is not None:
+        if lower <= current <= upper:
+            score_delta = 10
+            reason = f"Température compatible ({current_label} °C, attendu {expected_label})"
+            band = "in_range"
+        else:
+            matched = False
+            delta = lower - current if current < lower else current - upper
+            if delta <= 2:
+                score_delta = -5
+                reason = f"Température légèrement hors plage ({current_label} °C, attendu {expected_label})"
+                band = "slightly_out"
+            elif delta <= 5:
+                score_delta = -20
+                reason = f"Température hors plage ({current_label} °C, attendu {expected_label})"
+                band = "out_of_range"
+            else:
+                score_delta = -35
+                blocking = True
+                reason = f"Température très hors plage ({current_label} °C, attendu {expected_label})"
+                band = "blocked"
+    elif lower is not None:
+        if current >= lower:
+            score_delta = 10
+            reason = f"Température compatible ({current_label} °C, attendu {expected_label})"
+            band = "in_range"
+        else:
+            matched = False
+            delta = lower - current
+            if delta <= 2:
+                score_delta = -5
+                reason = f"Température légèrement hors plage ({current_label} °C, attendu {expected_label})"
+                band = "slightly_out"
+            elif delta <= 5:
+                score_delta = -20
+                reason = f"Température hors plage ({current_label} °C, attendu {expected_label})"
+                band = "out_of_range"
+            else:
+                score_delta = -35
+                blocking = True
+                reason = f"Température très hors plage ({current_label} °C, attendu {expected_label})"
+                band = "blocked"
+    else:
+        assert upper is not None
+        if current <= upper:
+            score_delta = 10
+            reason = f"Température compatible ({current_label} °C, attendu {expected_label})"
+            band = "in_range"
+        else:
+            matched = False
+            delta = current - upper
+            if delta <= 2:
+                score_delta = -5
+                reason = f"Température légèrement hors plage ({current_label} °C, attendu {expected_label})"
+                band = "slightly_out"
+            elif delta <= 5:
+                score_delta = -20
+                reason = f"Température hors plage ({current_label} °C, attendu {expected_label})"
+                band = "out_of_range"
+            else:
+                score_delta = -35
+                blocking = True
+                reason = f"Température très hors plage ({current_label} °C, attendu {expected_label})"
+                band = "blocked"
+
+    return {
+        "current": current,
+        "min": lower,
+        "max": upper,
+        "matched": matched,
+        "blocking": blocking,
+        "delta": delta,
+        "band": band,
+        "score_delta": score_delta,
+        "reason": reason,
+        "label": f"Température {('compatible' if matched else 'hors plage')} ({current_label} °C, attendu {expected_label})",
+    }
+
+
 def _state_metadata(state: str) -> dict[str, str]:
     if state == "recommended":
         return {
@@ -143,11 +327,11 @@ def _state_metadata(state: str) -> dict[str, str]:
         }
     if state == "possible":
         return {
-            "title": "Intervention à préparer",
-            "badge": "À préparer",
+            "title": "Prochaine intervention recommandée",
+            "badge": "À confirmer",
             "tone": "warning",
-            "icon": "mdi:package-variant-closed",
-            "summary": "Produit conseillé",
+            "icon": "mdi:spray-bottle",
+            "summary": "À préparer",
             "action_label": "Choisir le produit",
         }
     if state == "blocked":
@@ -176,13 +360,31 @@ def _evaluate_product_candidate(
     today: date,
     phase_active: str | None,
     selected_product_id: str | None,
+    temperature: float | None = None,
+    forecast_temperature_today: float | None = None,
+    temperature_source: str | None = None,
 ) -> dict[str, Any]:
     product_id = normalize_product_id(product.get("id"))
     product_name = str(product.get("nom") or product_id or "").strip()
     product_type = str(product.get("type") or "").strip()
+    usage_mode = _normalize_usage_mode(product.get("usage_mode"))
     phase_compatible = [str(value).strip() for value in (product.get("phase_compatible") or []) if str(value).strip()]
     months = normalize_application_months(product.get("application_months"))
     months_label = format_application_months_label(months)
+    temperature_min = _to_float(product.get("temperature_min"))
+    temperature_max = _to_float(product.get("temperature_max"))
+    if temperature_min is not None and temperature_max is not None and temperature_min > temperature_max:
+        temperature_min, temperature_max = temperature_max, temperature_min
+    reference_temperature = temperature if temperature is not None else forecast_temperature_today
+    reference_temperature_source = temperature_source
+    if reference_temperature is None and forecast_temperature_today is not None:
+        reference_temperature = forecast_temperature_today
+        reference_temperature_source = "meteo_forecast"
+    temperature_evaluation = _temperature_evaluation(
+        reference_temperature=reference_temperature,
+        temperature_min=temperature_min,
+        temperature_max=temperature_max,
+    )
     latest_application = _latest_application_for_product(history, product_id or "", product_name)
     delay_days = None
     try:
@@ -197,6 +399,20 @@ def _evaluate_product_candidate(
     if delay_days is not None and delay_days >= 0 and latest_application_date is not None:
         next_reapplication_date = latest_application_date + timedelta(days=delay_days)
         due = today >= next_reapplication_date
+    max_applications_per_year = _to_int(product.get("max_applications_per_year"))
+    if max_applications_per_year is not None and max_applications_per_year < 0:
+        max_applications_per_year = None
+    applications_this_year = _application_count_for_product_year(
+        history,
+        product_id or "",
+        product_name,
+        today.year,
+    )
+    annual_limit_reached = (
+        max_applications_per_year is not None and applications_this_year >= max_applications_per_year
+    )
+    if annual_limit_reached:
+        due = False
 
     reasons: list[str] = []
     score = 0
@@ -247,14 +463,52 @@ def _evaluate_product_candidate(
     if product_type:
         score += 1
 
-    blocked_reason = None
+    if usage_mode:
+        if usage_mode == "preventif":
+            score += 2 if (phase_match or month_match) else 1
+            reasons.append("Usage préventif")
+        elif usage_mode == "curatif":
+            score += 2 if phase_match else 1
+            reasons.append("Usage curatif")
+        elif usage_mode == "entretien":
+            score += 1
+            reasons.append("Usage entretien")
+        elif usage_mode == "rattrapage":
+            score += 2 if latest_application_date is not None else 1
+            reasons.append("Usage de rattrapage")
+
+    temperature_block_reason = None
+    if temperature_evaluation is not None:
+        score += int(temperature_evaluation["score_delta"])
+        reasons.append(str(temperature_evaluation["reason"]))
+        if temperature_evaluation["blocking"]:
+            due = False
+            temperature_block_reason = str(temperature_evaluation["reason"])
+
+    if annual_limit_reached and max_applications_per_year is not None:
+        reasons.append(
+            f"Limite annuelle atteinte ({applications_this_year} / {max_applications_per_year})"
+        )
+
+    blocked_reason_parts: list[str] = []
+    if annual_limit_reached and max_applications_per_year is not None:
+        blocked_reason_parts.append(
+            f"Limite annuelle atteinte ({applications_this_year} / {max_applications_per_year} applications cette année)."
+        )
     if delay_days is not None and not due and next_reapplication_date is not None:
-        blocked_reason = f"Réapplication attendue jusqu'au {next_reapplication_date.strftime('%d/%m/%Y')}."
+        blocked_reason_parts.append(
+            f"Réapplication attendue jusqu'au {next_reapplication_date.strftime('%d/%m/%Y')}."
+        )
+    if temperature_block_reason:
+        blocked_reason_parts.append(temperature_block_reason)
+    blocked_reason = _format_reasons(blocked_reason_parts) or None
 
     return {
         "product_id": product_id,
         "product_name": product_name or product_id,
         "product_type": product_type or None,
+        "usage_mode": usage_mode,
+        "max_applications_per_year": max_applications_per_year,
         "phase_compatible": phase_compatible,
         "months": months,
         "months_label": months_label,
@@ -267,6 +521,14 @@ def _evaluate_product_candidate(
         "score": _clamp_score(score),
         "reasons": reasons,
         "blocked_reason": blocked_reason,
+        "applications_this_year": applications_this_year,
+        "annual_limit_reached": annual_limit_reached,
+        "temperature_min": temperature_min,
+        "temperature_max": temperature_max,
+        "temperature_value": reference_temperature,
+        "temperature_source": reference_temperature_source,
+        "temperature_evaluation": temperature_evaluation,
+        "temperature_blocking": bool(temperature_evaluation["blocking"]) if temperature_evaluation else False,
     }
 
 
@@ -469,6 +731,51 @@ def _constraints_for_candidate(
             )
         )
 
+    temperature_value = candidate.get("temperature_value")
+    temperature_min = candidate.get("temperature_min")
+    temperature_max = candidate.get("temperature_max")
+    if temperature_value is not None and (temperature_min is not None or temperature_max is not None):
+        temperature_label = _temperature_range_label(temperature_min, temperature_max)
+        temperature_reason = candidate.get("temperature_evaluation", {}).get("reason") if isinstance(candidate.get("temperature_evaluation"), dict) else None
+        if not temperature_reason:
+            temperature_reason = (
+                f"Température compatible ({_format_temperature_value(temperature_value) or temperature_value} °C, attendu {temperature_label})"
+                if candidate.get("temperature_evaluation", {}).get("matched")
+                else f"Température hors plage ({_format_temperature_value(temperature_value) or temperature_value} °C, attendu {temperature_label})"
+            )
+        constraints.append(
+            _constraint_entry(
+                code="temperature_range",
+                label=temperature_reason,
+                value={
+                    "current": temperature_value,
+                    "min": temperature_min,
+                    "max": temperature_max,
+                    "matched": bool(candidate.get("temperature_evaluation", {}).get("matched")) if isinstance(candidate.get("temperature_evaluation"), dict) else False,
+                    "delta": candidate.get("temperature_evaluation", {}).get("delta") if isinstance(candidate.get("temperature_evaluation"), dict) else None,
+                    "source": candidate.get("temperature_source"),
+                },
+                hint="Les seuils de température du produit influencent la pertinence de l'application.",
+                blocking=bool(candidate.get("temperature_blocking")),
+                met=bool(candidate.get("temperature_evaluation", {}).get("matched")) if isinstance(candidate.get("temperature_evaluation"), dict) else False,
+            )
+        )
+        if candidate.get("temperature_blocking"):
+            missing_requirements.append(
+                _missing_requirement_entry(
+                    code="temperature_out_of_range",
+                    label="Température hors plage",
+                    value={
+                        "current": temperature_value,
+                        "min": temperature_min,
+                        "max": temperature_max,
+                        "source": candidate.get("temperature_source"),
+                    },
+                    hint="Attends une température plus adaptée avant de déclarer cette intervention.",
+                    blocking=True,
+                )
+            )
+
     if candidate.get("next_reapplication_date"):
         next_display = candidate.get("next_reapplication_display") or candidate.get("next_reapplication_date")
         constraints.append(
@@ -487,6 +794,25 @@ def _constraints_for_candidate(
                 hint="Le délai de réapplication évite les interventions trop rapprochées.",
                 blocking=not bool(candidate.get("due")),
                 met=bool(candidate.get("due")),
+            )
+        )
+
+    if candidate.get("max_applications_per_year") is not None and candidate.get("annual_limit_reached"):
+        max_applications_per_year = int(candidate.get("max_applications_per_year"))
+        applications_this_year = int(candidate.get("applications_this_year") or 0)
+        constraints.append(
+            _constraint_entry(
+                code="annual_applications_limit",
+                label=(
+                    f"Limite annuelle atteinte ({applications_this_year} / {max_applications_per_year})"
+                ),
+                value={
+                    "applications_this_year": applications_this_year,
+                    "max_applications_per_year": max_applications_per_year,
+                },
+                hint="Le nombre maximal d'applications annuelles configuré pour ce produit est atteint.",
+                blocking=True,
+                met=False,
             )
         )
 
@@ -520,6 +846,19 @@ def _constraints_for_candidate(
                 blocking=True,
             )
         )
+        if candidate and candidate.get("annual_limit_reached"):
+            missing_requirements.append(
+                _missing_requirement_entry(
+                    code="annual_limit_reached",
+                    label="Attendre la prochaine année d'application",
+                    value={
+                        "applications_this_year": int(candidate.get("applications_this_year") or 0),
+                        "max_applications_per_year": int(candidate.get("max_applications_per_year") or 0),
+                    },
+                    hint="La limite annuelle du produit est atteinte.",
+                    blocking=True,
+                )
+            )
 
     if block_reason:
         constraints.append(
@@ -575,7 +914,7 @@ def _ui_for_state(
             hint = reason or f"{selected_display or 'Le produit'} est prêt à être déclaré."
             action_label = "Déclarer maintenant"
         else:
-            summary = "Produit conseillé"
+            summary = "Recommandé"
             hint = reason or (
                 f"Sélectionne {selected_display} pour lancer la déclaration."
                 if selected_display
@@ -584,9 +923,10 @@ def _ui_for_state(
             action_label = "Choisir le produit"
     elif state == "possible":
         product_name = selected_display or (candidate or {}).get("product_name")
-        summary = f"Produit conseillé : {product_name}" if product_name else "À préparer"
+        summary = f"À préparer : {product_name}" if product_name else "À préparer"
         hint = reason or (
-            f"Phase actuelle : {phase_now or 'Non disponible'}."
+            f"Le moteur a retenu {product_name} parmi les produits enregistrés."
+            + (f" Phase actuelle : {phase_now or 'Non disponible'}." if phase_now else "")
             + (f" Phase idéale : {phase_id}." if phase_id else "")
             if product_name
             else "Le produit est disponible, mais la déclaration attend encore un petit réglage."
@@ -617,7 +957,7 @@ def _ui_for_state(
                 if selected_display
                 else (
                     (
-                        f"Produit conseillé : {(candidate or {}).get('product_name')}."
+                        f"{'Produit recommandé' if state == 'recommended' else 'Produit à sélectionner'} : {(candidate or {}).get('product_name')}."
                         + (
                             f" Phase actuelle : {phase_now}."
                             if phase_now
@@ -635,7 +975,7 @@ def _ui_for_state(
             if selected_months_label and selected_display
             else (
                 (
-                    f"Période recommandée: {(candidate or {}).get('months_label')}."
+                    f"Période à privilégier: {(candidate or {}).get('months_label')}."
                     + (f" · Phase actuelle: {phase_now}." if phase_now else "")
                 )
                 if candidate and candidate.get("months_label")
@@ -650,7 +990,7 @@ def _ui_for_state(
                 if selected_display
                 else (
                     (
-                        f"Produit conseillé : {(candidate or {}).get('product_name')}."
+                        f"{'Produit recommandé' if state == 'recommended' else 'Produit à sélectionner'} : {(candidate or {}).get('product_name')}."
                         + (f" Phase actuelle : {phase_now}." if phase_now else "")
                     )
                     if candidate and candidate.get("product_name")
@@ -685,6 +1025,9 @@ def build_intervention_recommendation(
     products: dict[str, dict[str, Any]] | None,
     history: list[dict[str, Any]] | None,
     application_state: dict[str, Any] | None,
+    temperature: float | None = None,
+    forecast_temperature_today: float | None = None,
+    temperature_source: str | None = None,
 ) -> dict[str, Any]:
     products_map = products if isinstance(products, dict) else {}
     history_list = [item for item in (history or []) if isinstance(item, dict)]
@@ -783,6 +1126,9 @@ def build_intervention_recommendation(
             today=today,
             phase_active=phase_active,
             selected_product_id=selected_product_id,
+            temperature=temperature,
+            forecast_temperature_today=forecast_temperature_today,
+            temperature_source=temperature_source,
         )
         for product in catalogue_products
     ]
@@ -813,6 +1159,10 @@ def build_intervention_recommendation(
             reasons.append(block_reason)
         if selected_product_id and best and best["product_id"] == selected_product_id:
             reasons.append(f"{best['product_name']} est sélectionné mais reste bloqué.")
+        if best and isinstance(best.get("temperature_evaluation"), dict):
+            temperature_reason = str(best["temperature_evaluation"].get("reason") or "").strip()
+            if temperature_reason and temperature_reason not in reasons:
+                reasons.append(temperature_reason)
         reason_text = _format_reasons(reasons) or "Attends la fin du blocage post-application avant de déclarer une nouvelle intervention."
         ui = _ui_for_state(
             state="blocked",
@@ -938,6 +1288,11 @@ def build_intervention_recommendation(
         if state == "possible"
         else best["blocked_reason"] or "La réapplication n'est pas encore possible."
     )
+    temperature_reason = None
+    if isinstance(best.get("temperature_evaluation"), dict):
+        temperature_reason = str(best["temperature_evaluation"].get("reason") or "").strip() or None
+    if temperature_reason and temperature_reason not in reason:
+        reason = f"{reason} · {temperature_reason}" if reason else temperature_reason
     why_now = reason
     if state == "blocked" and best["blocked_reason"]:
         why_now = best["blocked_reason"]

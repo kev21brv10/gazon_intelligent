@@ -25,19 +25,49 @@ def _catalogue_name_key(value: object) -> str:
     return " ".join(str(value or "").split()).casefold()
 
 
+def _format_usage_mode_label(value: object) -> str | None:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return None
+    labels = {
+        "preventif": "Préventif",
+        "curatif": "Curatif",
+        "entretien": "Entretien",
+        "rattrapage": "Rattrapage",
+    }
+    return labels.get(normalized, str(value).strip() or None)
+
+
+def _format_annual_limit_label(value: object) -> str | None:
+    try:
+        number = float(str(value).replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+    if not number or number <= 0:
+        return None
+    return f"{max(1, int(number))}/an"
+
+
 def _catalogue_product_label(product: dict[str, Any], duplicate_name_counts: dict[str, int]) -> str:
     product_id = str(product.get("id") or "").strip()
     product_name = str(product.get("nom") or product_id or "").strip()
     months_label = str(product.get("application_months_label") or "").strip()
+    usage_mode_label = _format_usage_mode_label(product.get("usage_mode"))
+    annual_limit_label = _format_annual_limit_label(product.get("max_applications_per_year"))
     if not product_name:
         base_label = product_id or "Produit"
     elif duplicate_name_counts.get(_catalogue_name_key(product_name), 0) > 1 and product_id:
         base_label = f"{product_name} — {product_id}"
     else:
         base_label = product_name
+    parts = [base_label]
     if months_label:
-        return f"{base_label} · {months_label}"
-    return base_label
+        parts.append(months_label)
+    if usage_mode_label:
+        parts.append(f"Mode {usage_mode_label}")
+    if annual_limit_label:
+        parts.append(f"Max {annual_limit_label}")
+    return " · ".join(parts)
 
 
 class GazonModeSelect(GazonEntityBase, SelectEntity):
@@ -63,7 +93,7 @@ class GazonModeSelect(GazonEntityBase, SelectEntity):
 
 
 class GazonInterventionProductSelect(GazonEntityBase, SelectEntity):
-    _attr_name = "Produit d'intervention"
+    _attr_name = "Produit sélectionné"
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.CONFIG
     _attr_icon = "mdi:package-variant-closed"
@@ -146,11 +176,19 @@ class GazonInterventionProductSelect(GazonEntityBase, SelectEntity):
         selected_product_name = product_name_by_id.get(selected_product_id) if selected_product_id else None
         selected_product_months = None
         selected_product_months_label = None
+        selected_product_usage_mode = None
+        selected_product_usage_mode_label = None
+        selected_product_max_applications_per_year = None
+        selected_product_max_applications_per_year_label = None
         if selected_product_id:
             selected_product = product_by_id.get(selected_product_id)
             if isinstance(selected_product, dict):
                 selected_product_months = selected_product.get("application_months")
                 selected_product_months_label = selected_product.get("application_months_label") or format_application_months_label(selected_product_months)
+                selected_product_usage_mode = selected_product.get("usage_mode")
+                selected_product_usage_mode_label = _format_usage_mode_label(selected_product_usage_mode)
+                selected_product_max_applications_per_year = selected_product.get("max_applications_per_year")
+                selected_product_max_applications_per_year_label = _format_annual_limit_label(selected_product_max_applications_per_year)
         if catalogue:
             if selected_product_id and selected_product_label:
                 summary = f"Produit sélectionné : {selected_product_label}"
@@ -165,6 +203,10 @@ class GazonInterventionProductSelect(GazonEntityBase, SelectEntity):
             "selected_product_name": selected_product_name,
             "selected_product_months": selected_product_months,
             "selected_product_months_label": selected_product_months_label,
+            "selected_product_usage_mode": selected_product_usage_mode,
+            "selected_product_usage_mode_label": selected_product_usage_mode_label,
+            "selected_product_max_applications_per_year": selected_product_max_applications_per_year,
+            "selected_product_max_applications_per_year_label": selected_product_max_applications_per_year_label,
             "summary": summary,
             "products_count": len(catalogue),
         }

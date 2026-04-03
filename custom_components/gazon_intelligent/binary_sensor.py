@@ -2,7 +2,7 @@ from homeassistant.components.binary_sensor import BinarySensorEntity
 
 from .const import DOMAIN
 from .entity_base import GazonEntityBase
-from .memory import compute_application_state
+from .memory import compute_application_state, normalize_post_application_status
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -46,7 +46,7 @@ class GazonTonteAutoriseeBinarySensor(GazonEntityBase, BinarySensorEntity):
 
 
 class GazonArrosageRecommandeBinarySensor(GazonEntityBase, BinarySensorEntity):
-    _attr_name = "Arrosage conseillé"
+    _attr_name = "Irrigation recommandée"
     _attr_has_entity_name = True
     _attr_icon = "mdi:water-check"
 
@@ -64,7 +64,7 @@ class GazonArrosageRecommandeBinarySensor(GazonEntityBase, BinarySensorEntity):
 
 
 class GazonApplicationArrosageAutoriseBinarySensor(GazonEntityBase, BinarySensorEntity):
-    _attr_name = "Arrosage après application autorisé"
+    _attr_name = "Irrigation post-application"
     _attr_has_entity_name = True
     _attr_icon = "mdi:water-check"
 
@@ -83,6 +83,7 @@ class GazonApplicationArrosageAutoriseBinarySensor(GazonEntityBase, BinarySensor
             "application_irrigation_delay_minutes": 0.0,
             "application_irrigation_mode": None,
             "application_label_notes": None,
+            "application_post_watering_status": "indisponible",
             "declared_at": None,
             "application_block_until": None,
             "application_block_active": False,
@@ -105,6 +106,7 @@ class GazonApplicationArrosageAutoriseBinarySensor(GazonEntityBase, BinarySensor
             "application_irrigation_delay_minutes",
             "application_irrigation_mode",
             "application_label_notes",
+            "application_post_watering_status",
             "declared_at",
             "application_block_until",
             "application_block_active",
@@ -122,6 +124,9 @@ class GazonApplicationArrosageAutoriseBinarySensor(GazonEntityBase, BinarySensor
             key: memory.get(key)
             for key in self._application_state_keys()
         }
+        state["application_post_watering_status"] = normalize_post_application_status(
+            state.get("application_post_watering_status")
+        )
         summary = state.get("derniere_application")
         if isinstance(summary, dict) and summary:
             return state
@@ -155,16 +160,13 @@ class GazonApplicationArrosageAutoriseBinarySensor(GazonEntityBase, BinarySensor
         auto_irrigation_enabled = bool(state.get("auto_irrigation_enabled", True))
         application_type = state.get("application_type")
         application_mode = str(state.get("application_irrigation_mode") or "").strip().lower()
-        application_post_watering_ready = bool(state.get("application_post_watering_ready"))
-        application_post_watering_pending = bool(state.get("application_post_watering_pending"))
-        application_requires_watering_after = bool(state.get("application_requires_watering_after"))
+        application_post_watering_status = normalize_post_application_status(
+            state.get("application_post_watering_status")
+        )
         return bool(
             application_type == "sol"
             and application_mode == "auto"
-            and application_requires_watering_after
-            and application_post_watering_pending
-            and application_post_watering_ready
-            and not bool(state.get("application_block_active"))
+            and application_post_watering_status == "autorise"
             and auto_irrigation_enabled
         )
 

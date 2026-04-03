@@ -40,6 +40,7 @@ ACTIVE_ENTITY_SUFFIXES: set[str] = {
     "catalogue_produits",
     "produit_intervention",
     "prochaine_intervention",
+    "debug_intervention",
     "arrosage_apres_application_autorise",
     "arrosage_automatique",
     "arroser_maintenant",

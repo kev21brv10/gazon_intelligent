@@ -18,6 +18,15 @@ from .const import (
     DEFAULT_APPLICATION_IRRIGATION_MODE,
     DEFAULT_APPLICATION_POST_WATERING_MM,
     DEFAULT_AUTO_IRRIGATION_ENABLED,
+    POST_APPLICATION_STATUS_ALIASES,
+    POST_APPLICATION_STATUS_INDISPONIBLE,
+    POST_APPLICATION_STATUS_NON_REQUIS,
+    POST_APPLICATION_STATUS_EN_ATTENTE,
+    POST_APPLICATION_STATUS_AUTORISE,
+    POST_APPLICATION_STATUS_TERMINE,
+    POST_APPLICATION_STATUS_BLOQUE,
+    POST_APPLICATION_STATUSES,
+    PRODUCT_USAGE_MODES,
 )
 from .water import _watering_item_mm, compute_recent_watering_mm
 
@@ -162,6 +171,33 @@ def _normalize_application_irrigation_mode(value: Any) -> str | None:
     }:
         return text
     return None
+
+
+def normalize_post_application_status(value: Any) -> str:
+    if value in (None, "", [], {}):
+        return POST_APPLICATION_STATUS_INDISPONIBLE
+    normalized = _normalize_text(value)
+    normalized = POST_APPLICATION_STATUS_ALIASES.get(normalized, normalized)
+    if normalized in POST_APPLICATION_STATUSES:
+        return normalized
+    return POST_APPLICATION_STATUS_INDISPONIBLE
+
+
+def _normalize_usage_mode(value: Any) -> str | None:
+    if value in (None, "", [], {}):
+        return None
+    normalized = _normalize_text(value)
+    if normalized in PRODUCT_USAGE_MODES:
+        return normalized
+    aliases = {
+        "preventive": "preventif",
+        "preventif": "preventif",
+        "curative": "curatif",
+        "entretien": "entretien",
+        "maintenance": "entretien",
+        "rattrapage": "rattrapage",
+    }
+    return aliases.get(normalized)
 
 
 def _parse_datetime(value: Any) -> datetime | None:
@@ -460,12 +496,27 @@ def normalize_product_record(product_id: Any, payload: dict[str, Any] | None) ->
         "nom": name or product_key,
         "type": product_type or None,
         "dose_conseillee": dose_conseillee or None,
+        "usage_mode": _normalize_usage_mode(payload.get("usage_mode")),
+        "max_applications_per_year": _to_int(payload.get("max_applications_per_year")),
         "reapplication_after_days": _to_int(payload.get("reapplication_after_days")),
         "delai_avant_tonte_jours": _to_int(payload.get("delai_avant_tonte_jours")),
         "phase_compatible": _split_csv_values(payload.get("phase_compatible")),
         "application_months": normalize_application_months(payload.get("application_months")),
+        "temperature_min": _to_float(payload.get("temperature_min")),
+        "temperature_max": _to_float(payload.get("temperature_max")),
         "note": note or None,
     }
+    if record.get("max_applications_per_year") is not None and int(record["max_applications_per_year"]) < 0:
+        record["max_applications_per_year"] = None
+    if (
+        record.get("temperature_min") is not None
+        and record.get("temperature_max") is not None
+        and float(record["temperature_min"]) > float(record["temperature_max"])
+    ):
+        record["temperature_min"], record["temperature_max"] = (
+            record["temperature_max"],
+            record["temperature_min"],
+        )
     record = _merge_application_fields(record, payload, product_type or None)
     application_months_label = format_application_months_label(record.get("application_months"))
     if application_months_label:
@@ -589,6 +640,7 @@ def compute_application_state(
             "application_irrigation_delay_minutes": 0.0,
             "application_irrigation_mode": None,
             "application_label_notes": None,
+            "application_post_watering_status": "indisponible",
             "declared_at": None,
             "application_block_until": None,
             "application_block_active": False,
@@ -673,6 +725,17 @@ def compute_application_state(
         and application_requires_watering_after
         and application_post_watering_remaining_mm > 0.1
     )
+    application_post_watering_status = POST_APPLICATION_STATUS_NON_REQUIS
+    if application_block_active:
+        application_post_watering_status = POST_APPLICATION_STATUS_BLOQUE
+    elif application_requires_watering_after:
+        if application_post_watering_pending and application_post_watering_ready:
+            application_post_watering_status = POST_APPLICATION_STATUS_AUTORISE
+        elif application_post_watering_pending:
+            application_post_watering_status = POST_APPLICATION_STATUS_EN_ATTENTE
+        else:
+            application_post_watering_status = POST_APPLICATION_STATUS_TERMINE
+    application_post_watering_status = normalize_post_application_status(application_post_watering_status)
 
     return {
         "derniere_application": summary,
@@ -683,6 +746,7 @@ def compute_application_state(
         "application_irrigation_delay_minutes": round(float(application_irrigation_delay_minutes or 0.0), 1),
         "application_irrigation_mode": application_irrigation_mode,
         "application_label_notes": application_label_notes,
+        "application_post_watering_status": application_post_watering_status,
         "date_action": latest_item.get("date"),
         "declared_at": declared_dt.isoformat() if declared_dt is not None else None,
         "application_block_until": application_block_until,
@@ -858,6 +922,7 @@ def compute_memory(
         "application_irrigation_delay_minutes": application_state.get("application_irrigation_delay_minutes", 0.0),
         "application_irrigation_mode": application_state.get("application_irrigation_mode"),
         "application_label_notes": application_state.get("application_label_notes"),
+        "application_post_watering_status": application_state.get("application_post_watering_status"),
         "application_block_until": application_state.get("application_block_until"),
         "application_block_active": application_state.get("application_block_active", False),
         "application_block_remaining_minutes": application_state.get("application_block_remaining_minutes", 0.0),

@@ -305,6 +305,12 @@ Les réglages produits se déclarent dans `register_product`:
 
 Tu peux aussi y enregistrer:
 
+- `usage_mode`
+  - mode d’usage métier du produit
+  - valeurs conseillées: `preventif`, `curatif`, `entretien`, `rattrapage`
+- `max_applications_per_year`
+  - limite annuelle d’utilisation du produit
+  - utile pour bloquer une recommandation quand le produit a déjà été trop utilisé
 - `reapplication_after_days`
 - `delai_avant_tonte_jours`
 - `phase_compatible`

@@ -151,6 +151,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     vol.Required("nom"): vol.Coerce(str),
                     vol.Required("type"): vol.Coerce(str),
                     vol.Optional("dose_conseillee"): vol.Coerce(str),
+                    vol.Optional("usage_mode"): vol.In(["preventif", "curatif", "entretien", "rattrapage"]),
+                    vol.Optional("max_applications_per_year"): vol.All(
+                        vol.Coerce(int),
+                        vol.Range(min=0, max=3650),
+                    ),
                     vol.Optional("reapplication_after_days"): vol.All(
                         vol.Coerce(int),
                         vol.Range(min=0, max=3650),
@@ -178,6 +183,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     vol.Optional("application_irrigation_mode"): vol.In(["auto", "manuel", "suggestion"]),
                     vol.Optional("application_label_notes"): vol.Coerce(str),
                     vol.Optional("note"): vol.Coerce(str),
+                    vol.Optional("temperature_min"): vol.Coerce(float),
+                    vol.Optional("temperature_max"): vol.Coerce(float),
                 }
             ),
         )
@@ -411,6 +418,8 @@ async def _handle_register_product(call: ServiceCall) -> None:
             call.data["nom"],
             call.data["type"],
             call.data.get("dose_conseillee"),
+            call.data.get("usage_mode"),
+            call.data.get("max_applications_per_year"),
             call.data.get("reapplication_after_days"),
             call.data.get("delai_avant_tonte_jours"),
             phase_compatible,
@@ -423,6 +432,8 @@ async def _handle_register_product(call: ServiceCall) -> None:
             call.data.get("application_irrigation_mode"),
             call.data.get("application_label_notes"),
             call.data.get("note"),
+            call.data.get("temperature_min"),
+            call.data.get("temperature_max"),
         )
     except Exception as err:  # pragma: no cover
         raise HomeAssistantError(f"Echec register_product: {err}") from err

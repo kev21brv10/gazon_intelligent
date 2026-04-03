@@ -185,6 +185,7 @@ def compute_decision(
             "application_irrigation_delay_minutes": watering_bundle.get("application_irrigation_delay_minutes"),
             "application_irrigation_mode": watering_bundle.get("application_irrigation_mode"),
             "application_label_notes": watering_bundle.get("application_label_notes"),
+            "application_post_watering_status": watering_bundle.get("application_post_watering_status"),
             "auto_irrigation_enabled": bool(
                 context.memory.get("auto_irrigation_enabled", DEFAULT_AUTO_IRRIGATION_ENABLED)
                 if context.memory
@@ -392,6 +393,7 @@ def build_decision_snapshot(
             "application_irrigation_delay_minutes": watering_bundle.get("application_irrigation_delay_minutes"),
             "application_irrigation_mode": watering_bundle.get("application_irrigation_mode"),
             "application_label_notes": watering_bundle.get("application_label_notes"),
+            "application_post_watering_status": watering_bundle.get("application_post_watering_status"),
             "auto_irrigation_enabled": bool(
                 context.memory.get("auto_irrigation_enabled", DEFAULT_AUTO_IRRIGATION_ENABLED)
                 if context.memory
@@ -564,6 +566,7 @@ def build_decision_result(context: DecisionContext) -> DecisionResult:
             "application_post_watering_mm": watering_bundle.get("application_post_watering_mm"),
             "application_irrigation_block_hours": watering_bundle.get("application_irrigation_block_hours"),
             "application_label_notes": watering_bundle.get("application_label_notes"),
+            "application_post_watering_status": watering_bundle.get("application_post_watering_status"),
             "application_block_until": watering_bundle.get("application_block_until"),
             "application_block_active": watering_bundle.get("application_block_active"),
             "application_post_watering_pending": watering_bundle.get("application_post_watering_pending"),

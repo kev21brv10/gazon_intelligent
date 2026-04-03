@@ -306,6 +306,7 @@ def _application_payload(application_state: dict[str, Any]) -> dict[str, Any]:
         ),
         "application_irrigation_mode": application_state.get("application_irrigation_mode"),
         "application_label_notes": application_state.get("application_label_notes"),
+        "application_post_watering_status": application_state.get("application_post_watering_status"),
         "application_block_until": application_state.get("application_block_until"),
         "application_block_active": bool(application_state.get("application_block_active", False)),
         "application_block_remaining_minutes": float(

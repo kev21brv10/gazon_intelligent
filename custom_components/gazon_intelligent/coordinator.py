@@ -201,6 +201,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "forecast_pluie_j2": forecast_pluie_j2,
             "forecast_pluie_3j": forecast_pluie_3j,
             "forecast_probabilite_max_3j": forecast_probabilite_max_3j,
+            "temperature": temperature,
             "objectif_mm": snapshot["objectif_mm"],
             "tonte_autorisee": snapshot["tonte_autorisee"],
             "tonte_statut": snapshot["tonte_statut"],
@@ -227,6 +228,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "application_post_watering_mm": snapshot.get("application_post_watering_mm"),
             "application_irrigation_block_hours": snapshot.get("application_irrigation_block_hours"),
             "application_label_notes": snapshot.get("application_label_notes"),
+            "application_post_watering_status": snapshot.get("application_post_watering_status"),
             "application_block_until": snapshot.get("application_block_until"),
             "application_block_active": snapshot.get("application_block_active"),
             "application_post_watering_pending": snapshot.get("application_post_watering_pending"),
@@ -236,6 +238,8 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.auto_irrigation_enabled,
             ),
             "feedback_observation": snapshot.get("feedback_observation"),
+            "assistant": snapshot.get("assistant"),
+            "intervention_recommendation": snapshot.get("intervention_recommendation"),
         }
 
     @property
@@ -1406,6 +1410,8 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         nom: str,
         type_produit: str,
         dose_conseillee: str | None = None,
+        usage_mode: str | None = None,
+        max_applications_per_year: int | None = None,
         reapplication_after_days: int | None = None,
         delai_avant_tonte_jours: int | None = None,
         phase_compatible: str | list[str] | None = None,
@@ -1418,12 +1424,16 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         application_irrigation_mode: str | None = None,
         application_label_notes: str | None = None,
         note: str | None = None,
+        temperature_min: float | None = None,
+        temperature_max: float | None = None,
     ) -> None:
         self.brain.register_product(
             product_id,
             nom,
             type_produit,
             dose_conseillee=dose_conseillee,
+            usage_mode=usage_mode,
+            max_applications_per_year=max_applications_per_year,
             reapplication_after_days=reapplication_after_days,
             delai_avant_tonte_jours=delai_avant_tonte_jours,
             phase_compatible=phase_compatible,
@@ -1436,6 +1446,8 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             application_irrigation_mode=application_irrigation_mode,
             application_label_notes=application_label_notes,
             note=note,
+            temperature_min=temperature_min,
+            temperature_max=temperature_max,
         )
         await self._async_save_state()
         await self.async_request_refresh()

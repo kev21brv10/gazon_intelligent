@@ -219,7 +219,106 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(product_select.current_option, "Engrais Printemps")
         self.assertEqual(product_select.extra_state_attributes["selected_product_id"], "engrais-printemps")
         self.assertEqual(product_select.extra_state_attributes["selected_product_name"], "Engrais Printemps")
-        self.assertEqual(product_select.extra_state_attributes["summary"], "Produit sélectionné : Engrais Printemps")
+
+    def test_debug_intervention_sensor_exposes_existing_payload(self) -> None:
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={
+                "intervention_recommendation": {
+                    "status": "possible",
+                    "score": 23,
+                    "recommended_action": "select_product",
+                    "reason": "Phase moins adaptée (Croissance, Entretien)",
+                    "why_now": "Phase moins adaptée (Croissance, Entretien) · Température compatible (15.3 °C, attendu 10 à 30 °C)",
+                    "reasons": [
+                        "Phase moins adaptée (Croissance, Entretien)",
+                        "Mois compatibles (Avril à Septembre)",
+                        "Température compatible (15.3 °C, attendu 10 à 30 °C)",
+                    ],
+                    "missing_requirements": [
+                        {
+                            "code": "prepare_declaration",
+                            "label": "Préparer la déclaration avec le produit recommandé",
+                            "blocking": False,
+                            "value": {"product_id": "h2pro_trismart", "product_name": "H2Pro TriSmart"},
+                        }
+                    ],
+                    "constraints": [
+                        {
+                            "code": "phase_compatibility",
+                            "label": "Phase moins adaptée (Croissance, Entretien)",
+                            "blocking": False,
+                            "met": False,
+                        },
+                        {
+                            "code": "temperature_range",
+                            "label": "Température compatible (15.3 °C, attendu 10 à 30 °C)",
+                            "blocking": False,
+                            "met": True,
+                        },
+                        {
+                            "code": "catalogue_empty",
+                            "label": "Aucun produit enregistré",
+                            "blocking": True,
+                            "met": False,
+                        },
+                    ],
+                    "product": {
+                        "id": "h2pro_trismart",
+                        "name": "H2Pro TriSmart",
+                        "type": "Agent Mouillant",
+                        "months": [4, 5, 6, 7, 8, 9],
+                        "months_label": "Avril à Septembre",
+                        "temperature_value": 15.3,
+                        "temperature_min": 10,
+                        "temperature_max": 30,
+                        "temperature_source": "capteur",
+                    },
+                    "context": {
+                        "catalogue_count": 4,
+                        "eligible_count": 0,
+                        "blocked_products_count": 1,
+                        "current_month": 4,
+                        "current_phase": "Normal",
+                        "current_sub_phase": "Normal",
+                    },
+                    "ui": {
+                        "summary": "À préparer",
+                        "hint": "Phase moins adaptée (Croissance, Entretien)",
+                    },
+                }
+            },
+            result=None,
+            history=[],
+            memory={},
+        )
+
+        debug_sensor = sensor.GazonDebugInterventionSensor(coordinator)
+
+        self.assertEqual(debug_sensor.native_value, "possible")
+        attrs = debug_sensor.extra_state_attributes
+        self.assertEqual(attrs["score"], 23)
+        self.assertEqual(attrs["status"], "possible")
+        self.assertEqual(attrs["recommended_action"], "select_product")
+        self.assertEqual(attrs["product_id"], "h2pro_trismart")
+        self.assertEqual(attrs["product_name"], "H2Pro TriSmart")
+        self.assertEqual(attrs["summary"], "À préparer")
+        self.assertEqual(attrs["context"]["phase"], "Normal")
+        self.assertEqual(attrs["context"]["month"], 4)
+        self.assertEqual(attrs["context"]["temperature"], 15.3)
+        self.assertEqual(len(attrs["blocking_constraints"]), 1)
+        self.assertEqual(len(attrs["non_blocking_constraints"]), 2)
+        self.assertEqual(attrs["blocking_constraints"][0]["impact"], "bloquant")
+        self.assertEqual(attrs["non_blocking_constraints"][0]["impact"], "dégradant")
+        self.assertEqual(attrs["constraints"][0]["impact"], "dégradant")
+        self.assertEqual(attrs["constraints"][1]["impact"], "neutre")
+        self.assertEqual(attrs["constraints"][2]["impact"], "bloquant")
+        self.assertEqual(attrs["reasons"], [
+            "Phase moins adaptée (Croissance, Entretien)",
+            "Mois compatibles (Avril à Septembre)",
+            "Température compatible (15.3 °C, attendu 10 à 30 °C)",
+        ])
+        self.assertEqual(attrs["missing_requirements"][0]["code"], "prepare_declaration")
 
     def test_intervention_product_select_includes_application_months(self) -> None:
         coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=None, history=[], memory={})

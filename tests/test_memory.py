@@ -49,6 +49,8 @@ class MemoryCatalogTests(unittest.TestCase):
                 "nom": "Engrais printemps",
                 "type": "Fertilisation",
                 "dose_conseillee": "12.5",
+                "usage_mode": "Entretien",
+                "max_applications_per_year": "6",
                 "reapplication_after_days": "21",
                 "delai_avant_tonte_jours": "2",
                 "phase_compatible": ["Sursemis", "Croissance", "Entretien"],
@@ -60,6 +62,8 @@ class MemoryCatalogTests(unittest.TestCase):
                 "application_irrigation_delay_minutes": "15",
                 "application_irrigation_mode": "manuel",
                 "application_label_notes": "Appliquer au matin",
+                "temperature_min": "8",
+                "temperature_max": "28",
                 "note": "Appliquer au matin",
             },
         )
@@ -70,6 +74,8 @@ class MemoryCatalogTests(unittest.TestCase):
         self.assertEqual(record["nom"], "Engrais printemps")
         self.assertEqual(record["type"], "Fertilisation")
         self.assertEqual(record["dose_conseillee"], "12.5")
+        self.assertEqual(record["usage_mode"], "entretien")
+        self.assertEqual(record["max_applications_per_year"], 6)
         self.assertEqual(record["reapplication_after_days"], 21)
         self.assertEqual(record["delai_avant_tonte_jours"], 2)
         self.assertEqual(record["phase_compatible"], ["Sursemis", "Croissance", "Entretien"])
@@ -82,6 +88,8 @@ class MemoryCatalogTests(unittest.TestCase):
         self.assertEqual(record["application_irrigation_delay_minutes"], 15.0)
         self.assertEqual(record["application_irrigation_mode"], "manuel")
         self.assertEqual(record["application_label_notes"], "Appliquer au matin")
+        self.assertEqual(record["temperature_min"], 8.0)
+        self.assertEqual(record["temperature_max"], 28.0)
 
     def test_application_months_helpers_normalize_and_format_ranges(self) -> None:
         months = memory.normalize_application_months("mars à mai + septembre à octobre")
@@ -161,6 +169,7 @@ class MemoryCatalogTests(unittest.TestCase):
 
         self.assertEqual(state["application_type"], "foliaire")
         self.assertFalse(state["application_requires_watering_after"])
+        self.assertEqual(state["application_post_watering_status"], "bloque")
         self.assertEqual(state["application_irrigation_block_hours"], 24.0)
         self.assertEqual(state["application_irrigation_delay_minutes"], 0.0)
         self.assertEqual(state["application_irrigation_mode"], "suggestion")
@@ -189,6 +198,7 @@ class MemoryCatalogTests(unittest.TestCase):
             now=memory.datetime(2026, 3, 18, 8, 45, tzinfo=memory.timezone.utc),
         )
 
+        self.assertEqual(state["application_post_watering_status"], "en_attente")
         self.assertEqual(state["application_irrigation_delay_minutes"], 90.0)
         self.assertEqual(state["application_irrigation_mode"], "manuel")
         self.assertFalse(state["application_post_watering_ready"])
@@ -212,8 +222,65 @@ class MemoryCatalogTests(unittest.TestCase):
             now=memory.datetime(2026, 3, 18, 8, 45, tzinfo=memory.timezone.utc),
         )
 
+        self.assertEqual(ready_state["application_post_watering_status"], "autorise")
         self.assertTrue(ready_state["application_post_watering_ready"])
         self.assertEqual(ready_state["application_post_watering_delay_remaining_minutes"], 0.0)
+
+    def test_compute_application_state_marks_completed_post_watering(self) -> None:
+        state = memory.compute_application_state(
+            [
+                {
+                    "type": "Fertilisation",
+                    "date": "2026-03-18",
+                    "declared_at": "2026-03-18T08:00:00+00:00",
+                    "produit": "Engrais printemps",
+                    "application_type": "sol",
+                    "application_requires_watering_after": True,
+                    "application_post_watering_mm": 1.0,
+                    "application_irrigation_block_hours": 0.0,
+                    "application_irrigation_delay_minutes": 30.0,
+                    "application_irrigation_mode": "auto",
+                },
+                {
+                    "type": "arrosage",
+                    "date": "2026-03-18",
+                    "objectif_mm": 1.2,
+                    "source": "manual",
+                },
+            ],
+            now=memory.datetime(2026, 3, 18, 9, 0, tzinfo=memory.timezone.utc),
+        )
+
+        self.assertEqual(state["application_post_watering_status"], "termine")
+        self.assertFalse(state["application_post_watering_pending"])
+        self.assertEqual(state["application_post_watering_remaining_mm"], 0.0)
+
+    def test_compute_application_state_marks_non_required_post_watering(self) -> None:
+        state = memory.compute_application_state(
+            [
+                {
+                    "type": "Biostimulant",
+                    "date": "2026-03-12",
+                    "declared_at": "2026-04-01T21:24:28.946171+00:00",
+                    "produit": "Humuslight",
+                    "application_type": "sol",
+                    "application_requires_watering_after": False,
+                    "application_post_watering_mm": 0.0,
+                    "application_irrigation_block_hours": 0.0,
+                    "application_irrigation_delay_minutes": 0.0,
+                    "application_irrigation_mode": "suggestion",
+                }
+            ],
+            now=memory.datetime(2026, 4, 2, 9, 0, tzinfo=memory.timezone.utc),
+        )
+
+        self.assertEqual(state["application_post_watering_status"], "non_requis")
+        self.assertFalse(state["application_block_active"])
+        self.assertFalse(state["application_post_watering_pending"])
+        self.assertFalse(state["application_post_watering_ready"])
+
+    def test_normalize_post_application_status_accepts_legacy_non_autorise(self) -> None:
+        self.assertEqual(memory.normalize_post_application_status("non_autorise"), "termine")
 
     def test_compute_next_reapplication_date_prefers_latest_item(self) -> None:
         next_date = memory.compute_next_reapplication_date(
@@ -272,14 +339,21 @@ class MemoryCatalogTests(unittest.TestCase):
             sous_phase="Reprise",
             selected_product_id=None,
             selected_product_name=None,
+            temperature=20.0,
+            forecast_temperature_today=19.0,
+            temperature_source="capteur",
             products={
                 "humuslight": {
                     "id": "humuslight",
                     "nom": "Humuslight",
                     "type": "Biostimulant",
+                    "usage_mode": "preventif",
+                    "max_applications_per_year": 2,
                     "reapplication_after_days": 25,
                     "phase_compatible": ["Sursemis", "Croissance", "Entretien"],
                     "application_months": [3, 4, 5, 9, 10],
+                    "temperature_min": 8,
+                    "temperature_max": 28,
                 }
             },
             history=[
@@ -308,7 +382,98 @@ class MemoryCatalogTests(unittest.TestCase):
         self.assertTrue(recommendation["product"]["phase_match"])
         self.assertTrue(recommendation["product"]["month_match"])
         self.assertTrue(recommendation["product"]["due"])
+        self.assertTrue(any(item.get("code") == "temperature_range" and item.get("met") for item in recommendation["constraints"]))
         self.assertFalse(recommendation["ready_to_declare"])
         self.assertEqual(recommendation["selection"]["id"], None)
         self.assertTrue(all(isinstance(item, dict) for item in recommendation["constraints"]))
         self.assertTrue(all(isinstance(item, dict) for item in recommendation["missing_requirements"]))
+
+    def test_build_intervention_recommendation_blocks_when_temperature_is_far_out_of_range(self) -> None:
+        recommendation = intervention.build_intervention_recommendation(
+            today=date(2026, 4, 10),
+            phase_active="Sursemis",
+            sous_phase="Reprise",
+            selected_product_id=None,
+            selected_product_name=None,
+            temperature=35.0,
+            forecast_temperature_today=35.0,
+            temperature_source="capteur",
+            products={
+                "humuslight": {
+                    "id": "humuslight",
+                    "nom": "Humuslight",
+                    "type": "Biostimulant",
+                    "usage_mode": "preventif",
+                    "max_applications_per_year": 2,
+                    "reapplication_after_days": 25,
+                    "phase_compatible": ["Sursemis", "Croissance", "Entretien"],
+                    "application_months": [3, 4, 5, 9, 10],
+                    "temperature_min": 8,
+                    "temperature_max": 28,
+                }
+            },
+            history=[
+                {
+                    "type": "Biostimulant",
+                    "date": "2026-03-12",
+                    "produit_id": "humuslight",
+                    "produit": "Humuslight",
+                    "reapplication_after_days": 25,
+                    "produit_catalogue": {
+                        "id": "humuslight",
+                        "nom": "Humuslight",
+                    },
+                }
+            ],
+            application_state={},
+        )
+
+        self.assertEqual(recommendation["status"], "blocked")
+        self.assertEqual(recommendation["recommended_action"], "wait")
+        self.assertTrue(
+            any(item.get("code") == "temperature_range" and item.get("blocking") for item in recommendation["constraints"])
+        )
+        self.assertTrue(
+            any(item.get("code") == "temperature_out_of_range" for item in recommendation["missing_requirements"])
+        )
+
+    def test_build_intervention_recommendation_blocks_when_annual_limit_is_reached(self) -> None:
+        recommendation = intervention.build_intervention_recommendation(
+            today=date(2026, 4, 10),
+            phase_active="Sursemis",
+            sous_phase="Reprise",
+            selected_product_id=None,
+            selected_product_name=None,
+            products={
+                "humuslight": {
+                    "id": "humuslight",
+                    "nom": "Humuslight",
+                    "type": "Biostimulant",
+                    "usage_mode": "preventif",
+                    "max_applications_per_year": 1,
+                    "reapplication_after_days": 25,
+                    "phase_compatible": ["Sursemis", "Croissance", "Entretien"],
+                    "application_months": [3, 4, 5, 9, 10],
+                }
+            },
+            history=[
+                {
+                    "type": "Biostimulant",
+                    "date": "2026-03-12",
+                    "produit_id": "humuslight",
+                    "produit": "Humuslight",
+                    "reapplication_after_days": 25,
+                    "produit_catalogue": {
+                        "id": "humuslight",
+                        "nom": "Humuslight",
+                    },
+                }
+            ],
+            application_state={},
+        )
+
+        self.assertEqual(recommendation["status"], "blocked")
+        self.assertEqual(recommendation["recommended_action"], "wait")
+        self.assertTrue(
+            any(item.get("code") == "annual_applications_limit" for item in recommendation["constraints"])
+        )
