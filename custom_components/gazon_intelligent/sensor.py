@@ -90,6 +90,55 @@ def _hydric_strategy(balance_mm: float | None, deficit_3j: float | None, deficit
     return "arroser rapidement en profondeur"
 
 
+def _score_level_and_tone(score: object) -> tuple[str | None, str]:
+    try:
+        value = float(score)
+    except (TypeError, ValueError):
+        return None, "neutral"
+    if value <= 30.0:
+        return "faible", "neutral"
+    if value <= 70.0:
+        return "moyen", "warning"
+    return "élevé", "success"
+
+
+def _window_display_label(value: object) -> str | None:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return None
+    labels = {
+        "maintenant": "Maintenant",
+        "ce_matin": "Ce matin",
+        "demain_matin": "Demain matin",
+        "apres_pluie": "Après la pluie",
+        "soir": "Soir",
+        "attendre": "Attendre",
+    }
+    return labels.get(normalized, normalized.replace("_", " "))
+
+
+def _block_reason_display_label(value: object) -> str | None:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return None
+    labels = {
+        "pluie_prevue_suffisante": "Pluie prévue suffisante",
+        "temperature_trop_basse": "Température trop basse",
+        "arrosage_recent": "Arrosage récent",
+        "sol_deja_humide": "Sol déjà humide",
+        "pluie_probabilite_elevee": "Pluie probable élevée",
+        "surface_non_seche": "Surface non sèche",
+        "cooldown_24h": "Cooldown 24 h",
+        "humidite_excessive": "Humidité excessive",
+        "humidite_elevee": "Humidité élevée",
+        "garde_fou_hebdomadaire": "Garde-fou hebdomadaire",
+        "mode_bloque": "Mode bloqué",
+        "pluie_active": "Pluie active",
+        "bloque": "Bloqué",
+    }
+    return labels.get(normalized, normalized.replace("_", " "))
+
+
 async def async_setup_entry(hass, entry, async_add_entities):
     await _async_ensure_assistant_entity_id(hass, entry)
     coordinator = hass.data[DOMAIN][entry.entry_id]
@@ -116,6 +165,9 @@ async def async_setup_entry(hass, entry, async_add_entities):
             GazonCatalogueProduitsSensor(coordinator),
             GazonInterventionRecommendationSensor(coordinator),
             GazonDebugInterventionSensor(coordinator),
+            GazonScoreNiveauSensor(coordinator),
+            GazonProchaineFenetreOptimaleSensor(coordinator),
+            GazonProchainBlocageAttenduSensor(coordinator),
         ]
     )
 
@@ -868,11 +920,11 @@ class GazonInterventionRecommendationSensor(GazonEntityBase, SensorEntity):
                 "current_sub_phase": None,
             },
             "ui": {
-                "title": "Prochaine intervention indisponible",
-                "badge": "Catalogue vide",
+                "title": "Non disponible",
+                "badge": "Non disponible",
                 "tone": "neutral",
                 "icon": "mdi:package-variant-closed",
-                "summary": "Intervention indisponible",
+                "summary": "Non disponible",
                 "hint": "Ajoute au moins un produit au catalogue pour obtenir une recommandation.",
                 "action_label": "Ajouter un produit",
                 "selection_summary": "Aucun produit disponible dans le catalogue.",
@@ -1010,6 +1062,172 @@ class GazonDebugInterventionSensor(GazonEntityBase, SensorEntity):
             "ui_summary": ui.get("summary"),
             "ui_hint": ui.get("hint"),
         }
+
+
+class GazonScoreNiveauSensor(GazonEntityBase, SensorEntity):
+    _attr_name = "Niveau de pertinence"
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:signal"
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_score_niveau"
+
+    def _score_payload(self) -> dict[str, object]:
+        payload = self._decision_value("intervention_recommendation")
+        if isinstance(payload, dict) and payload:
+            return payload
+        data = getattr(self.coordinator, "data", None)
+        if isinstance(data, dict):
+            payload = data.get("intervention_recommendation")
+            if isinstance(payload, dict) and payload:
+                return payload
+        return {}
+
+    @property
+    def native_value(self):
+        payload = self._score_payload()
+        score = payload.get("score")
+        if score is None:
+            return None
+        level, _tone = _score_level_and_tone(score)
+        return level
+
+    @property
+    def extra_state_attributes(self):
+        payload = self._score_payload()
+        if not payload:
+            return None
+        score = payload.get("score")
+        if score is None:
+            return None
+        level, tone = _score_level_and_tone(score)
+        if level is None:
+            return None
+        try:
+            score_value = int(round(float(score)))
+        except (TypeError, ValueError):
+            return None
+        return {
+            "score": score_value,
+            "score_level": level,
+            "summary": f"Pertinence {level} ({score_value}/100)",
+            "tone": tone,
+            "source_entity": f"sensor.{DOMAIN}_prochaine_intervention",
+        }
+
+
+class GazonProchaineFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
+    _attr_name = "Prochaine fenêtre optimale"
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:clock-outline"
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_prochaine_fenetre_optimale"
+
+    def _window_context(self) -> dict[str, object]:
+        payload = self._decision_value("intervention_recommendation")
+        context = payload.get("context") if isinstance(payload, dict) else {}
+        if not isinstance(context, dict):
+            context = {}
+        data = getattr(self.coordinator, "data", None)
+        if not isinstance(data, dict):
+            data = {}
+        return {
+            "source_state": str(self._decision_value("fenetre_optimale") or "attendre").strip().lower() or "attendre",
+            "block_reason": str(self._decision_value("block_reason") or "").strip() or None,
+            "confidence_score": self._decision_value("confidence_score"),
+            "phase": context.get("current_phase") or self._decision_value("phase_active"),
+            "month": context.get("current_month") or date.today().month,
+            "temperature": self._decision_value("temperature"),
+        }
+
+    @property
+    def native_value(self):
+        source_state = str(self._decision_value("fenetre_optimale") or "").strip().lower()
+        if source_state not in {"maintenant", "ce_matin", "demain_matin", "apres_pluie", "soir", "attendre"}:
+            source_state = "attendre"
+        return source_state
+
+    @property
+    def extra_state_attributes(self):
+        context = self._window_context()
+        source_state = str(context.get("source_state") or "attendre").strip().lower()
+        summary_label = _window_display_label(source_state) or "Attendre"
+        attrs = {
+            "source_entity": f"sensor.{DOMAIN}_fenetre_optimale",
+            "source_state": source_state,
+            "block_reason": context.get("block_reason"),
+            "confidence_score": context.get("confidence_score"),
+            "phase": context.get("phase"),
+            "month": context.get("month"),
+            "temperature": context.get("temperature"),
+            "summary": f"Prochaine fenêtre: {summary_label}",
+        }
+        return {key: value for key, value in attrs.items() if value not in (None, "", [], {})}
+
+
+class GazonProchainBlocageAttenduSensor(GazonEntityBase, SensorEntity):
+    _attr_name = "Prochain blocage attendu"
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:alert-circle-outline"
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_prochain_blocage_attendu"
+
+    def _source_context(self) -> dict[str, object]:
+        payload = self._decision_value("intervention_recommendation")
+        context = payload.get("context") if isinstance(payload, dict) else {}
+        if not isinstance(context, dict):
+            context = {}
+        block_reason = str(self._decision_value("block_reason") or "").strip() or None
+        source_status = "bloque" if block_reason else str(self._decision_value("fenetre_optimale") or "").strip().lower() or "attendre"
+        return {
+            "source_status": source_status,
+            "block_reason": block_reason,
+            "confidence_score": self._decision_value("confidence_score"),
+            "phase": context.get("current_phase") or self._decision_value("phase_active"),
+            "month": context.get("current_month") or date.today().month,
+            "temperature": self._decision_value("temperature"),
+        }
+
+    @property
+    def native_value(self):
+        context = self._source_context()
+        block_reason = str(context.get("block_reason") or "").strip()
+        source_status = str(context.get("source_status") or "").strip().lower()
+        if block_reason:
+            return block_reason
+        if source_status == "bloque":
+            return "bloque"
+        return None
+
+    @property
+    def extra_state_attributes(self):
+        context = self._source_context()
+        block_reason = str(context.get("block_reason") or "").strip()
+        source_status = str(context.get("source_status") or "").strip().lower()
+        block_label = _block_reason_display_label(block_reason or source_status)
+        summary = "Aucun blocage attendu"
+        if block_label:
+            summary = f"Blocage attendu: {block_label}"
+        attrs = {
+            "source_entity": f"sensor.{DOMAIN}_fenetre_optimale",
+            "source_status": source_status or None,
+            "block_reason": block_reason or None,
+            "block_label": block_label,
+            "confidence_score": context.get("confidence_score"),
+            "phase": context.get("phase"),
+            "month": context.get("month"),
+            "temperature": context.get("temperature"),
+            "summary": summary,
+        }
+        return {key: value for key, value in attrs.items() if value not in (None, "", [], {})}
 
 
 class GazonPlanArrosageSensor(GazonEntityBase, SensorEntity):

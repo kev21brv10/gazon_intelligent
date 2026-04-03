@@ -238,7 +238,7 @@ class DecisionResultChainTests(unittest.TestCase):
                     "missing_requirements": [
                         {
                             "code": "prepare_declaration",
-                            "label": "Préparer la déclaration avec le produit recommandé",
+                            "label": "Préparer la déclaration avec le produit proposé",
                             "blocking": False,
                             "value": {"product_id": "h2pro_trismart", "product_name": "H2Pro TriSmart"},
                         }
@@ -318,7 +318,148 @@ class DecisionResultChainTests(unittest.TestCase):
             "Mois compatibles (Avril à Septembre)",
             "Température compatible (15.3 °C, attendu 10 à 30 °C)",
         ])
-        self.assertEqual(attrs["missing_requirements"][0]["code"], "prepare_declaration")
+
+    def test_projection_entities_use_existing_states_and_signals(self) -> None:
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={
+                "intervention_recommendation": {
+                    "status": "possible",
+                    "score": 7,
+                    "recommended_action": "select_product",
+                    "ready_to_declare": False,
+                    "selected_product_ready": False,
+                    "product": {
+                        "id": "floranid_twin_permanent",
+                        "name": "Floranid Twin Permanent",
+                    },
+                    "ui": {
+                        "summary": "À préparer : Floranid Twin Permanent",
+                        "hint": "Phase moins adaptée (Croissance, Entretien)",
+                    },
+                    "context": {
+                        "current_phase": "Normal",
+                        "current_month": 4,
+                    },
+                },
+                "fenetre_optimale": "attendre",
+                "block_reason": "sol_deja_humide",
+                "confidence_score": 90,
+                "phase_active": "Normal",
+                "temperature": 6.9,
+                "application_post_watering_status": "non_requis",
+                "arrosage_recommande": False,
+                "type_arrosage": "bloque",
+                "auto_irrigation_enabled": True,
+            },
+            result=None,
+            history=[],
+            memory={},
+        )
+
+        score_sensor = sensor.GazonScoreNiveauSensor(coordinator)
+        window_sensor = sensor.GazonProchaineFenetreOptimaleSensor(coordinator)
+        block_sensor = sensor.GazonProchainBlocageAttenduSensor(coordinator)
+        irrigation_signal = binary_sensor.GazonSignalIrrigationBinarySensor(coordinator)
+        intervention_signal = binary_sensor.GazonSignalInterventionBinarySensor(coordinator)
+
+        self.assertEqual(score_sensor.native_value, "faible")
+        score_attrs = score_sensor.extra_state_attributes
+        self.assertIsNotNone(score_attrs)
+        assert score_attrs is not None
+        self.assertEqual(score_attrs["score"], 7)
+        self.assertEqual(score_attrs["score_level"], "faible")
+        self.assertEqual(score_attrs["tone"], "neutral")
+        self.assertEqual(score_attrs["summary"], "Pertinence faible (7/100)")
+        self.assertEqual(score_attrs["source_entity"], "sensor.gazon_intelligent_prochaine_intervention")
+
+        self.assertEqual(window_sensor.native_value, "attendre")
+        window_attrs = window_sensor.extra_state_attributes
+        self.assertIsNotNone(window_attrs)
+        assert window_attrs is not None
+        self.assertEqual(window_attrs["source_state"], "attendre")
+        self.assertEqual(window_attrs["block_reason"], "sol_deja_humide")
+        self.assertEqual(window_attrs["confidence_score"], 90)
+        self.assertEqual(window_attrs["phase"], "Normal")
+        self.assertEqual(window_attrs["month"], 4)
+        self.assertEqual(window_attrs["temperature"], 6.9)
+        self.assertEqual(window_attrs["summary"], "Prochaine fenêtre: Attendre")
+
+        self.assertEqual(block_sensor.native_value, "sol_deja_humide")
+        block_attrs = block_sensor.extra_state_attributes
+        self.assertIsNotNone(block_attrs)
+        assert block_attrs is not None
+        self.assertEqual(block_attrs["source_status"], "bloque")
+        self.assertEqual(block_attrs["block_reason"], "sol_deja_humide")
+        self.assertEqual(block_attrs["block_label"], "Sol déjà humide")
+        self.assertEqual(block_attrs["summary"], "Blocage attendu: Sol déjà humide")
+
+        self.assertFalse(irrigation_signal.is_on)
+        irrigation_attrs = irrigation_signal.extra_state_attributes
+        self.assertIsNotNone(irrigation_attrs)
+        assert irrigation_attrs is not None
+        self.assertEqual(irrigation_attrs["trigger_kind"], "none")
+        self.assertEqual(irrigation_attrs["application_post_watering_status"], "non_requis")
+        self.assertEqual(irrigation_attrs["summary"], "Aucune irrigation actionnable")
+
+        self.assertFalse(intervention_signal.is_on)
+        intervention_attrs = intervention_signal.extra_state_attributes
+        self.assertIsNotNone(intervention_attrs)
+        assert intervention_attrs is not None
+        self.assertEqual(intervention_attrs["source_status"], "possible")
+        self.assertEqual(intervention_attrs["trigger_kind"], "soft")
+        self.assertEqual(intervention_attrs["summary"], "À préparer : Floranid Twin Permanent")
+
+        coordinator.data["intervention_recommendation"] = {
+            **coordinator.data["intervention_recommendation"],
+            "status": "recommended",
+            "ready_to_declare": False,
+            "selected_product_ready": False,
+            "ui": {
+                "summary": "Recommandé",
+            },
+        }
+        self.assertTrue(intervention_signal.is_on)
+        intervention_attrs = intervention_signal.extra_state_attributes
+        self.assertIsNotNone(intervention_attrs)
+        assert intervention_attrs is not None
+        self.assertEqual(intervention_attrs["trigger_kind"], "recommended")
+        self.assertEqual(intervention_attrs["summary"], "Recommandé")
+
+        coordinator.data["intervention_recommendation"] = {
+            **coordinator.data["intervention_recommendation"],
+            "ready_to_declare": True,
+            "selected_product_ready": True,
+            "ui": {
+                "summary": "Prêt à déclarer",
+            },
+        }
+        self.assertTrue(intervention_signal.is_on)
+        intervention_attrs = intervention_signal.extra_state_attributes
+        self.assertIsNotNone(intervention_attrs)
+        assert intervention_attrs is not None
+        self.assertEqual(intervention_attrs["trigger_kind"], "ready")
+        self.assertEqual(intervention_attrs["summary"], "Prêt à déclarer")
+
+        coordinator.data["application_post_watering_status"] = "autorise"
+        self.assertTrue(irrigation_signal.is_on)
+        irrigation_attrs = irrigation_signal.extra_state_attributes
+        self.assertIsNotNone(irrigation_attrs)
+        assert irrigation_attrs is not None
+        self.assertEqual(irrigation_attrs["trigger_kind"], "post_application")
+        self.assertEqual(irrigation_attrs["source_status"], "autorise")
+        self.assertEqual(irrigation_attrs["summary"], "Irrigation post-application autorisée")
+
+        coordinator.data["application_post_watering_status"] = "non_requis"
+        coordinator.data["arrosage_recommande"] = True
+        coordinator.data["type_arrosage"] = "auto"
+        self.assertTrue(irrigation_signal.is_on)
+        irrigation_attrs = irrigation_signal.extra_state_attributes
+        self.assertIsNotNone(irrigation_attrs)
+        assert irrigation_attrs is not None
+        self.assertEqual(irrigation_attrs["trigger_kind"], "hydrique")
+        self.assertEqual(irrigation_attrs["source_status"], "auto")
+        self.assertEqual(irrigation_attrs["summary"], "Irrigation hydrique actionnable")
 
     def test_intervention_product_select_includes_application_months(self) -> None:
         coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=None, history=[], memory={})
