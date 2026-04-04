@@ -102,7 +102,7 @@ class DiagnosticsTests(unittest.TestCase):
             "sous_phase": "Enracinement",
             "objectif_mm": 0.0,
             "arrosage_recommande": False,
-            "type_arrosage": "personnalise",
+            "type_arrosage": "aucune_action",
             "niveau_action": "surveiller",
             "fenetre_optimale": "attendre",
             "risque_gazon": "modere",

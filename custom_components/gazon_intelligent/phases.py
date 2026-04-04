@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from typing import Any
 
+from homeassistant.util import dt as dt_util
+
 PHASE_DURATIONS_DAYS: dict[str, int] = {
     "Normal": 0,
     "Sursemis": 21,
@@ -88,7 +90,7 @@ def compute_dominant_phase(
     today: date | None = None,
     temperature: float | None = None,
 ) -> dict[str, Any]:
-    today = today or date.today()
+    today = today or dt_util.now().date()
     best: tuple[int, date] | None = None
     dominant: dict[str, Any] | None = None
 
@@ -151,11 +153,11 @@ def compute_subphase(
     today: date | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    today = today or date.today()
+    today = today or dt_util.now().date()
     if now is None:
-        now = datetime.combine(today, datetime.min.time())
+        now = dt_util.now()
     elif now.tzinfo is None:
-        now = now.replace(tzinfo=datetime.now().astimezone().tzinfo)
+        now = now.replace(tzinfo=dt_util.now().tzinfo)
     age_jours = 0
     progression = 0.0
     if date_debut is not None:

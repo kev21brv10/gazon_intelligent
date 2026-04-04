@@ -3,15 +3,17 @@ from __future__ import annotations
 import unittest
 from dataclasses import dataclass
 import asyncio
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 import sys
 import types
 from unittest.mock import AsyncMock
+from zoneinfo import ZoneInfo
 
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_DIR = ROOT / "custom_components" / "gazon_intelligent"
+TEST_TZ = ZoneInfo("Europe/Paris")
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -35,6 +37,11 @@ def _install_homeassistant_stubs() -> None:
     ensure_module("homeassistant")
     ensure_module("homeassistant.components")
     ensure_module("homeassistant.helpers")
+    util_mod = ensure_module("homeassistant.util")
+    if not hasattr(util_mod, "__path__"):
+        util_mod.__path__ = []  # type: ignore[attr-defined]
+    dt_mod = ensure_module("homeassistant.util.dt")
+    dt_mod.now = lambda: datetime(2026, 4, 4, 14, 15, tzinfo=TEST_TZ)  # type: ignore[attr-defined]
 
     sensor_mod = ensure_module("homeassistant.components.sensor")
     if not hasattr(sensor_mod, "SensorEntity"):
@@ -47,6 +54,10 @@ def _install_homeassistant_stubs() -> None:
     binary_sensor_mod = ensure_module("homeassistant.components.binary_sensor")
     if not hasattr(binary_sensor_mod, "BinarySensorEntity"):
         binary_sensor_mod.BinarySensorEntity = type("BinarySensorEntity", (), {"__init__": lambda self, *args, **kwargs: None})
+
+    select_mod = ensure_module("homeassistant.components.select")
+    if not hasattr(select_mod, "SelectEntity"):
+        select_mod.SelectEntity = type("SelectEntity", (), {"__init__": lambda self, *args, **kwargs: None})
 
     helpers_entity_mod = ensure_module("homeassistant.helpers.entity")
     if not hasattr(helpers_entity_mod, "DeviceInfo"):
@@ -157,7 +168,7 @@ def _make_result():
 
 
 def _local_text(iso_value: str) -> str:
-    return datetime.fromisoformat(iso_value).astimezone().strftime("%d/%m/%Y à %H:%M")
+    return datetime.fromisoformat(iso_value).astimezone(TEST_TZ).strftime("%d/%m/%Y à %H:%M")
 
 
 class DecisionResultChainTests(unittest.TestCase):
@@ -295,10 +306,11 @@ class DecisionResultChainTests(unittest.TestCase):
 
         debug_sensor = sensor.GazonDebugInterventionSensor(coordinator)
 
-        self.assertEqual(debug_sensor.native_value, "possible")
+        self.assertEqual(debug_sensor.native_value, "preparation")
         attrs = debug_sensor.extra_state_attributes
+        self.assertEqual(attrs["runtime_probe"], "constraints_probe_20260404_01")
         self.assertEqual(attrs["score"], 23)
-        self.assertEqual(attrs["status"], "possible")
+        self.assertEqual(attrs["status"], "preparation")
         self.assertEqual(attrs["recommended_action"], "select_product")
         self.assertEqual(attrs["product_id"], "h2pro_trismart")
         self.assertEqual(attrs["product_name"], "H2Pro TriSmart")
@@ -306,18 +318,218 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(attrs["context"]["phase"], "Normal")
         self.assertEqual(attrs["context"]["month"], 4)
         self.assertEqual(attrs["context"]["temperature"], 15.3)
-        self.assertEqual(len(attrs["blocking_constraints"]), 1)
-        self.assertEqual(len(attrs["non_blocking_constraints"]), 2)
-        self.assertEqual(attrs["blocking_constraints"][0]["impact"], "bloquant")
-        self.assertEqual(attrs["non_blocking_constraints"][0]["impact"], "dégradant")
+        blocking_constraints = [item for item in attrs["constraints"] if item["impact"] == "bloquant"]
+        non_blocking_constraints = [item for item in attrs["constraints"] if item["impact"] != "bloquant"]
+        self.assertEqual(len(blocking_constraints), 1)
+        self.assertEqual(len(non_blocking_constraints), 2)
+        self.assertEqual(blocking_constraints[0]["impact"], "bloquant")
+        self.assertEqual(non_blocking_constraints[0]["impact"], "dégradant")
         self.assertEqual(attrs["constraints"][0]["impact"], "dégradant")
         self.assertEqual(attrs["constraints"][1]["impact"], "neutre")
         self.assertEqual(attrs["constraints"][2]["impact"], "bloquant")
+        self.assertNotIn("ui_summary", attrs)
+        self.assertNotIn("ui_hint", attrs)
         self.assertEqual(attrs["reasons"], [
             "Phase moins adaptée (Croissance, Entretien)",
             "Mois compatibles (Avril à Septembre)",
             "Température compatible (15.3 °C, attendu 10 à 30 °C)",
         ])
+
+    def test_intervention_recommendation_sensor_normalizes_constraint_context(self) -> None:
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={
+                "intervention_recommendation": {
+                    "status": "possible",
+                    "score": 23,
+                    "recommended_action": "select_product",
+                    "reason": "Phase moins adaptée (Croissance, Entretien)",
+                    "why_now": "Phase moins adaptée (Croissance, Entretien) · Température compatible (15.3 °C, attendu 10 à 30 °C)",
+                    "reasons": [
+                        "Phase moins adaptée (Croissance, Entretien)",
+                        "Mois compatibles (Avril à Septembre)",
+                        "Température compatible (15.3 °C, attendu 10 à 30 °C)",
+                    ],
+                    "constraints": [
+                        {
+                            "code": "phase_compatibility",
+                            "label": "Phase moins adaptée (Croissance, Entretien)",
+                            "blocking": False,
+                            "met": False,
+                            "value": {
+                                "expected": ["Croissance", "Entretien"],
+                                "current": None,
+                                "matched": False,
+                            },
+                        },
+                        {
+                            "code": "application_months",
+                            "label": "Mois compatibles (Avril à Septembre)",
+                            "blocking": False,
+                            "met": True,
+                            "value": {
+                                "months": [4, 5, 6, 7, 8, 9],
+                                "current_month": None,
+                                "matched": True,
+                            },
+                        },
+                    ],
+                    "product": {
+                        "id": "h2pro_trismart",
+                        "name": "H2Pro TriSmart",
+                        "type": "Agent Mouillant",
+                        "months": [4, 5, 6, 7, 8, 9],
+                        "months_label": "Avril à Septembre",
+                        "temperature_value": 15.3,
+                        "temperature_min": 10,
+                        "temperature_max": 30,
+                        "temperature_source": "capteur",
+                    },
+                    "context": {
+                        "catalogue_count": 4,
+                        "eligible_count": 0,
+                        "blocked_products_count": 1,
+                        "current_month": 4,
+                        "current_phase": "Normal",
+                        "current_sub_phase": "Normal",
+                    },
+                    "ui": {
+                        "summary": "À préparer",
+                        "hint": "Phase moins adaptée (Croissance, Entretien)",
+                    },
+                }
+            },
+            result=None,
+            history=[],
+            memory={},
+        )
+
+        recommendation_sensor = sensor.GazonInterventionRecommendationSensor(coordinator)
+
+        attrs = recommendation_sensor.extra_state_attributes
+        self.assertEqual(attrs["runtime_probe"], "constraints_probe_20260404_01")
+        self.assertEqual(attrs["current_phase"], "Normal")
+        self.assertEqual(attrs["current_month"], 4)
+        self.assertEqual(attrs["summary"], "À préparer")
+        self.assertEqual(attrs["hint"], "Phase moins adaptée (Croissance, Entretien)")
+
+        debug_sensor = sensor.GazonDebugInterventionSensor(coordinator)
+        payload = debug_sensor.extra_state_attributes
+        phase_constraint = next(item for item in payload["constraints"] if item.get("code") == "phase_compatibility")
+        month_constraint = next(item for item in payload["constraints"] if item.get("code") == "application_months")
+        self.assertEqual(phase_constraint["value"]["current"], "Normal")
+        self.assertEqual(month_constraint["value"]["current_month"], 4)
+
+    def test_intervention_recommendation_sensor_prefers_coordinator_data_over_result_cache(self) -> None:
+        stale_result = _make_result()
+        stale_result.extra["intervention_recommendation"] = {
+            "status": "blocked",
+            "score": 12,
+            "recommended_action": "wait",
+            "constraints": [
+                {
+                    "code": "phase_compatibility",
+                    "label": "Phase moins adaptée",
+                    "blocking": False,
+                    "met": False,
+                    "value": {
+                        "expected": ["Croissance", "Entretien"],
+                        "current": None,
+                        "matched": False,
+                    },
+                },
+                {
+                    "code": "application_months",
+                    "label": "Mois compatibles",
+                    "blocking": False,
+                    "met": True,
+                    "value": {
+                        "months": [4, 5, 6, 7, 8, 9],
+                        "current_month": None,
+                        "matched": True,
+                    },
+                },
+            ],
+            "context": {
+                "current_phase": "Normal",
+                "current_month": 4,
+            },
+        }
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={
+                "intervention_recommendation": {
+                    "status": "possible",
+                    "score": 23,
+                    "recommended_action": "select_product",
+                    "constraints": [
+                        {
+                            "code": "phase_compatibility",
+                            "label": "Phase moins adaptée (Croissance, Entretien)",
+                            "blocking": False,
+                            "met": False,
+                            "value": {
+                                "expected": ["Croissance", "Entretien"],
+                                "current": None,
+                                "matched": False,
+                            },
+                        },
+                        {
+                            "code": "application_months",
+                            "label": "Mois compatibles (Avril à Septembre)",
+                            "blocking": False,
+                            "met": True,
+                            "value": {
+                                "months": [4, 5, 6, 7, 8, 9],
+                                "current_month": None,
+                                "matched": True,
+                            },
+                        },
+                    ],
+                    "product": {
+                        "id": "h2pro_trismart",
+                        "name": "H2Pro TriSmart",
+                        "type": "Agent Mouillant",
+                        "months": [4, 5, 6, 7, 8, 9],
+                        "months_label": "Avril à Septembre",
+                        "temperature_value": 15.3,
+                        "temperature_min": 10,
+                        "temperature_max": 30,
+                        "temperature_source": "capteur",
+                    },
+                    "context": {
+                        "catalogue_count": 4,
+                        "eligible_count": 0,
+                        "blocked_products_count": 1,
+                        "current_month": 4,
+                        "current_phase": "Normal",
+                        "current_sub_phase": "Normal",
+                    },
+                    "ui": {
+                        "summary": "À préparer",
+                        "hint": "Phase moins adaptée (Croissance, Entretien)",
+                    },
+                }
+            },
+            result=stale_result,
+            history=[],
+            memory={},
+        )
+
+        recommendation_sensor = sensor.GazonInterventionRecommendationSensor(coordinator)
+        attrs = recommendation_sensor.extra_state_attributes
+        self.assertEqual(attrs["runtime_probe"], "constraints_probe_20260404_01")
+        self.assertEqual(attrs["current_phase"], "Normal")
+        self.assertEqual(attrs["current_month"], 4)
+        self.assertEqual(attrs["product_id"], "h2pro_trismart")
+        self.assertEqual(attrs["product_name"], "H2Pro TriSmart")
+
+        debug_sensor = sensor.GazonDebugInterventionSensor(coordinator)
+        debug_attrs = debug_sensor.extra_state_attributes
+        phase_constraint = next(item for item in debug_attrs["constraints"] if item.get("code") == "phase_compatibility")
+        month_constraint = next(item for item in debug_attrs["constraints"] if item.get("code") == "application_months")
+        self.assertEqual(phase_constraint["value"]["current"], "Normal")
+        self.assertEqual(month_constraint["value"]["current_month"], 4)
 
     def test_projection_entities_use_existing_states_and_signals(self) -> None:
         coordinator = _FakeCoordinator(
@@ -406,7 +618,7 @@ class DecisionResultChainTests(unittest.TestCase):
         intervention_attrs = intervention_signal.extra_state_attributes
         self.assertIsNotNone(intervention_attrs)
         assert intervention_attrs is not None
-        self.assertEqual(intervention_attrs["source_status"], "possible")
+        self.assertEqual(intervention_attrs["source_status"], "preparation")
         self.assertEqual(intervention_attrs["trigger_kind"], "soft")
         self.assertEqual(intervention_attrs["summary"], "À préparer : Floranid Twin Permanent")
 
@@ -461,6 +673,60 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(irrigation_attrs["source_status"], "auto")
         self.assertEqual(irrigation_attrs["summary"], "Irrigation hydrique actionnable")
 
+    def test_expected_block_sensor_reports_none_cleanly_without_real_block_reason(self) -> None:
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={
+                "fenetre_optimale": "attendre",
+                "confidence_score": 92,
+                "phase_active": "Normal",
+                "temperature": 18.9,
+            },
+            result=None,
+            history=[],
+            memory={},
+        )
+
+        block_sensor = sensor.GazonProchainBlocageAttenduSensor(coordinator)
+
+        self.assertEqual(block_sensor.native_value, "aucun")
+        attrs = block_sensor.extra_state_attributes
+        self.assertIsNotNone(attrs)
+        assert attrs is not None
+        self.assertEqual(attrs["source_status"], "attendre")
+        self.assertEqual(attrs["summary"], "Aucun blocage attendu")
+        self.assertNotIn("block_reason", attrs)
+        self.assertNotIn("block_label", attrs)
+
+    def test_objectif_sensor_prefers_daily_hydric_balance_over_soil_reserve_for_labels(self) -> None:
+        result = _make_result()
+        result.extra.update(
+            {
+                "bilan_hydrique_mm": 15.6,
+                "bilan_hydrique_journalier_mm": -1.1,
+                "bilan_hydrique_precedent_mm": 16.7,
+                "deficit_3j": 3.4,
+                "deficit_7j": 8.0,
+            }
+        )
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={},
+            result=result,
+            history=[],
+            memory={},
+        )
+
+        objectif_sensor = sensor.GazonObjectifMmSensor(coordinator)
+        attrs = objectif_sensor.extra_state_attributes
+
+        self.assertEqual(objectif_sensor.native_value, 1.2)
+        self.assertEqual(attrs["bilan_hydrique_mm"], -1.1)
+        self.assertEqual(attrs["bilan_hydrique_journalier_mm"], -1.1)
+        self.assertEqual(attrs["reserve_hydrique_sol_mm"], 15.6)
+        self.assertEqual(attrs["hydric_balance_level"], "déficit")
+        self.assertEqual(attrs["hydric_strategy"], "arroser profondément")
+
     def test_intervention_product_select_includes_application_months(self) -> None:
         coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=None, history=[], memory={})
         coordinator.products = {
@@ -491,6 +757,7 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertIsNone(product_select.current_option)
         self.assertIsNone(product_select.extra_state_attributes["selected_product_id"])
         self.assertIsNone(product_select.extra_state_attributes["selected_product_name"])
+        self.assertNotIn("selected_product_months", product_select.extra_state_attributes)
         self.assertEqual(product_select.extra_state_attributes["summary"], "Aucun produit enregistré")
 
     def test_intervention_product_select_maps_label_to_product_id(self) -> None:
@@ -516,10 +783,24 @@ class DecisionResultChainTests(unittest.TestCase):
 
         self.assertEqual(
             product_select.options,
-            ["Produit Standard — bio-1", "Produit Standard — bio-2"],
+            ["Aucun produit sélectionné", "Produit Standard — bio-1", "Produit Standard — bio-2"],
         )
-        self.assertIsNone(product_select.current_option)
+        self.assertEqual(product_select.current_option, "Aucun produit sélectionné")
         self.assertEqual(product_select.extra_state_attributes["summary"], "Aucun produit sélectionné")
+
+    def test_intervention_product_select_can_clear_selection(self) -> None:
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=None, history=[], memory={})
+        coordinator.products = {
+            "bio-1": {"id": "bio-1", "nom": "Bio Boost"},
+            "bio-2": {"id": "bio-2", "nom": "Produit Standard"},
+        }
+        coordinator.selected_product_id = "bio-1"
+        coordinator.async_set_selected_product = AsyncMock()
+
+        product_select = select.GazonInterventionProductSelect(coordinator)
+        asyncio.run(product_select.async_select_option("Aucun produit sélectionné"))
+
+        coordinator.async_set_selected_product.assert_awaited_once_with(None)
 
     def test_intervention_product_select_defaults_to_single_product(self) -> None:
         coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=None, history=[], memory={})
@@ -532,6 +813,7 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(product_select.options, ["Bio Boost"])
         self.assertEqual(product_select.current_option, "Bio Boost")
         self.assertEqual(product_select.extra_state_attributes["selected_product_id"], "bio-1")
+        self.assertNotIn("selected_product_usage_mode", product_select.extra_state_attributes)
         self.assertEqual(product_select.extra_state_attributes["summary"], "Produit sélectionné : Bio Boost")
 
     def test_niveau_action_sensor_uses_friendly_state_for_no_action(self) -> None:
@@ -539,21 +821,29 @@ class DecisionResultChainTests(unittest.TestCase):
         result.niveau_action = "surveiller"
         result.objectif_arrosage = 0.0
         result.arrosage_recommande = False
+        result.type_arrosage = "personnalise"
         result.decision_resume = {
             "action": "aucune_action",
             "moment": "attendre",
             "objectif_mm": 0.0,
-            "type_arrosage": "personnalise",
+            "type_arrosage": "aucune_action",
         }
         coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=result, history=[], memory={})
 
         niveau_sensor = sensor.GazonNiveauActionSensor(coordinator)
         type_sensor = sensor.GazonTypeArrosageSensor(coordinator)
+        conseil_sensor = sensor.GazonConseilPrincipalSensor(coordinator)
+        irrigation_sensor = binary_sensor.GazonArrosageRecommandeBinarySensor(coordinator)
+        irrigation_signal = binary_sensor.GazonSignalIrrigationBinarySensor(coordinator)
 
         self.assertEqual(niveau_sensor.native_value, "aucune_action")
         self.assertIn("aucune_action", niveau_sensor.extra_state_attributes["possible_values"])
         self.assertEqual(type_sensor.native_value, "Aucune action")
         self.assertIn("Aucune action", type_sensor.extra_state_attributes["possible_values"])
+        self.assertNotIn("Réglage personnalisé", type_sensor.extra_state_attributes["possible_values"])
+        self.assertEqual(conseil_sensor.extra_state_attributes["type_arrosage"], "aucune_action")
+        self.assertEqual(irrigation_sensor.extra_state_attributes["type_arrosage"], "aucune_action")
+        self.assertEqual(irrigation_signal.extra_state_attributes["type_arrosage"], "aucune_action")
 
     def test_watering_progress_sensor_exposes_active_session(self) -> None:
         coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=None, history=[], memory={})
@@ -756,6 +1046,11 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(last_application_sensor.native_value, "Humuslight")
         self.assertEqual(last_application_sensor.extra_state_attributes["application_type"], "sol")
         self.assertEqual(last_application_sensor.extra_state_attributes["application_irrigation_mode"], "auto")
+        self.assertNotIn("application_type", application_allowed_sensor.extra_state_attributes["derniere_application"])
+        self.assertNotIn(
+            "application_requires_watering_after",
+            application_allowed_sensor.extra_state_attributes["derniere_application"],
+        )
         self.assertTrue(application_allowed_sensor.is_on)
         self.assertEqual(application_allowed_sensor.extra_state_attributes["application_post_watering_mm"], 1.0)
 
@@ -831,10 +1126,12 @@ class DecisionResultChainTests(unittest.TestCase):
             catalogue_sensor.extra_state_attributes["products_summary"][0]["id"],
             "bio-1",
         )
+        self.assertNotIn("phase_compatible", catalogue_sensor.extra_state_attributes["products_summary"][0])
         self.assertEqual(
             catalogue_sensor.extra_state_attributes["products_summary"][1]["application_irrigation_mode"],
             "suggestion",
         )
+        self.assertNotIn("application_label_notes", catalogue_sensor.extra_state_attributes["products_summary"][1])
 
     def test_user_action_sensor_exposes_human_readable_summary(self) -> None:
         coordinator = _FakeCoordinator(
@@ -1039,6 +1336,7 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(
             type_arrosage_sensor.extra_state_attributes["possible_values"],
             [
+                "Aucune action",
                 "Arrosage bloqué",
                 "Réglage personnalisé",
                 "Arrosage manuel fréquent",

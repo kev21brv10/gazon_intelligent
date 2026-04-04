@@ -10,6 +10,8 @@ from .const import DEFAULT_MODE, DOMAIN, MODES_GAZON
 from .entity_base import GazonEntityBase
 from .memory import format_application_months_label
 
+_NO_PRODUCT_OPTION = "Aucun produit sélectionné"
+
 
 async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = hass.data[DOMAIN][entry.entry_id]
@@ -78,7 +80,7 @@ class GazonModeSelect(GazonEntityBase, SelectEntity):
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_mode"
+        self._set_entity_identity("select", "mode")
 
     @property
     def options(self):
@@ -100,7 +102,7 @@ class GazonInterventionProductSelect(GazonEntityBase, SelectEntity):
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_produit_intervention"
+        self._set_entity_identity("select", "produit_intervention")
 
     def _catalogue(self) -> list[tuple[str, dict[str, Any], str]]:
         products = getattr(self.coordinator, "products", None)
@@ -154,14 +156,22 @@ class GazonInterventionProductSelect(GazonEntityBase, SelectEntity):
             for product_id, product, _label in self._catalogue()
         }
 
+    def _has_selection_placeholder(self) -> bool:
+        return bool(self._catalogue()) and self._resolved_selected_product_id() is None
+
     @property
     def options(self):
-        return [label for _product_id, _product, label in self._catalogue()]
+        labels = [label for _product_id, _product, label in self._catalogue()]
+        if self._has_selection_placeholder():
+            return [_NO_PRODUCT_OPTION, *labels]
+        return labels
 
     @property
     def current_option(self):
         selected_product_id = self._resolved_selected_product_id()
         if not selected_product_id:
+            if self._catalogue():
+                return _NO_PRODUCT_OPTION
             return None
         return self._label_by_product_id().get(selected_product_id)
 
@@ -201,11 +211,8 @@ class GazonInterventionProductSelect(GazonEntityBase, SelectEntity):
         return {
             "selected_product_id": str(selected_product_id).strip() if selected_product_id else None,
             "selected_product_name": selected_product_name,
-            "selected_product_months": selected_product_months,
             "selected_product_months_label": selected_product_months_label,
-            "selected_product_usage_mode": selected_product_usage_mode,
             "selected_product_usage_mode_label": selected_product_usage_mode_label,
-            "selected_product_max_applications_per_year": selected_product_max_applications_per_year,
             "selected_product_max_applications_per_year_label": selected_product_max_applications_per_year_label,
             "summary": summary,
             "products_count": len(catalogue),
@@ -213,6 +220,9 @@ class GazonInterventionProductSelect(GazonEntityBase, SelectEntity):
 
     async def async_select_option(self, option: str):
         option = str(option).strip()
+        if option == _NO_PRODUCT_OPTION:
+            await self.coordinator.async_set_selected_product(None)
+            return
         product_id = self._product_id_by_label().get(option)
         if not product_id:
             raise HomeAssistantError(f"Produit d'intervention introuvable dans le catalogue: {option}")

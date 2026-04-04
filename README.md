@@ -47,13 +47,36 @@ Les autres entités détaillent le contexte, l'historique, la tonte et le debug.
 
 ---
 
-## ✨ Release 0.4.6
+## ✨ Release 0.5.0
 
-Cette version apporte surtout trois choses:
+Cette version marque une évolution majeure de l'intégration:
 
-- un Sursemis plus sensible aux sous-phases
-- une façade publique plus lisible et cohérente
-- des diagnostics plus utiles pour comprendre les décisions et les blocages
+- stabilisation des `entity_id` publics et migration du registre Home Assistant
+- refonte importante du moteur d'irrigation, des plans et du suivi runtime
+- recommandation d'intervention plus fine, plus explicable et mieux contextualisée
+- capteurs de synthèse plus utiles pour Home Assistant, les dashboards et les automatisations
+- couverture de tests nettement renforcée
+
+---
+
+## 🔄 Après mise à jour vers 0.5.0
+
+Cette version stabilise les `entity_id` publics de l’intégration.
+
+En pratique:
+
+- un redémarrage ou un rechargement de l’intégration est recommandé
+- le registre Home Assistant est réaligné automatiquement quand c’est possible
+- si tu utilises d’anciens dashboards ou automatisations, vérifie surtout les entités de boutons, de sélection produit et d’arrosage automatique
+
+Les IDs publics à privilégier sont désormais par exemple:
+
+- `sensor.gazon_intelligent_assistant`
+- `sensor.gazon_intelligent_conseil_principal`
+- `select.gazon_intelligent_produit_d_intervention`
+- `switch.gazon_intelligent_arrosage_automatique_autorise`
+- `button.gazon_intelligent_date_action_today`
+- `button.gazon_intelligent_retour_mode_normal`
 
 ---
 
@@ -103,8 +126,8 @@ En pratique, l’intégration gère:
 ### Entités de lecture
 
 - `sensor.gazon_intelligent_conseil_principal`
-  - petit résumé facile à lire
-  - utile pour comprendre pourquoi la décision a été prise
+  - résumé public priorisé de la situation
+  - remonte l’information la plus utile entre assistant, intervention et irrigation
 - `sensor.gazon_intelligent_fenetre_optimale`
   - indique le meilleur moment pour agir
 - `sensor.gazon_intelligent_objectif_d_arrosage`
@@ -134,8 +157,8 @@ En pratique, l’intégration gère:
 ### Interface utilisateur
 
 - `button.gazon_intelligent_arroser_maintenant`
-- `button.gazon_intelligent_noter_la_date_du_jour`
-- `button.gazon_intelligent_retour_au_mode_normal`
+- `button.gazon_intelligent_date_action_today`
+- `button.gazon_intelligent_retour_mode_normal`
 - `switch.gazon_intelligent_arrosage_automatique_autorise`
 - `select.gazon_intelligent_mode_du_gazon`
 
@@ -216,7 +239,10 @@ Le système :
 
 ### Comment l’intégration décide
 
-L’intégration essaie d’arroser:
+Le moteur ne se contente pas de dire “arroser ou non”.
+Il cherche à produire une décision exploitable, lisible et réaliste.
+
+En pratique, l’intégration essaie d’arroser:
 
 - tôt le matin quand c’est possible
 - un peu plus souvent en Sursemis
@@ -246,7 +272,7 @@ Elle peut aussi:
 
 ### 🔍 Informations utiles
 
-Le moteur expose aussi quelques champs utiles pour comprendre la décision:
+Le moteur expose aussi des champs utiles pour comprendre la décision:
 
 - `deficit_brut_mm`
 - `deficit_mm_ajuste`
@@ -256,9 +282,15 @@ Le moteur expose aussi quelques champs utiles pour comprendre la décision:
 - `confidence_level`
 - `block_reason`
 
-Le résumé hydrique affiché dans `raison_decision` suit le format:
+Le résumé hydrique exposé dans `raison_decision` suit le format:
 
 - `Déficit: brut=X mm, ajusté=Y mm, final=Z mm`
+
+Cela sert surtout à:
+
+- comprendre pourquoi l’objectif est nul, réduit ou maintenu
+- relire la logique directement dans Home Assistant
+- vérifier que le comportement reste cohérent avec la réalité du terrain
 
 ### 🧮 Comment le plan est construit
 
@@ -270,7 +302,16 @@ Le résumé hydrique affiché dans `raison_decision` suit le format:
 
 ### 🧪 Produits et applications
 
-Cette partie sert à mémoriser un produit ou un traitement une seule fois, puis à laisser l’intégration réutiliser ces réglages automatiquement au moment de déclarer une intervention.
+Cette partie sert à enregistrer un produit une seule fois, puis à réutiliser automatiquement ses réglages quand tu déclares une intervention.
+
+#### Workflow rapide
+
+1. Enregistre le produit avec `gazon_intelligent.register_product`
+2. Choisis-le dans `select.gazon_intelligent_produit_d_intervention`
+3. Déclare ensuite l’intervention réelle avec `gazon_intelligent.declare_intervention`
+
+S’il n’existe qu’un seul produit, l’intégration peut parfois le reprendre automatiquement.
+S’il y en a plusieurs, il faut une sélection claire.
 
 #### Deux types d’application
 
@@ -281,7 +322,7 @@ Cette partie sert à mémoriser un produit ou un traitement une seule fois, puis
   - produit appliqué sur le feuillage
   - bloque temporairement l’arrosage automatique pendant la protection
 
-#### Champs à enregistrer une seule fois
+#### Ce qu’il faut renseigner une seule fois
 
 Les réglages produits se déclarent dans `register_product`:
 
@@ -317,7 +358,7 @@ Tu peux aussi y enregistrer:
   - sélection multiple possible
   - exemple: `Sursemis`, `Croissance`, `Entretien`
 
-#### Ce que l’intégration affiche
+#### Ce que l’intégration expose ensuite
 
 - `Dernière application`
   - le dernier produit ou traitement enregistré
@@ -336,16 +377,7 @@ Tu peux aussi y enregistrer:
 - `Arrosage après application autorisé`
   - indique si un arrosage est permis après une application
 
-#### Choisir un produit pour une intervention
-
-Le plus simple est de:
-
-1. Enregistrer d’abord le produit avec `register_product`
-2. Le choisir ensuite dans `select.gazon_intelligent_produit_d_intervention`
-3. Déclarer l’intervention réelle avec `declare_intervention`
-
-Le sélecteur affiche les noms lisibles. Si plusieurs produits ont le même nom, le libellé devient `Nom — product_id` pour éviter toute ambiguïté.
-Quand aucun produit ne correspond plus, la sélection se vide proprement.
+Le sélecteur affiche les noms lisibles. Si plusieurs produits ont le même nom, le libellé devient `Nom — product_id` pour éviter toute ambiguïté. Quand aucun produit ne correspond plus, la sélection se vide proprement.
 
 Les états de `Dernière exécution` sont simples:
 
@@ -354,33 +386,7 @@ Les états de `Dernière exécution` sont simples:
 - `bloque` = action refusée pour sécurité ou timing
 - `refuse` = action impossible ou incohérente
 
-#### Comment ajouter un produit
-
-1. Utilise le service `gazon_intelligent.register_product`
-2. Donne un `product_id` unique
-3. Renseigne le nom, la catégorie et le dosage au m², puis tous les réglages utiles du produit
-4. Lors d’une intervention réelle, choisis le produit dans `select.gazon_intelligent_produit_d_intervention` ou précise son ID exact
-5. Lance `gazon_intelligent.declare_intervention` avec la date d'action (`date_action`), la zone et une note si besoin
-6. S’il n’y a qu’un seul produit enregistré, l’intégration peut le reprendre automatiquement
-7. Si plusieurs produits existent, il faut une sélection claire: le sélecteur ou un ID / nom exact
-8. Si le produit n’est plus utile, retire-le avec `gazon_intelligent.remove_product`
-
-#### Quand utiliser un produit enregistré
-
-Un produit enregistré sert à:
-
-- réutiliser les mêmes réglages à chaque fois
-- éviter de retaper les paramètres à la main
-- garder une trace claire dans l’historique
-- simplifier la déclaration d’intervention
-
-#### Exemples simples
-
-- un produit de sol peut demander un arrosage léger après application
-- un produit foliaire peut bloquer l’arrosage pendant quelques heures
-- un produit inconnu ne déclenche rien d’automatique
-
-#### Ce qu’il faut retenir
+#### Règles utiles
 
 - le produit se mémorise avec `register_product`
 - le choix du produit pour l’intervention se fait avec `select.gazon_intelligent_produit_d_intervention`
@@ -391,9 +397,9 @@ Un produit enregistré sert à:
 - `score` est un entier borné entre `0` et `100`
 - `constraints` et `missing_requirements` sont des listes d’objets structurés, jamais des listes de chaînes
 - `unavailable` couvre le cas catalogue vide, sans ajouter de statut fantôme
-- l’intervention réelle se déclare avec `declare_intervention`
 - `declare_intervention` reste simple: produit choisi, date d'action (`date_action`), zone, note
 - `remove_product` nettoie la base locale
+- `remove_last_application` supprime la dernière application enregistrée si elle a été déclarée par erreur
 - le moteur garde la main sur les garde-fous d’arrosage
 
 ---
@@ -567,9 +573,9 @@ python3 -m pytest
 
 ## 🧾 Version
 
-- manifest : `0.4.6`
-- README : `0.4.6`
-- changelog : `0.4.6`
+- manifest : `0.5.0`
+- README : `0.5.0`
+- changelog : `0.5.0`
 
 
 ## 📄 Licence

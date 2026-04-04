@@ -13,7 +13,12 @@ from .const import (
     DEFAULT_AUTO_IRRIGATION_ENABLED,
 )
 from .decision_models import DecisionContext
-from .guidance import _confidence_assessment, compute_watering_profile, is_fertilization_window_open
+from .guidance import (
+    _confidence_assessment,
+    _reference_hydric_balance_mm,
+    compute_watering_profile,
+    is_fertilization_window_open,
+)
 from .memory import compute_application_state
 from .scores import classify_stress_level
 from .water import compute_advanced_context, compute_etp, compute_water_balance
@@ -384,7 +389,7 @@ def build_watering_bundle(
     arrosage_recent = water_balance.get("arrosage_recent", 0.0)
     deficit_3j = water_balance.get("deficit_3j", 0.0)
     deficit_7j = water_balance.get("deficit_7j", 0.0)
-    bilan_hydrique_mm = water_balance.get("bilan_hydrique_mm", 0.0)
+    bilan_hydrique_mm = _reference_hydric_balance_mm(water_balance)
     bilan_hydrique_3j = water_balance.get("bilan_hydrique_3j", 0.0)
     bilan_hydrique_7j = water_balance.get("bilan_hydrique_7j", 0.0)
     pluie_efficace = water_balance.get("pluie_efficace", 0.0)
@@ -967,10 +972,10 @@ def build_watering_bundle(
         action_recommandee = "Surveille les capteurs et l'évolution météo."
         action_a_eviter = "Éviter tout arrosage inutile."
         objectif_mm = 0.0
-        type_arrosage = "bloque" if watering_blocked else "personnalise"
+        type_arrosage = "bloque" if watering_blocked else "aucune_action"
         arrosage_recommande = False
         arrosage_auto_autorise = False
-        arrosage_conseille = "personnalise"
+        arrosage_conseille = "personnalise" if watering_blocked else "aucune_action"
     elif phase_dominante == "Fertilisation":
         passages = _soil_fractionation_passages(
             phase_dominante,

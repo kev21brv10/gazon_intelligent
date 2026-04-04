@@ -10,8 +10,10 @@ mais délègue la logique métier aux modules spécialisés:
 - decision_mowing.py
 """
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any
+
+from homeassistant.util import dt as dt_util
 
 from .const import DEFAULT_AUTO_IRRIGATION_ENABLED
 from .decision_models import DecisionContext, DecisionResult
@@ -19,6 +21,20 @@ from .decision_mowing import build_mowing_bundle
 from .decision_phase import build_phase_bundle
 from .decision_risk import build_risk_bundle
 from .decision_watering import build_water_bundle, build_watering_bundle
+from .guidance import compute_action_guidance as guidance_compute_action_guidance
+from .guidance import compute_objectif_mm as guidance_compute_objectif_mm
+from .memory import compute_memory as memory_compute_memory
+from .phases import (
+    compute_dominant_phase as phases_compute_dominant_phase,
+    compute_phase_active as phases_compute_phase_active,
+    compute_subphase as phases_compute_subphase,
+)
+from .water import (
+    compute_advanced_context as water_compute_advanced_context,
+    compute_etp as water_compute_etp,
+    compute_recent_watering_mm as water_compute_recent_watering_mm,
+    compute_water_balance as water_compute_water_balance,
+)
 
 
 def _display_date_from_iso(value: str | None) -> str | None:
@@ -28,6 +44,51 @@ def _display_date_from_iso(value: str | None) -> str | None:
         return date.fromisoformat(value).strftime("%d/%m/%Y")
     except ValueError:
         return value
+
+
+def compute_phase_active(*args, **kwargs):
+    return phases_compute_phase_active(*args, **kwargs)
+
+
+def compute_dominant_phase(*args, **kwargs):
+    return phases_compute_dominant_phase(*args, **kwargs)
+
+
+def compute_subphase(*args, **kwargs):
+    today = kwargs.get("today")
+    now = kwargs.get("now")
+    if today is not None and now is None:
+        reference_now = dt_util.now()
+        kwargs["now"] = datetime.combine(today, datetime.min.time(), tzinfo=reference_now.tzinfo)
+    return phases_compute_subphase(*args, **kwargs)
+
+
+def compute_recent_watering_mm(*args, **kwargs):
+    return water_compute_recent_watering_mm(*args, **kwargs)
+
+
+def compute_advanced_context(*args, **kwargs):
+    return water_compute_advanced_context(*args, **kwargs)
+
+
+def compute_etp(*args, **kwargs):
+    return water_compute_etp(*args, **kwargs)
+
+
+def compute_water_balance(*args, **kwargs):
+    return water_compute_water_balance(*args, **kwargs)
+
+
+def compute_objectif_mm(*args, **kwargs):
+    return guidance_compute_objectif_mm(*args, **kwargs)
+
+
+def compute_action_guidance(*args, **kwargs):
+    return guidance_compute_action_guidance(*args, **kwargs)
+
+
+def compute_memory(*args, **kwargs):
+    return memory_compute_memory(*args, **kwargs)
 
 
 def compute_decision(
@@ -56,7 +117,7 @@ def compute_decision(
     pluie_probabilite_max_3j: float | None = None,
 ) -> DecisionResult:
     """Retourne un résultat typé, compatible avec le snapshot historique."""
-    today = today or date.today()
+    today = today or dt_util.now().date()
     context = DecisionContext(
         history=[item for item in history if isinstance(item, dict)],
         today=today,
@@ -585,6 +646,9 @@ def build_decision_result(context: DecisionContext) -> DecisionResult:
             "soil_drainage_factor": watering_bundle.get("soil_drainage_factor"),
             "soil_infiltration_factor": watering_bundle.get("soil_infiltration_factor"),
             "soil_need_factor": watering_bundle.get("soil_need_factor"),
+            "bilan_hydrique_journalier_mm": water_bundle["water_balance"].get("bilan_hydrique_journalier_mm"),
+            "bilan_hydrique_precedent_mm": water_bundle["water_balance"].get("bilan_hydrique_precedent_mm"),
+            "soil_balance": water_bundle["water_balance"].get("soil_balance"),
             "bilan_hydrique_mm": water_bundle["water_balance"].get("bilan_hydrique_mm"),
             "deficit_3j": water_bundle["water_balance"].get("deficit_3j"),
             "deficit_7j": water_bundle["water_balance"].get("deficit_7j"),

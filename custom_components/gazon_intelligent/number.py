@@ -70,7 +70,7 @@ class GazonDebitZoneNumber(GazonEntityBase, NumberEntity):
         self._zone_index = zone_index
         self._config_key = config_key
         self._attr_name = f"Débit zone {zone_index}"
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_debit_zone_{zone_index}"
+        self._set_entity_identity("number", f"debit_zone_{zone_index}")
 
     @property
     def native_value(self):
@@ -107,7 +107,7 @@ class GazonMowerSettingNumber(GazonEntityBase, NumberEntity):
         self._config_key = config_key
         self._default_value = default_value
         self._attr_name = label
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_{suffix}"
+        self._set_entity_identity("number", suffix)
         self._attr_native_min_value = native_min
         self._attr_native_max_value = native_max
 

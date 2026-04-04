@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from datetime import date
+from datetime import date, datetime, timezone
 import importlib
 from pathlib import Path
 import sys
@@ -13,6 +13,14 @@ PACKAGE_DIR = ROOT / "custom_components" / "gazon_intelligent"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+
+def _ensure_module(name: str) -> types.ModuleType:
+    module = sys.modules.get(name)
+    if module is None:
+        module = types.ModuleType(name)
+        sys.modules[name] = module
+    return module
+
 def _ensure_package(name: str, path: Path) -> None:
     if name in sys.modules:
         return
@@ -21,8 +29,21 @@ def _ensure_package(name: str, path: Path) -> None:
     sys.modules[name] = module
 
 
+def _install_homeassistant_stubs() -> None:
+    _ensure_module("homeassistant")
+    util_mod = _ensure_module("homeassistant.util")
+    dt_mod = _ensure_module("homeassistant.util.dt")
+    if not hasattr(dt_mod, "now"):
+        dt_mod.now = lambda: datetime.now(timezone.utc)
+    if not hasattr(dt_mod, "utcnow"):
+        dt_mod.utcnow = lambda: datetime.now(timezone.utc)
+    if not hasattr(util_mod, "dt"):
+        util_mod.dt = dt_mod
+
+
 _ensure_package("custom_components", PACKAGE_DIR.parent)
 _ensure_package("custom_components.gazon_intelligent", PACKAGE_DIR)
+_install_homeassistant_stubs()
 
 GazonBrain = importlib.import_module("custom_components.gazon_intelligent.gazon_brain").GazonBrain
 

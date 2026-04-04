@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any
 
+from homeassistant.util import dt as dt_util
+
 from .const import DEFAULT_TYPE_SOL
 from .phases import PHASE_DURATIONS_DAYS, SUBPHASE_RULES
 
@@ -39,6 +41,7 @@ POSSIBLE_FENETRE_OPTIMALE_VALUES: tuple[str, ...] = (
     "attendre",
 )
 POSSIBLE_TYPE_ARROSAGE_VALUES: tuple[str, ...] = (
+    "aucune_action",
     "bloque",
     "personnalise",
     "manuel_frequent",
@@ -48,6 +51,7 @@ POSSIBLE_TYPE_ARROSAGE_VALUES: tuple[str, ...] = (
 )
 
 TYPE_ARROSAGE_DISPLAY_LABELS: dict[str, str] = {
+    "aucune_action": "Aucune action",
     "bloque": "Arrosage bloqué",
     "personnalise": "Réglage personnalisé",
     "manuel_frequent": "Arrosage manuel fréquent",
@@ -115,7 +119,7 @@ class DecisionContext:
         soil_balance: dict[str, Any] | None = None,
         memory: dict[str, Any] | None = None,
     ) -> "DecisionContext":
-        today = today or date.today()
+        today = today or dt_util.now().date()
         weather_profile = weather_profile or {}
         return cls(
             history=[item for item in history if isinstance(item, dict)],

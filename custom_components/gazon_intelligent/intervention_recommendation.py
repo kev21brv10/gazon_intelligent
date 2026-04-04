@@ -334,8 +334,6 @@ def _opportunity_evaluation(application_state: dict[str, Any] | None) -> dict[st
         block_reason = "Un délai post-application est encore en cours."
     elif post_status in {"bloque", "en_attente"} and not block_reason:
         block_reason = "Le contexte post-application n'autorise pas encore une nouvelle proposition."
-    elif type_arrosage == "bloque" and not block_reason:
-        block_reason = "Le profil d'arrosage courant reste bloqué."
 
     if block_reason:
         return {
@@ -365,12 +363,16 @@ def _opportunity_evaluation(application_state: dict[str, Any] | None) -> dict[st
         score_delta += 1
         reasons.append("Contexte hydrique légèrement déficitaire")
 
+    if type_arrosage == "bloque" and not reasons:
+        score_delta -= 2
+        reasons.append("Fenêtre hydrique actuellement fermée")
+
     return {
         "hard_blocking": False,
         "hard_block_reason": None,
         "score_delta": score_delta,
         "reasons": reasons,
-        "level": "weak" if score_delta < 0 else "strong",
+        "level": "weak" if score_delta < 0 or type_arrosage == "bloque" else "strong",
     }
 
 
@@ -442,7 +444,7 @@ def _state_metadata(state: str) -> dict[str, str]:
             "summary": "Recommandé",
             "action_label": "Déclarer maintenant",
         }
-    if state == "possible":
+    if state == "preparation":
         return {
             "title": "À préparer",
             "badge": "À préparer",
@@ -680,7 +682,7 @@ def _evaluate_product_candidate(
 def _priority_from_state(state: str, score: int) -> str:
     if state == "recommended":
         return "high" if score >= 70 else "medium"
-    if state == "possible":
+    if state == "preparation":
         return "medium"
     if state == "blocked":
         return "blocked"
@@ -811,6 +813,8 @@ def _constraints_for_candidate(
     state: str,
     block_reason: str | None,
     selected_ready: bool,
+    current_phase: str | None = None,
+    current_month: int | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
     if not candidate:
         constraints = [
@@ -849,7 +853,7 @@ def _constraints_for_candidate(
                 label=f"Phase compatible ({phase_label})" if candidate.get("phase_match") else f"Phase moins adaptée ({phase_label})",
                 value={
                     "expected": phase_compatible,
-                    "current": candidate.get("current_phase"),
+                    "current": current_phase if current_phase is not None else candidate.get("current_phase"),
                     "matched": bool(candidate.get("phase_match")),
                 },
                 hint="La phase dominante du gazon influence la pertinence du produit.",
@@ -867,7 +871,7 @@ def _constraints_for_candidate(
                 label=f"Mois compatibles ({months_label})" if candidate.get("month_match") else f"Hors période idéale ({months_label})",
                 value={
                     "months": months,
-                    "current_month": candidate.get("current_month"),
+                    "current_month": current_month if current_month is not None else candidate.get("current_month"),
                     "matched": bool(candidate.get("month_match")),
                 },
                 hint="Les mois d’application aident à garder la recommandation saisonnière cohérente.",
@@ -971,7 +975,7 @@ def _constraints_for_candidate(
                 blocking=False,
             )
         )
-    elif state == "possible":
+    elif state == "preparation":
         missing_requirements.append(
             _missing_requirement_entry(
                 code="prepare_declaration",
@@ -1034,6 +1038,29 @@ def _constraints_for_candidate(
     return constraints, missing_requirements, ""
 
 
+def _apply_constraint_context(
+    constraints: list[dict[str, Any]],
+    *,
+    current_phase: str | None,
+    current_month: int | None,
+) -> list[dict[str, Any]]:
+    if not constraints:
+        return constraints
+    updated: list[dict[str, Any]] = []
+    for constraint in constraints:
+        item = dict(constraint)
+        value = item.get("value")
+        if isinstance(value, dict):
+            value = dict(value)
+            if item.get("code") == "phase_compatibility" and current_phase is not None:
+                value["current"] = current_phase
+            if item.get("code") == "application_months" and current_month is not None:
+                value["current_month"] = current_month
+            item["value"] = value
+        updated.append(item)
+    return updated
+
+
 def _ui_for_state(
     *,
     state: str,
@@ -1066,7 +1093,7 @@ def _ui_for_state(
                 else "Sélectionne ce produit pour préparer la déclaration."
             )
             action_label = "Choisir le produit"
-    elif state == "possible":
+    elif state == "preparation":
         product_name = selected_display or (candidate or {}).get("product_name")
         summary = f"À préparer : {product_name}" if product_name else "À préparer"
         hint = reason or "La prochaine intervention est à préparer."
@@ -1104,7 +1131,7 @@ def _ui_for_state(
                         )
                         + (f" Phase idéale : {phase_id}." if phase_id else "")
                     )
-                    if candidate and candidate.get("product_name") and state in {"recommended", "possible"}
+                    if candidate and candidate.get("product_name") and state in {"recommended", "preparation"}
                     else "Sélectionne un produit dans la liste pour préparer la déclaration."
                 )
             )
@@ -1333,6 +1360,13 @@ def build_intervention_recommendation(
             state="blocked",
             block_reason=block_reason or reason_text,
             selected_ready=False,
+            current_phase=phase_active,
+            current_month=today.month,
+        )
+        constraints = _apply_constraint_context(
+            constraints,
+            current_phase=phase_active,
+            current_month=today.month,
         )
         return {
             "schema_version": 3,
@@ -1437,7 +1471,7 @@ def build_intervention_recommendation(
         and best["phase_match"]
         and best["month_match"]
         and int(best["score"]) >= HIGH_SCORE_RECOMMENDATION_THRESHOLD
-        else "possible"
+        else "preparation"
     )
     if not best["due"]:
         state = "blocked"
@@ -1450,7 +1484,7 @@ def build_intervention_recommendation(
         else "Sélectionne ce produit pour préparer la déclaration."
         if state == "recommended"
         else "Le produit est disponible, mais certains critères restent moins favorables."
-        if state == "possible"
+        if state == "preparation"
         else best["blocked_reason"] or "La réapplication n'est pas encore possible."
     )
     temperature_reason = None
@@ -1463,7 +1497,7 @@ def build_intervention_recommendation(
         why_now = best["blocked_reason"]
     elif state == "recommended" and best["months_label"]:
         why_now = f"{reason} · Période recommandée: {best['months_label']}."
-    elif state == "possible":
+    elif state == "preparation":
         phase_now = str(phase_active or "").strip() or "Non disponible"
         phase_ideal = ", ".join(best["phase_compatible"][:3]) if best.get("phase_compatible") else ""
         if phase_ideal:
@@ -1475,6 +1509,13 @@ def build_intervention_recommendation(
         state=state,
         block_reason=best["blocked_reason"],
         selected_ready=selected_ready,
+        current_phase=phase_active,
+        current_month=today.month,
+    )
+    constraints = _apply_constraint_context(
+        constraints,
+        current_phase=phase_active,
+        current_month=today.month,
     )
     product = _product_details(best)
     selection = _selection_details(
@@ -1498,7 +1539,7 @@ def build_intervention_recommendation(
         "declare_intervention"
         if selected_ready and state == "recommended"
         else "select_product"
-        if state in {"recommended", "possible"}
+        if state in {"recommended", "preparation"}
         else "wait"
         if state == "blocked"
         else "add_product"

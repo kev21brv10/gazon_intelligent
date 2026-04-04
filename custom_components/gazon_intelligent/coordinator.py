@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import asyncio
 import logging
 from typing import Any
+from uuid import uuid4
 
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.config_entries import ConfigEntry
@@ -13,6 +14,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import async_call_later, async_track_state_change_event, async_track_time_interval
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
 
 from .const import (
     DOMAIN,
@@ -45,6 +47,7 @@ from .gazon_brain import GazonBrain
 from .memory import compute_application_state
 from .water import compute_recent_watering_mm
 from .weather_adapter import WeatherAdapter
+from .watering_plan import WateringPlan, build_watering_plan, normalize_existing_plan
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -84,6 +87,13 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._watering_session: dict[str, Any] | None = None
         self._unsub_watering_session_finalize: CALLBACK_TYPE | None = None
         self._zone_tracking_suspended = 0
+        self._irrigation_launch_lock = asyncio.Lock()
+        self._runtime_state: dict[str, Any] = {
+            "active_irrigation_session": None,
+            "last_irrigation_execution": None,
+            "last_auto_irrigation_reason": None,
+            "auto_irrigation_safety_lock": False,
+        }
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Récupère et calcule les données exposées par l'intégration."""
@@ -153,7 +163,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if retour_arrosage_sensor is not None and retour_arrosage_sensor > 0:
             retour_arrosage = retour_arrosage_sensor
         else:
-            retour_arrosage_today = compute_recent_watering_mm(self.history, today=date.today(), days=0)
+            retour_arrosage_today = compute_recent_watering_mm(self.history, today=dt_util.now().date(), days=0)
             retour_arrosage = retour_arrosage_today if retour_arrosage_today > 0 else None
         type_sol = self._get_conf(CONF_TYPE_SOL) or DEFAULT_TYPE_SOL
         hauteur_min_tondeuse_cm = self._get_float_conf(
@@ -165,7 +175,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             DEFAULT_HAUTEUR_MAX_TONDEUSE_CM,
         )
         snapshot = self.brain.compute_snapshot(
-            today=date.today(),
+            today=dt_util.now().date(),
             temperature=temperature,
             forecast_temperature_today=forecast_temperature_today,
             temperature_source=temperature_source,
@@ -190,7 +200,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         _LOGGER.debug("Gazon Intelligent V2 observability: %s", self._build_observability_payload(snapshot))
         await self._async_save_state()
-        self._maybe_schedule_auto_irrigation(snapshot)
+        maybe_schedule = self._maybe_schedule_auto_irrigation(snapshot)
+        if asyncio.iscoroutine(maybe_schedule):
+            await maybe_schedule
 
         return {
             "mode": snapshot["mode"],
@@ -563,6 +575,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._unsub_zone_listeners = [
             async_track_state_change_event(self.hass, zone_ids, self._handle_zone_state_change)
         ]
+        await self._restore_active_irrigation_session()
         self._rebuild_watering_session_from_current_state()
 
     def _source_entity_ids(self) -> list[str]:
@@ -626,7 +639,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         snapshot = dict(self.data) if isinstance(self.data, dict) else {}
         if not snapshot:
             return
-        self._maybe_schedule_auto_irrigation(snapshot)
+        maybe_schedule = self._maybe_schedule_auto_irrigation(snapshot)
+        if asyncio.iscoroutine(maybe_schedule):
+            await maybe_schedule
 
     @callback
     def _handle_source_state_change(self, event: Event) -> None:
@@ -828,60 +843,10 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if plan_state is None:
             return None
         attributes = plan_state.attributes if isinstance(plan_state.attributes, dict) else {}
-        zones = attributes.get("zones")
-        if not isinstance(zones, list) or not zones:
+        plan = normalize_existing_plan(attributes)
+        if plan is None:
             return None
-
-        try:
-            passages = max(1, int(attributes.get("passages", 1)))
-        except (TypeError, ValueError):
-            passages = 1
-        try:
-            pause_minutes = max(0, int(attributes.get("pause_between_passages_minutes", 0)))
-        except (TypeError, ValueError):
-            pause_minutes = 0
-
-        normalized_zones: list[dict[str, Any]] = []
-        for zone in zones:
-            if not isinstance(zone, dict):
-                continue
-            entity_id = str(zone.get("zone") or zone.get("entity_id") or "").strip()
-            if not entity_id:
-                continue
-            duration_seconds = zone.get("duration_seconds")
-            if duration_seconds is None:
-                duration_min = zone.get("duration_min")
-                try:
-                    duration_seconds = float(duration_min) * 60.0 if duration_min is not None else None
-                except (TypeError, ValueError):
-                    duration_seconds = None
-            try:
-                duration_seconds = float(duration_seconds)
-            except (TypeError, ValueError):
-                continue
-            if duration_seconds <= 0:
-                continue
-            normalized_zones.append(
-                {
-                    "zone": entity_id,
-                    "entity_id": entity_id,
-                    "rate_mm_h": zone.get("rate_mm_h"),
-                    "duration_seconds": duration_seconds,
-                    "duration_min": zone.get("duration_min"),
-                    "mm": zone.get("mm"),
-                }
-            )
-
-        if not normalized_zones:
-            return None
-
-        return {
-            "objective_mm": attributes.get("objective_mm"),
-            "total_duration_min": attributes.get("total_duration_min"),
-            "zones": normalized_zones,
-            "passages": passages,
-            "pause_between_passages_minutes": pause_minutes,
-        }
+        return plan.as_dict()
 
     def _plan_type_for_zone_count(self, zone_count: int) -> str:
         if zone_count <= 0:
@@ -896,67 +861,17 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         plan: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if isinstance(plan, dict):
-            zones = plan.get("zones")
-            if not isinstance(zones, list):
-                zones = []
-            zone_count = plan.get("zone_count")
-            try:
-                zone_count = int(zone_count) if zone_count is not None else len(zones)
-            except (TypeError, ValueError):
-                zone_count = len(zones)
-            passages = plan.get("passages", 1)
-            try:
-                passages = max(1, int(passages))
-            except (TypeError, ValueError):
-                passages = 1
-            summary = dict(plan)
-            summary["zone_count"] = zone_count
-            summary["passages"] = passages
-            summary["fractionation"] = passages > 1
-            summary["plan_type"] = self._plan_type_for_zone_count(zone_count)
-            return summary
+            normalized = normalize_existing_plan(plan)
+            if normalized is not None:
+                return normalized.as_dict()
 
-        objective = float(
-            objectif_mm if objectif_mm is not None else self.data.get("objectif_mm") or 0.0
-        )
-        passages = self.data.get("watering_passages") or 1
-        pause_minutes = self.data.get("watering_pause_minutes") or 0
-        try:
-            passages = max(1, int(passages))
-        except (TypeError, ValueError):
-            passages = 1
-        try:
-            pause_minutes = max(0, int(pause_minutes))
-        except (TypeError, ValueError):
-            pause_minutes = 0
-
-        zones: list[dict[str, Any]] = []
-        max_minutes = 0.0
-        min_minutes = 99999.0
-        if objective > 0:
-            for entity_id, rate_mm_min in self._iter_zones_with_rate():
-                rate_mm_h = rate_mm_min * 60.0
-                if rate_mm_h <= 0:
-                    continue
-                duration_min = (objective / rate_mm_h) * 60.0
-                if duration_min <= 0:
-                    continue
-                rounded_duration = max(0.5, round(duration_min * 2.0) / 2.0)
-                rounded_duration = min(rounded_duration, 180.0)
-                max_minutes = max(max_minutes, rounded_duration)
-                min_minutes = min(min_minutes, rounded_duration)
-                zones.append(
-                    {
-                        "zone": entity_id,
-                        "entity_id": entity_id,
-                        "rate_mm_h": round(rate_mm_h, 1),
-                        "objectif_mm": round(objective, 1),
-                        "duration_min": round(rounded_duration, 1),
-                        "duration_seconds": int(round(rounded_duration * 60.0)),
-                    }
-                )
-
-        if not zones or objective <= 0:
+        canonical = self._get_canonical_watering_plan(objectif_mm=objectif_mm)
+        if canonical is None:
+            objective = float(
+                objectif_mm if objectif_mm is not None else self.data.get("objectif_mm") or 0.0
+            )
+            passages = self.data.get("watering_passages") or 1
+            pause_minutes = self.data.get("watering_pause_minutes") or 0
             return {
                 "objective_mm": round(max(0.0, objective), 1),
                 "zones": [],
@@ -970,21 +885,14 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "source": "no_plan",
                 "plan_type": "no_plan",
             }
-
-        total_duration_min = round(sum(float(zone["duration_min"]) for zone in zones), 1)
-        return {
-            "objective_mm": round(objective, 1),
-            "zones": zones,
-            "zone_count": len(zones),
-            "total_duration_min": total_duration_min,
-            "min_duration_min": round(min_minutes, 1),
-            "max_duration_min": round(max_minutes, 1),
-            "fractionation": passages > 1,
-            "passages": passages,
-            "pause_between_passages_minutes": pause_minutes,
-            "source": "calculated_from_objective",
-            "plan_type": self._plan_type_for_zone_count(len(zones)),
-        }
+        summary = canonical.as_dict()
+        summary["min_duration_min"] = round(
+            min(zone.duration_s for zone in canonical.zones) / 60.0, 1
+        ) if canonical.zones else 0.0
+        summary["max_duration_min"] = round(
+            max(zone.duration_s for zone in canonical.zones) / 60.0, 1
+        ) if canonical.zones else 0.0
+        return summary
 
     def _plan_arrosage_entity_id(self) -> str:
         """Résout l'entité du plan d'arrosage courant."""
@@ -1045,6 +953,158 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             parsed = parsed.replace(tzinfo=timezone.utc)
         return parsed.astimezone(timezone.utc)
 
+    def _new_runtime_id(self, prefix: str) -> str:
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        return f"{prefix}_{timestamp}_{uuid4().hex[:8]}"
+
+    def _ensure_irrigation_runtime_bootstrap(self) -> None:
+        if not hasattr(self, "_irrigation_launch_lock"):
+            self._irrigation_launch_lock = None
+        if self._irrigation_launch_lock is None:
+            try:
+                self._irrigation_launch_lock = asyncio.Lock()
+            except RuntimeError:
+                self._irrigation_launch_lock = None
+        runtime_state = getattr(self, "_runtime_state", None)
+        if not isinstance(runtime_state, dict):
+            self._runtime_state = {
+                "active_irrigation_session": None,
+                "last_irrigation_execution": None,
+                "last_auto_irrigation_reason": None,
+                "auto_irrigation_safety_lock": False,
+            }
+            return
+        runtime_state.setdefault("active_irrigation_session", None)
+        runtime_state.setdefault("last_irrigation_execution", None)
+        runtime_state.setdefault("last_auto_irrigation_reason", None)
+        runtime_state.setdefault("auto_irrigation_safety_lock", False)
+
+    def _serialize_runtime_value(self, value: Any) -> Any:
+        if isinstance(value, datetime):
+            return value.astimezone(timezone.utc).isoformat()
+        if isinstance(value, date):
+            return value.isoformat()
+        if isinstance(value, dict):
+            return {key: self._serialize_runtime_value(val) for key, val in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self._serialize_runtime_value(item) for item in value]
+        return value
+
+    def _deserialize_active_irrigation_session(self, payload: Any) -> dict[str, Any] | None:
+        if not isinstance(payload, dict):
+            return None
+        session = dict(payload)
+        for key in ("started_at", "paused_until", "last_update", "ended_at"):
+            if key in session:
+                session[key] = self._parse_datetime_value(session.get(key))
+        return session
+
+    def _get_active_irrigation_session(self) -> dict[str, Any] | None:
+        GazonIntelligentCoordinator._ensure_irrigation_runtime_bootstrap(self)
+        session = self._runtime_state.get("active_irrigation_session")
+        return session if isinstance(session, dict) else None
+
+    def _set_active_irrigation_session(self, session: dict[str, Any] | None) -> None:
+        GazonIntelligentCoordinator._ensure_irrigation_runtime_bootstrap(self)
+        self._runtime_state["active_irrigation_session"] = session if isinstance(session, dict) else None
+
+    def _set_last_irrigation_execution(self, execution: dict[str, Any] | None) -> None:
+        GazonIntelligentCoordinator._ensure_irrigation_runtime_bootstrap(self)
+        self._runtime_state["last_irrigation_execution"] = execution if isinstance(execution, dict) else None
+
+    def _set_last_auto_irrigation_reason(self, reason: str | None) -> None:
+        GazonIntelligentCoordinator._ensure_irrigation_runtime_bootstrap(self)
+        if reason is None:
+            self._runtime_state["last_auto_irrigation_reason"] = None
+            return
+        self._runtime_state["last_auto_irrigation_reason"] = {
+            "reason": str(reason),
+            "recorded_at": datetime.now(timezone.utc),
+        }
+
+    def _auto_irrigation_safety_lock_active(self) -> bool:
+        GazonIntelligentCoordinator._ensure_irrigation_runtime_bootstrap(self)
+        return bool(self._runtime_state.get("auto_irrigation_safety_lock"))
+
+    async def _persist_runtime_state(self) -> None:
+        save_state = getattr(self, "_async_save_state", None)
+        if callable(save_state):
+            await save_state()
+
+    async def _set_irrigation_safety_lock(self, error: str, failed_zone: str | None = None) -> None:
+        self._runtime_state["auto_irrigation_safety_lock"] = True
+        execution = self._runtime_state.get("last_irrigation_execution")
+        if not isinstance(execution, dict):
+            execution = {}
+        execution["last_error"] = str(error)
+        if failed_zone:
+            execution["last_failed_zone"] = str(failed_zone)
+        execution["auto_irrigation_safety_lock"] = True
+        self._set_last_irrigation_execution(execution)
+        await self._persist_runtime_state()
+
+    def _emit_irrigation_event(self, event_name: str, payload: dict[str, Any]) -> None:
+        hass = getattr(self, "hass", None)
+        bus = getattr(hass, "bus", None)
+        async_fire = getattr(bus, "async_fire", None)
+        if callable(async_fire):
+            async_fire(event_name, payload)
+
+    def _build_runtime_payload_for_event(self, session: dict[str, Any] | None, **extra: Any) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        if isinstance(session, dict):
+            for key in ("session_id", "run_id", "source", "strategy", "status", "current_passage"):
+                value = session.get(key)
+                if value not in (None, "", [], {}):
+                    payload[key] = value
+        for key, value in extra.items():
+            if value not in (None, "", [], {}):
+                payload[key] = self._serialize_runtime_value(value)
+        return payload
+
+    def _get_canonical_watering_plan(
+        self,
+        *,
+        objectif_mm: float | None = None,
+        plan_arrosage_entity_id: str | None = None,
+    ) -> WateringPlan | None:
+        if plan_arrosage_entity_id:
+            hass = getattr(self, "hass", None)
+            states = getattr(hass, "states", None)
+            plan_state = states.get(plan_arrosage_entity_id) if states is not None else None
+            attrs = plan_state.attributes if plan_state is not None and isinstance(plan_state.attributes, dict) else {}
+            normalized = normalize_existing_plan(attrs)
+            if normalized is not None:
+                return normalized
+
+        try:
+            objective = float(
+                objectif_mm if objectif_mm is not None else self.data.get("objectif_mm", 0.0)
+            )
+        except (TypeError, ValueError):
+            objective = 0.0
+        if objective <= 0:
+            return None
+        zones_cfg = [(entity_id, rate_mm_min * 60.0) for entity_id, rate_mm_min in self._iter_zones_with_rate()]
+        if not zones_cfg:
+            return None
+        passages = self.data.get("watering_passages") if isinstance(self.data, dict) else 1
+        pause_minutes = self.data.get("watering_pause_minutes") if isinstance(self.data, dict) else 0
+        try:
+            passages = max(1, int(passages or 1))
+        except (TypeError, ValueError):
+            passages = 1
+        try:
+            pause_minutes = max(0, int(pause_minutes or 0))
+        except (TypeError, ValueError):
+            pause_minutes = 0
+        return build_watering_plan(
+            objective,
+            zones_cfg,
+            passages=passages,
+            pause_minutes=pause_minutes,
+        )
+
     def _recent_watering_block_active(self, objective_mm: float | None = None) -> bool:
         objective = float(objective_mm or 0.0)
         if objective <= 0:
@@ -1080,6 +1140,13 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return False
 
     def _watering_session_active(self) -> bool:
+        runtime_session = self._get_active_irrigation_session()
+        if isinstance(runtime_session, dict) and runtime_session.get("status") in {
+            "running",
+            "paused",
+            "recovery_required",
+        }:
+            return True
         session = getattr(self, "_watering_session", None)
         if isinstance(session, dict):
             active_zones = session.get("active_zones")
@@ -1101,6 +1168,8 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return False
 
     def _should_launch_auto_irrigation(self, snapshot: dict[str, Any]) -> tuple[bool, str]:
+        if self._auto_irrigation_safety_lock_active():
+            return False, "safety_lock"
         if not self.auto_irrigation_enabled:
             return False, "auto_irrigation_disabled"
 
@@ -1118,14 +1187,14 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return False, "watering_in_progress"
 
         target_date = str(snapshot.get("watering_target_date") or "").strip()
-        today_str = date.today().isoformat()
+        today_str = dt_util.now().date().isoformat()
         if target_date and today_str < target_date:
             return False, "target_date_future"
 
         if self._recent_watering_block_active(objectif_mm):
             return False, "recent_watering"
 
-        current = datetime.now().astimezone()
+        current = dt_util.now()
         current_minutes = current.hour * 60 + current.minute
         window_start = int(snapshot.get("watering_window_start_minute") or 0)
         window_end = int(snapshot.get("watering_window_end_minute") or 0)
@@ -1143,71 +1212,87 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         return True, "ready"
 
-    def _maybe_schedule_auto_irrigation(self, snapshot: dict[str, Any]) -> None:
-        auto_task = getattr(self, "_auto_irrigation_task", None)
-        scheduler_task = getattr(self, "_auto_irrigation_scheduler_task", None)
-        if auto_task and not auto_task.done():
-            return
-        if scheduler_task and not scheduler_task.done():
-            return
-
-        should_launch, _reason = self._should_launch_auto_irrigation(snapshot)
-        if not should_launch:
-            return
-
-        plan_entity_id = self._plan_arrosage_entity_id()
-        plan = self._build_watering_plan_from_state(plan_entity_id)
-        objectif_mm = None
-        if plan is None:
-            try:
-                objectif_mm = float(snapshot.get("objectif_mm") or 0.0)
-            except (TypeError, ValueError):
-                objectif_mm = 0.0
-            if objectif_mm <= 0:
+    async def _maybe_schedule_auto_irrigation(self, snapshot: dict[str, Any]) -> None:
+        GazonIntelligentCoordinator._ensure_irrigation_runtime_bootstrap(self)
+        if self._irrigation_launch_lock is None:
+            self._irrigation_launch_lock = asyncio.Lock()
+        async with self._irrigation_launch_lock:
+            auto_task = getattr(self, "_auto_irrigation_task", None)
+            scheduler_task = getattr(self, "_auto_irrigation_scheduler_task", None)
+            if auto_task and not auto_task.done():
                 return
-            plan_feedback = self._build_watering_plan_summary_for_user_action(objectif_mm=objectif_mm)
-        else:
-            plan_feedback = self._build_watering_plan_summary_for_user_action(plan=plan)
+            if scheduler_task and not scheduler_task.done():
+                return
 
-        async def _runner() -> None:
-            await self.async_record_user_action(
-                action="Arrosage automatique",
-                state="en_attente",
-                reason="Arrosage automatique lancé, attente de la fin de la séquence.",
-                plan_type=str(plan_feedback.get("plan_type") or "no_plan"),
-                zone_count=int(plan_feedback.get("zone_count") or 0),
-                passages=int(plan_feedback.get("passages") or 1),
-            )
-            try:
-                await self.async_start_auto_irrigation(
-                    objectif_mm,
-                    plan_entity_id if plan is not None else None,
-                    source="auto_irrigation",
-                    user_action_context={
-                        "action": "Arrosage automatique",
-                        "success_reason": "Arrosage automatique exécuté avec succès.",
-                        "plan_type": str(plan_feedback.get("plan_type") or "no_plan"),
-                        "zone_count": int(plan_feedback.get("zone_count") or 0),
-                        "passages": int(plan_feedback.get("passages") or 1),
+            should_launch, reason = self._should_launch_auto_irrigation(snapshot)
+            self._set_last_auto_irrigation_reason(reason)
+            if not should_launch:
+                await self._persist_runtime_state()
+                return
+
+            plan_entity_id = self._plan_arrosage_entity_id()
+            plan = self._get_canonical_watering_plan(plan_arrosage_entity_id=plan_entity_id)
+            objectif_mm = None
+            if plan is None:
+                try:
+                    objectif_mm = float(snapshot.get("objectif_mm") or 0.0)
+                except (TypeError, ValueError):
+                    objectif_mm = 0.0
+                plan = self._get_canonical_watering_plan(objectif_mm=objectif_mm)
+            if plan is None:
+                self._set_last_auto_irrigation_reason("no_plan_available")
+                await self._persist_runtime_state()
+                return
+            plan_feedback = plan.as_dict()
+
+            async def _runner() -> None:
+                self._emit_irrigation_event(
+                    "gazon_intelligent_auto_irrigation_scheduled",
+                    {
+                        "reason": "ready",
+                        "plan_type": plan.plan_type,
+                        "zone_count": len(plan.zones),
+                        "passages": plan.passage_count,
                     },
                 )
-            except HomeAssistantError as err:
                 await self.async_record_user_action(
                     action="Arrosage automatique",
-                    state="refuse",
-                    reason=str(err),
+                    state="en_attente",
+                    reason="Arrosage automatique lancé, attente de la fin de la séquence.",
                     plan_type=str(plan_feedback.get("plan_type") or "no_plan"),
                     zone_count=int(plan_feedback.get("zone_count") or 0),
                     passages=int(plan_feedback.get("passages") or 1),
                 )
-                _LOGGER.debug("Arrosage automatique ignoré: %s", err)
-            finally:
-                self._auto_irrigation_scheduler_task = None
+                try:
+                    await self.async_start_auto_irrigation(
+                        objectif_mm,
+                        plan_entity_id if plan_entity_id else None,
+                        source="auto_irrigation",
+                        user_action_context={
+                            "action": "Arrosage automatique",
+                            "success_reason": "Arrosage automatique exécuté avec succès.",
+                            "plan_type": str(plan_feedback.get("plan_type") or "no_plan"),
+                            "zone_count": int(plan_feedback.get("zone_count") or 0),
+                            "passages": int(plan_feedback.get("passages") or 1),
+                        },
+                    )
+                except HomeAssistantError as err:
+                    await self.async_record_user_action(
+                        action="Arrosage automatique",
+                        state="refuse",
+                        reason=str(err),
+                        plan_type=str(plan_feedback.get("plan_type") or "no_plan"),
+                        zone_count=int(plan_feedback.get("zone_count") or 0),
+                        passages=int(plan_feedback.get("passages") or 1),
+                    )
+                    _LOGGER.debug("Arrosage automatique ignoré: %s", err)
+                finally:
+                    self._auto_irrigation_scheduler_task = None
 
-        self._auto_irrigation_scheduler_task = self.hass.async_create_task(
-            _runner(),
-            "gazon_intelligent_auto_irrigation_scheduler",
-        )
+            self._auto_irrigation_scheduler_task = self.hass.async_create_task(
+                _runner(),
+                "gazon_intelligent_auto_irrigation_scheduler",
+            )
 
     def _track_watering_zone_on(self, entity_id: str, changed_at: datetime) -> None:
         self._ensure_watering_session(changed_at)
@@ -1774,6 +1859,410 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except (TypeError, ValueError):
             return 0.0
 
+    def _build_pending_zone_segments(self, plan: WateringPlan) -> list[dict[str, Any]]:
+        pending: list[dict[str, Any]] = []
+        for passage in range(1, plan.passage_count + 1):
+            for zone_index, zone in enumerate(plan.zones):
+                pending.append(
+                    {
+                        "passage": passage,
+                        "zone_index": zone_index,
+                        "zone": zone.zone,
+                        "duration_s": zone.duration_s,
+                        "mm": round(zone.mm, 1),
+                    }
+                )
+        return pending
+
+    def _build_zone_execution_record(
+        self,
+        *,
+        zone,
+        passage: int,
+        order: int,
+    ) -> dict[str, Any]:
+        return {
+            "order": order,
+            "passage": passage,
+            "zone": zone.zone,
+            "entity_id": zone.zone,
+            "rate_mm_h": round(zone.rate_mm_h, 1),
+            "duration_s": int(zone.duration_s),
+            "duration_seconds": int(zone.duration_s),
+            "duration_min": round(zone.duration_s / 60.0, 1),
+            "mm": round(zone.mm, 1),
+        }
+
+    def _build_active_irrigation_session(
+        self,
+        *,
+        plan: WateringPlan,
+        source: str,
+        strategy: str,
+        run_id: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        now = datetime.now(timezone.utc)
+        return {
+            "session_id": session_id or self._new_runtime_id("sess"),
+            "run_id": run_id or self._new_runtime_id("irrig"),
+            "source": source,
+            "strategy": strategy,
+            "status": "running",
+            "target_mm": round(plan.objective_mm, 1),
+            "plan": plan.as_runtime_dict(),
+            "passage_count": plan.passage_count,
+            "current_passage": 1,
+            "current_zone_index": 0,
+            "current_zone": None,
+            "active_zones": [],
+            "zones_done": [],
+            "zones_failed": [],
+            "zones_pending": self._build_pending_zone_segments(plan),
+            "planned_total_seconds": float(plan.total_duration_s),
+            "started_at": now,
+            "last_activity_at": now,
+            "paused_until": None,
+            "last_update": now,
+            "last_error": None,
+        }
+
+    def _persist_execution_snapshot(
+        self,
+        session: dict[str, Any],
+        *,
+        status: str,
+        error: str | None = None,
+    ) -> None:
+        ended_at = datetime.now(timezone.utc)
+        execution = {
+            "session_id": session.get("session_id"),
+            "run_id": session.get("run_id"),
+            "source": session.get("source"),
+            "strategy": session.get("strategy"),
+            "target_mm": session.get("target_mm"),
+            "status": status,
+            "zones_done": list(session.get("zones_done") or []),
+            "zones_failed": list(session.get("zones_failed") or []),
+            "started_at": session.get("started_at"),
+            "ended_at": ended_at,
+            "last_error": error or session.get("last_error"),
+        }
+        self._set_last_irrigation_execution(execution)
+
+    async def _safe_turn_off_zone(self, entity_id: str, session: dict[str, Any]) -> None:
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                await asyncio.shield(
+                    self.hass.services.async_call(
+                        "switch",
+                        "turn_off",
+                        {"entity_id": entity_id},
+                        blocking=True,
+                    )
+                )
+                return
+            except Exception as err:  # pragma: no cover - safety path
+                last_error = err
+                if attempt < 2:
+                    await asyncio.sleep(0.2)
+        message = f"Echec arrêt zone {entity_id}: {last_error}"
+        session["status"] = "failed"
+        session["last_error"] = message
+        session["active_zones"] = []
+        session["last_update"] = datetime.now(timezone.utc)
+        session["last_activity_at"] = session["last_update"]
+        session.setdefault("zones_failed", []).append(
+            {
+                "passage": session.get("current_passage"),
+                "zone_index": session.get("current_zone_index"),
+                "zone": entity_id,
+                "status": "shutdown_uncertain",
+                "error": message,
+            }
+        )
+        self._persist_execution_snapshot(session, status="failed", error=message)
+        await self._set_irrigation_safety_lock(message, entity_id)
+        self._emit_irrigation_event(
+            "gazon_intelligent_auto_irrigation_failed",
+            self._build_runtime_payload_for_event(
+                session,
+                failed_zone=entity_id,
+                error=message,
+                shutdown_uncertain=True,
+            ),
+        )
+        raise HomeAssistantError(message)
+
+    async def _execute_canonical_watering_plan(
+        self,
+        *,
+        plan: WateringPlan,
+        source: str,
+        strategy: str,
+        user_action_context: dict[str, Any] | None = None,
+        session: dict[str, Any] | None = None,
+    ) -> None:
+        user_action_context = dict(user_action_context or {})
+        runtime_session = session or self._build_active_irrigation_session(
+            plan=plan,
+            source=source,
+            strategy=strategy,
+        )
+        runtime_session["planned_total_seconds"] = float(plan.total_duration_s)
+        runtime_session.setdefault("last_activity_at", runtime_session.get("started_at"))
+        self._set_active_irrigation_session(runtime_session)
+        await self._persist_runtime_state()
+        self._emit_irrigation_event(
+            "gazon_intelligent_auto_irrigation_started",
+            self._build_runtime_payload_for_event(runtime_session, target_mm=plan.objective_mm),
+        )
+        error_reason: str | None = None
+        cancelled = False
+        executed_zones: list[dict[str, Any]] = list(runtime_session.get("zones_done") or [])
+        try:
+            start_passage = max(1, int(runtime_session.get("current_passage") or 1))
+            start_zone_index = max(0, int(runtime_session.get("current_zone_index") or 0))
+            for passage in range(start_passage, plan.passage_count + 1):
+                runtime_session["status"] = "running"
+                runtime_session["current_passage"] = passage
+                if passage != start_passage:
+                    start_zone_index = 0
+                for zone_index, zone in enumerate(plan.zones[start_zone_index:], start=start_zone_index):
+                    runtime_session["current_zone_index"] = zone_index
+                    runtime_session["current_zone"] = zone.zone
+                    runtime_session["active_zones"] = [zone.zone]
+                    runtime_session["last_update"] = datetime.now(timezone.utc)
+                    runtime_session["last_activity_at"] = runtime_session["last_update"]
+                    await self._persist_runtime_state()
+                    self._emit_irrigation_event(
+                        "gazon_intelligent_auto_irrigation_zone_started",
+                        self._build_runtime_payload_for_event(
+                            runtime_session,
+                            zone=zone.zone,
+                            duration_s=zone.duration_s,
+                        ),
+                    )
+                    try:
+                        await self.hass.services.async_call(
+                            "switch",
+                            "turn_on",
+                            {"entity_id": zone.zone},
+                            blocking=True,
+                        )
+                    except Exception as err:
+                        message = f"Echec démarrage zone {zone.zone}: {err}"
+                        runtime_session["status"] = "failed"
+                        runtime_session["last_error"] = message
+                        runtime_session["last_update"] = datetime.now(timezone.utc)
+                        runtime_session["last_activity_at"] = runtime_session["last_update"]
+                        runtime_session.setdefault("zones_failed", []).append(
+                            {
+                                "passage": passage,
+                                "zone_index": zone_index,
+                                "zone": zone.zone,
+                                "status": "turn_on_failed",
+                                "error": message,
+                            }
+                        )
+                        await self._persist_runtime_state()
+                        raise HomeAssistantError(message) from err
+
+                    try:
+                        await asyncio.sleep(zone.duration_s)
+                    finally:
+                        await self._safe_turn_off_zone(zone.zone, runtime_session)
+
+                    record = self._build_zone_execution_record(
+                        zone=zone,
+                        passage=passage,
+                        order=len(executed_zones) + 1,
+                    )
+                    executed_zones.append(record)
+                    runtime_session["zones_done"] = executed_zones
+                    runtime_session["zones_pending"] = [
+                        pending
+                        for pending in runtime_session.get("zones_pending", [])
+                        if not (
+                            int(pending.get("passage") or 0) == passage
+                            and int(pending.get("zone_index") or -1) == zone_index
+                        )
+                    ]
+                    runtime_session["active_zones"] = []
+                    runtime_session["current_zone"] = None
+                    runtime_session["current_zone_index"] = zone_index + 1
+                    runtime_session["last_update"] = datetime.now(timezone.utc)
+                    runtime_session["last_activity_at"] = runtime_session["last_update"]
+                    await self._persist_runtime_state()
+                    self._emit_irrigation_event(
+                        "gazon_intelligent_auto_irrigation_zone_finished",
+                        self._build_runtime_payload_for_event(
+                            runtime_session,
+                            zone=zone.zone,
+                            duration_s=zone.duration_s,
+                            mm=zone.mm,
+                        ),
+                    )
+
+                if passage < plan.passage_count and plan.pause_between_passages_s > 0:
+                    runtime_session["status"] = "paused"
+                    runtime_session["current_passage"] = passage + 1
+                    runtime_session["current_zone_index"] = 0
+                    runtime_session["paused_until"] = datetime.now(timezone.utc) + timedelta(
+                        seconds=plan.pause_between_passages_s
+                    )
+                    runtime_session["last_update"] = datetime.now(timezone.utc)
+                    runtime_session["last_activity_at"] = runtime_session["last_update"]
+                    await self._persist_runtime_state()
+                    await asyncio.sleep(plan.pause_between_passages_s)
+                    runtime_session["status"] = "running"
+                    runtime_session["paused_until"] = None
+                    runtime_session["last_update"] = datetime.now(timezone.utc)
+                    runtime_session["last_activity_at"] = runtime_session["last_update"]
+                    await self._persist_runtime_state()
+
+            total_mm = round(sum(float(zone.get("mm") or 0.0) for zone in executed_zones), 1)
+            await self.async_record_watering(
+                dt_util.now().date(),
+                objectif_mm=plan.objective_mm,
+                total_mm=total_mm,
+                zones=executed_zones,
+                source=source,
+            )
+            self._persist_execution_snapshot(runtime_session, status="completed")
+            self._emit_irrigation_event(
+                "gazon_intelligent_auto_irrigation_completed",
+                self._build_runtime_payload_for_event(runtime_session, total_mm=total_mm),
+            )
+            if user_action_context:
+                await self.async_record_user_action(
+                    action=str(user_action_context.get("action")),
+                    state="ok",
+                    reason=str(user_action_context.get("success_reason") or "Arrosage terminé avec succès."),
+                    plan_type=user_action_context.get("plan_type"),
+                    zone_count=user_action_context.get("zone_count"),
+                    passages=user_action_context.get("passages"),
+                )
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
+        except HomeAssistantError as err:
+            error_reason = str(err)
+            runtime_session["status"] = "failed"
+            runtime_session["last_error"] = error_reason
+            runtime_session["active_zones"] = []
+            runtime_session["last_update"] = datetime.now(timezone.utc)
+            runtime_session["last_activity_at"] = runtime_session["last_update"]
+            self._persist_execution_snapshot(runtime_session, status="failed", error=error_reason)
+            await self._persist_runtime_state()
+            self._emit_irrigation_event(
+                "gazon_intelligent_auto_irrigation_failed",
+                self._build_runtime_payload_for_event(runtime_session, error=error_reason),
+            )
+            if user_action_context:
+                await self.async_record_user_action(
+                    action=str(user_action_context.get("action")),
+                    state="refuse",
+                    reason=error_reason,
+                    plan_type=user_action_context.get("plan_type"),
+                    zone_count=user_action_context.get("zone_count"),
+                    passages=user_action_context.get("passages"),
+                )
+        except Exception as err:  # pragma: no cover - best effort cleanup
+            error_reason = str(err)
+            runtime_session["status"] = "failed"
+            runtime_session["last_error"] = error_reason
+            runtime_session["active_zones"] = []
+            runtime_session["last_update"] = datetime.now(timezone.utc)
+            runtime_session["last_activity_at"] = runtime_session["last_update"]
+            self._persist_execution_snapshot(runtime_session, status="failed", error=error_reason)
+            await self._persist_runtime_state()
+            self._emit_irrigation_event(
+                "gazon_intelligent_auto_irrigation_failed",
+                self._build_runtime_payload_for_event(runtime_session, error=error_reason),
+            )
+            _LOGGER.exception("Echec arrosage automatique (%s)", source)
+            if user_action_context:
+                await self.async_record_user_action(
+                    action=str(user_action_context.get("action")),
+                    state="refuse",
+                    reason=error_reason,
+                    plan_type=user_action_context.get("plan_type"),
+                    zone_count=user_action_context.get("zone_count"),
+                    passages=user_action_context.get("passages"),
+                )
+        finally:
+            self._auto_irrigation_task = None
+            if not cancelled:
+                self._set_active_irrigation_session(None)
+                await self._persist_runtime_state()
+
+    async def _resume_active_irrigation_session(self, session: dict[str, Any]) -> None:
+        plan = normalize_existing_plan(session.get("plan"))
+        if plan is None:
+            session["status"] = "failed"
+            session["last_error"] = "Plan persistant invalide."
+            self._persist_execution_snapshot(session, status="failed", error=session["last_error"])
+            self._set_active_irrigation_session(None)
+            await self._persist_runtime_state()
+            return
+
+        if session.get("status") == "paused":
+            paused_until = session.get("paused_until")
+            if isinstance(paused_until, datetime):
+                delay = max(0.0, (paused_until - datetime.now(timezone.utc)).total_seconds())
+                if delay > 0:
+                    await asyncio.sleep(delay)
+            session["status"] = "running"
+            session["paused_until"] = None
+            session["last_update"] = datetime.now(timezone.utc)
+            session["last_activity_at"] = session["last_update"]
+            await self._persist_runtime_state()
+        elif session.get("status") == "running" and session.get("current_zone"):
+            current_zone = str(session.get("current_zone"))
+            try:
+                await self._safe_turn_off_zone(current_zone, session)
+            except HomeAssistantError:
+                return
+            session.setdefault("zones_failed", []).append(
+                {
+                    "passage": session.get("current_passage"),
+                    "zone_index": session.get("current_zone_index"),
+                    "zone": current_zone,
+                    "status": "aborted",
+                    "error": "restart_recovery",
+                }
+            )
+            session["status"] = "recovery_required"
+            session["active_zones"] = []
+            session["current_zone"] = None
+            session["current_zone_index"] = int(session.get("current_zone_index") or 0) + 1
+            session["last_error"] = "restart_recovery"
+            session["last_update"] = datetime.now(timezone.utc)
+            session["last_activity_at"] = session["last_update"]
+            await self._persist_runtime_state()
+
+        await self._execute_canonical_watering_plan(
+            plan=plan,
+            source=str(session.get("source") or "auto_irrigation"),
+            strategy=str(session.get("strategy") or "plan"),
+            session=session,
+        )
+
+    async def _restore_active_irrigation_session(self) -> None:
+        session = self._get_active_irrigation_session()
+        if not isinstance(session, dict):
+            return
+        if self._auto_irrigation_task and not self._auto_irrigation_task.done():
+            return
+        if session.get("status") not in {"running", "paused", "recovery_required"}:
+            return
+        self._auto_irrigation_task = self.hass.async_create_task(
+            self._resume_active_irrigation_session(session),
+            "gazon_intelligent_auto_irrigation_resume",
+        )
+
     async def async_start_auto_irrigation(
         self,
         objectif_mm: float | None,
@@ -1784,270 +2273,47 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Arrose automatiquement chaque zone en séquence selon le débit renseigné."""
         source = str(source or "auto_irrigation")
         user_action_context = dict(user_action_context or {})
-        if source in AUTO_IRRIGATION_AUTO_SOURCES and not self.auto_irrigation_enabled:
-            raise HomeAssistantError("L'arrosage automatique est désactivé.")
-        if self._watering_session_active():
-            raise HomeAssistantError("Un arrosage est déjà en cours.")
-        if self._auto_irrigation_task and not self._auto_irrigation_task.done():
-            raise HomeAssistantError(
-                "Un arrosage automatique est déjà en cours."
-            )
+        GazonIntelligentCoordinator._ensure_irrigation_runtime_bootstrap(self)
+        if self._irrigation_launch_lock is None:
+            self._irrigation_launch_lock = asyncio.Lock()
+        if self._irrigation_launch_lock.locked() and source not in AUTO_IRRIGATION_AUTO_SOURCES:
+            raise HomeAssistantError("Un lancement d'arrosage est déjà en préparation.")
+        async with self._irrigation_launch_lock:
+            if source in AUTO_IRRIGATION_AUTO_SOURCES and self._auto_irrigation_safety_lock_active():
+                raise HomeAssistantError("L'arrosage automatique est verrouillé après une erreur critique.")
+            if source in AUTO_IRRIGATION_AUTO_SOURCES and not self.auto_irrigation_enabled:
+                raise HomeAssistantError("L'arrosage automatique est désactivé.")
+            if self._watering_session_active():
+                raise HomeAssistantError("Un arrosage est déjà en cours.")
+            if self._auto_irrigation_task and not self._auto_irrigation_task.done():
+                raise HomeAssistantError("Un arrosage automatique est déjà en cours.")
+            if (
+                self._auto_irrigation_scheduler_task
+                and not self._auto_irrigation_scheduler_task.done()
+                and source not in AUTO_IRRIGATION_AUTO_SOURCES
+            ):
+                raise HomeAssistantError("Un arrosage automatique est déjà programmé.")
 
-        plan = None
-        if plan_arrosage_entity_id:
-            plan = self._build_watering_plan_from_state(plan_arrosage_entity_id)
-            if plan is None:
-                raise HomeAssistantError(
-                    "Le plan d'arrosage est vide ou invalide."
-                )
-        else:
-            objectif = float(objectif_mm) if objectif_mm is not None else float(
-                self.data.get("objectif_mm", 0.0)
+            plan = self._get_canonical_watering_plan(
+                objectif_mm=objectif_mm,
+                plan_arrosage_entity_id=plan_arrosage_entity_id,
             )
-            zones = list(self._iter_zones_with_rate())
-            if not zones:
+            if plan is None:
+                if plan_arrosage_entity_id:
+                    raise HomeAssistantError("Le plan d'arrosage est vide ou invalide.")
                 raise HomeAssistantError(
                     "Aucune zone d'arrosage valide n'est configurée (zone + débit mm/h)."
                 )
-
-        async def _turn_off_zone(entity_id: str) -> None:
-            try:
-                await asyncio.shield(
-                    self.hass.services.async_call(
-                        "switch",
-                        "turn_off",
-                        {"entity_id": entity_id},
-                        blocking=True,
-                    )
-                )
-            except Exception as err:  # pragma: no cover - best effort cleanup
-                _LOGGER.debug("Echec turn_off pour %s: %s", entity_id, err)
-
-        async def _finalize_user_action(state: str, reason: str) -> None:
-            action = user_action_context.get("action")
-            if not action:
-                return
-            await self.async_record_user_action(
-                action=str(action),
-                state=state,
-                reason=reason,
-                plan_type=user_action_context.get("plan_type"),
-                zone_count=user_action_context.get("zone_count"),
-                passages=user_action_context.get("passages"),
+            strategy = "plan" if plan_arrosage_entity_id else "fallback"
+            self._auto_irrigation_task = self.hass.async_create_task(
+                self._execute_canonical_watering_plan(
+                    plan=plan,
+                    source=source,
+                    strategy=strategy,
+                    user_action_context=user_action_context,
+                ),
+                "gazon_intelligent_auto_irrigation_sequence",
             )
-
-        def _begin_watering_session(planned_total_seconds: float) -> None:
-            started_at = datetime.now(timezone.utc)
-            clear_session = getattr(self, "_clear_watering_session", None)
-            if callable(clear_session):
-                clear_session()
-            ensure_session = getattr(self, "_ensure_watering_session", None)
-            if callable(ensure_session):
-                ensure_session(started_at)
-                session = getattr(self, "_watering_session", None)
-                if isinstance(session, dict):
-                    session["started_at"] = started_at
-                    session["last_activity_at"] = started_at
-                    session["last_inactive_at"] = None
-                    session["zones"] = {}
-                    session["active_zones"] = {}
-                    session["zone_order"] = 0
-                    session["planned_total_seconds"] = max(0.0, float(planned_total_seconds or 0.0))
-                    return
-            self._watering_session = {
-                "started_at": started_at,
-                "last_activity_at": started_at,
-                "last_inactive_at": None,
-                "zones": {},
-                "active_zones": {},
-                "zone_order": 0,
-                "planned_total_seconds": max(0.0, float(planned_total_seconds or 0.0)),
-            }
-
-        async def _run_fallback_sequence():
-            session_zones: list[dict[str, Any]] = []
-            error_reason: str | None = None
-            cancelled = False
-            planned_total_seconds = 0.0
-            session_refresh_requested = False
-            for _order, (_entity_id, rate) in enumerate(zones, start=1):
-                if rate <= 0:
-                    continue
-                duration = objectif / rate
-                if duration <= 0:
-                    continue
-                planned_total_seconds += max(duration, 0.0) * 60.0
-            try:
-                _begin_watering_session(planned_total_seconds)
-                self._zone_tracking_suspended += 1
-                for order, (entity_id, rate) in enumerate(zones, start=1):
-                    if rate <= 0:
-                        continue
-                    duration = objectif / rate
-                    if duration <= 0:
-                        continue
-                    session = self._watering_session
-                    if session is not None:
-                        started_at = datetime.now(timezone.utc)
-                        session["active_zones"][entity_id] = started_at
-                        session["last_activity_at"] = started_at
-                    session["zones"][entity_id] = {
-                            "order": order,
-                            "zone": entity_id,
-                            "entity_id": entity_id,
-                            "rate_mm_h": rate * 60.0,
-                            "duration_seconds": duration * 60.0,
-                            "duration_min": duration,
-                            "mm": round(duration * rate, 1),
-                            "started_at": started_at,
-                            "ended_at": None,
-                        }
-                    if not session_refresh_requested:
-                        refresh = getattr(self, "async_request_refresh", None)
-                        if callable(refresh):
-                            await refresh()
-                        session_refresh_requested = True
-                    await self.hass.services.async_call(
-                        "switch", "turn_on", {"entity_id": entity_id}, blocking=True
-                    )
-                    try:
-                        await asyncio.sleep(max(duration, 0) * 60)
-                    finally:
-                        await _turn_off_zone(entity_id)
-                    session_zones.append(
-                        {
-                            "order": order,
-                            "zone": entity_id,
-                            "entity_id": entity_id,
-                            "rate_mm_h": rate * 60.0,
-                            "duration_min": duration,
-                            "mm": round(duration * rate, 1),
-                        }
-                    )
-            except asyncio.CancelledError:
-                cancelled = True
-                raise
-            except HomeAssistantError as err:
-                error_reason = str(err)
-                _LOGGER.debug("Echec arrosage automatique (%s): %s", source, err)
-            except Exception as err:  # pragma: no cover - best effort cleanup
-                error_reason = str(err)
-                _LOGGER.exception("Echec arrosage automatique (%s)", source)
-            finally:
-                self._zone_tracking_suspended = max(0, self._zone_tracking_suspended - 1)
-                self._auto_irrigation_task = None
-                self._clear_watering_session()
-                if session_zones:
-                    await self.async_record_watering(
-                        date.today(),
-                        objectif_mm=objectif,
-                        zones=session_zones,
-                        source=source,
-                    )
-                if user_action_context and not cancelled:
-                    if error_reason is None:
-                        await _finalize_user_action(
-                            "ok",
-                            str(user_action_context.get("success_reason") or "Arrosage terminé avec succès."),
-                        )
-                    else:
-                        await _finalize_user_action("refuse", error_reason)
-
-        async def _run_plan_sequence():
-            assert plan is not None
-            zones = list(plan["zones"])
-            passages = max(1, int(plan["passages"]))
-            pause_minutes = max(0, int(plan["pause_between_passages_minutes"]))
-            started_zones: list[str] = []
-            error_reason: str | None = None
-            cancelled = False
-            planned_total_seconds = 0.0
-            session_refresh_requested = False
-            for passage_index in range(passages):
-                for zone in zones:
-                    duration_seconds = zone.get("duration_seconds")
-                    try:
-                        duration_seconds = float(duration_seconds)
-                    except (TypeError, ValueError):
-                        continue
-                    if duration_seconds <= 0:
-                        continue
-                    planned_total_seconds += duration_seconds
-                if passage_index < passages - 1 and pause_minutes > 0:
-                    planned_total_seconds += pause_minutes * 60.0
-            try:
-                _begin_watering_session(planned_total_seconds)
-                self._zone_tracking_suspended += 1
-                for passage_index in range(passages):
-                    for zone in zones:
-                        entity_id = str(zone["zone"])
-                        duration_seconds = zone.get("duration_seconds")
-                        try:
-                            duration_seconds = float(duration_seconds)
-                        except (TypeError, ValueError):
-                            continue
-                        if duration_seconds <= 0:
-                            continue
-                        session = self._watering_session
-                        if session is not None:
-                            started_at = datetime.now(timezone.utc)
-                            session["active_zones"][entity_id] = started_at
-                            session["last_activity_at"] = started_at
-                            session["zones"][entity_id] = {
-                                "order": len(session["zones"]) + 1,
-                                "zone": entity_id,
-                                "entity_id": entity_id,
-                                "rate_mm_h": zone.get("rate_mm_h"),
-                                "duration_seconds": duration_seconds,
-                                "duration_min": zone.get("duration_min"),
-                                "mm": zone.get("mm"),
-                            "started_at": started_at,
-                            "ended_at": None,
-                        }
-                        if not session_refresh_requested:
-                            refresh = getattr(self, "async_request_refresh", None)
-                            if callable(refresh):
-                                await refresh()
-                            session_refresh_requested = True
-                        await self.hass.services.async_call(
-                            "switch", "turn_on", {"entity_id": entity_id}, blocking=True
-                        )
-                        started_zones.append(entity_id)
-                        try:
-                            await asyncio.sleep(max(1, int(round(duration_seconds / passages))))
-                        finally:
-                            await _turn_off_zone(entity_id)
-                    if passage_index < passages - 1 and pause_minutes > 0:
-                        await asyncio.sleep(pause_minutes * 60)
-            except asyncio.CancelledError:
-                cancelled = True
-                raise
-            except HomeAssistantError as err:
-                error_reason = str(err)
-                _LOGGER.debug("Echec arrosage automatique (%s): %s", source, err)
-            except Exception as err:  # pragma: no cover - best effort cleanup
-                error_reason = str(err)
-                _LOGGER.exception("Echec arrosage automatique (%s)", source)
-            finally:
-                self._zone_tracking_suspended = max(0, self._zone_tracking_suspended - 1)
-                cleanup_targets = list(dict.fromkeys(started_zones or [str(zone["zone"]) for zone in zones]))
-                for entity_id in reversed(cleanup_targets):
-                    await _turn_off_zone(entity_id)
-                self._auto_irrigation_task = None
-                self._clear_watering_session()
-                if user_action_context and not cancelled:
-                    if error_reason is None:
-                        await _finalize_user_action(
-                            "ok",
-                            str(user_action_context.get("success_reason") or "Arrosage terminé avec succès."),
-                        )
-                    else:
-                        await _finalize_user_action("refuse", error_reason)
-
-        sequence = _run_plan_sequence if plan is not None else _run_fallback_sequence
-        self._auto_irrigation_task = self.hass.async_create_task(
-            sequence(), "gazon_intelligent_auto_irrigation_sequence"
-        )
 
     def schedule_post_start_refresh(self, delay_seconds: int = 30) -> None:
         """Planifie un refresh peu après le démarrage de Home Assistant."""
@@ -2168,7 +2434,43 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Charge l'état persistant (mode, date_action)."""
         data = await self._store.async_load() or {}
         self.brain.load_state(data)
+        runtime = data.get("runtime")
+        if isinstance(runtime, dict):
+            active_session = self._deserialize_active_irrigation_session(
+                runtime.get("active_irrigation_session")
+            )
+            last_execution = runtime.get("last_irrigation_execution")
+            if isinstance(last_execution, dict):
+                last_execution = self._serialize_runtime_value(last_execution)
+            else:
+                last_execution = None
+            last_auto_irrigation_reason = runtime.get("last_auto_irrigation_reason")
+            if isinstance(last_auto_irrigation_reason, dict):
+                last_auto_irrigation_reason = self._serialize_runtime_value(last_auto_irrigation_reason)
+            else:
+                last_auto_irrigation_reason = None
+            self._runtime_state = {
+                "active_irrigation_session": active_session,
+                "last_irrigation_execution": last_execution,
+                "last_auto_irrigation_reason": last_auto_irrigation_reason,
+                "auto_irrigation_safety_lock": bool(runtime.get("auto_irrigation_safety_lock")),
+            }
 
     async def _async_save_state(self) -> None:
         """Sauvegarde l'état persistant (mode, date_action)."""
-        await self._store.async_save(self.brain.dump_state())
+        payload = self.brain.dump_state()
+        payload["runtime"] = {
+            "active_irrigation_session": self._serialize_runtime_value(
+                self._runtime_state.get("active_irrigation_session")
+            ),
+            "last_irrigation_execution": self._serialize_runtime_value(
+                self._runtime_state.get("last_irrigation_execution")
+            ),
+            "last_auto_irrigation_reason": self._serialize_runtime_value(
+                self._runtime_state.get("last_auto_irrigation_reason")
+            ),
+            "auto_irrigation_safety_lock": bool(
+                self._runtime_state.get("auto_irrigation_safety_lock")
+            ),
+        }
+        await self._store.async_save(payload)

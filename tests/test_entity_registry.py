@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
 import unittest
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 import sys
 import types
+from zoneinfo import ZoneInfo
 
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_DIR = ROOT / "custom_components" / "gazon_intelligent"
+TEST_TZ = ZoneInfo("Europe/Paris")
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -36,6 +40,11 @@ def _install_homeassistant_stubs() -> None:
     ensure_module("homeassistant")
     ensure_module("homeassistant.components")
     ensure_module("homeassistant.helpers")
+    util_mod = ensure_module("homeassistant.util")
+    if not hasattr(util_mod, "__path__"):
+        util_mod.__path__ = []  # type: ignore[attr-defined]
+    dt_mod = ensure_module("homeassistant.util.dt")
+    dt_mod.now = lambda: datetime(2026, 4, 4, 14, 15, tzinfo=TEST_TZ)  # type: ignore[attr-defined]
 
     sensor_mod = ensure_module("homeassistant.components.sensor")
     if not hasattr(sensor_mod, "SensorEntity"):
@@ -101,6 +110,7 @@ def _install_homeassistant_stubs() -> None:
 _install_homeassistant_stubs()
 
 entity_ids = importlib.import_module("custom_components.gazon_intelligent.entity_ids")
+entity_migration = importlib.import_module("custom_components.gazon_intelligent.entity_migration")
 sensor = importlib.import_module("custom_components.gazon_intelligent.sensor")
 binary_sensor = importlib.import_module("custom_components.gazon_intelligent.binary_sensor")
 switch = importlib.import_module("custom_components.gazon_intelligent.switch")
@@ -118,6 +128,23 @@ class _FakeEntry:
 class _FakeCoordinator:
     entry: _FakeEntry
     data: dict[str, object]
+
+
+@dataclass
+class _FakeRegistryEntry:
+    entity_id: str
+    unique_id: str
+    config_entry_id: str
+
+
+class _FakeRegistry:
+    def __init__(self, entries: list[_FakeRegistryEntry]) -> None:
+        self.entities = {entry.entity_id: entry for entry in entries}
+
+    def async_update_entity(self, current_entity_id: str, *, new_entity_id: str) -> None:
+        entry = self.entities.pop(current_entity_id)
+        entry.entity_id = new_entity_id
+        self.entities[new_entity_id] = entry
 
 
 class EntityRegistryTests(unittest.TestCase):
@@ -138,6 +165,7 @@ class EntityRegistryTests(unittest.TestCase):
             sensor.GazonScoreNiveauSensor(coordinator),
             sensor.GazonProchaineFenetreOptimaleSensor(coordinator),
             sensor.GazonProchainBlocageAttenduSensor(coordinator),
+            sensor.GazonArrosageEnCoursSensor(coordinator),
             sensor.GazonTonteEtatSensor(coordinator),
             sensor.GazonHauteurTonteSensor(coordinator),
             sensor.GazonConseilPrincipalSensor(coordinator),
@@ -188,6 +216,13 @@ class EntityRegistryTests(unittest.TestCase):
         }
 
         self.assertEqual(suffixes, entity_ids.ACTIVE_ENTITY_SUFFIXES)
+        self.assertEqual(
+            {entity.entity_id for entity in entities},
+            {
+                entity_ids.public_entity_id(entity_ids.public_entity_domain(suffix), suffix)
+                for suffix in entity_ids.ACTIVE_ENTITY_SUFFIXES
+            },
+        )
 
     def test_button_labels_are_explicit(self) -> None:
         coordinator = _FakeCoordinator(entry=_FakeEntry(), data={})
@@ -204,3 +239,37 @@ class EntityRegistryTests(unittest.TestCase):
 
     def test_mode_select_remains_config_only(self) -> None:
         self.assertNotIn("extra_state_attributes", select.GazonModeSelect.__dict__)
+
+    def test_entity_registry_alignment_renames_known_entities(self) -> None:
+        registry = _FakeRegistry(
+            [
+                _FakeRegistryEntry(
+                    entity_id="select.gazon_intelligent_produit_selectionne",
+                    unique_id="entry123_produit_intervention",
+                    config_entry_id="entry123",
+                ),
+                _FakeRegistryEntry(
+                    entity_id="switch.gazon_intelligent_auto_irrigation_enabled",
+                    unique_id="entry123_arrosage_automatique",
+                    config_entry_id="entry123",
+                ),
+            ]
+        )
+
+        updates = asyncio.run(entity_migration.async_align_entity_ids(None, "entry123", entity_registry=registry))
+
+        self.assertEqual(
+            updates,
+            [
+                (
+                    "select.gazon_intelligent_produit_selectionne",
+                    "select.gazon_intelligent_produit_d_intervention",
+                ),
+                (
+                    "switch.gazon_intelligent_auto_irrigation_enabled",
+                    "switch.gazon_intelligent_arrosage_automatique_autorise",
+                ),
+            ],
+        )
+        self.assertIn("select.gazon_intelligent_produit_d_intervention", registry.entities)
+        self.assertIn("switch.gazon_intelligent_arrosage_automatique_autorise", registry.entities)

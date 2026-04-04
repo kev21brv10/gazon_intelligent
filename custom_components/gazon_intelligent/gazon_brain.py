@@ -4,6 +4,8 @@ import copy
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+from homeassistant.util import dt as dt_util
+
 from .const import (
     APPLICATION_INTERVENTIONS,
     DEFAULT_AUTO_IRRIGATION_ENABLED,
@@ -297,7 +299,7 @@ class GazonBrain:
         self.declare_intervention(mode)
 
     def set_date_action(self, date_action: date | None = None) -> None:
-        target_date = date_action or date.today()
+        target_date = date_action or dt_util.now().date()
         updated = False
         for idx in range(len(self.history) - 1, -1, -1):
             item_type = self.history[idx].get("type")
@@ -315,7 +317,7 @@ class GazonBrain:
         self.date_action = target_date
 
     def set_normal(self) -> None:
-        today = date.today()
+        today = dt_util.now().date()
         self.history = [
             item
             for item in self.history
@@ -338,7 +340,7 @@ class GazonBrain:
                 history=self.history,
                 current_phase=self.mode,
                 previous_memory=self.memory,
-                today=date.today(),
+                today=dt_util.now().date(),
             )
             self.memory.update(updated_memory)
             self.memory["historique_total"] = len(self.history)
@@ -368,7 +370,7 @@ class GazonBrain:
         ) -> dict[str, Any]:
         if intervention not in INTERVENTIONS_ACTIONS:
             raise ValueError(f"Intervention non supportée: {intervention}")
-        target_date = date_action or date.today()
+        target_date = date_action or dt_util.now().date()
         product_query = normalize_product_id(produit_id) or normalize_product_id(produit)
         product_record = self._resolve_product_record(produit_id, produit)
         selected_product_id = normalize_product_id(selected_product_id) or self.selected_product_id
@@ -469,7 +471,7 @@ class GazonBrain:
     def record_mowing(self, date_action: date | None = None) -> dict[str, Any]:
         item = {
             "type": "tonte",
-            "date": (date_action or date.today()).isoformat(),
+            "date": (date_action or dt_util.now().date()).isoformat(),
         }
         self._append_history(item)
         return item
@@ -484,7 +486,7 @@ class GazonBrain:
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "type": "arrosage",
-            "date": (date_action or date.today()).isoformat(),
+            "date": (date_action or dt_util.now().date()).isoformat(),
             "source": source,
             "recorded_at": datetime.now(timezone.utc).isoformat(),
         }

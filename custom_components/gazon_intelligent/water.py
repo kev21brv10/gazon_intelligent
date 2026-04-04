@@ -314,7 +314,7 @@ def compute_advanced_context(
         "weather_cloud_coverage": weather_profile.get("weather_cloud_coverage"),
         "weather_dew_point": weather_profile.get("weather_dew_point"),
         "weather_uv_index": weather_profile.get("weather_uv_index"),
-        "weather_precipitation_probability": weather_profile.get("weather_precipitation_probability"),
+        "weather_precipitation_probability": weather_precipitation_probability,
         "weather_condition": weather_profile.get("weather_condition"),
     }
 

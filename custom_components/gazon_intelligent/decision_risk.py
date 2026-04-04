@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from .decision_models import DecisionContext
-from .guidance import compute_action_guidance, compute_next_reevaluation
+from .guidance import _reference_hydric_balance_mm, compute_action_guidance, compute_next_reevaluation
 from .scores import compute_internal_scores
 
 
@@ -65,7 +65,7 @@ def build_risk_bundle(
         water_bundle["objectif_mm"] > 0,
         action_guidance["niveau_action"],
         action_guidance["risque_gazon"],
-        water_bundle["water_balance"].get("bilan_hydrique_mm", 0.0),
+        _reference_hydric_balance_mm(water_bundle["water_balance"]),
         context.pluie_demain,
         context.pluie_j2,
         context.pluie_3j,

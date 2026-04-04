@@ -51,21 +51,30 @@ class _FakeHass:
 class MigrationRuntimeTests(unittest.TestCase):
     def test_async_migrate_entry_updates_version_and_cleans(self) -> None:
         calls: list[tuple[object, str]] = []
+        align_calls: list[tuple[object, str]] = []
 
         async def fake_cleanup(hass, entry_id, entity_registry=None):
             calls.append((hass, entry_id))
             return ["sensor.gazon_intelligent_score_tonte"]
 
+        async def fake_align(hass, entry_id, entity_registry=None):
+            align_calls.append((hass, entry_id))
+            return [("sensor.old", "sensor.new")]
+
         original = integration.async_cleanup_obsolete_entities
+        original_align = integration.async_align_entity_ids
         integration.async_cleanup_obsolete_entities = fake_cleanup
+        integration.async_align_entity_ids = fake_align
         try:
             hass = _FakeHass()
             entry = _FakeEntry()
             result = asyncio.run(integration.async_migrate_entry(hass, entry))
         finally:
             integration.async_cleanup_obsolete_entities = original
+            integration.async_align_entity_ids = original_align
 
         self.assertTrue(result)
-        self.assertEqual(entry.version, 2)
+        self.assertEqual(entry.version, 3)
         self.assertEqual(calls, [(hass, "entry123")])
-        self.assertEqual(hass.config_entries.updated_versions, [2])
+        self.assertEqual(align_calls, [(hass, "entry123")])
+        self.assertEqual(hass.config_entries.updated_versions, [3])

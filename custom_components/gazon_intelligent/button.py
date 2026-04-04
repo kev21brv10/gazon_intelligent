@@ -22,7 +22,7 @@ class ArroserMaintenantButton(GazonEntityBase, ButtonEntity):
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_arroser_maintenant"
+        self._set_entity_identity("button", "arroser_maintenant")
 
     async def async_press(self):
         await self.coordinator.async_force_manual_irrigation()
@@ -35,7 +35,7 @@ class RetourModeNormalButton(GazonEntityBase, ButtonEntity):
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_retour_mode_normal"
+        self._set_entity_identity("button", "retour_mode_normal")
 
     async def async_press(self):
         await self.coordinator.async_set_normal()
@@ -48,7 +48,7 @@ class DateActionAujourdhuiButton(GazonEntityBase, ButtonEntity):
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_date_action_today"
+        self._set_entity_identity("button", "date_action_today")
 
     async def async_press(self):
         await self.coordinator.async_set_date_action()
