@@ -1153,6 +1153,7 @@ def build_intervention_recommendation(
     *,
     today: date,
     phase_active: str | None,
+    phase_source: str | None = None,
     sous_phase: str | None,
     selected_product_id: str | None,
     selected_product_name: str | None,
@@ -1163,6 +1164,7 @@ def build_intervention_recommendation(
     forecast_temperature_today: float | None = None,
     temperature_source: str | None = None,
 ) -> dict[str, Any]:
+    current_phase_is_default_normal = phase_active == "Normal" and phase_source == "absence_phase"
     products_map = products if isinstance(products, dict) else {}
     history_list = [item for item in (history or []) if isinstance(item, dict)]
     catalogue_products = [
@@ -1251,6 +1253,8 @@ def build_intervention_recommendation(
                 "eligible_count": 0,
                 "current_month": today.month,
                 "current_phase": phase_active,
+                "current_phase_source": phase_source,
+                "current_phase_is_default_normal": current_phase_is_default_normal,
                 "current_sub_phase": sous_phase,
             },
             "ui": ui,
@@ -1348,6 +1352,8 @@ def build_intervention_recommendation(
                 "eligible_count": len(eligible_candidates),
                 "current_month": today.month,
                 "current_phase": phase_active,
+                "current_phase_source": phase_source,
+                "current_phase_is_default_normal": current_phase_is_default_normal,
                 "current_sub_phase": sous_phase,
                 "opportunity_level": opportunity.get("level"),
             },
@@ -1410,6 +1416,8 @@ def build_intervention_recommendation(
                 "eligible_count": len(eligible_candidates),
                 "current_month": today.month,
                 "current_phase": phase_active,
+                "current_phase_source": phase_source,
+                "current_phase_is_default_normal": current_phase_is_default_normal,
                 "current_sub_phase": sous_phase,
             },
             "ui": ui,
@@ -1509,6 +1517,8 @@ def build_intervention_recommendation(
             "blocked_products_count": len(blocked_candidates),
             "current_month": today.month,
             "current_phase": phase_active,
+            "current_phase_source": phase_source,
+            "current_phase_is_default_normal": current_phase_is_default_normal,
             "current_sub_phase": sous_phase,
             "opportunity_level": opportunity.get("level"),
         },

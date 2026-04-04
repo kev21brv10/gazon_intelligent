@@ -770,6 +770,7 @@ class GazonBrain:
         snapshot["intervention_recommendation"] = build_intervention_recommendation(
             today=today,
             phase_active=snapshot.get("phase_active"),
+            phase_source=snapshot.get("phase_dominante_source"),
             sous_phase=snapshot.get("sous_phase"),
             selected_product_id=self.selected_product_id,
             selected_product_name=self.selected_product_name,
