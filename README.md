@@ -63,39 +63,6 @@ En pratique:
 
 ---
 
-## ✨ Release 0.5.0
-
-Cette version marque une évolution majeure de l'intégration:
-
-- stabilisation des `entity_id` publics et migration du registre Home Assistant
-- refonte importante du moteur d'irrigation, des plans et du suivi runtime
-- recommandation d'intervention plus fine, plus explicable et mieux contextualisée
-- capteurs de synthèse plus utiles pour Home Assistant, les dashboards et les automatisations
-- couverture de tests nettement renforcée
-
----
-
-## 🔄 Après mise à jour vers 0.5.0
-
-Cette version stabilise les `entity_id` publics de l’intégration.
-
-En pratique:
-
-- un redémarrage ou un rechargement de l’intégration est recommandé
-- le registre Home Assistant est réaligné automatiquement quand c’est possible
-- si tu utilises d’anciens dashboards ou automatisations, vérifie surtout les entités de boutons, de sélection produit et d’arrosage automatique
-
-Les IDs publics à privilégier sont désormais par exemple:
-
-- `sensor.gazon_intelligent_assistant`
-- `sensor.gazon_intelligent_conseil_principal`
-- `select.gazon_intelligent_produit_d_intervention`
-- `switch.gazon_intelligent_arrosage_automatique_autorise`
-- `button.gazon_intelligent_date_action_today`
-- `button.gazon_intelligent_retour_mode_normal`
-
----
-
 ## 🧠 Ce que fait l’intégration
 
 Gazon Intelligent centralise le calcul dans l’intégration et transforme ces données en décision:
