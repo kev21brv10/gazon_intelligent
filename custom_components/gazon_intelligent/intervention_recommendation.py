@@ -14,6 +14,8 @@ from .memory import (
     normalize_product_id,
 )
 
+HIGH_SCORE_RECOMMENDATION_THRESHOLD = 71
+
 
 def _parse_date(value: object | None) -> date | None:
     if value in (None, "", [], {}):
@@ -315,6 +317,63 @@ def _temperature_evaluation(
     }
 
 
+def _opportunity_evaluation(application_state: dict[str, Any] | None) -> dict[str, Any]:
+    state = application_state if isinstance(application_state, dict) else {}
+    block_reason = str(state.get("application_block_reason") or "").strip()
+    post_status = _normalize_text(state.get("application_post_watering_status"))
+    type_arrosage = _normalize_text(state.get("type_arrosage"))
+    block_active = bool(state.get("application_block_active"))
+    post_watering_pending = bool(state.get("application_post_watering_pending"))
+    delay_remaining = float(state.get("application_post_watering_delay_remaining_minutes") or 0.0)
+
+    if block_active and not block_reason:
+        block_reason = "Une application récente bloque encore toute nouvelle intervention."
+    elif post_watering_pending and not block_reason:
+        block_reason = "L'arrosage post-application n'est pas encore terminé."
+    elif delay_remaining > 0 and not block_reason:
+        block_reason = "Un délai post-application est encore en cours."
+    elif post_status in {"bloque", "en_attente"} and not block_reason:
+        block_reason = "Le contexte post-application n'autorise pas encore une nouvelle proposition."
+    elif type_arrosage == "bloque" and not block_reason:
+        block_reason = "Le profil d'arrosage courant reste bloqué."
+
+    if block_reason:
+        return {
+            "hard_blocking": True,
+            "hard_block_reason": block_reason,
+            "score_delta": 0,
+            "reasons": [block_reason],
+            "level": "blocked",
+        }
+
+    reasons: list[str] = []
+    score_delta = 0
+    hydric_level = _normalize_text(state.get("hydric_balance_level"))
+    bilan_hydrique = None
+    try:
+        bilan_hydrique = float(state.get("bilan_hydrique_mm"))
+    except (TypeError, ValueError):
+        bilan_hydrique = None
+
+    if hydric_level == "excedentaire" or (bilan_hydrique is not None and bilan_hydrique >= 1.5):
+        score_delta -= 3
+        reasons.append("Contexte hydrique excédentaire")
+    elif hydric_level == "equilibre" or (bilan_hydrique is not None and bilan_hydrique >= 0.0):
+        score_delta -= 2
+        reasons.append("Contexte hydrique équilibré")
+    elif bilan_hydrique is not None and bilan_hydrique <= -1.0:
+        score_delta += 1
+        reasons.append("Contexte hydrique légèrement déficitaire")
+
+    return {
+        "hard_blocking": False,
+        "hard_block_reason": None,
+        "score_delta": score_delta,
+        "reasons": reasons,
+        "level": "weak" if score_delta < 0 else "strong",
+    }
+
+
 def _state_metadata(state: str) -> dict[str, str]:
     if state == "recommended":
         return {
@@ -360,6 +419,7 @@ def _evaluate_product_candidate(
     today: date,
     phase_active: str | None,
     selected_product_id: str | None,
+    application_state: dict[str, Any] | None = None,
     temperature: float | None = None,
     forecast_temperature_today: float | None = None,
     temperature_source: str | None = None,
@@ -463,6 +523,11 @@ def _evaluate_product_candidate(
     if product_type:
         score += 1
 
+    opportunity = _opportunity_evaluation(application_state)
+    if opportunity["score_delta"]:
+        score += int(opportunity["score_delta"])
+        reasons.extend(str(reason) for reason in opportunity["reasons"] if str(reason).strip())
+
     if usage_mode:
         if usage_mode == "preventif":
             score += 2 if (phase_match or month_match) else 1
@@ -501,6 +566,8 @@ def _evaluate_product_candidate(
         )
     if temperature_block_reason:
         blocked_reason_parts.append(temperature_block_reason)
+    if opportunity.get("hard_block_reason"):
+        blocked_reason_parts.append(str(opportunity["hard_block_reason"]))
     blocked_reason = _format_reasons(blocked_reason_parts) or None
 
     return {
@@ -529,6 +596,10 @@ def _evaluate_product_candidate(
         "temperature_source": reference_temperature_source,
         "temperature_evaluation": temperature_evaluation,
         "temperature_blocking": bool(temperature_evaluation["blocking"]) if temperature_evaluation else False,
+        "opportunity_level": opportunity["level"],
+        "opportunity_score_delta": int(opportunity["score_delta"]),
+        "opportunity_hard_blocking": bool(opportunity["hard_blocking"]),
+        "opportunity_hard_block_reason": opportunity["hard_block_reason"],
     }
 
 
@@ -1048,6 +1119,9 @@ def build_intervention_recommendation(
         block_reason = "L'arrosage post-application n'est pas encore terminé."
     if not block_reason and delay_remaining > 0:
         block_reason = "Un délai post-application est encore en cours."
+    opportunity = _opportunity_evaluation(application_state)
+    if not block_reason and opportunity.get("hard_block_reason"):
+        block_reason = str(opportunity["hard_block_reason"])
 
     if not catalogue_products:
         metadata = _state_metadata("unavailable")
@@ -1117,6 +1191,7 @@ def build_intervention_recommendation(
             today=today,
             phase_active=phase_active,
             selected_product_id=selected_product_id,
+            application_state=application_state,
             temperature=temperature,
             forecast_temperature_today=forecast_temperature_today,
             temperature_source=temperature_source,
@@ -1143,11 +1218,14 @@ def build_intervention_recommendation(
     ]
     blocked_candidates = [candidate for candidate in candidates if not candidate["due"]]
 
-    if block_active or post_watering_pending:
+    if block_active or post_watering_pending or opportunity.get("hard_blocking"):
         metadata = _state_metadata("blocked")
         reasons = []
         if block_reason:
             reasons.append(block_reason)
+        opportunity_block_reason = opportunity.get("hard_block_reason")
+        if opportunity_block_reason and opportunity_block_reason not in reasons:
+            reasons.append(str(opportunity_block_reason))
         if selected_product_id and best and best["product_id"] == selected_product_id:
             reasons.append(f"{best['product_name']} est sélectionné mais reste bloqué.")
         if best and isinstance(best.get("temperature_evaluation"), dict):
@@ -1199,6 +1277,7 @@ def build_intervention_recommendation(
                 "current_month": today.month,
                 "current_phase": phase_active,
                 "current_sub_phase": sous_phase,
+                "opportunity_level": opportunity.get("level"),
             },
             "ui": ui,
         }
@@ -1264,7 +1343,14 @@ def build_intervention_recommendation(
             "ui": ui,
         }
 
-    state = "recommended" if best["due"] and best["phase_match"] and best["month_match"] else "possible"
+    state = (
+        "recommended"
+        if best["due"]
+        and best["phase_match"]
+        and best["month_match"]
+        and int(best["score"]) >= HIGH_SCORE_RECOMMENDATION_THRESHOLD
+        else "possible"
+    )
     if not best["due"]:
         state = "blocked"
 
@@ -1352,6 +1438,7 @@ def build_intervention_recommendation(
             "current_month": today.month,
             "current_phase": phase_active,
             "current_sub_phase": sous_phase,
+            "opportunity_level": opportunity.get("level"),
         },
         "ui": ui,
     }
