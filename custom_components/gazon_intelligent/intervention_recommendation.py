@@ -655,6 +655,8 @@ def _evaluate_product_candidate(
         "due": due,
         "phase_match": phase_match,
         "month_match": month_match,
+        "current_phase": phase_active,
+        "current_month": today.month,
         "selected": bool(selected_product_id and product_id and normalize_product_id(selected_product_id) == product_id),
         "score": _clamp_score(score),
         "reasons": reasons,
@@ -1309,6 +1311,12 @@ def build_intervention_recommendation(
             if temperature_reason and temperature_reason not in reasons:
                 reasons.append(temperature_reason)
         reason_text = _format_reasons(reasons) or "Attends la fin du blocage post-application avant de déclarer une nouvelle intervention."
+        if best:
+            best_type = str(best.get("product_type") or "").strip()
+            best_usage = str(best.get("usage_mode") or "").strip()
+            if best_type == "Agent Mouillant" and best_usage == "preventif":
+                if "humide" in reason_text.lower() or "arrosage" in reason_text.lower():
+                    reason_text = f"Agent mouillant préventif: sol déjà humide ou arrosage bloqué. {reason_text}"
         ui = _ui_for_state(
             state="blocked",
             metadata=metadata,
