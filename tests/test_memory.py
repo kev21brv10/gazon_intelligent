@@ -336,6 +336,7 @@ class MemoryCatalogTests(unittest.TestCase):
         recommendation = intervention.build_intervention_recommendation(
             today=date(2026, 4, 10),
             phase_active="Sursemis",
+            phase_source="historique_actif",
             sous_phase="Reprise",
             selected_product_id=None,
             selected_product_name=None,
@@ -387,11 +388,14 @@ class MemoryCatalogTests(unittest.TestCase):
         self.assertEqual(recommendation["selection"]["id"], None)
         self.assertTrue(all(isinstance(item, dict) for item in recommendation["constraints"]))
         self.assertTrue(all(isinstance(item, dict) for item in recommendation["missing_requirements"]))
+        self.assertEqual(recommendation["context"]["current_phase_source"], "historique_actif")
+        self.assertFalse(recommendation["context"]["current_phase_is_default_normal"])
 
     def test_build_intervention_recommendation_keeps_low_score_candidate_possible(self) -> None:
         recommendation = intervention.build_intervention_recommendation(
             today=date(2026, 4, 10),
             phase_active="Sursemis",
+            phase_source="historique_actif",
             sous_phase="Reprise",
             selected_product_id=None,
             selected_product_name=None,
@@ -416,10 +420,40 @@ class MemoryCatalogTests(unittest.TestCase):
         self.assertEqual(recommendation["recommended_action"], "select_product")
         self.assertLess(recommendation["score"], 71)
 
+    def test_build_intervention_recommendation_marks_default_normal_source(self) -> None:
+        recommendation = intervention.build_intervention_recommendation(
+            today=date(2026, 4, 10),
+            phase_active="Normal",
+            phase_source="absence_phase",
+            sous_phase="Normal",
+            selected_product_id=None,
+            selected_product_name=None,
+            products={
+                "simple": {
+                    "id": "simple",
+                    "nom": "Simple",
+                    "type": "Biostimulant",
+                    "usage_mode": "preventif",
+                    "phase_compatible": ["Normal"],
+                    "application_months": [4],
+                }
+            },
+            history=[],
+            application_state={},
+            temperature=20.0,
+            forecast_temperature_today=20.0,
+            temperature_source="capteur",
+        )
+
+        self.assertEqual(recommendation["context"]["current_phase"], "Normal")
+        self.assertEqual(recommendation["context"]["current_phase_source"], "absence_phase")
+        self.assertTrue(recommendation["context"]["current_phase_is_default_normal"])
+
     def test_build_intervention_recommendation_penalizes_fertilisation_more_than_biostimulant_in_normal_phase(self) -> None:
         fertilisation = intervention.build_intervention_recommendation(
             today=date(2026, 4, 10),
             phase_active="Normal",
+            phase_source="absence_phase",
             sous_phase="Normal",
             selected_product_id=None,
             selected_product_name=None,
@@ -459,6 +493,7 @@ class MemoryCatalogTests(unittest.TestCase):
         biostimulant = intervention.build_intervention_recommendation(
             today=date(2026, 4, 10),
             phase_active="Normal",
+            phase_source="absence_phase",
             sous_phase="Normal",
             selected_product_id=None,
             selected_product_name=None,
@@ -503,6 +538,7 @@ class MemoryCatalogTests(unittest.TestCase):
         preventif = intervention.build_intervention_recommendation(
             today=date(2026, 4, 10),
             phase_active="Sursemis",
+            phase_source="historique_actif",
             sous_phase="Reprise",
             selected_product_id=None,
             selected_product_name=None,
@@ -533,6 +569,7 @@ class MemoryCatalogTests(unittest.TestCase):
         curatif = intervention.build_intervention_recommendation(
             today=date(2026, 4, 10),
             phase_active="Sursemis",
+            phase_source="historique_actif",
             sous_phase="Reprise",
             selected_product_id=None,
             selected_product_name=None,
@@ -568,6 +605,7 @@ class MemoryCatalogTests(unittest.TestCase):
         recommendation = intervention.build_intervention_recommendation(
             today=date(2026, 4, 10),
             phase_active="Sursemis",
+            phase_source="historique_actif",
             sous_phase="Reprise",
             selected_product_id=None,
             selected_product_name=None,
@@ -617,6 +655,7 @@ class MemoryCatalogTests(unittest.TestCase):
         recommendation = intervention.build_intervention_recommendation(
             today=date(2026, 4, 10),
             phase_active="Sursemis",
+            phase_source="historique_actif",
             sous_phase="Reprise",
             selected_product_id=None,
             selected_product_name=None,
@@ -658,6 +697,7 @@ class MemoryCatalogTests(unittest.TestCase):
         recommendation = intervention.build_intervention_recommendation(
             today=date(2026, 4, 10),
             phase_active="Sursemis",
+            phase_source="historique_actif",
             sous_phase="Reprise",
             selected_product_id=None,
             selected_product_name=None,

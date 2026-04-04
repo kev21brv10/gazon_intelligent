@@ -848,6 +848,7 @@ class GazonInterventionRecommendationSensor(GazonEntityBase, SensorEntity):
             recommendation = build_intervention_recommendation(
                 today=date.today(),
                 phase_active=snapshot.get("phase_active") or snapshot.get("mode"),
+                phase_source=snapshot.get("phase_dominante_source"),
                 sous_phase=snapshot.get("sous_phase"),
                 selected_product_id=getattr(self.coordinator, "selected_product_id", None),
                 selected_product_name=getattr(self.coordinator, "selected_product_name", None),
