@@ -10,40 +10,61 @@
 ![License](https://img.shields.io/github/license/kev21brv10/gazon_intelligent?style=flat-square)
 
 
-> Gazon Intelligent transforme vos données météo et d’arrosage en décisions simples, fiables et automatisables, avec une façade canonique lisible dans `sensor.gazon_intelligent_assistant`.
+> Gazon Intelligent transforme tes données météo, d’arrosage et de contexte gazon en une seule décision claire, lisible et exploitable dans Home Assistant.
 
 ---
 
-## En bref
+## En 15 secondes
 
-- une seule intégration, un seul moteur
-- une décision lisible à la fois
-- Sursemis strict plafonné à `0.5 mm`
-- une façade canonique: `sensor.gazon_intelligent_assistant`
-- des entités complémentaires pour le contexte, l’historique, la tonte et le debug
+- une seule intégration, un seul moteur métier
+- une façade canonique très lisible: `sensor.gazon_intelligent_assistant`
+- des entités complémentaires pour comprendre le contexte, sans complexifier l’usage quotidien
 
-En clair:
+Tu veux savoir quoi faire sur ton gazon ?
+L’intégration te donne directement :
 
-- l’intégration regarde les données utiles
-- elle dit quoi faire, quand le faire, et combien appliquer
-- Home Assistant affiche la décision de façon simple
+- quoi faire
+- quand le faire
+- combien appliquer
+
+👉 Commence ici : [Démarrage rapide](#-démarrage-rapide)
+
+---
+
+## 👀 À regarder en premier
+
+### `sensor.gazon_intelligent_assistant`
+
+C’est l’entité centrale de l’intégration.
+C’est celle qu’il faut regarder en premier.
+
+Elle te donne la promesse produit :
+
+- quoi faire maintenant
+- quand agir
+- combien appliquer si un arrosage est utile
+- pourquoi cette décision remonte en priorité
+
+Quand il n’y a rien à faire, elle l’indique explicitement.
+Les autres entités servent surtout à détailler ou confirmer ce choix.
 
 ---
 
 ## 🚀 Démarrage rapide
 
-1. Installer l’intégration `gazon_intelligent`
-2. Configurer le type de sol et les zones
-3. Consulter `sensor.gazon_intelligent_assistant`
-4. Ouvrir `sensor.gazon_intelligent_conseil_principal`, `sensor.gazon_intelligent_fenetre_optimale` et `sensor.gazon_intelligent_objectif_d_arrosage` si besoin
+1. Installe l’intégration `gazon_intelligent`
+2. Configure le type de sol et les zones
+3. Consulte `sensor.gazon_intelligent_assistant`
+4. Ouvre `sensor.gazon_intelligent_conseil_principal`, `sensor.gazon_intelligent_fenetre_optimale` et `sensor.gazon_intelligent_objectif_d_arrosage` si tu veux plus de contexte
 
-👉 Vous obtenez immédiatement :
+👉 En quelques secondes, tu sais déjà :
+
 - quoi faire
 - quand le faire
 - combien appliquer
 
 La façade canonique est `sensor.gazon_intelligent_assistant`.
-Les autres entités détaillent le contexte, l'historique, la tonte et le debug.
+Les autres entités détaillent le contexte, l’historique, la tonte et le debug.
 
 ---
 
@@ -60,6 +81,30 @@ En pratique:
 - l’intégration reste la source de vérité métier
 - la card lit et met en forme ces entités pour l’interface
 - les `entity_id` publics stabilisés dans cette version servent aussi à garantir la cohérence entre backend et frontend
+
+---
+
+## 🧭 Utilisation simple
+
+Au quotidien, le principe est simple:
+
+1. l’intégration calcule la décision
+2. tu lis `sensor.gazon_intelligent_assistant`
+3. tu appliques ou tu laisses faire
+
+### À consulter en priorité
+
+- `sensor.gazon_intelligent_assistant`
+- `sensor.gazon_intelligent_conseil_principal`
+- `sensor.gazon_intelligent_fenetre_optimale`
+- `sensor.gazon_intelligent_objectif_d_arrosage`
+
+### Lecture rapide
+
+- si `assistant = aucune_action`, il n’y a rien à faire
+- si `fenetre_optimale = attendre`, le moteur réévalue plus tard
+- si `objectif_d_arrosage > 0`, un arrosage est potentiellement utile
+- si `tonte_autorisee = off`, la tonte est bloquée pour une bonne raison
 
 ---
 
@@ -96,33 +141,32 @@ En pratique, l’intégration gère:
 *Capture prochainement.*
 
 ---
-## 👀 Entités principales
+## 👀 Entités
 
-### Façade canonique
+### Entité principale
 
 - `sensor.gazon_intelligent_assistant`
   - c’est l’entité à regarder en premier
-  - elle dit ce qu’il faut faire
-  - elle affiche aussi la prochaine date estimée
+  - elle porte la décision principale
+  - elle expose aussi la prochaine date estimée
   - quand il n’y a rien à faire, elle affiche `aucune_action`
 
-### Entités de lecture
+### Entités principales
 
 - `sensor.gazon_intelligent_conseil_principal`
   - résumé public priorisé de la situation
-  - remonte l’information la plus utile entre assistant, intervention et irrigation
 - `sensor.gazon_intelligent_fenetre_optimale`
-  - indique le meilleur moment pour agir
+  - meilleur moment pour agir
 - `sensor.gazon_intelligent_objectif_d_arrosage`
-  - indique combien arroser
+  - quantité d’eau utile si un arrosage est nécessaire
 - `sensor.gazon_intelligent_plan_d_arrosage`
-  - détaille le cycle d’arrosage calculé
+  - cycle d’arrosage calculé
 - `sensor.gazon_intelligent_niveau_d_action`
-  - indique si on peut attendre, surveiller, agir ou traiter en priorité
+  - niveau d’urgence métier
 - `sensor.gazon_intelligent_type_d_arrosage`
-  - indique le profil d’arrosage retenu
+  - profil d’arrosage retenu
 
-### Entités métier complémentaires
+### Entités avancées
 
 - `sensor.gazon_intelligent_phase_dominante`
 - `sensor.gazon_intelligent_sous_phase`
@@ -137,7 +181,7 @@ En pratique, l’intégration gère:
 - `binary_sensor.gazon_intelligent_tonte_autorisee`
 - `binary_sensor.gazon_intelligent_arrosage_apres_application_autorise`
 
-### Interface utilisateur
+### Entités d’action
 
 - `button.gazon_intelligent_arroser_maintenant`
 - `button.gazon_intelligent_date_action_today`
@@ -145,7 +189,7 @@ En pratique, l’intégration gère:
 - `switch.gazon_intelligent_arrosage_automatique_autorise`
 - `select.gazon_intelligent_mode_du_gazon`
 
-### Debug
+### Entités debug et diagnostic
 
 - diagnostics téléchargeables via l’intégration
 - logs du module `custom_components.gazon_intelligent`
@@ -160,7 +204,7 @@ Les libellés restent simples à lire:
 - `assistant`
   - la décision principale
 - `conseil_principal`
-  - l’explication courte
+  - le résumé public le plus utile à afficher
 - `fenetre_optimale`
   - quand agir si besoin
 - `objectif_d_arrosage`
@@ -188,7 +232,12 @@ Les libellés restent simples à lire:
 
 ---
 
-## ✂️ Gestion de la tonte
+## 📘 Approfondir
+
+Les sections ci-dessous détaillent le fonctionnement métier de l’intégration.
+Elles sont utiles quand tu veux comprendre plus finement le moteur ou exploiter toutes les entités disponibles.
+
+### ✂️ Gestion de la tonte
 
 L'entité **État de tonte** expose :
 
@@ -218,9 +267,9 @@ Le système :
 
 ---
 
-## 💧 Détails avancés sur l’arrosage
+### 💧 Détails avancés sur l’arrosage
 
-### Comment l’intégration décide
+#### Comment l’intégration décide
 
 Le moteur ne se contente pas de dire “arroser ou non”.
 Il cherche à produire une décision exploitable, lisible et réaliste.
@@ -239,7 +288,7 @@ Elle peut aussi:
 - empêcher un arrosage trop proche du précédent
 - fractionner un arrosage si un seul passage serait trop important
 
-### Exemple de comportement
+#### Exemple de comportement
 
 | Mode | Fenêtre cible | Objectif mm | Fréquence | Fractionnement |
 | --- | --- | --- | --- | --- |
@@ -253,7 +302,7 @@ Elle peut aussi:
 | Application foliaire | Bloqué pendant la fenêtre de protection | 0 | 0 | Non |
 | Type d'application inconnu | Bloqué | 0 | 0 | Non |
 
-### 🔍 Informations utiles
+#### 🔍 Informations utiles
 
 Le moteur expose aussi des champs utiles pour comprendre la décision:
 
@@ -275,7 +324,7 @@ Cela sert surtout à:
 - relire la logique directement dans Home Assistant
 - vérifier que le comportement reste cohérent avec la réalité du terrain
 
-### 🧮 Comment le plan est construit
+#### 🧮 Comment le plan est construit
 
 - `plan_type = single_zone` quand une seule zone compose le plan
 - `plan_type = multi_zone` quand le plan couvre plusieurs zones
@@ -283,11 +332,11 @@ Cela sert surtout à:
 - `zone_count` indique le nombre de zones
 - `passages` indique le nombre de passages
 
-### 🧪 Produits et applications
+#### 🧪 Produits et applications
 
 Cette partie sert à enregistrer un produit une seule fois, puis à réutiliser automatiquement ses réglages quand tu déclares une intervention.
 
-#### Workflow rapide
+##### Workflow rapide
 
 1. Enregistre le produit avec `gazon_intelligent.register_product`
 2. Choisis-le dans `select.gazon_intelligent_produit_d_intervention`
@@ -296,7 +345,7 @@ Cette partie sert à enregistrer un produit une seule fois, puis à réutiliser 
 S’il n’existe qu’un seul produit, l’intégration peut parfois le reprendre automatiquement.
 S’il y en a plusieurs, il faut une sélection claire.
 
-#### Deux types d’application
+##### Deux types d’application
 
 - `sol`
   - produit appliqué sur le sol
@@ -305,7 +354,7 @@ S’il y en a plusieurs, il faut une sélection claire.
   - produit appliqué sur le feuillage
   - bloque temporairement l’arrosage automatique pendant la protection
 
-#### Ce qu’il faut renseigner une seule fois
+##### Ce qu’il faut renseigner une seule fois
 
 Les réglages produits se déclarent dans `register_product`:
 
@@ -341,7 +390,7 @@ Tu peux aussi y enregistrer:
   - sélection multiple possible
   - exemple: `Sursemis`, `Croissance`, `Entretien`
 
-#### Ce que l’intégration expose ensuite
+##### Ce que l’intégration expose ensuite
 
 - `Dernière application`
   - le dernier produit ou traitement enregistré
@@ -369,7 +418,7 @@ Les états de `Dernière exécution` sont simples:
 - `bloque` = action refusée pour sécurité ou timing
 - `refuse` = action impossible ou incohérente
 
-#### Règles utiles
+##### Règles utiles
 
 - le produit se mémorise avec `register_product`
 - le choix du produit pour l’intervention se fait avec `select.gazon_intelligent_produit_d_intervention`
@@ -475,45 +524,6 @@ Notes:
 - tous les réglages du produit se trouvent dans `register_product`.
 - si une application a été enregistrée par erreur, `remove_last_application` supprime la dernière application de l’historique local.
 - `declare_mowing` et `declare_watering` sont des raccourcis de compatibilité utiles.
-
----
-
-## 🧭 Utilisation au quotidien
-
-Le principe est simple:
-
-1. L’intégration calcule la décision
-2. Tu lis la façade `assistant`
-3. Tu appliques ou tu laisses faire
-
-### À consulter en priorité
-
-- `sensor.gazon_intelligent_assistant`
-- `sensor.gazon_intelligent_conseil_principal`
-- `sensor.gazon_intelligent_fenetre_optimale`
-- `sensor.gazon_intelligent_objectif_d_arrosage`
-- `sensor.gazon_intelligent_etat_de_tonte`
-- `binary_sensor.gazon_intelligent_arrosage_recommande`
-- `binary_sensor.gazon_intelligent_tonte_autorisee`
-
-### Lecture rapide
-
-- si `assistant = aucune_action`, il n’y a rien à faire
-- si `fenetre_optimale = attendre`, le moteur réévalue plus tard
-- si `objectif_d_arrosage > 0`, un arrosage est potentiellement utile
-- si `tonte_autorisee = off`, la tonte est bloquée pour une bonne raison
-
-### Ce que le système automatise
-
-- bilan hydrique complet
-- comparaison pluie / arrosage / ETP
-- gestion des phases et sous-phases
-- décisions arrosage / tonte
-- mémoire des actions
-- suivi des interventions
-- verrou global d'arrosage automatique
-
----
 
 ## 🌿 Produits personnalisés
 
