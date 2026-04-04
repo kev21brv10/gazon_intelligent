@@ -374,6 +374,64 @@ def _opportunity_evaluation(application_state: dict[str, Any] | None) -> dict[st
     }
 
 
+def _family_policy_adjustment(
+    *,
+    product_type: str,
+    usage_mode: str | None,
+    phase_active: str | None,
+    phase_match: bool,
+    month_match: bool,
+    opportunity_level: str,
+) -> tuple[int, list[str]]:
+    delta = 0
+    reasons: list[str] = []
+    normalized_product_type = _normalize_text(product_type)
+    normalized_phase = _normalize_text(phase_active)
+    normalized_usage = _normalize_text(usage_mode)
+
+    if normalized_product_type == "fertilisation":
+        if normalized_phase == "normal":
+            delta -= 2
+            reasons.append("Fertilisation: phase Normal peu prioritaire")
+        elif phase_match and month_match:
+            delta += 2
+            reasons.append("Fertilisation: fenêtre cohérente")
+
+    elif normalized_product_type == "biostimulant":
+        if phase_match and month_match:
+            delta += 2
+            reasons.append("Biostimulant: fenêtre favorable")
+        if opportunity_level == "weak":
+            delta -= 2
+            reasons.append("Biostimulant: opportunité hydrique moyenne")
+
+    elif normalized_product_type == "agent mouillant":
+        if normalized_usage == "preventif":
+            if opportunity_level == "strong":
+                delta += 2
+                reasons.append("Agent mouillant préventif: contexte favorable")
+            elif opportunity_level == "weak":
+                delta -= 2
+                reasons.append("Agent mouillant préventif: contexte seulement moyen")
+        elif normalized_usage == "curatif":
+            if opportunity_level == "strong":
+                delta += 3
+                reasons.append("Agent mouillant curatif: contexte exploitable")
+            elif opportunity_level == "weak":
+                delta -= 3
+                reasons.append("Agent mouillant curatif: contexte encore peu marqué")
+
+    elif normalized_product_type == "scarification":
+        if normalized_phase == "normal":
+            delta -= 3
+            reasons.append("Scarification: phase Normal trop neutre")
+        elif phase_match and month_match:
+            delta += 2
+            reasons.append("Scarification: fenêtre cohérente")
+
+    return delta, reasons
+
+
 def _state_metadata(state: str) -> dict[str, str]:
     if state == "recommended":
         return {
@@ -528,6 +586,19 @@ def _evaluate_product_candidate(
         score += int(opportunity["score_delta"])
         reasons.extend(str(reason) for reason in opportunity["reasons"] if str(reason).strip())
 
+    family_delta, family_reasons = _family_policy_adjustment(
+        product_type=product_type,
+        usage_mode=usage_mode,
+        phase_active=phase_active,
+        phase_match=phase_match,
+        month_match=month_match,
+        opportunity_level=str(opportunity.get("level") or "strong"),
+    )
+    if family_delta:
+        score += int(family_delta)
+    if family_reasons:
+        reasons.extend(str(reason) for reason in family_reasons if str(reason).strip())
+
     if usage_mode:
         if usage_mode == "preventif":
             score += 2 if (phase_match or month_match) else 1
@@ -600,6 +671,7 @@ def _evaluate_product_candidate(
         "opportunity_score_delta": int(opportunity["score_delta"]),
         "opportunity_hard_blocking": bool(opportunity["hard_blocking"]),
         "opportunity_hard_block_reason": opportunity["hard_block_reason"],
+        "family_score_delta": int(family_delta),
     }
 
 

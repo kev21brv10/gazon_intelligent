@@ -416,6 +416,154 @@ class MemoryCatalogTests(unittest.TestCase):
         self.assertEqual(recommendation["recommended_action"], "select_product")
         self.assertLess(recommendation["score"], 71)
 
+    def test_build_intervention_recommendation_penalizes_fertilisation_more_than_biostimulant_in_normal_phase(self) -> None:
+        fertilisation = intervention.build_intervention_recommendation(
+            today=date(2026, 4, 10),
+            phase_active="Normal",
+            sous_phase="Normal",
+            selected_product_id=None,
+            selected_product_name=None,
+            products={
+                "engrais": {
+                    "id": "engrais",
+                    "nom": "Engrais test",
+                    "type": "Fertilisation",
+                    "usage_mode": "entretien",
+                    "max_applications_per_year": 2,
+                    "reapplication_after_days": 25,
+                    "phase_compatible": ["Normal"],
+                    "application_months": [4],
+                    "temperature_min": 8,
+                    "temperature_max": 28,
+                }
+            },
+            history=[
+                {
+                    "type": "Fertilisation",
+                    "date": "2026-03-12",
+                    "produit_id": "engrais",
+                    "produit": "Engrais test",
+                    "reapplication_after_days": 25,
+                    "produit_catalogue": {
+                        "id": "engrais",
+                        "nom": "Engrais test",
+                    },
+                }
+            ],
+            application_state={},
+            temperature=20.0,
+            forecast_temperature_today=20.0,
+            temperature_source="capteur",
+        )
+
+        biostimulant = intervention.build_intervention_recommendation(
+            today=date(2026, 4, 10),
+            phase_active="Normal",
+            sous_phase="Normal",
+            selected_product_id=None,
+            selected_product_name=None,
+            products={
+                "stim": {
+                    "id": "stim",
+                    "nom": "Stim test",
+                    "type": "Biostimulant",
+                    "usage_mode": "entretien",
+                    "max_applications_per_year": 2,
+                    "reapplication_after_days": 25,
+                    "phase_compatible": ["Normal"],
+                    "application_months": [4],
+                    "temperature_min": 8,
+                    "temperature_max": 28,
+                }
+            },
+            history=[
+                {
+                    "type": "Biostimulant",
+                    "date": "2026-03-12",
+                    "produit_id": "stim",
+                    "produit": "Stim test",
+                    "reapplication_after_days": 25,
+                    "produit_catalogue": {
+                        "id": "stim",
+                        "nom": "Stim test",
+                    },
+                }
+            ],
+            application_state={},
+            temperature=20.0,
+            forecast_temperature_today=20.0,
+            temperature_source="capteur",
+        )
+
+        self.assertLess(fertilisation["score"], biostimulant["score"])
+        self.assertEqual(fertilisation["status"], "recommended")
+        self.assertEqual(biostimulant["status"], "recommended")
+
+    def test_build_intervention_recommendation_gives_mouillant_curatif_more_priority_than_preventif_on_clear_opportunity(self) -> None:
+        preventif = intervention.build_intervention_recommendation(
+            today=date(2026, 4, 10),
+            phase_active="Sursemis",
+            sous_phase="Reprise",
+            selected_product_id=None,
+            selected_product_name=None,
+            products={
+                "mouillant_preventif": {
+                    "id": "mouillant_preventif",
+                    "nom": "Mouillant préventif",
+                    "type": "Agent Mouillant",
+                    "usage_mode": "preventif",
+                    "max_applications_per_year": 6,
+                    "reapplication_after_days": 21,
+                    "phase_compatible": ["Sursemis", "Croissance", "Entretien"],
+                    "application_months": [4, 5, 6, 7, 8, 9],
+                    "temperature_min": 10,
+                    "temperature_max": 30,
+                }
+            },
+            history=[],
+            application_state={
+                "bilan_hydrique_mm": -1.2,
+                "hydric_balance_level": "déficit",
+            },
+            temperature=20.0,
+            forecast_temperature_today=20.0,
+            temperature_source="capteur",
+        )
+
+        curatif = intervention.build_intervention_recommendation(
+            today=date(2026, 4, 10),
+            phase_active="Sursemis",
+            sous_phase="Reprise",
+            selected_product_id=None,
+            selected_product_name=None,
+            products={
+                "mouillant_curatif": {
+                    "id": "mouillant_curatif",
+                    "nom": "Mouillant curatif",
+                    "type": "Agent Mouillant",
+                    "usage_mode": "curatif",
+                    "max_applications_per_year": 6,
+                    "reapplication_after_days": 21,
+                    "phase_compatible": ["Sursemis", "Croissance", "Entretien"],
+                    "application_months": [4, 5, 6, 7, 8, 9],
+                    "temperature_min": 10,
+                    "temperature_max": 30,
+                }
+            },
+            history=[],
+            application_state={
+                "bilan_hydrique_mm": -1.2,
+                "hydric_balance_level": "déficit",
+            },
+            temperature=20.0,
+            forecast_temperature_today=20.0,
+            temperature_source="capteur",
+        )
+
+        self.assertLess(preventif["score"], curatif["score"])
+        self.assertIn(preventif["status"], {"possible", "recommended"})
+        self.assertIn(curatif["status"], {"possible", "recommended"})
+
     def test_build_intervention_recommendation_blocks_when_temperature_is_far_out_of_range(self) -> None:
         recommendation = intervention.build_intervention_recommendation(
             today=date(2026, 4, 10),
