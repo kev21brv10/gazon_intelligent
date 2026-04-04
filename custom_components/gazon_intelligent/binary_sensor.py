@@ -1,8 +1,80 @@
+from __future__ import annotations
+
 from homeassistant.components.binary_sensor import BinarySensorEntity
 
 from .const import DOMAIN
 from .entity_base import GazonEntityBase
 from .memory import compute_application_state, normalize_post_application_status
+
+_APPLICATION_SUMMARY_PUBLIC_KEYS = (
+    "produit_id",
+    "libelle",
+    "type",
+    "date",
+    "date_action",
+    "declared_at",
+    "produit",
+    "dose",
+    "note",
+    "reapplication_after_days",
+    "source",
+)
+_APPLICATION_PUBLIC_ATTR_KEYS = (
+    "application_type",
+    "application_requires_watering_after",
+    "application_post_watering_mm",
+    "application_irrigation_mode",
+    "application_post_watering_status",
+)
+_APPLICATION_STATUS_ATTR_KEYS = (
+    "application_block_active",
+    "application_block_remaining_minutes",
+    "application_post_watering_pending",
+    "application_post_watering_delay_remaining_minutes",
+    "application_post_watering_ready",
+    "application_post_watering_remaining_mm",
+    "auto_irrigation_enabled",
+)
+
+
+def _normalized_public_type_arrosage(entity: GazonEntityBase, raw_value: object | None = None) -> str:
+    raw_type = str(raw_value if raw_value is not None else entity._decision_value("type_arrosage") or "").strip().lower()
+    if raw_type != "personnalise":
+        return raw_type
+    objectif_mm = entity._decision_value("objectif_mm", 0.0)
+    try:
+        objectif_mm = float(objectif_mm or 0.0)
+    except (TypeError, ValueError):
+        objectif_mm = 0.0
+    decision_resume = entity._decision_value("decision_resume")
+    if (
+        objectif_mm <= 0.0
+        and isinstance(decision_resume, dict)
+        and str(decision_resume.get("action") or "").strip() in {"aucune_action", "none"}
+    ):
+        return "aucune_action"
+    return raw_type
+
+
+def _normalize_intervention_payload(payload: dict[str, object]) -> dict[str, object]:
+    if not isinstance(payload, dict) or not payload:
+        return payload
+    normalized = dict(payload)
+    status = str(normalized.get("status") or "").strip().lower()
+    if status == "possible":
+        normalized["status"] = "preparation"
+    return normalized
+
+
+def _compact_application_summary(summary: object) -> dict[str, object] | None:
+    if not isinstance(summary, dict) or not summary:
+        return None
+    compact = {
+        key: summary.get(key)
+        for key in _APPLICATION_SUMMARY_PUBLIC_KEYS
+        if summary.get(key) not in (None, "", [], {})
+    }
+    return compact or None
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -25,7 +97,7 @@ class GazonTonteAutoriseeBinarySensor(GazonEntityBase, BinarySensorEntity):
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_tonte_autorisee"
+        self._set_entity_identity("binary_sensor", "tonte_autorisee")
 
     @property
     def is_on(self):
@@ -54,7 +126,7 @@ class GazonArrosageRecommandeBinarySensor(GazonEntityBase, BinarySensorEntity):
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_arrosage_recommande"
+        self._set_entity_identity("binary_sensor", "arrosage_recommande")
 
     @property
     def is_on(self):
@@ -62,7 +134,10 @@ class GazonArrosageRecommandeBinarySensor(GazonEntityBase, BinarySensorEntity):
 
     @property
     def extra_state_attributes(self):
-        return self._attrs_from_result("objectif_mm", "type_arrosage")
+        attrs = self._attrs_from_result("objectif_mm", "type_arrosage") or {}
+        if "type_arrosage" in attrs:
+            attrs["type_arrosage"] = _normalized_public_type_arrosage(self, attrs.get("type_arrosage")) or None
+        return attrs or None
 
 
 class GazonApplicationArrosageAutoriseBinarySensor(GazonEntityBase, BinarySensorEntity):
@@ -72,7 +147,7 @@ class GazonApplicationArrosageAutoriseBinarySensor(GazonEntityBase, BinarySensor
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_arrosage_apres_application_autorise"
+        self._set_entity_identity("binary_sensor", "arrosage_apres_application_autorise")
 
     @staticmethod
     def _empty_application_state() -> dict[str, object]:
@@ -99,27 +174,7 @@ class GazonApplicationArrosageAutoriseBinarySensor(GazonEntityBase, BinarySensor
         }
 
     def _application_state_keys(self) -> tuple[str, ...]:
-        return (
-            "derniere_application",
-            "application_type",
-            "application_requires_watering_after",
-            "application_post_watering_mm",
-            "application_irrigation_block_hours",
-            "application_irrigation_delay_minutes",
-            "application_irrigation_mode",
-            "application_label_notes",
-            "application_post_watering_status",
-            "declared_at",
-            "application_block_until",
-            "application_block_active",
-            "application_block_remaining_minutes",
-            "application_post_watering_pending",
-            "application_post_watering_ready_at",
-            "application_post_watering_delay_remaining_minutes",
-            "application_post_watering_ready",
-            "application_post_watering_remaining_mm",
-            "auto_irrigation_enabled",
-        )
+        return ("derniere_application",) + _APPLICATION_PUBLIC_ATTR_KEYS + _APPLICATION_STATUS_ATTR_KEYS
 
     def _state_from_memory(self, memory: dict[str, object]) -> dict[str, object]:
         state = {
@@ -176,7 +231,12 @@ class GazonApplicationArrosageAutoriseBinarySensor(GazonEntityBase, BinarySensor
     def extra_state_attributes(self):
         state = self._application_state()
         attrs: dict[str, object] = {}
+        compact_summary = _compact_application_summary(state.get("derniere_application"))
+        if compact_summary:
+            attrs["derniere_application"] = compact_summary
         for key in self._application_state_keys():
+            if key == "derniere_application":
+                continue
             value = state.get(key)
             if value not in (None, "", [], {}):
                 attrs[key] = value
@@ -190,7 +250,7 @@ class GazonSignalIrrigationBinarySensor(GazonEntityBase, BinarySensorEntity):
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_signal_irrigation"
+        self._set_entity_identity("binary_sensor", "signal_irrigation")
 
     @property
     def is_on(self):
@@ -207,7 +267,7 @@ class GazonSignalIrrigationBinarySensor(GazonEntityBase, BinarySensorEntity):
             self._decision_value("application_post_watering_status")
         )
         hydric_actionable = bool(self._decision_value("arrosage_recommande", False))
-        type_arrosage = str(self._decision_value("type_arrosage") or "").strip().lower()
+        type_arrosage = _normalized_public_type_arrosage(self)
         if post_status == "autorise":
             trigger_kind = "post_application"
             source_status = post_status
@@ -243,17 +303,17 @@ class GazonSignalInterventionBinarySensor(GazonEntityBase, BinarySensorEntity):
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_signal_intervention"
+        self._set_entity_identity("binary_sensor", "signal_intervention")
 
     def _intervention_payload(self) -> dict[str, object]:
         payload = self._decision_value("intervention_recommendation")
         if isinstance(payload, dict) and payload:
-            return payload
+            return _normalize_intervention_payload(payload)
         data = getattr(self.coordinator, "data", None)
         if isinstance(data, dict):
             payload = data.get("intervention_recommendation")
             if isinstance(payload, dict) and payload:
-                return payload
+                return _normalize_intervention_payload(payload)
         return {}
 
     @property
@@ -276,7 +336,7 @@ class GazonSignalInterventionBinarySensor(GazonEntityBase, BinarySensorEntity):
             trigger_kind = "ready"
         elif status == "recommended":
             trigger_kind = "recommended"
-        elif status == "possible":
+        elif status == "preparation":
             trigger_kind = "soft"
         product = payload.get("product")
         if not isinstance(product, dict):
@@ -286,7 +346,7 @@ class GazonSignalInterventionBinarySensor(GazonEntityBase, BinarySensorEntity):
             ui = {}
         summary = ui.get("summary") or {
             "recommended": "Recommandé",
-            "possible": "À préparer",
+            "preparation": "À préparer",
             "blocked": "Bloqué",
             "unavailable": "Non disponible",
         }.get(status, "Non disponible")

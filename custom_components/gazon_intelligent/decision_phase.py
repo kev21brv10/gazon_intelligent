@@ -2,8 +2,9 @@ from __future__ import annotations
 
 """Logique pure liée à la phase et à la sous-phase."""
 
-from datetime import datetime
 from typing import Any
+
+from homeassistant.util import dt as dt_util
 
 from .decision_models import DecisionContext
 from .guidance import compute_jours_restants_for
@@ -24,7 +25,7 @@ def build_phase_bundle(context: DecisionContext) -> dict[str, Any]:
         date_debut=date_debut,
         date_fin=date_fin,
         today=context.today,
-        now=datetime.now().astimezone(),
+        now=dt_util.now(),
     )
     jours_restants = compute_jours_restants_for(
         phase_dominante=phase_dominante,

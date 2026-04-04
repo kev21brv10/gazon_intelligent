@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from datetime import date
+from datetime import date, datetime, timezone
 from importlib import util
 from pathlib import Path
 import sys
@@ -24,6 +24,24 @@ def _ensure_package(name: str) -> None:
     sys.modules[name] = module
 
 
+def _ensure_homeassistant_dt_module() -> None:
+    if "homeassistant.util.dt" in sys.modules:
+        return
+    homeassistant = sys.modules.get("homeassistant")
+    if homeassistant is None:
+        homeassistant = types.ModuleType("homeassistant")
+        homeassistant.__path__ = []  # type: ignore[attr-defined]
+        sys.modules["homeassistant"] = homeassistant
+    util = sys.modules.get("homeassistant.util")
+    if util is None:
+        util = types.ModuleType("homeassistant.util")
+        util.__path__ = []  # type: ignore[attr-defined]
+        sys.modules["homeassistant.util"] = util
+    dt_module = types.ModuleType("homeassistant.util.dt")
+    dt_module.now = lambda: datetime(2026, 4, 4, 14, 15, tzinfo=timezone.utc)  # type: ignore[attr-defined]
+    sys.modules["homeassistant.util.dt"] = dt_module
+
+
 def _load_module(fullname: str, filename: str):
     spec = util.spec_from_file_location(fullname, MODULE_DIR / filename)
     if spec is None or spec.loader is None:
@@ -36,6 +54,7 @@ def _load_module(fullname: str, filename: str):
 
 _ensure_package("custom_components")
 _ensure_package("custom_components.gazon_intelligent")
+_ensure_homeassistant_dt_module()
 _load_module("custom_components.gazon_intelligent.const", "const.py")
 _load_module("custom_components.gazon_intelligent.water", "water.py")
 _load_module("custom_components.gazon_intelligent.memory", "memory.py")
@@ -486,6 +505,18 @@ class GazonBrainTests(unittest.TestCase):
 
     def test_compute_snapshot_updates_and_persists_soil_balance(self) -> None:
         brain = GazonBrain()
+        brain.register_product(
+            "humuslight",
+            "Humuslight",
+            type_produit="Biostimulant",
+            usage_mode="preventif",
+            max_applications_per_year=2,
+            reapplication_after_days=25,
+            phase_compatible=["Sursemis", "Croissance", "Entretien"],
+            application_months=[3, 4, 5, 9, 10],
+            temperature_min=8,
+            temperature_max=28,
+        )
         brain.record_watering(
             date_action=date(2026, 3, 18),
             total_mm=3.6,
@@ -497,7 +528,7 @@ class GazonBrainTests(unittest.TestCase):
             source="auto_irrigation",
         )
         snapshot = brain.compute_snapshot(
-            today=date(2026, 3, 18),
+            today=date(2026, 4, 10),
             temperature=20.0,
             pluie_24h=1.0,
             pluie_demain=0.0,
@@ -516,7 +547,10 @@ class GazonBrainTests(unittest.TestCase):
         reloaded = GazonBrain()
         reloaded.load_state(brain.dump_state())
 
-        self.assertGreater(snapshot["bilan_hydrique_mm"], 12.0)
+        self.assertGreater(snapshot["bilan_hydrique_mm"], 10.0)
+        self.assertIn("bilan_hydrique_journalier_mm", snapshot)
+        self.assertIn("bilan_hydrique_journalier_mm", brain.last_result.extra)
+        self.assertIn("soil_balance", brain.last_result.extra)
         self.assertEqual(snapshot["soil_balance"]["reserve_mm"], reloaded.soil_balance["reserve_mm"])
         self.assertEqual(reloaded.soil_balance["reserve_mm"], brain.soil_balance["reserve_mm"])
         self.assertIsNotNone(brain.last_result)
@@ -524,6 +558,12 @@ class GazonBrainTests(unittest.TestCase):
         self.assertEqual(brain.last_result.extra["configuration"]["type_sol"], "limoneux")
         self.assertEqual(brain.last_result.extra["pluie_demain_source"], "meteo_forecast")
         self.assertIn("assistant", snapshot)
+        recommendation = snapshot["intervention_recommendation"]
+        self.assertEqual(recommendation["context"]["current_month"], 4)
+        phase_constraint = next(item for item in recommendation["constraints"] if item.get("code") == "phase_compatibility")
+        self.assertEqual(phase_constraint["value"]["current"], "Normal")
+        month_constraint = next(item for item in recommendation["constraints"] if item.get("code") == "application_months")
+        self.assertEqual(month_constraint["value"]["current_month"], 4)
         self.assertEqual(
             set(snapshot["assistant"].keys()),
             {"action", "moment", "quantity_mm", "status", "reason"},

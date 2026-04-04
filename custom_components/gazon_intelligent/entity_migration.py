@@ -3,12 +3,12 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any, TYPE_CHECKING
 
-from .entity_ids import ACTIVE_ENTITY_SUFFIXES
+from .entity_ids import ACTIVE_ENTITY_SUFFIXES, public_entity_domain, public_entity_id
 
 if TYPE_CHECKING:  # pragma: no cover
     from homeassistant.core import HomeAssistant
 
-CURRENT_CONFIG_ENTRY_VERSION = 2
+CURRENT_CONFIG_ENTRY_VERSION = 3
 
 
 def _unique_id_suffix(unique_id: Any, entry_id: str) -> str | None:
@@ -45,6 +45,29 @@ def iter_obsolete_entity_ids(
     return obsolete_entity_ids
 
 
+def iter_entity_id_updates(
+    entities: Iterable[Any],
+    entry_id: str,
+) -> list[tuple[str, str, str]]:
+    updates: list[tuple[str, str, str]] = []
+    for entity in entities:
+        config_entry_id = getattr(entity, "config_entry_id", None)
+        if config_entry_id != entry_id:
+            continue
+        unique_id = getattr(entity, "unique_id", None)
+        suffix = _unique_id_suffix(unique_id, entry_id)
+        if suffix is None or suffix not in ACTIVE_ENTITY_SUFFIXES:
+            continue
+        current_entity_id = getattr(entity, "entity_id", None)
+        if not isinstance(current_entity_id, str) or not current_entity_id:
+            continue
+        desired_entity_id = public_entity_id(public_entity_domain(suffix), suffix)
+        if current_entity_id == desired_entity_id:
+            continue
+        updates.append((current_entity_id, desired_entity_id, unique_id))
+    return updates
+
+
 async def async_cleanup_obsolete_entities(
     hass: "HomeAssistant | None",
     entry_id: str,
@@ -60,3 +83,24 @@ async def async_cleanup_obsolete_entities(
     for entity_id in obsolete_entity_ids:
         registry.async_remove(entity_id)
     return obsolete_entity_ids
+
+
+async def async_align_entity_ids(
+    hass: "HomeAssistant | None",
+    entry_id: str,
+    entity_registry: Any | None = None,
+) -> list[tuple[str, str]]:
+    if entity_registry is None:
+        from homeassistant.helpers import entity_registry as er  # local import for HA runtime
+
+        registry = er.async_get(hass)
+    else:
+        registry = entity_registry
+    applied_updates: list[tuple[str, str]] = []
+    for current_entity_id, desired_entity_id, unique_id in iter_entity_id_updates(registry.entities.values(), entry_id):
+        existing = registry.entities.get(desired_entity_id)
+        if existing is not None and getattr(existing, "unique_id", None) != unique_id:
+            continue
+        registry.async_update_entity(current_entity_id, new_entity_id=desired_entity_id)
+        applied_updates.append((current_entity_id, desired_entity_id))
+    return applied_updates

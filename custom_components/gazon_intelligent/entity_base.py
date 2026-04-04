@@ -5,12 +5,22 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .decision_models import DecisionResult
+from .entity_ids import public_entity_id
 
 
 class GazonEntityBase(CoordinatorEntity):
     """Base commune pour les entités de Gazon Intelligent."""
 
     _device_model = "Gestion gazon"
+
+    def _set_entity_identity(self, platform: str, suffix: str) -> None:
+        entry_id = self.coordinator.entry.entry_id
+        resolved_entity_id = public_entity_id(platform, suffix)
+        _domain, object_id = resolved_entity_id.split(".", 1)
+        self._attr_unique_id = f"{entry_id}_{suffix}"
+        self._attr_entity_id = resolved_entity_id
+        self._attr_suggested_object_id = object_id
+        self.entity_id = resolved_entity_id
 
     @property
     def device_info(self) -> DeviceInfo:

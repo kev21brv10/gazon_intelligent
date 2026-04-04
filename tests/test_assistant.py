@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import unittest
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 import sys
 import types
+from zoneinfo import ZoneInfo
 
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_DIR = ROOT / "custom_components" / "gazon_intelligent"
+TEST_TZ = ZoneInfo("Europe/Paris")
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -32,6 +35,11 @@ def _install_homeassistant_stubs() -> None:
     ensure_module("homeassistant")
     ensure_module("homeassistant.components")
     ensure_module("homeassistant.helpers")
+    util_mod = ensure_module("homeassistant.util")
+    if not hasattr(util_mod, "__path__"):
+        util_mod.__path__ = []  # type: ignore[attr-defined]
+    dt_mod = ensure_module("homeassistant.util.dt")
+    dt_mod.now = lambda: datetime(2026, 4, 4, 14, 15, tzinfo=TEST_TZ)  # type: ignore[attr-defined]
 
     sensor_mod = ensure_module("homeassistant.components.sensor")
     if not hasattr(sensor_mod, "SensorEntity"):
@@ -209,3 +217,56 @@ class AssistantDecisionTests(unittest.TestCase):
 
         self.assertEqual(entity.extra_state_attributes["next_action_date"], "2026-03-27")
         self.assertEqual(entity.extra_state_attributes["next_action_display"], "27/03/2026")
+
+    def test_action_recommandee_sensor_falls_back_to_assistant_when_text_is_generic(self) -> None:
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={
+                "action_recommandee": "Réévalue au prochain cycle météo.",
+                "tonte_autorisee": True,
+                "tonte_statut": "autorisee",
+            },
+        )
+
+        entity = sensor.GazonActionRecommandeeSensor(coordinator)
+
+        self.assertEqual(entity.native_value, "Tonte possible maintenant.")
+
+    def test_conseil_principal_exposes_public_action_recommandee(self) -> None:
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={
+                "conseil_principal": "N'arrose pas pour le moment.",
+                "action_recommandee": "Réévalue au prochain cycle météo.",
+                "tonte_autorisee": True,
+                "tonte_statut": "autorisee",
+            },
+        )
+
+        entity = sensor.GazonConseilPrincipalSensor(coordinator)
+
+        self.assertEqual(entity.extra_state_attributes["action_recommandee"], "Tonte possible maintenant.")
+
+    def test_conseil_principal_sensor_builds_global_summary_for_card(self) -> None:
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={
+                "conseil_principal": "N'arrose pas pour le moment.",
+                "action_recommandee": "Réévalue au prochain cycle météo.",
+                "arrosage_recommande": False,
+                "application_post_watering_status": "non_requis",
+                "tonte_autorisee": True,
+                "tonte_statut": "autorisee",
+                "intervention_recommendation": {
+                    "status": "preparation",
+                    "ready_to_declare": False,
+                    "product": {"name": "H2Pro TriSmart"},
+                },
+            },
+        )
+
+        entity = sensor.GazonConseilPrincipalSensor(coordinator)
+
+        expected = "Tonte possible maintenant."
+        self.assertEqual(entity.native_value, expected)
+        self.assertEqual(entity.extra_state_attributes["summary"], expected)

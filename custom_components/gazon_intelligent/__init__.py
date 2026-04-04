@@ -14,6 +14,7 @@ from .const import (
     MODES_GAZON,
 )
 from .entity_migration import (
+    async_align_entity_ids,
     async_cleanup_obsolete_entities,
 )
 from .coordinator import GazonIntelligentCoordinator
@@ -44,6 +45,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await async_cleanup_obsolete_entities(hass, entry.entry_id)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    await async_align_entity_ids(hass, entry.entry_id)
     await coordinator.async_start_source_monitoring()
     await coordinator.async_start_zone_monitoring()
     await coordinator.async_start_auto_irrigation_monitoring()

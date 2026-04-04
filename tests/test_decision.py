@@ -6,6 +6,7 @@ import importlib
 from pathlib import Path
 import sys
 import types
+from zoneinfo import ZoneInfo
 
 
 
@@ -23,8 +24,25 @@ def _ensure_package(name: str, path: Path) -> None:
     sys.modules[name] = module
 
 
+def _install_homeassistant_dt_stub() -> None:
+    homeassistant = sys.modules.get("homeassistant")
+    if homeassistant is None:
+        homeassistant = types.ModuleType("homeassistant")
+        homeassistant.__path__ = []  # type: ignore[attr-defined]
+        sys.modules["homeassistant"] = homeassistant
+    util = sys.modules.get("homeassistant.util")
+    if util is None:
+        util = types.ModuleType("homeassistant.util")
+        util.__path__ = []  # type: ignore[attr-defined]
+        sys.modules["homeassistant.util"] = util
+    dt_module = types.ModuleType("homeassistant.util.dt")
+    dt_module.now = lambda: datetime(2026, 4, 4, 14, 15, tzinfo=ZoneInfo("Europe/Paris"))  # type: ignore[attr-defined]
+    sys.modules["homeassistant.util.dt"] = dt_module
+
+
 _ensure_package("custom_components", PACKAGE_DIR.parent)
 _ensure_package("custom_components.gazon_intelligent", PACKAGE_DIR)
+_install_homeassistant_dt_stub()
 
 decision = importlib.import_module("custom_components.gazon_intelligent.decision")
 decision_watering = importlib.import_module("custom_components.gazon_intelligent.decision_watering")
@@ -202,6 +220,13 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertLess(context["dew_factor"], 1.0)
         self.assertLess(context["rain_factor"], 1.0)
 
+    def test_compute_advanced_context_normalizes_weather_probability_strings(self) -> None:
+        context = decision.compute_advanced_context(
+            weather_profile={"weather_precipitation_probability": "70"},
+        )
+
+        self.assertEqual(context["weather_precipitation_probability"], 70.0)
+
     def test_compute_memory_tracks_last_useful_events(self) -> None:
         history = [
             {"type": "tonte", "date": "2026-03-12"},
@@ -311,6 +336,8 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertEqual(snapshot["phase_active"], "Normal")
         self.assertEqual(snapshot["objectif_mm"], 0.0)
         self.assertFalse(snapshot["arrosage_recommande"])
+        self.assertEqual(snapshot["type_arrosage"], "aucune_action")
+        self.assertEqual(snapshot["arrosage_conseille"], "aucune_action")
         self.assertEqual(snapshot["niveau_action"], "aucune_action")
         self.assertNotIn("0.0 mm", snapshot["conseil_principal"])
         self.assertNotIn("0.0 mm", snapshot["action_recommandee"])
@@ -796,7 +823,7 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertIn("Cooldown 24h", snapshot["raison_decision"])
         self.assertIn("cooldown_24h", snapshot["raison_decision"])
 
-    def test_build_decision_snapshot_blocks_when_soil_is_already_saturated(self) -> None:
+    def test_build_decision_snapshot_normal_uses_daily_balance_even_with_positive_soil_reserve(self) -> None:
         snapshot = decision.build_decision_snapshot(
             history=[{"type": "Normal", "date": date.today().isoformat()}],
             today=date.today(),
@@ -811,11 +838,41 @@ class DecisionEngineTests(unittest.TestCase):
         )
 
         self.assertEqual(snapshot["phase_active"], "Normal")
-        self.assertEqual(snapshot["type_arrosage"], "bloque")
-        self.assertEqual(snapshot["block_reason"], "sol_deja_humide")
+        self.assertEqual(snapshot["bilan_hydrique_mm"], 6.0)
+        self.assertLess(snapshot["bilan_hydrique_journalier_mm"], 0.0)
+        self.assertEqual(snapshot["type_arrosage"], "auto")
+        self.assertIsNone(snapshot.get("block_reason"))
+        self.assertGreater(snapshot["objectif_mm"], 0.0)
+        self.assertNotIn("Sol déjà humide", snapshot["raison_decision"])
+        self.assertNotIn("sol_deja_humide", snapshot["raison_decision"])
+
+    def test_build_decision_snapshot_normal_urgence_uses_daily_balance_when_soil_reserve_is_positive(self) -> None:
+        snapshot = decision.build_decision_snapshot(
+            history=[{"type": "Normal", "date": "2026-04-04"}],
+            today=date(2026, 4, 4),
+            hour_of_day=8,
+            temperature=14.6,
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            humidite=60.0,
+            type_sol="limoneux",
+            etp_capteur=0.9,
+            soil_balance={
+                "reserve_mm": 15.8,
+                "previous_reserve_mm": 16.7,
+                "pluie_mm": 0.0,
+                "arrosage_mm": 0.0,
+                "etp_mm": 0.9,
+                "delta_mm": -0.9,
+            },
+        )
+
         self.assertEqual(snapshot["objectif_mm"], 0.0)
-        self.assertIn("Sol déjà humide", snapshot["raison_decision"])
-        self.assertIn("sol_deja_humide", snapshot["raison_decision"])
+        self.assertEqual(snapshot["type_arrosage"], "aucune_action")
+        self.assertEqual(snapshot["arrosage_conseille"], "aucune_action")
+        self.assertLess(snapshot["bilan_hydrique_journalier_mm"], 0.0)
+        self.assertGreater(snapshot["bilan_hydrique_mm"], 0.0)
+        self.assertEqual(snapshot["urgence"], "moyenne")
 
     def test_compute_objectif_mm_blocks_when_three_day_rain_horizon_is_significant(self) -> None:
         objectif = decision.compute_objectif_mm(
@@ -1116,10 +1173,10 @@ class DecisionEngineTests(unittest.TestCase):
                     weather_profile={"weather_precipitation_probability": 20.0},
                     soil_balance={"reserve_mm": 5.5},
                 ),
-                0.0,
-                False,
-                "sol_deja_humide",
-                False,
+                0.5,
+                True,
+                None,
+                True,
             ),
             (
                 "recent_watering",
@@ -1187,7 +1244,7 @@ class DecisionEngineTests(unittest.TestCase):
             hour_of_day=8,
             temperature=18.0,
             pluie_24h=0.0,
-            pluie_demain=0.6,
+            pluie_demain=0.8,
             humidite=55.0,
             type_sol="limoneux",
             etp_capteur=1.2,
@@ -1200,7 +1257,7 @@ class DecisionEngineTests(unittest.TestCase):
             hour_of_day=8,
             temperature=18.0,
             pluie_24h=0.0,
-            pluie_demain=0.6,
+            pluie_demain=0.8,
             humidite=55.0,
             type_sol="limoneux",
             etp_capteur=1.2,

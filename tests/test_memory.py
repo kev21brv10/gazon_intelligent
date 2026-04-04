@@ -6,6 +6,8 @@ import importlib
 from pathlib import Path
 import sys
 import types
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 
 
@@ -23,11 +25,33 @@ def _ensure_package(name: str, path: Path) -> None:
     sys.modules[name] = module
 
 
+def _ensure_homeassistant_dt_module() -> None:
+    if "homeassistant.util.dt" in sys.modules:
+        return
+    homeassistant = sys.modules.get("homeassistant")
+    if homeassistant is None:
+        homeassistant = types.ModuleType("homeassistant")
+        homeassistant.__path__ = []  # type: ignore[attr-defined]
+        sys.modules["homeassistant"] = homeassistant
+    util = sys.modules.get("homeassistant.util")
+    if util is None:
+        util = types.ModuleType("homeassistant.util")
+        util.__path__ = []  # type: ignore[attr-defined]
+        sys.modules["homeassistant.util"] = util
+    dt_module = types.ModuleType("homeassistant.util.dt")
+    dt_module.now = lambda: datetime(2026, 4, 4, 14, 15, tzinfo=timezone.utc)  # type: ignore[attr-defined]
+    sys.modules["homeassistant.util.dt"] = dt_module
+
+
 _ensure_package("custom_components", PACKAGE_DIR.parent)
 _ensure_package("custom_components.gazon_intelligent", PACKAGE_DIR)
+_ensure_homeassistant_dt_module()
 
 memory = importlib.import_module("custom_components.gazon_intelligent.memory")
 intervention = importlib.import_module("custom_components.gazon_intelligent.intervention_recommendation")
+decision_models = importlib.import_module("custom_components.gazon_intelligent.decision_models")
+phases = importlib.import_module("custom_components.gazon_intelligent.phases")
+guidance = importlib.import_module("custom_components.gazon_intelligent.guidance")
 
 
 class MemoryCatalogTests(unittest.TestCase):
@@ -399,7 +423,7 @@ class MemoryCatalogTests(unittest.TestCase):
             4,
         )
 
-    def test_build_intervention_recommendation_keeps_low_score_candidate_possible(self) -> None:
+    def test_build_intervention_recommendation_keeps_low_score_candidate_in_preparation(self) -> None:
         recommendation = intervention.build_intervention_recommendation(
             today=date(2026, 4, 10),
             phase_active="Sursemis",
@@ -424,7 +448,7 @@ class MemoryCatalogTests(unittest.TestCase):
             temperature_source="capteur",
         )
 
-        self.assertEqual(recommendation["status"], "possible")
+        self.assertEqual(recommendation["status"], "preparation")
         self.assertEqual(recommendation["recommended_action"], "select_product")
         self.assertLess(recommendation["score"], 71)
 
@@ -638,8 +662,8 @@ class MemoryCatalogTests(unittest.TestCase):
         )
 
         self.assertLess(preventif["score"], curatif["score"])
-        self.assertIn(preventif["status"], {"possible", "recommended"})
-        self.assertIn(curatif["status"], {"possible", "recommended"})
+        self.assertIn(preventif["status"], {"preparation", "recommended"})
+        self.assertIn(curatif["status"], {"preparation", "recommended"})
 
     def test_build_intervention_recommendation_blocks_when_temperature_is_far_out_of_range(self) -> None:
         recommendation = intervention.build_intervention_recommendation(
@@ -781,3 +805,92 @@ class MemoryCatalogTests(unittest.TestCase):
                 for item in recommendation["missing_requirements"]
             )
         )
+
+    def test_build_intervention_recommendation_does_not_block_only_because_watering_profile_is_blocked(self) -> None:
+        recommendation = intervention.build_intervention_recommendation(
+            today=date(2026, 4, 4),
+            phase_active="Normal",
+            phase_source="absence_phase",
+            sous_phase="Normal",
+            selected_product_id=None,
+            selected_product_name=None,
+            products={
+                "h2pro_trismart": {
+                    "id": "h2pro_trismart",
+                    "nom": "H2Pro TriSmart",
+                    "type": "Agent Mouillant",
+                    "usage_mode": "preventif",
+                    "max_applications_per_year": 6,
+                    "reapplication_after_days": 28,
+                    "phase_compatible": ["Croissance", "Entretien"],
+                    "application_months": [4, 5, 6, 7, 8, 9],
+                    "temperature_min": 10,
+                    "temperature_max": 30,
+                }
+            },
+            history=[],
+            application_state={
+                "type_arrosage": "bloque",
+                "application_block_active": False,
+                "application_post_watering_pending": False,
+                "application_post_watering_status": "non_requis",
+                "bilan_hydrique_mm": 15.7,
+            },
+            temperature=17.3,
+            forecast_temperature_today=17.3,
+            temperature_source="weather",
+        )
+
+        self.assertEqual(recommendation["status"], "preparation")
+        self.assertEqual(recommendation["recommended_action"], "select_product")
+        self.assertFalse(
+            any(item.get("code") == "post_application_block" for item in recommendation["constraints"])
+        )
+        self.assertIn("Contexte hydrique excédentaire", recommendation["reasons"])
+
+    def test_default_decision_time_comes_from_home_assistant_clock(self) -> None:
+        fixed_now = datetime(2026, 4, 4, 14, 15, tzinfo=timezone(timedelta(hours=2)))
+        with patch.object(decision_models.dt_util, "now", return_value=fixed_now), patch.object(
+            phases.dt_util,
+            "now",
+            return_value=fixed_now,
+        ):
+            context = decision_models.DecisionContext.from_legacy_args(history=[])
+            dominant = phases.compute_dominant_phase([], today=None, temperature=None)
+            subphase = phases.compute_subphase("Normal", None, None, today=None, now=None)
+
+        self.assertEqual(context.today, date(2026, 4, 4))
+        self.assertEqual(dominant["phase_dominante"], "Normal")
+        self.assertEqual(dominant["source"], "absence_phase")
+        self.assertEqual(subphase["sous_phase"], "Normal")
+
+    def test_normal_watering_profile_uses_daily_balance_instead_of_soil_reserve_for_blocking(self) -> None:
+        profile = guidance.compute_watering_profile(
+            phase_dominante="Normal",
+            sous_phase="Normal",
+            water_balance={
+                "bilan_hydrique_mm": 15.6,
+                "bilan_hydrique_journalier_mm": -1.0,
+                "deficit_jour": 1.0,
+                "deficit_3j": 3.4,
+                "deficit_7j": 8.0,
+                "arrosage_recent_7j": 0.5,
+                "arrosage_recent": 0.5,
+            },
+            today=date(2026, 4, 4),
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            pluie_j2=0.0,
+            pluie_3j=0.0,
+            pluie_probabilite_max_3j=0.0,
+            humidite=60.0,
+            temperature=19.1,
+            etp=1.1,
+            type_sol="limoneux",
+            weather_profile={},
+            history=[],
+        )
+
+        self.assertIsNone(profile.get("block_reason"))
+        self.assertEqual(profile["type_arrosage"], "aucune_action")
+        self.assertFalse(profile["arrosage_recommande"])

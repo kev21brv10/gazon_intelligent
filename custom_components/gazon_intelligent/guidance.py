@@ -124,6 +124,17 @@ def _to_float(value: Any) -> float | None:
         return None
 
 
+def _reference_hydric_balance_mm(water_balance: dict[str, Any] | None) -> float:
+    water_balance = water_balance or {}
+    reference = water_balance.get("bilan_hydrique_journalier_mm")
+    if reference is None:
+        reference = water_balance.get("bilan_hydrique_mm", 0.0)
+    try:
+        return float(reference or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _parse_history_datetime(value: Any) -> datetime | None:
     if value is None:
         return None
@@ -198,7 +209,7 @@ def _compute_transition_sursemis_pret(
     tonte_ok = tonte_count >= 2
     height_ok = hauteur_gazon is None or hauteur_gazon >= 6.0
     weather_ok = (
-        water_balance.get("bilan_hydrique_mm", 0.0) <= 2.0
+        _reference_hydric_balance_mm(water_balance) <= 2.0
         and pluie_24h < 1.0
         and pluie_demain < 1.0
         and pluie_probabilite_24h < 65.0
@@ -420,7 +431,7 @@ def _evening_window_allowed(
 ) -> bool:
     temperature = temperature if temperature is not None else 0.0
     humidite = humidite if humidite is not None else 0.0
-    bilan_hydrique_mm = water_balance.get("bilan_hydrique_mm", 0.0)
+    bilan_hydrique_mm = _reference_hydric_balance_mm(water_balance)
     arrosage_recent = water_balance.get("arrosage_recent", 0.0)
     deficit_3j = water_balance.get("deficit_3j", 0.0)
 
@@ -644,7 +655,7 @@ def compute_watering_profile(
             cooldown_24h_hours = delta_hours
             cooldown_24h_active = delta_hours < 24.0
 
-    bilan_hydrique_mm = water_balance.get("bilan_hydrique_mm", 0.0)
+    bilan_hydrique_mm = _reference_hydric_balance_mm(water_balance)
     deficit_jour = water_balance.get("deficit_jour", 0.0)
     deficit_3j = water_balance.get("deficit_3j", 0.0)
     deficit_7j = water_balance.get("deficit_7j", 0.0)
@@ -807,7 +818,7 @@ def compute_watering_profile(
         mm_cible = 0.5 if sursemis_state["allowed"] else 0.0
         block_reason = sursemis_state["block_reason"]
         mm_final = mm_cible
-        type_arrosage = "manuel_frequent" if mm_final > 0 else "personnalise"
+        type_arrosage = "manuel_frequent" if mm_final > 0 else "aucune_action"
         arrosage_auto = False
         passages = 1
         pause_minutes = 0
@@ -991,10 +1002,12 @@ def compute_watering_profile(
             "mm_requested": round(mm_cible, 1),
             "mm_applied": round(mm_final, 1),
             "mm_detected": round(water_balance.get("arrosage_recent_jour", 0.0), 1),
-            "type_arrosage": "bloque" if block_reason is not None else ("auto" if mm_final > 0 else "personnalise"),
+            "type_arrosage": "bloque" if block_reason is not None else ("auto" if mm_final > 0 else "aucune_action"),
             "arrosage_recommande": mm_final > 0 and block_reason is None,
             "arrosage_auto_autorise": mm_final > 0 and block_reason is None,
-            "arrosage_conseille": "personnalise" if block_reason is not None or mm_final <= 0 else "auto",
+            "arrosage_conseille": (
+                "personnalise" if block_reason is not None else "aucune_action" if mm_final <= 0 else "auto"
+            ),
             "watering_passages": passages,
             "watering_pause_minutes": pause_minutes,
             "fractionnement": {
@@ -1084,7 +1097,7 @@ def compute_watering_profile(
             "mm_requested": round(mm_cible, 1),
             "mm_applied": round(mm_final, 1),
             "mm_detected": round(water_balance.get("arrosage_recent_jour", 0.0), 1),
-            "type_arrosage": "auto" if mm_final > 0 else "personnalise",
+            "type_arrosage": "auto" if mm_final > 0 else "aucune_action",
             "arrosage_recommande": mm_final > 0,
             "arrosage_auto_autorise": mm_final > 0,
             "arrosage_conseille": "auto" if phase_dominante == "Fertilisation" else "personnalise",
@@ -1159,7 +1172,7 @@ def compute_watering_profile(
         "mm_requested": round(mm_cible, 1),
         "mm_applied": round(mm_final, 1),
         "mm_detected": round(water_balance.get("arrosage_recent_jour", 0.0), 1),
-        "type_arrosage": "personnalise" if mm_final <= 0 else "auto",
+        "type_arrosage": "aucune_action" if mm_final <= 0 else "auto",
         "arrosage_recommande": mm_final > 0,
         "arrosage_auto_autorise": mm_final > 0,
         "arrosage_conseille": "personnalise",
@@ -1251,7 +1264,7 @@ def is_fertilization_window_open(
     temperature = temperature or 0.0
     humidite = humidite or 0.0
     etp = etp or 0.0
-    bilan_hydrique_mm = water_balance.get("bilan_hydrique_mm", 0.0)
+    bilan_hydrique_mm = _reference_hydric_balance_mm(water_balance)
     mois = today.month
 
     if mois in {12, 1, 2}:
@@ -1307,7 +1320,7 @@ def compute_action_guidance(
     humidite = humidite or 0.0
     temperature = temperature or 0.0
     etp = etp or 0.0
-    bilan_hydrique_mm = water_balance.get("bilan_hydrique_mm", 0.0)
+    bilan_hydrique_mm = _reference_hydric_balance_mm(water_balance)
     deficit_3j = water_balance.get("deficit_3j", 0.0)
     deficit_7j = water_balance.get("deficit_7j", 0.0)
     besoin_court = max(0.0, -bilan_hydrique_mm)

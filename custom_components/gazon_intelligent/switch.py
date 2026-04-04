@@ -20,7 +20,7 @@ class GazonAutoIrrigationSwitch(GazonEntityBase, SwitchEntity):
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_arrosage_automatique"
+        self._set_entity_identity("switch", "arrosage_automatique")
 
     @property
     def is_on(self):
