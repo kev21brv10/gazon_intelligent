@@ -47,6 +47,22 @@ Les autres entités détaillent le contexte, l'historique, la tonte et le debug.
 
 ---
 
+## 🧩 Carte Lovelace associée
+
+Cette intégration est conçue pour fonctionner avec une carte Lovelace dédiée :
+
+- `lovelace-gazon-intelligent-card`
+
+La carte s'appuie directement sur les entités publiques exposées par l’intégration, notamment les capteurs de synthèse, les entités d’intervention, les sélecteurs produit et les réglages visibles dans Home Assistant.
+
+En pratique:
+
+- l’intégration reste la source de vérité métier
+- la card lit et met en forme ces entités pour l’interface
+- les `entity_id` publics stabilisés dans cette version servent aussi à garantir la cohérence entre backend et frontend
+
+---
+
 ## ✨ Release 0.5.0
 
 Cette version marque une évolution majeure de l'intégration:
