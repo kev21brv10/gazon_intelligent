@@ -390,6 +390,14 @@ class MemoryCatalogTests(unittest.TestCase):
         self.assertTrue(all(isinstance(item, dict) for item in recommendation["missing_requirements"]))
         self.assertEqual(recommendation["context"]["current_phase_source"], "historique_actif")
         self.assertFalse(recommendation["context"]["current_phase_is_default_normal"])
+        self.assertEqual(
+            next(item for item in recommendation["constraints"] if item.get("code") == "phase_compatibility")["value"]["current"],
+            "Sursemis",
+        )
+        self.assertEqual(
+            next(item for item in recommendation["constraints"] if item.get("code") == "application_months")["value"]["current_month"],
+            4,
+        )
 
     def test_build_intervention_recommendation_keeps_low_score_candidate_possible(self) -> None:
         recommendation = intervention.build_intervention_recommendation(
@@ -448,6 +456,38 @@ class MemoryCatalogTests(unittest.TestCase):
         self.assertEqual(recommendation["context"]["current_phase"], "Normal")
         self.assertEqual(recommendation["context"]["current_phase_source"], "absence_phase")
         self.assertTrue(recommendation["context"]["current_phase_is_default_normal"])
+
+    def test_build_intervention_recommendation_uses_explicit_block_reason_for_preventive_wetting_agent(self) -> None:
+        recommendation = intervention.build_intervention_recommendation(
+            today=date(2026, 4, 10),
+            phase_active="Normal",
+            phase_source="absence_phase",
+            sous_phase="Normal",
+            selected_product_id=None,
+            selected_product_name=None,
+            products={
+                "mouillant_preventif": {
+                    "id": "mouillant_preventif",
+                    "nom": "Mouillant préventif",
+                    "type": "Agent Mouillant",
+                    "usage_mode": "preventif",
+                    "phase_compatible": ["Normal"],
+                    "application_months": [4],
+                }
+            },
+            history=[],
+            application_state={
+                "application_block_active": True,
+                "application_block_reason": "sol déjà humide",
+            },
+            temperature=20.0,
+            forecast_temperature_today=20.0,
+            temperature_source="capteur",
+        )
+
+        self.assertEqual(recommendation["status"], "blocked")
+        self.assertIn("Agent mouillant préventif", recommendation["reason"])
+        self.assertIn("sol déjà humide", recommendation["reason"])
 
     def test_build_intervention_recommendation_penalizes_fertilisation_more_than_biostimulant_in_normal_phase(self) -> None:
         fertilisation = intervention.build_intervention_recommendation(
