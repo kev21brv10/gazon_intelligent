@@ -388,6 +388,34 @@ class MemoryCatalogTests(unittest.TestCase):
         self.assertTrue(all(isinstance(item, dict) for item in recommendation["constraints"]))
         self.assertTrue(all(isinstance(item, dict) for item in recommendation["missing_requirements"]))
 
+    def test_build_intervention_recommendation_keeps_low_score_candidate_possible(self) -> None:
+        recommendation = intervention.build_intervention_recommendation(
+            today=date(2026, 4, 10),
+            phase_active="Sursemis",
+            sous_phase="Reprise",
+            selected_product_id=None,
+            selected_product_name=None,
+            products={
+                "simple": {
+                    "id": "simple",
+                    "nom": "Simple",
+                    "type": "Biostimulant",
+                    "usage_mode": "preventif",
+                    "phase_compatible": ["Sursemis"],
+                    "application_months": [4],
+                }
+            },
+            history=[],
+            application_state={},
+            temperature=20.0,
+            forecast_temperature_today=20.0,
+            temperature_source="capteur",
+        )
+
+        self.assertEqual(recommendation["status"], "possible")
+        self.assertEqual(recommendation["recommended_action"], "select_product")
+        self.assertLess(recommendation["score"], 71)
+
     def test_build_intervention_recommendation_blocks_when_temperature_is_far_out_of_range(self) -> None:
         recommendation = intervention.build_intervention_recommendation(
             today=date(2026, 4, 10),
@@ -476,4 +504,52 @@ class MemoryCatalogTests(unittest.TestCase):
         self.assertEqual(recommendation["recommended_action"], "wait")
         self.assertTrue(
             any(item.get("code") == "annual_applications_limit" for item in recommendation["constraints"])
+        )
+
+    def test_build_intervention_recommendation_blocks_when_post_application_context_is_not_ready(self) -> None:
+        recommendation = intervention.build_intervention_recommendation(
+            today=date(2026, 4, 10),
+            phase_active="Sursemis",
+            sous_phase="Reprise",
+            selected_product_id=None,
+            selected_product_name=None,
+            products={
+                "humuslight": {
+                    "id": "humuslight",
+                    "nom": "Humuslight",
+                    "type": "Biostimulant",
+                    "usage_mode": "preventif",
+                    "max_applications_per_year": 2,
+                    "reapplication_after_days": 25,
+                    "phase_compatible": ["Sursemis", "Croissance", "Entretien"],
+                    "application_months": [3, 4, 5, 9, 10],
+                    "temperature_min": 8,
+                    "temperature_max": 28,
+                }
+            },
+            history=[
+                {
+                    "type": "Biostimulant",
+                    "date": "2026-03-12",
+                    "produit_id": "humuslight",
+                    "produit": "Humuslight",
+                    "reapplication_after_days": 25,
+                    "produit_catalogue": {
+                        "id": "humuslight",
+                        "nom": "Humuslight",
+                    },
+                }
+            ],
+            application_state={
+                "application_post_watering_status": "en_attente",
+            },
+        )
+
+        self.assertEqual(recommendation["status"], "blocked")
+        self.assertEqual(recommendation["recommended_action"], "wait")
+        self.assertTrue(
+            any(
+                "post-application" in str(item.get("hint") or "").lower() or "post-application" in str(item.get("label") or "").lower()
+                for item in recommendation["missing_requirements"]
+            )
         )
