@@ -10,7 +10,9 @@
 ![License](https://img.shields.io/github/license/kev21brv10/gazon_intelligent?style=flat-square)
 
 
-> Gazon Intelligent transforme tes données météo, d’arrosage et de contexte gazon en une seule décision claire, lisible et exploitable dans Home Assistant.
+> Gazon Intelligent analyse ton gazon à ta place et te dit exactement quoi faire, quand le faire et combien appliquer, directement dans Home Assistant.
+
+> Une seule décision à la fois. Toujours la bonne.
 
 ---
 
@@ -20,14 +22,24 @@
 - une façade canonique très lisible: `sensor.gazon_intelligent_assistant`
 - des entités complémentaires pour comprendre le contexte, sans complexifier l’usage quotidien
 
-Tu veux savoir quoi faire sur ton gazon ?
-L’intégration te donne directement :
-
-- quoi faire
-- quand le faire
-- combien appliquer
+Tu veux savoir quoi faire sur ton gazon ? L’intégration te donne directement l’action utile et le bon moment, avec la quantité seulement quand elle compte.
 
 👉 Commence ici : [Démarrage rapide](#-démarrage-rapide)
+
+---
+
+## Pourquoi c’est différent
+
+Gazon Intelligent n’est pas juste une collection de capteurs.
+
+Il ne se contente pas d’afficher des données:
+
+- il prend une décision à partir de la météo, de l’arrosage réel, de la phase du gazon et de l’historique
+- il évite les actions inutiles ou mal synchronisées
+- il remonte une seule action claire à la fois
+- il garde les détails utiles dans des entités complémentaires, sans perdre la lisibilité du résultat principal
+
+En clair: le produit ne te montre pas seulement l’état du gazon, il t’aide à décider.
 
 ---
 
@@ -36,17 +48,7 @@ L’intégration te donne directement :
 ### `sensor.gazon_intelligent_assistant`
 
 C’est l’entité centrale de l’intégration.
-C’est celle qu’il faut regarder en premier.
-
-Elle te donne la promesse produit :
-
-- quoi faire maintenant
-- quand agir
-- combien appliquer si un arrosage est utile
-- pourquoi cette décision remonte en priorité
-
-Quand il n’y a rien à faire, elle l’indique explicitement.
-Les autres entités servent surtout à détailler ou confirmer ce choix.
+Elle remonte l’action prioritaire et le bon moment pour agir. Quand il n’y a rien à faire, elle l’indique explicitement.
 
 ---
 
@@ -57,14 +59,7 @@ Les autres entités servent surtout à détailler ou confirmer ce choix.
 3. Consulte `sensor.gazon_intelligent_assistant`
 4. Ouvre `sensor.gazon_intelligent_conseil_principal`, `sensor.gazon_intelligent_fenetre_optimale` et `sensor.gazon_intelligent_objectif_d_arrosage` si tu veux plus de contexte
 
-👉 En quelques secondes, tu sais déjà :
-
-- quoi faire
-- quand le faire
-- combien appliquer
-
-La façade canonique est `sensor.gazon_intelligent_assistant`.
-Les autres entités détaillent le contexte, l’historique, la tonte et le debug.
+👉 En quelques secondes, tu sais si une action est utile, quand l’exécuter et si un arrosage doit être quantifié.
 
 ---
 
@@ -90,11 +85,10 @@ Au quotidien, le principe est simple:
 
 1. l’intégration calcule la décision
 2. tu lis `sensor.gazon_intelligent_assistant`
-3. tu appliques ou tu laisses faire
+3. tu ouvres les entités de contexte seulement si tu veux confirmer ou approfondir
 
 ### À consulter en priorité
 
-- `sensor.gazon_intelligent_assistant`
 - `sensor.gazon_intelligent_conseil_principal`
 - `sensor.gazon_intelligent_fenetre_optimale`
 - `sensor.gazon_intelligent_objectif_d_arrosage`
@@ -110,7 +104,7 @@ Au quotidien, le principe est simple:
 
 ## 🧠 Ce que fait l’intégration
 
-Gazon Intelligent centralise le calcul dans l’intégration et transforme ces données en décision:
+Gazon Intelligent centralise le calcul et transforme ces données en décision à partir de:
 
 - météo
 - arrosage récent
@@ -118,12 +112,11 @@ Gazon Intelligent centralise le calcul dans l’intégration et transforme ces d
 - phase dominante et sous-phase
 - historique des interventions
 
-Il répond ensuite à des questions simples:
+Il répond ensuite à l’essentiel:
 
 - quoi faire
-- quand le faire
-- combien appliquer
-- pourquoi
+- quand agir
+- quelle quantité appliquer si besoin
 - quoi éviter
 
 En pratique, l’intégration gère:
@@ -143,31 +136,31 @@ En pratique, l’intégration gère:
 ---
 ## 👀 Entités
 
-### Entité principale
+Avant de parcourir toute la liste:
+
+1. regarde `sensor.gazon_intelligent_assistant`
+2. vérifie `sensor.gazon_intelligent_conseil_principal`
+3. ouvre `sensor.gazon_intelligent_fenetre_optimale` si une action est proposée
+4. regarde `sensor.gazon_intelligent_objectif_d_arrosage` si l’action concerne l’irrigation
+
+Le reste sert surtout à détailler, confirmer ou approfondir la décision.
+
+### Entités essentielles
 
 - `sensor.gazon_intelligent_assistant`
-  - c’est l’entité à regarder en premier
-  - elle porte la décision principale
-  - elle expose aussi la prochaine date estimée
-  - quand il n’y a rien à faire, elle affiche `aucune_action`
-
-### Entités principales
-
+  - décision principale à lire en premier
 - `sensor.gazon_intelligent_conseil_principal`
   - résumé public priorisé de la situation
 - `sensor.gazon_intelligent_fenetre_optimale`
   - meilleur moment pour agir
 - `sensor.gazon_intelligent_objectif_d_arrosage`
   - quantité d’eau utile si un arrosage est nécessaire
-- `sensor.gazon_intelligent_plan_d_arrosage`
-  - cycle d’arrosage calculé
-- `sensor.gazon_intelligent_niveau_d_action`
-  - niveau d’urgence métier
-- `sensor.gazon_intelligent_type_d_arrosage`
-  - profil d’arrosage retenu
 
 ### Entités avancées
 
+- `sensor.gazon_intelligent_plan_d_arrosage`
+- `sensor.gazon_intelligent_niveau_d_action`
+- `sensor.gazon_intelligent_type_d_arrosage`
 - `sensor.gazon_intelligent_phase_dominante`
 - `sensor.gazon_intelligent_sous_phase`
 - `sensor.gazon_intelligent_risque_gazon`
@@ -411,6 +404,9 @@ Tu peux aussi y enregistrer:
 
 Le sélecteur affiche les noms lisibles. Si plusieurs produits ont le même nom, le libellé devient `Nom — product_id` pour éviter toute ambiguïté. Quand aucun produit ne correspond plus, la sélection se vide proprement.
 
+Dans le cas normal, l’utilisateur choisit son produit dans l’interface.
+Le `product_id` ou le nom exact servent surtout pour la compatibilité, le YAML ou les automatisations avancées.
+
 Les états de `Dernière exécution` sont simples:
 
 - `ok` = action acceptée
@@ -537,7 +533,8 @@ Si tu utilises souvent les mêmes produits:
 6. `remove_last_application` supprime la dernière application si elle a été déclarée par erreur
 7. si plusieurs instances Gazon Intelligent existent, la carte transmet automatiquement `entity_id` pour viser la bonne instance
 
-Si plusieurs produits existent, utilise l’ID ou le nom exact du produit voulu. Sinon, l’intégration refuse de deviner.
+En usage normal, tu passes par le sélecteur produit de l’interface.
+Si plusieurs produits existent, l’ID ou le nom exact servent surtout aux cas avancés, aux automatisations ou au YAML.
 
 👉 Cela évite de retaper les mêmes paramètres à chaque fois.
 
