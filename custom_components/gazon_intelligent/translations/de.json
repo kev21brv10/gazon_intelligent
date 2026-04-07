@@ -72,42 +72,42 @@
   "selector": {
     "gazon_mode": {
       "options": {
-        "Normal": "Normal",
-        "Sursemis": "Nachsaat",
-        "Traitement": "Behandlung",
-        "Fertilisation": "Düngung",
-        "Biostimulant": "Biostimulans",
-        "Agent Mouillant": "Netzmittel",
-        "Scarification": "Vertikutierung",
-        "Hivernage": "Wintermodus"
+        "normal": "Normal",
+        "sursemis": "Nachsaat",
+        "traitement": "Behandlung",
+        "fertilisation": "Düngung",
+        "biostimulant": "Biostimulans",
+        "agent-mouillant": "Netzmittel",
+        "scarification": "Vertikutierung",
+        "hivernage": "Wintermodus"
       }
     },
     "gazon_intervention": {
       "options": {
-        "Sursemis": "Nachsaat",
-        "Traitement": "Behandlung",
-        "Fertilisation": "Düngung",
-        "Biostimulant": "Biostimulans",
-        "Agent Mouillant": "Netzmittel",
-        "Scarification": "Vertikutierung",
-        "Hivernage": "Wintermodus"
+        "sursemis": "Nachsaat",
+        "traitement": "Behandlung",
+        "fertilisation": "Düngung",
+        "biostimulant": "Biostimulans",
+        "agent-mouillant": "Netzmittel",
+        "scarification": "Vertikutierung",
+        "hivernage": "Wintermodus"
       }
     },
     "gazon_product_category": {
       "options": {
-        "Traitement": "Behandlung",
-        "Fertilisation": "Düngung",
-        "Biostimulant": "Biostimulans",
-        "Agent Mouillant": "Netzmittel",
-        "Scarification": "Vertikutierung",
-        "Hivernage": "Wintermodus"
+        "traitement": "Behandlung",
+        "fertilisation": "Düngung",
+        "biostimulant": "Biostimulans",
+        "agent-mouillant": "Netzmittel",
+        "scarification": "Vertikutierung",
+        "hivernage": "Wintermodus"
       }
     },
     "gazon_phase_compatible": {
       "options": {
-        "Sursemis": "Nachsaat",
-        "Croissance": "Wachstum",
-        "Entretien": "Pflege"
+        "sursemis": "Nachsaat",
+        "croissance": "Wachstum",
+        "entretien": "Pflege"
       }
     }
   },

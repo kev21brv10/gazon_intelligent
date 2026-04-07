@@ -72,42 +72,42 @@
   "selector": {
     "gazon_mode": {
       "options": {
-        "Normal": "Normaal",
-        "Sursemis": "Doorzaai",
-        "Traitement": "Behandeling",
-        "Fertilisation": "Bemesting",
-        "Biostimulant": "Biostimulant",
-        "Agent Mouillant": "Bevochtigingsmiddel",
-        "Scarification": "Verticuteren",
-        "Hivernage": "Wintermodus"
+        "normal": "Normaal",
+        "sursemis": "Doorzaai",
+        "traitement": "Behandeling",
+        "fertilisation": "Bemesting",
+        "biostimulant": "Biostimulant",
+        "agent-mouillant": "Bevochtigingsmiddel",
+        "scarification": "Verticuteren",
+        "hivernage": "Wintermodus"
       }
     },
     "gazon_intervention": {
       "options": {
-        "Sursemis": "Doorzaai",
-        "Traitement": "Behandeling",
-        "Fertilisation": "Bemesting",
-        "Biostimulant": "Biostimulant",
-        "Agent Mouillant": "Bevochtigingsmiddel",
-        "Scarification": "Verticuteren",
-        "Hivernage": "Wintermodus"
+        "sursemis": "Doorzaai",
+        "traitement": "Behandeling",
+        "fertilisation": "Bemesting",
+        "biostimulant": "Biostimulant",
+        "agent-mouillant": "Bevochtigingsmiddel",
+        "scarification": "Verticuteren",
+        "hivernage": "Wintermodus"
       }
     },
     "gazon_product_category": {
       "options": {
-        "Traitement": "Behandeling",
-        "Fertilisation": "Bemesting",
-        "Biostimulant": "Biostimulant",
-        "Agent Mouillant": "Bevochtigingsmiddel",
-        "Scarification": "Verticuteren",
-        "Hivernage": "Wintermodus"
+        "traitement": "Behandeling",
+        "fertilisation": "Bemesting",
+        "biostimulant": "Biostimulant",
+        "agent-mouillant": "Bevochtigingsmiddel",
+        "scarification": "Verticuteren",
+        "hivernage": "Wintermodus"
       }
     },
     "gazon_phase_compatible": {
       "options": {
-        "Sursemis": "Doorzaai",
-        "Croissance": "Groei",
-        "Entretien": "Onderhoud"
+        "sursemis": "Doorzaai",
+        "croissance": "Groei",
+        "entretien": "Onderhoud"
       }
     }
   },

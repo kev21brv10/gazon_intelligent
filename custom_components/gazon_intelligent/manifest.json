@@ -1,14 +1,14 @@
 {
   "domain": "gazon_intelligent",
   "name": "Gazon Intelligent",
-  "version": "0.5.1",
-  "documentation": "https://github.com/kev21brv10/gazon_intelligent",
-  "issue_tracker": "https://github.com/kev21brv10/gazon_intelligent/issues",
-  "config_flow": true,
-  "single_config_entry": true,
-  "iot_class": "calculated",
-  "requirements": [],
   "codeowners": ["@kev21brv10"],
+  "config_flow": true,
+  "documentation": "https://github.com/kev21brv10/gazon_intelligent",
+  "integration_type": "hub",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/kev21brv10/gazon_intelligent/issues",
   "loggers": ["custom_components.gazon_intelligent"],
-  "integration_type": "hub"
+  "requirements": [],
+  "single_config_entry": true,
+  "version": "0.5.1"
 }

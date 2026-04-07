@@ -72,42 +72,42 @@
   "selector": {
     "gazon_mode": {
       "options": {
-        "Normal": "Normal",
-        "Sursemis": "Resiembra",
-        "Traitement": "Tratamiento",
-        "Fertilisation": "Fertilización",
-        "Biostimulant": "Bioestimulante",
-        "Agent Mouillant": "Agente humectante",
-        "Scarification": "Escarificación",
-        "Hivernage": "Modo invierno"
+        "normal": "Normal",
+        "sursemis": "Resiembra",
+        "traitement": "Tratamiento",
+        "fertilisation": "Fertilización",
+        "biostimulant": "Bioestimulante",
+        "agent-mouillant": "Agente humectante",
+        "scarification": "Escarificación",
+        "hivernage": "Modo invierno"
       }
     },
     "gazon_intervention": {
       "options": {
-        "Sursemis": "Resiembra",
-        "Traitement": "Tratamiento",
-        "Fertilisation": "Fertilización",
-        "Biostimulant": "Bioestimulante",
-        "Agent Mouillant": "Agente humectante",
-        "Scarification": "Escarificación",
-        "Hivernage": "Modo invierno"
+        "sursemis": "Resiembra",
+        "traitement": "Tratamiento",
+        "fertilisation": "Fertilización",
+        "biostimulant": "Bioestimulante",
+        "agent-mouillant": "Agente humectante",
+        "scarification": "Escarificación",
+        "hivernage": "Modo invierno"
       }
     },
     "gazon_product_category": {
       "options": {
-        "Traitement": "Tratamiento",
-        "Fertilisation": "Fertilización",
-        "Biostimulant": "Bioestimulante",
-        "Agent Mouillant": "Agente humectante",
-        "Scarification": "Escarificación",
-        "Hivernage": "Modo invierno"
+        "traitement": "Tratamiento",
+        "fertilisation": "Fertilización",
+        "biostimulant": "Bioestimulante",
+        "agent-mouillant": "Agente humectante",
+        "scarification": "Escarificación",
+        "hivernage": "Modo invierno"
       }
     },
     "gazon_phase_compatible": {
       "options": {
-        "Sursemis": "Resiembra",
-        "Croissance": "Crecimiento",
-        "Entretien": "Mantenimiento"
+        "sursemis": "Resiembra",
+        "croissance": "Crecimiento",
+        "entretien": "Mantenimiento"
       }
     }
   },

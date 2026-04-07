@@ -72,42 +72,42 @@
   "selector": {
     "gazon_mode": {
       "options": {
-        "Normal": "Normal",
-        "Sursemis": "Overseeding",
-        "Traitement": "Treatment",
-        "Fertilisation": "Fertilization",
-        "Biostimulant": "Biostimulant",
-        "Agent Mouillant": "Wetting agent",
-        "Scarification": "Scarification",
-        "Hivernage": "Winter mode"
+        "normal": "Normal",
+        "sursemis": "Overseeding",
+        "traitement": "Treatment",
+        "fertilisation": "Fertilization",
+        "biostimulant": "Biostimulant",
+        "agent-mouillant": "Wetting agent",
+        "scarification": "Scarification",
+        "hivernage": "Winter mode"
       }
     },
     "gazon_intervention": {
       "options": {
-        "Sursemis": "Overseeding",
-        "Traitement": "Treatment",
-        "Fertilisation": "Fertilization",
-        "Biostimulant": "Biostimulant",
-        "Agent Mouillant": "Wetting agent",
-        "Scarification": "Scarification",
-        "Hivernage": "Winter mode"
+        "sursemis": "Overseeding",
+        "traitement": "Treatment",
+        "fertilisation": "Fertilization",
+        "biostimulant": "Biostimulant",
+        "agent-mouillant": "Wetting agent",
+        "scarification": "Scarification",
+        "hivernage": "Winter mode"
       }
     },
     "gazon_product_category": {
       "options": {
-        "Traitement": "Treatment",
-        "Fertilisation": "Fertilization",
-        "Biostimulant": "Biostimulant",
-        "Agent Mouillant": "Wetting agent",
-        "Scarification": "Scarification",
-        "Hivernage": "Winter mode"
+        "traitement": "Treatment",
+        "fertilisation": "Fertilization",
+        "biostimulant": "Biostimulant",
+        "agent-mouillant": "Wetting agent",
+        "scarification": "Scarification",
+        "hivernage": "Winter mode"
       }
     },
     "gazon_phase_compatible": {
       "options": {
-        "Sursemis": "Overseeding",
-        "Croissance": "Growth",
-        "Entretien": "Maintenance"
+        "sursemis": "Overseeding",
+        "croissance": "Growth",
+        "entretien": "Maintenance"
       }
     }
   },
