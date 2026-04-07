@@ -72,42 +72,42 @@
   "selector": {
     "gazon_mode": {
       "options": {
-        "Normal": "Normal",
-        "Sursemis": "Sursemis",
-        "Traitement": "Traitement",
-        "Fertilisation": "Fertilisation",
-        "Biostimulant": "Biostimulant",
-        "Agent Mouillant": "Agent Mouillant",
-        "Scarification": "Scarification",
-        "Hivernage": "Hivernage"
+        "normal": "Normal",
+        "sursemis": "Sursemis",
+        "traitement": "Traitement",
+        "fertilisation": "Fertilisation",
+        "biostimulant": "Biostimulant",
+        "agent-mouillant": "Agent Mouillant",
+        "scarification": "Scarification",
+        "hivernage": "Hivernage"
       }
     },
     "gazon_intervention": {
       "options": {
-        "Sursemis": "Sursemis",
-        "Traitement": "Traitement",
-        "Fertilisation": "Fertilisation",
-        "Biostimulant": "Biostimulant",
-        "Agent Mouillant": "Agent Mouillant",
-        "Scarification": "Scarification",
-        "Hivernage": "Hivernage"
+        "sursemis": "Sursemis",
+        "traitement": "Traitement",
+        "fertilisation": "Fertilisation",
+        "biostimulant": "Biostimulant",
+        "agent-mouillant": "Agent Mouillant",
+        "scarification": "Scarification",
+        "hivernage": "Hivernage"
       }
     },
     "gazon_product_category": {
       "options": {
-        "Traitement": "Traitement",
-        "Fertilisation": "Fertilisation",
-        "Biostimulant": "Biostimulant",
-        "Agent Mouillant": "Agent Mouillant",
-        "Scarification": "Scarification",
-        "Hivernage": "Hivernage"
+        "traitement": "Traitement",
+        "fertilisation": "Fertilisation",
+        "biostimulant": "Biostimulant",
+        "agent-mouillant": "Agent Mouillant",
+        "scarification": "Scarification",
+        "hivernage": "Hivernage"
       }
     },
     "gazon_phase_compatible": {
       "options": {
-        "Sursemis": "Sursemis",
-        "Croissance": "Croissance",
-        "Entretien": "Entretien"
+        "sursemis": "Sursemis",
+        "croissance": "Croissance",
+        "entretien": "Entretien"
       }
     }
   },
