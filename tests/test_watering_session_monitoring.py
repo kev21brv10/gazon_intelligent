@@ -391,7 +391,7 @@ class WateringSessionMonitoringTests(unittest.TestCase):
         coordinator.history = [
             {
                 "type": "arrosage",
-                "date": datetime.now(timezone.utc).date().isoformat(),
+                "date": coordinator_mod.dt_util.now().date().isoformat(),
                 "objectif_mm": 4.0,
                 "zones": [{"zone": "switch.zone_1", "mm": 2.0}],
             }
