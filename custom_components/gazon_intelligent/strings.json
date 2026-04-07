@@ -197,6 +197,10 @@
         }
       }
     },
+    "remove_last_application": {
+      "name": "Supprimer la dernière application",
+      "description": "Supprime la dernière application enregistrée dans l'historique local."
+    },
     "register_product": {
       "name": "Enregistrer un produit",
       "description": "Ajoute ou met à jour un produit personnalisé dans la base locale. La catégorie se choisit dans une liste, le dosage peut être saisi au m² et les mois d'application peuvent être précisés.",

@@ -60,7 +60,7 @@ start_auto_irrigation:
 start_application_irrigation: {}
 
 declare_intervention:
-  description: "Déclare une intervention réelle. Les réglages du produit se configurent dans \"Enregistrer un produit\" ; ici, il suffit de choisir le produit déjà enregistré, la date, la zone et une note si besoin. Si plusieurs produits existent et qu'aucun produit explicite n'est fourni, l'intégration utilise la sélection courante de l'UI ou renvoie une erreur claire. Quand plusieurs instances Gazon Intelligent existent, fournis aussi entity_id pour cibler la bonne instance."
+  description: "Déclare une intervention réelle. Les réglages du produit se configurent dans \"Enregistrer un produit\" ; ici, il suffit de choisir le produit déjà enregistré, la date, la zone et une note si besoin. Si plusieurs produits existent et qu'aucun produit explicite n'est fourni, l'intégration utilise la sélection courante de l'UI ou renvoie une erreur claire."
   fields:
     intervention:
       required: true
@@ -87,15 +87,6 @@ declare_intervention:
       required: false
       selector:
         text:
-    entity_id:
-      required: false
-      selector:
-        entity:
-          domain:
-            - sensor
-            - select
-            - binary_sensor
-            - switch
     zone:
       required: false
       selector:
@@ -104,37 +95,8 @@ declare_intervention:
       required: false
       selector:
         text:
-    temperature_min:
-      required: false
-      example: 8
-      selector:
-        number:
-          min: -30
-          max: 60
-          step: 0.5
-          unit_of_measurement: "°C"
-    temperature_max:
-      required: false
-      example: 28
-      selector:
-        number:
-          min: -30
-          max: 60
-          step: 0.5
-          unit_of_measurement: "°C"
-
 remove_last_application:
-  description: "Supprime la dernière application enregistrée dans l'historique local. Si plusieurs instances existent, fournir entity_id permet de cibler la bonne instance."
-  fields:
-    entity_id:
-      required: false
-      selector:
-        entity:
-          domain:
-            - sensor
-            - select
-            - binary_sensor
-            - switch
+  description: "Supprime la dernière application enregistrée dans l'historique local."
 
 register_product:
   description: "Ajoute ou met à jour un produit personnalisé dans la base locale. La catégorie se choisit dans une liste, le dosage peut être saisi au m², les mois d'application peuvent être précisés et des seuils de température optionnels peuvent affiner la recommandation."

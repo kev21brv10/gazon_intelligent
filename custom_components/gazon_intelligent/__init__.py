@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import voluptuous as vol
@@ -19,6 +20,8 @@ from .entity_migration import (
 )
 from .coordinator import GazonIntelligentCoordinator
 from .date_utils import parse_optional_date
+
+_LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = ["select", "number", "sensor", "binary_sensor", "switch", "button"]
 
@@ -128,7 +131,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     vol.Optional("date_action"): str,
                     vol.Optional("produit_id"): vol.Coerce(str),
                     vol.Optional("produit"): vol.Coerce(str),
-                    vol.Optional("entity_id"): vol.Coerce(str),
                     vol.Optional("zone"): vol.Coerce(str),
                     vol.Optional("note"): vol.Coerce(str),
                 }
@@ -261,48 +263,6 @@ def _get_first_coordinator(hass: HomeAssistant) -> GazonIntelligentCoordinator:
     return next(iter(coordinators.values()))
 
 
-def _get_coordinator_for_entity_id(
-    hass: HomeAssistant,
-    entity_id: str | None,
-) -> GazonIntelligentCoordinator | None:
-    normalized_entity_id = str(entity_id or "").strip()
-    if not normalized_entity_id:
-        return None
-    try:
-        from homeassistant.helpers import entity_registry as er  # local import for HA runtime
-
-        registry = er.async_get(hass)
-        entity_entry = registry.entities.get(normalized_entity_id)
-    except Exception:  # pragma: no cover - best effort fallback
-        return None
-    if entity_entry is None:
-        return None
-    config_entry_id = getattr(entity_entry, "config_entry_id", None)
-    if not config_entry_id:
-        return None
-    coordinator = hass.data.get(DOMAIN, {}).get(config_entry_id)
-    if isinstance(coordinator, GazonIntelligentCoordinator):
-        return coordinator
-    return None
-
-
-def _get_target_coordinator(
-    hass: HomeAssistant,
-    entity_id: str | None = None,
-) -> GazonIntelligentCoordinator:
-    coordinator = _get_coordinator_for_entity_id(hass, entity_id)
-    if coordinator is not None:
-        return coordinator
-    coordinators = hass.data.get(DOMAIN, {})
-    if not coordinators:
-        raise HomeAssistantError("Aucune instance de Gazon Intelligent n'est configurée.")
-    if len(coordinators) == 1:
-        return next(iter(coordinators.values()))
-    raise HomeAssistantError(
-        "Plusieurs instances de Gazon Intelligent sont configurées. Fournis entity_id pour cibler la bonne instance."
-    )
-
-
 async def _handle_set_mode(call: ServiceCall) -> None:
     hass = call.hass
     coordinator = _get_first_coordinator(hass)
@@ -328,8 +288,6 @@ async def _handle_set_date_action(call: ServiceCall) -> None:
         await coordinator.async_set_date_action(date_action)
     except ValueError as err:
         raise HomeAssistantError("La date doit être au format JJ/MM/AAAA.") from err
-    except Exception as err:  # pragma: no cover
-        raise HomeAssistantError(f"Echec set_date_action: {err}") from err
 
 
 async def _handle_reset_mode(call: ServiceCall) -> None:
@@ -362,7 +320,7 @@ async def _handle_start_application_irrigation(call: ServiceCall) -> None:
 
 async def _handle_declare_intervention(call: ServiceCall) -> None:
     hass = call.hass
-    coordinator = _get_target_coordinator(hass, call.data.get("entity_id"))
+    coordinator = _get_first_coordinator(hass)
     try:
         await coordinator.async_declare_intervention(
             intervention=call.data["intervention"],
@@ -372,18 +330,18 @@ async def _handle_declare_intervention(call: ServiceCall) -> None:
             zone=call.data.get("zone"),
             note=call.data.get("note"),
         )
-    except ValueError as err:
+    except (HomeAssistantError, ValueError) as err:
+        _LOGGER.debug("Echec declare_intervention pour %s: %s", call.data.get("intervention"), err)
         raise HomeAssistantError(str(err) or "La date doit être au format JJ/MM/AAAA.") from err
-    except Exception as err:  # pragma: no cover
-        raise HomeAssistantError(f"Echec declare_intervention: {err}") from err
 
 
 async def _handle_remove_last_application(call: ServiceCall) -> None:
     hass = call.hass
-    coordinator = _get_target_coordinator(hass, call.data.get("entity_id"))
+    coordinator = _get_first_coordinator(hass)
     try:
         await coordinator.async_remove_last_application()
-    except Exception as err:  # pragma: no cover
+    except (HomeAssistantError, ValueError) as err:
+        _LOGGER.debug("Echec remove_last_application: %s", err)
         raise HomeAssistantError(f"Echec remove_last_application: {err}") from err
 
 
@@ -437,7 +395,8 @@ async def _handle_register_product(call: ServiceCall) -> None:
             call.data.get("temperature_min"),
             call.data.get("temperature_max"),
         )
-    except Exception as err:  # pragma: no cover
+    except (HomeAssistantError, ValueError) as err:
+        _LOGGER.debug("Echec register_product pour %s: %s", call.data.get("product_id"), err)
         raise HomeAssistantError(f"Echec register_product: {err}") from err
 
 
@@ -446,5 +405,6 @@ async def _handle_remove_product(call: ServiceCall) -> None:
     coordinator = _get_first_coordinator(hass)
     try:
         await coordinator.async_remove_product(call.data["product_id"])
-    except Exception as err:  # pragma: no cover
+    except (HomeAssistantError, ValueError) as err:
+        _LOGGER.debug("Echec remove_product pour %s: %s", call.data.get("product_id"), err)
         raise HomeAssistantError(f"Echec remove_product: {err}") from err

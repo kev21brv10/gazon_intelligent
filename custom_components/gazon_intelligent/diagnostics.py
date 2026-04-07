@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
@@ -78,7 +79,6 @@ _MEMORY_KEYS: tuple[str, ...] = (
     "derniere_application",
     "feedback_observation",
     "prochaine_reapplication",
-    "catalogue_produits",
     "date_derniere_mise_a_jour",
     "auto_irrigation_enabled",
 )
@@ -101,8 +101,42 @@ _HISTORY_KEYS: tuple[str, ...] = (
     "plan_type",
     "state",
     "reason",
+    "note",
     "summary",
 )
+
+_DIAGNOSTICS_REDACT_KEYS: set[str] = {
+    "application_label_notes",
+    "capteur_etp",
+    "capteur_hauteur_gazon",
+    "capteur_humidite",
+    "capteur_humidite_sol",
+    "capteur_pluie_24h",
+    "capteur_pluie_demain",
+    "capteur_retour_arrosage",
+    "capteur_rosee",
+    "capteur_temperature",
+    "capteur_vent",
+    "email",
+    "entite_meteo",
+    "entity_id",
+    "entry_id",
+    "feedback_observation",
+    "note",
+    "notes",
+    "plan_arrosage_entity",
+    "product_id",
+    "produit_id",
+    "selected_product_id",
+    "user_id",
+    "username",
+    "zone",
+    "zone_1",
+    "zone_2",
+    "zone_3",
+    "zone_4",
+    "zone_5",
+}
 
 
 def _compact_dict(data: dict[str, Any] | None, keys: tuple[str, ...] | None = None) -> dict[str, Any]:
@@ -117,7 +151,7 @@ def _compact_history_item(item: dict[str, Any]) -> dict[str, Any]:
     return _compact_dict(item, _HISTORY_KEYS)
 
 
-def _build_history_tail(history: list[dict[str, Any]], limit: int = 20) -> list[dict[str, Any]]:
+def _build_history_tail(history: list[dict[str, Any]], limit: int = 10) -> list[dict[str, Any]]:
     if not isinstance(history, list) or not history:
         return []
     tail = history[-limit:]
@@ -136,7 +170,7 @@ def _select_snapshot(coordinator: Any) -> dict[str, Any]:
     if last_result is not None and hasattr(last_result, "to_snapshot"):
         try:
             result_snapshot = last_result.to_snapshot()
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             return {}
         if isinstance(result_snapshot, dict):
             return result_snapshot
@@ -171,7 +205,7 @@ async def async_get_config_entry_diagnostics(
     coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id) if hasattr(hass, "data") else None
     snapshot = _select_snapshot(coordinator) if coordinator is not None else {}
 
-    return {
+    payload = {
         "config_entry": {
             "entry_id": entry.entry_id,
             "title": getattr(entry, "title", ""),
@@ -183,3 +217,4 @@ async def async_get_config_entry_diagnostics(
         "decision": _build_snapshot_summary(snapshot),
         "history_tail": _build_history_tail(getattr(coordinator, "history", []) or []) if coordinator is not None else [],
     }
+    return async_redact_data(payload, _DIAGNOSTICS_REDACT_KEYS)
