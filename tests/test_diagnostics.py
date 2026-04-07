@@ -52,6 +52,21 @@ def _install_homeassistant_stubs() -> None:
 
         core_mod.HomeAssistant = HomeAssistant
 
+    ensure_module("homeassistant.components")
+    diagnostics_mod = ensure_module("homeassistant.components.diagnostics")
+    if not hasattr(diagnostics_mod, "async_redact_data"):
+        def async_redact_data(data: object, to_redact: set[str] | frozenset[str]) -> object:
+            if isinstance(data, dict):
+                return {
+                    key: ("**REDACTED**" if key in to_redact else async_redact_data(value, to_redact))
+                    for key, value in data.items()
+                }
+            if isinstance(data, list):
+                return [async_redact_data(item, to_redact) for item in data]
+            return data
+
+        diagnostics_mod.async_redact_data = async_redact_data
+
 
 _ensure_package("custom_components", PACKAGE_DIR.parent)
 _ensure_package("custom_components.gazon_intelligent", PACKAGE_DIR)
@@ -125,6 +140,7 @@ class DiagnosticsTests(unittest.TestCase):
                     "source": "zone_session",
                     "objectif_mm": 0.5,
                     "total_mm": 0.5,
+                    "note": "note interne",
                 }
             ],
             memory={
@@ -141,15 +157,16 @@ class DiagnosticsTests(unittest.TestCase):
 
         payload = asyncio.run(diagnostics.async_get_config_entry_diagnostics(hass, entry))
 
-        self.assertEqual(payload["config_entry"]["entry_id"], "entry123")
+        self.assertEqual(payload["config_entry"]["entry_id"], "**REDACTED**")
         self.assertEqual(payload["config_entry"]["title"], "Gazon Intelligent")
-        self.assertEqual(payload["config_entry"]["data"]["zone_1"], "switch.zone_1")
+        self.assertEqual(payload["config_entry"]["data"]["zone_1"], "**REDACTED**")
         self.assertEqual(payload["runtime"]["mode"], "Sursemis")
         self.assertEqual(payload["runtime"]["history_count"], 1)
         self.assertEqual(payload["runtime"]["products_count"], 1)
-        self.assertEqual(payload["runtime"]["memory"]["feedback_observation"], "ok")
+        self.assertEqual(payload["runtime"]["memory"]["feedback_observation"], "**REDACTED**")
         self.assertEqual(payload["decision"]["assistant"]["action"], "aucune_action")
         self.assertEqual(payload["history_tail"][0]["summary"], "Dernier arrosage 0.5 mm")
+        self.assertEqual(payload["history_tail"][0]["note"], "**REDACTED**")
 
     def test_config_entry_diagnostics_falls_back_to_last_result(self) -> None:
         entry = _FakeEntry()

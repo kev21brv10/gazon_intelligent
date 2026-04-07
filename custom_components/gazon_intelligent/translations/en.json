@@ -164,6 +164,10 @@
         }
       }
     },
+    "start_application_irrigation": {
+      "name": "Water now",
+      "description": "Triggers a controlled post-application watering without directly driving the zones."
+    },
     "declare_intervention": {
       "name": "Declare an intervention",
       "description": "Logs a real intervention. Product settings live in \"Register a product\"; here you only choose the already registered product, the action date, the zone, and an optional note. If several products exist, an exact ID or name is required.",
@@ -233,6 +237,34 @@
         "application_months": {
           "name": "Allowed application months (optional)",
           "description": "List the allowed months. Example: 3,4,5,9,10 or March to May + September to October."
+        },
+        "application_type": {
+          "name": "Application type (optional)",
+          "description": "soil or foliar."
+        },
+        "application_requires_watering_after": {
+          "name": "Watering after application required (optional)",
+          "description": "Indicates whether a technical watering should follow."
+        },
+        "application_post_watering_mm": {
+          "name": "Post-application watering (mm, optional)",
+          "description": "Technical amount of water to apply after the application."
+        },
+        "application_irrigation_block_hours": {
+          "name": "Watering block (h, optional)",
+          "description": "Automatic block duration after application."
+        },
+        "application_irrigation_delay_minutes": {
+          "name": "Delay before watering (min, optional)",
+          "description": "Waiting time before authorizing post-application watering."
+        },
+        "application_irrigation_mode": {
+          "name": "Post-application watering mode (optional)",
+          "description": "auto, manual or suggestion."
+        },
+        "application_label_notes": {
+          "name": "Label notes (optional)",
+          "description": "Informational notes related to the product label."
         },
         "note": {
           "name": "Note (optional)",

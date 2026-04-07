@@ -9,18 +9,17 @@
 ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2026.3.2+-blue)
 ![License](https://img.shields.io/github/license/kev21brv10/gazon_intelligent?style=flat-square)
 
+> Gazon Intelligent analyse ton gazon à ta place et te dit quoi faire, quand le faire et combien appliquer, directement dans Home Assistant.
 
-> Gazon Intelligent analyse ton gazon à ta place et te dit exactement quoi faire, quand le faire et combien appliquer, directement dans Home Assistant.
-
-> Une seule décision à la fois. Toujours la bonne.
+> Une seule décision claire à la fois, avec le contexte utile quand tu veux aller plus loin.
 
 ---
 
 ## En 15 secondes
 
 - une seule intégration, un seul moteur métier
-- une façade canonique très lisible: `sensor.gazon_intelligent_assistant`
-- des entités complémentaires pour comprendre le contexte, sans complexifier l’usage quotidien
+- une entité principale très lisible : `sensor.gazon_intelligent_assistant`
+- des entités complémentaires pour comprendre le contexte sans alourdir l’usage quotidien
 
 Tu veux savoir quoi faire sur ton gazon ? L’intégration te donne directement l’action utile et le bon moment, avec la quantité seulement quand elle compte.
 
@@ -32,14 +31,14 @@ Tu veux savoir quoi faire sur ton gazon ? L’intégration te donne directement 
 
 Gazon Intelligent n’est pas juste une collection de capteurs.
 
-Il ne se contente pas d’afficher des données:
+Il ne se contente pas d’afficher des données :
 
 - il prend une décision à partir de la météo, de l’arrosage réel, de la phase du gazon et de l’historique
 - il évite les actions inutiles ou mal synchronisées
 - il remonte une seule action claire à la fois
 - il garde les détails utiles dans des entités complémentaires, sans perdre la lisibilité du résultat principal
 
-En clair: le produit ne te montre pas seulement l’état du gazon, il t’aide à décider.
+En clair : le produit ne te montre pas seulement l’état du gazon, il t’aide à décider.
 
 ---
 
@@ -55,33 +54,92 @@ Elle remonte l’action prioritaire et le bon moment pour agir. Quand il n’y a
 ## 🚀 Démarrage rapide
 
 1. Installe l’intégration `gazon_intelligent`
-2. Configure le type de sol et les zones
-3. Consulte `sensor.gazon_intelligent_assistant`
-4. Ouvre `sensor.gazon_intelligent_conseil_principal`, `sensor.gazon_intelligent_fenetre_optimale` et `sensor.gazon_intelligent_objectif_d_arrosage` si tu veux plus de contexte
+2. Ajoute l’intégration dans Home Assistant
+3. Renseigne le config flow : zones utilisées, débits d’arrosage et type de sol
+4. Consulte `sensor.gazon_intelligent_assistant`
+5. Ouvre `sensor.gazon_intelligent_conseil_principal`, `sensor.gazon_intelligent_fenetre_optimale` et `sensor.gazon_intelligent_objectif_d_arrosage` si tu veux plus de contexte
 
 👉 En quelques secondes, tu sais si une action est utile, quand l’exécuter et si un arrosage doit être quantifié.
 
 ---
 
-## 🧩 Carte Lovelace associée
+## 📦 Installation
 
-Cette intégration est conçue pour fonctionner avec une carte Lovelace dédiée :
+### Via HACS (recommandé)
+
+1. Ouvre **HACS → Intégrations → Menu → Dépôts personnalisés**
+2. Ajoute le dépôt `https://github.com/kev21brv10/gazon_intelligent`
+3. Choisis la catégorie **Intégration**
+4. Installe `Gazon Intelligent`
+5. Redémarre Home Assistant
+6. Va dans **Paramètres → Appareils et services → Ajouter une intégration**
+7. Recherche `Gazon Intelligent`
+
+### Installation manuelle
+
+1. Copie `custom_components/gazon_intelligent` dans `config/custom_components`
+2. Redémarre Home Assistant
+3. Va dans **Paramètres → Appareils et services → Ajouter une intégration**
+4. Recherche `Gazon Intelligent`
+
+### Compatibilité
+
+- Home Assistant `2026.3.2+`
+- installation recommandée via HACS
+
+---
+
+## ⚙️ Configuration
+
+Aucune configuration YAML obligatoire.
+
+### Configuration principale
+
+Lors du config flow, renseigne au minimum :
+
+- `zone_1` à `zone_5`
+- `debit_zone_1` à `debit_zone_5`
+- `type_sol`
+
+### Options avancées
+
+- `entite_meteo` : météo principale obligatoire
+- `capteur_pluie_24h` : pluie locale 24h, prioritaire si fournie
+- `capteur_pluie_demain` : pluie locale demain, prioritaire si fournie
+- `capteur_temperature` : température locale, prioritaire si fournie
+- `capteur_etp` : ETP du jour, calcul automatique si non renseigné
+- `capteur_humidite` : humidité locale, prioritaire si fournie
+- `capteur_humidite_sol`
+- `capteur_hauteur_gazon`
+- `capteur_vent` : vent local, prioritaire si fourni
+- `capteur_rosee`
+- `capteur_retour_arrosage`
+- `hauteur_min_tondeuse_cm`
+- `hauteur_max_tondeuse_cm`
+
+### Règles de fonctionnement
+
+- capteur absent → fallback météo
+- ETP absent → estimation automatique
+- retour arrosage absent ou à `0.0` → historique du jour
+- tondeuse configurée → recommandation active
+
+---
+
+## 🧩 Carte Lovelace optionnelle
+
+Une carte Lovelace dédiée peut être utilisée pour une interface plus lisible :
 
 - `lovelace-gazon-intelligent-card`
 
-La carte s'appuie directement sur les entités publiques exposées par l’intégration, notamment les capteurs de synthèse, les entités d’intervention, les sélecteurs produit et les réglages visibles dans Home Assistant.
-
-En pratique:
-
-- l’intégration reste la source de vérité métier
-- la card lit et met en forme ces entités pour l’interface
-- les `entity_id` publics stabilisés dans cette version servent aussi à garantir la cohérence entre backend et frontend
+L’intégration fonctionne seule avec ses entités natives.
+La carte lit simplement les entités publiques et les met en forme pour l’interface.
 
 ---
 
 ## 🧭 Utilisation simple
 
-Au quotidien, le principe est simple:
+Au quotidien, le principe est simple :
 
 1. l’intégration calcule la décision
 2. tu lis `sensor.gazon_intelligent_assistant`
@@ -102,59 +160,21 @@ Au quotidien, le principe est simple:
 
 ---
 
-## 🧠 Ce que fait l’intégration
-
-Gazon Intelligent centralise le calcul et transforme ces données en décision à partir de:
-
-- météo
-- arrosage récent
-- type de sol
-- phase dominante et sous-phase
-- historique des interventions
-
-Il répond ensuite à l’essentiel:
-
-- quoi faire
-- quand agir
-- quelle quantité appliquer si besoin
-- quoi éviter
-
-En pratique, l’intégration gère:
-
-- l’arrosage
-- la tonte
-- les blocages météo ou applicatifs
-- la mémoire métier
-- les diagnostics
-
----
-
-## 📸 Aperçu
-
-*Capture prochainement.*
-
----
 ## 👀 Entités
 
-Avant de parcourir toute la liste:
+Avant de parcourir toute la liste :
 
 1. regarde `sensor.gazon_intelligent_assistant`
 2. vérifie `sensor.gazon_intelligent_conseil_principal`
 3. ouvre `sensor.gazon_intelligent_fenetre_optimale` si une action est proposée
 4. regarde `sensor.gazon_intelligent_objectif_d_arrosage` si l’action concerne l’irrigation
 
-Le reste sert surtout à détailler, confirmer ou approfondir la décision.
-
 ### Entités essentielles
 
 - `sensor.gazon_intelligent_assistant`
-  - décision principale à lire en premier
 - `sensor.gazon_intelligent_conseil_principal`
-  - résumé public priorisé de la situation
 - `sensor.gazon_intelligent_fenetre_optimale`
-  - meilleur moment pour agir
 - `sensor.gazon_intelligent_objectif_d_arrosage`
-  - quantité d’eau utile si un arrosage est nécessaire
 
 ### Entités avancées
 
@@ -182,309 +202,10 @@ Le reste sert surtout à détailler, confirmer ou approfondir la décision.
 - `switch.gazon_intelligent_arrosage_automatique_autorise`
 - `select.gazon_intelligent_mode_du_gazon`
 
-### Entités debug et diagnostic
+### Diagnostic
 
 - diagnostics téléchargeables via l’intégration
 - logs du module `custom_components.gazon_intelligent`
-- `sensor.gazon_intelligent_catalogue_produits` pour voir rapidement les produits enregistrés
-
----
-
-## 🔎 Comment lire les états
-
-Les libellés restent simples à lire:
-
-- `assistant`
-  - la décision principale
-- `conseil_principal`
-  - le résumé public le plus utile à afficher
-- `fenetre_optimale`
-  - quand agir si besoin
-- `objectif_d_arrosage`
-  - combien arroser
-- `next_action_date`
-  - la date estimée de la prochaine action
-- `next_action_display`
-  - la même date en format lisible
-- `Dernière exécution`
-  - ce que l’intégration a réellement lancé
-- `Dernière session détectée`
-  - la dernière session d’arrosage observée
-- `Dernière application`
-  - le dernier traitement enregistré
-- `niveau_d_action`
-  - le niveau d’urgence
-
-### Valeurs à retenir
-
-- `aucune_action` = rien à faire pour l’instant
-- `attendre` = on réévalue plus tard
-- `surveiller` = pas d’action immédiate, mais contexte à suivre
-- `a_faire` = action utile à exécuter
-- `critique` = action à traiter en priorité
-
----
-
-## 📘 Approfondir
-
-Les sections ci-dessous détaillent le fonctionnement métier de l’intégration.
-Elles sont utiles quand tu veux comprendre plus finement le moteur ou exploiter toutes les entités disponibles.
-
-### ✂️ Gestion de la tonte
-
-L'entité **État de tonte** expose :
-
-- `hauteur_tonte_recommandee_cm`  
-- `hauteur_tonte_min_cm`  
-- `hauteur_tonte_max_cm`  
-
-L'entité **Hauteur de tonte conseillée** affiche directement la hauteur recommandée.
-
-En pratique:
-
-- si la tonte est autorisée, tu peux t’en servir comme repère
-- si la tonte est interdite, le gazon a besoin de temps ou les conditions ne sont pas bonnes
-
-### ⚙️ Réglages tondeuse
-
-Configurables dans Home Assistant :
-
-- Hauteur min tondeuse  
-- Hauteur max tondeuse  
-
-Le système :
-
-- respecte les limites de ta machine  
-- applique un pas réel de **0.5 cm**  
-- adapte la hauteur selon la saison, la météo et le stress du gazon  
-
----
-
-### 💧 Détails avancés sur l’arrosage
-
-#### Comment l’intégration décide
-
-Le moteur ne se contente pas de dire “arroser ou non”.
-Il cherche à produire une décision exploitable, lisible et réaliste.
-
-En pratique, l’intégration essaie d’arroser:
-
-- tôt le matin quand c’est possible
-- un peu plus souvent en Sursemis
-- plus profondément et moins souvent en mode Normal
-- seulement quand le sol a vraiment besoin d’eau
-- jamais si une pluie importante ou un blocage l’empêche
-
-Elle peut aussi:
-
-- attendre après une application
-- empêcher un arrosage trop proche du précédent
-- fractionner un arrosage si un seul passage serait trop important
-
-#### Exemple de comportement
-
-| Mode | Fenêtre cible | Objectif mm | Fréquence | Fractionnement |
-| --- | --- | --- | --- | --- |
-| Sursemis / Germination | Matin prioritaire, tôt et régulier | Faible, léger et fréquent | Plusieurs petits apports si sec / chaud / venteux | Oui si l'objectif dépasse 1 à 2 mm |
-| Sursemis / Enracinement | Matin prioritaire, puis plus souple | Faible à modéré | On espace progressivement et on augmente la profondeur | Oui si l'objectif dépasse 2 mm |
-| Normal | Matin tôt prioritaire (`04:00–08:00`, acceptable jusqu'à `10:00`) | Plus profond | Plus rare, avec un vrai apport utile | Oui si l'objectif est élevé |
-| Fertilisation / Biostimulant | Matin tôt, arrosage technique après application si requis | Technique, modéré | Ponctuel | Oui si le plan l'exige |
-| Agent Mouillant / Scarification | Matin tôt prioritaire | Technique, modéré | Ponctuel | Oui si l'objectif l'exige |
-| Application sol avec `application_irrigation_mode=manuel` | Après délai applicatif, via service ou bouton manuel interne | Technique, léger | Déclenchement manuel contrôlé | Oui selon le plan calculé |
-| Application sol avec `application_irrigation_mode=suggestion` | Affichage seulement | Technique, léger | Aucune exécution automatique | Non |
-| Application foliaire | Bloqué pendant la fenêtre de protection | 0 | 0 | Non |
-| Type d'application inconnu | Bloqué | 0 | 0 | Non |
-
-#### 🔍 Informations utiles
-
-Le moteur expose aussi des champs utiles pour comprendre la décision:
-
-- `deficit_brut_mm`
-- `deficit_mm_ajuste`
-- `mm_cible`
-- `mm_final`
-- `heat_stress_level`
-- `confidence_level`
-- `block_reason`
-
-Le résumé hydrique exposé dans `raison_decision` suit le format:
-
-- `Déficit: brut=X mm, ajusté=Y mm, final=Z mm`
-
-Cela sert surtout à:
-
-- comprendre pourquoi l’objectif est nul, réduit ou maintenu
-- relire la logique directement dans Home Assistant
-- vérifier que le comportement reste cohérent avec la réalité du terrain
-
-#### 🧮 Comment le plan est construit
-
-- `plan_type = single_zone` quand une seule zone compose le plan
-- `plan_type = multi_zone` quand le plan couvre plusieurs zones
-- `fractionation = true` seulement si l’arrosage est vraiment découpé en plusieurs passages
-- `zone_count` indique le nombre de zones
-- `passages` indique le nombre de passages
-
-#### 🧪 Produits et applications
-
-Cette partie sert à enregistrer un produit une seule fois, puis à réutiliser automatiquement ses réglages quand tu déclares une intervention.
-
-##### Workflow rapide
-
-1. Enregistre le produit avec `gazon_intelligent.register_product`
-2. Choisis-le dans `select.gazon_intelligent_produit_d_intervention`
-3. Déclare ensuite l’intervention réelle avec `gazon_intelligent.declare_intervention`
-
-S’il n’existe qu’un seul produit, l’intégration peut parfois le reprendre automatiquement.
-S’il y en a plusieurs, il faut une sélection claire.
-
-##### Deux types d’application
-
-- `sol`
-  - produit appliqué sur le sol
-  - peut demander un arrosage technique après application
-- `foliaire`
-  - produit appliqué sur le feuillage
-  - bloque temporairement l’arrosage automatique pendant la protection
-
-##### Ce qu’il faut renseigner une seule fois
-
-Les réglages produits se déclarent dans `register_product`:
-
-- `type`
-  - catégorie du produit, choisie dans une liste
-  - exemple: `Biostimulant`
-- `dose_conseillee`
-  - dosage conseillé au m²
-  - exemple: `1.2 ml / m²`
-- `application_type`
-- `application_requires_watering_after`
-- `application_post_watering_mm`
-- `application_irrigation_block_hours`
-- `application_irrigation_delay_minutes`
-- `application_irrigation_mode`
-- `application_label_notes`
-- `application_months`
-  - mois ou périodes d’application recommandés
-  - critère souple pour guider la recommandation, pas un blocage absolu
-  - exemple: `3,4,5,9,10` ou `mars à mai + septembre à octobre`
-
-Tu peux aussi y enregistrer:
-
-- `usage_mode`
-  - mode d’usage métier du produit
-  - valeurs conseillées: `preventif`, `curatif`, `entretien`, `rattrapage`
-- `max_applications_per_year`
-  - limite annuelle d’utilisation du produit
-  - utile pour bloquer une recommandation quand le produit a déjà été trop utilisé
-- `reapplication_after_days`
-- `delai_avant_tonte_jours`
-- `phase_compatible`
-  - sélection multiple possible
-  - exemple: `Sursemis`, `Croissance`, `Entretien`
-
-##### Ce que l’intégration expose ensuite
-
-- `Dernière application`
-  - le dernier produit ou traitement enregistré
-- `Dernière exécution`
-  - ce que l’intégration a réellement lancé
-- `Catalogue produits`
-  - le nombre de produits enregistrés et leurs détails
-- `Prochaine intervention`
-  - la recommandation calculée par l’algorithme à partir du catalogue, de la phase, du mois et de l’historique
-- `Produit d’intervention`
-  - le produit actuellement choisi pour une prochaine intervention
-  - la liste est remplie automatiquement à partir des produits enregistrés
-  - si un seul produit existe, il peut être repris automatiquement
-- `Cycle calculé`
-  - le plan d’arrosage calculé si un arrosage est nécessaire
-- `Arrosage après application autorisé`
-  - indique si un arrosage est permis après une application
-
-Le sélecteur affiche les noms lisibles. Si plusieurs produits ont le même nom, le libellé devient `Nom — product_id` pour éviter toute ambiguïté. Quand aucun produit ne correspond plus, la sélection se vide proprement.
-
-Dans le cas normal, l’utilisateur choisit son produit dans l’interface.
-Le `product_id` ou le nom exact servent surtout pour la compatibilité, le YAML ou les automatisations avancées.
-
-Les états de `Dernière exécution` sont simples:
-
-- `ok` = action acceptée
-- `en_attente` = action reconnue mais différée
-- `bloque` = action refusée pour sécurité ou timing
-- `refuse` = action impossible ou incohérente
-
-##### Règles utiles
-
-- le produit se mémorise avec `register_product`
-- le choix du produit pour l’intervention se fait avec `select.gazon_intelligent_produit_d_intervention`
-- la prochaine intervention recommandée est exposée par `sensor.gazon_intelligent_prochaine_intervention`
-- ce capteur expose un `payload` structuré et versionné (`schema_version: 3`) qui devient la source de vérité pour la carte
-- le contrat conserve toujours les mêmes champs racine, avec `null`, `[]` ou `{}` quand une donnée n’est pas disponible
-- `status` vaut `recommended`, `possible`, `blocked` ou `unavailable`
-- `score` est un entier borné entre `0` et `100`
-- `constraints` et `missing_requirements` sont des listes d’objets structurés, jamais des listes de chaînes
-- `unavailable` couvre le cas catalogue vide, sans ajouter de statut fantôme
-- `declare_intervention` reste simple: produit choisi, date d'action (`date_action`), zone, note
-- `remove_product` nettoie la base locale
-- `remove_last_application` supprime la dernière application enregistrée si elle a été déclarée par erreur
-- le moteur garde la main sur les garde-fous d’arrosage
-
----
-
-## 🚀 Installation
-
-### Via HACS (recommandé)
-
-1. Ajouter ce dépôt dans HACS (catégorie **Integration**)  
-2. Installer **Gazon Intelligent**  
-3. Redémarrer Home Assistant  
-4. Ajouter l’intégration  
-
-### Installation manuelle
-
-1. Copier `custom_components/gazon_intelligent` dans `config/custom_components`  
-2. Redémarrer Home Assistant  
-3. Ajouter l’intégration  
-
-### Compatibilité
-
-- Home Assistant ≥ **2026.3.2**
-
----
-
-## ⚙️ Configuration
-
-Aucune configuration YAML obligatoire.
-
-### Configuration principale
-
-- `zone_1` à `zone_5`  
-- `debit_zone_1` à `debit_zone_5`  
-- `type_sol`  
-
-### Options avancées
-
-- `entite_meteo` : météo principale obligatoire
-- `capteur_pluie_24h` : pluie locale 24h, prioritaire si fournie
-- `capteur_pluie_demain` : pluie locale demain, prioritaire si fournie
-- `capteur_temperature` : température locale, prioritaire si fournie
-- `capteur_etp` : ETP du jour, calcul automatique si non renseigné
-- `capteur_humidite` : humidité locale, prioritaire si fournie
-- `capteur_humidite_sol`
-- `capteur_hauteur_gazon`
-- `capteur_vent` : vent local, prioritaire si fourni
-- `capteur_rosee`
-- `capteur_retour_arrosage`
-- `hauteur_min_tondeuse_cm`
-- `hauteur_max_tondeuse_cm`
-
-### Règles de fonctionnement
-
-- capteur absent → fallback météo  
-- ETP absent → estimation automatique  
-- retour arrosage absent ou à `0.0` → historique du jour
-- tondeuse configurée → recommandation active  
 
 ---
 
@@ -508,35 +229,47 @@ Aucune configuration YAML obligatoire.
 - `gazon_intelligent.register_product`
 - `gazon_intelligent.remove_product`
 
-Notes:
+Notes :
 
-- `set_mode` et `reset_mode` restent les raccourcis stables pour piloter le mode du gazon.
-- `set_date_action` enregistre la date métier réelle.
-- `start_manual_irrigation` lance un arrosage manuel contrôlé à partir d’un objectif explicite.
-- `start_auto_irrigation` exécute le cycle calculé ou un objectif fourni, sans contourner les garde-fous.
-- `declare_intervention` reste le point d’entrée principal pour les interventions.
-- `declare_intervention` reste volontairement simple: on choisit le produit dans le sélecteur dédié, puis la date, la zone et une note si besoin.
-- si plusieurs produits sont enregistrés, il faut une sélection claire: le sélecteur, ou un ID / nom exact, sinon le moteur renvoie une erreur explicite.
-- tous les réglages du produit se trouvent dans `register_product`.
-- si une application a été enregistrée par erreur, `remove_last_application` supprime la dernière application de l’historique local.
-- `declare_mowing` et `declare_watering` sont des raccourcis de compatibilité utiles.
+- `set_mode` et `reset_mode` pilotent le mode du gazon
+- `set_date_action` enregistre la date métier réelle
+- `start_manual_irrigation` lance un arrosage manuel contrôlé à partir d’un objectif explicite
+- `start_auto_irrigation` exécute le cycle calculé ou un objectif fourni, sans contourner les garde-fous
+- `declare_intervention` reste le point d’entrée principal pour les interventions
+- tous les réglages produit se trouvent dans `register_product`
 
-## 🌿 Produits personnalisés
+---
 
-Si tu utilises souvent les mêmes produits:
+## 📘 Approfondir
 
-1. `register_product` sert à enregistrer la fiche produit
-2. `select.gazon_intelligent_produit_d_intervention` sert à choisir le produit pour la prochaine intervention
-3. `declare_intervention` sert à déclarer l’action réelle
-4. le moteur reprend automatiquement tous les réglages enregistrés pour ce produit
-5. `remove_product` retire le produit s’il n’est plus utile
-6. `remove_last_application` supprime la dernière application si elle a été déclarée par erreur
-7. si plusieurs instances Gazon Intelligent existent, la carte transmet automatiquement `entity_id` pour viser la bonne instance
+Cette partie est volontairement plus avancée.
+Elle sert à comprendre le moteur sans alourdir le démarrage.
 
-En usage normal, tu passes par le sélecteur produit de l’interface.
-Si plusieurs produits existent, l’ID ou le nom exact servent surtout aux cas avancés, aux automatisations ou au YAML.
+### Tonte
 
-👉 Cela évite de retaper les mêmes paramètres à chaque fois.
+L’intégration expose :
+
+- l’état de tonte
+- la hauteur de tonte conseillée
+- les limites min / max de la machine
+
+### Arrosage
+
+Le moteur essaie de produire une décision exploitable et réaliste :
+
+- matin prioritaire quand c’est possible
+- fréquence plus légère en Sursemis
+- arrosage plus profond en mode Normal
+- blocage si pluie importante ou contrainte applicative
+- fractionnement si un seul passage serait trop important
+
+### Produits et applications
+
+Tu peux enregistrer un produit une seule fois, puis réutiliser ses réglages via :
+
+1. `gazon_intelligent.register_product`
+2. `select.gazon_intelligent_produit_d_intervention`
+3. `gazon_intelligent.declare_intervention`
 
 ---
 
@@ -544,29 +277,30 @@ Si plusieurs produits existent, l’ID ou le nom exact servent surtout aux cas a
 
 Si le projet t’aide :
 
-- ⭐ Mets une étoile  
-- 🐛 Remonte les bugs  
-- 💡 Propose des idées  
+- ⭐ Mets une étoile
+- 🐛 Remonte les bugs
+- 💡 Propose des idées
 
 ---
 
 ## 🛠️ Développement local
 
-Pour lancer la suite de tests avec `pytest`:
+Pour lancer la suite de tests :
 
 ```bash
 python3 -m pip install -r requirements-dev.txt
-python3 -m pytest
+python3 -m unittest discover -s tests
 ```
 
 ---
 
 ## 🧾 Version
 
-- manifest : `0.5.0`
-- README : `0.5.0`
-- changelog : `0.5.0`
+- manifest : `0.5.1`
+- README : `0.5.1`
+- changelog : `0.5.1`
 
+---
 
 ## 📄 Licence
 

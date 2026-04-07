@@ -164,6 +164,10 @@
         }
       }
     },
+    "start_application_irrigation": {
+      "name": "Water now",
+      "description": "Triggers a controlled post-application watering without directly driving the zones."
+    },
     "declare_intervention": {
       "name": "Actie melden",
       "description": "Legt een echte actie vast. De productinstellingen worden vastgelegd in \"Product registreren\"; hier kies je alleen het al geregistreerde product, de datum, de zone en eventueel een opmerking. Als er meerdere producten zijn, is een exact ID of exacte naam verplicht.",
@@ -233,6 +237,34 @@
         "application_months": {
           "name": "Toegestane toepassingsmaanden (optioneel)",
           "description": "Geef de toegestane maanden op. Voorbeeld: 3,4,5,9,10 of maart tot mei + september tot oktober."
+        },
+        "application_type": {
+          "name": "Application type (optional)",
+          "description": "soil or foliar."
+        },
+        "application_requires_watering_after": {
+          "name": "Watering after application required (optional)",
+          "description": "Indicates whether a technical watering should follow."
+        },
+        "application_post_watering_mm": {
+          "name": "Post-application watering (mm, optional)",
+          "description": "Technical amount of water to apply after the application."
+        },
+        "application_irrigation_block_hours": {
+          "name": "Watering block (h, optional)",
+          "description": "Automatic block duration after application."
+        },
+        "application_irrigation_delay_minutes": {
+          "name": "Delay before watering (min, optional)",
+          "description": "Waiting time before authorizing post-application watering."
+        },
+        "application_irrigation_mode": {
+          "name": "Post-application watering mode (optional)",
+          "description": "auto, manual or suggestion."
+        },
+        "application_label_notes": {
+          "name": "Label notes (optional)",
+          "description": "Informational notes related to the product label."
         },
         "note": {
           "name": "Opmerking (optioneel)",
