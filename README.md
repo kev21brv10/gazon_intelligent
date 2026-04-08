@@ -296,9 +296,9 @@ python3 -m unittest discover -s tests
 
 ## 🧾 Version
 
-- manifest : `0.5.2`
-- README : `0.5.2`
-- changelog : `0.5.2`
+- manifest : `0.5.3`
+- README : `0.5.3`
+- changelog : `0.5.3`
 
 ---
 
