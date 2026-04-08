@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date, datetime
+
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -14,6 +16,65 @@ from .decision_models import (
     POSSIBLE_TYPE_ARROSAGE_VALUES,
 )
 from .entity_ids import public_entity_id
+
+
+_EXACT_VALUE_PRECISIONS: dict[str, int] = {
+    "temperature": 1,
+    "forecast_temperature_today": 1,
+    "temperature_reference_hydrique": 1,
+    "etp": 1,
+    "et0_mm": 1,
+    "etc_mm": 1,
+    "kc_gazon": 2,
+    "mad_ratio": 2,
+    "depletion_ratio": 3,
+    "depletion_ratio_raw": 3,
+    "reserve_fill_ratio": 3,
+    "reserve_available_ratio": 3,
+    "sous_phase_progression": 1,
+}
+
+_SUFFIX_VALUE_PRECISIONS: tuple[tuple[str, int], ...] = (
+    ("_mm", 1),
+    ("_cm", 1),
+    ("_temperature", 1),
+    ("_ratio", 3),
+)
+
+
+def _round_precision_for_key(key: str | None) -> int | None:
+    if not key:
+        return None
+    if key in _EXACT_VALUE_PRECISIONS:
+        return _EXACT_VALUE_PRECISIONS[key]
+    for suffix, precision in _SUFFIX_VALUE_PRECISIONS:
+        if key.endswith(suffix):
+            return precision
+    return 3
+
+
+def _normalize_exposed_value(value, key: str | None = None):
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, dict):
+        return {child_key: _normalize_exposed_value(child_value, child_key) for child_key, child_value in value.items()}
+    if isinstance(value, list):
+        return [_normalize_exposed_value(item, key) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_normalize_exposed_value(item, key) for item in value)
+    if isinstance(value, (date, datetime, str)):
+        return value
+    if isinstance(value, int):
+        precision = _round_precision_for_key(key)
+        if precision is None:
+            return value
+        return round(float(value), precision)
+    if isinstance(value, float):
+        precision = _round_precision_for_key(key)
+        if precision is None:
+            return value
+        return round(value, precision)
+    return value
 
 
 class GazonEntityBase(CoordinatorEntity):
@@ -56,14 +117,14 @@ class GazonEntityBase(CoordinatorEntity):
         if result is not None:
             value = getattr(result, key, None)
             if value is not None:
-                return value
+                return _normalize_exposed_value(value, key)
             extra = getattr(result, "extra", None)
             if isinstance(extra, dict) and key in extra and extra[key] is not None:
-                return extra[key]
+                return _normalize_exposed_value(extra[key], key)
 
         attrs = getattr(self.coordinator, "data", None)
         if isinstance(attrs, dict):
-            return attrs.get(key, default)
+            return _normalize_exposed_value(attrs.get(key, default), key)
         return default
 
     def _decision_attrs(self, *keys: str) -> dict[str, object] | None:
@@ -77,7 +138,7 @@ class GazonEntityBase(CoordinatorEntity):
                     if isinstance(extra, dict):
                         value = extra.get(key)
                 if value is not None:
-                    attrs[key] = value
+                    attrs[key] = _normalize_exposed_value(value, key)
             if attrs:
                 return attrs
         return self._attrs_from_data(*keys)
@@ -97,7 +158,7 @@ class GazonEntityBase(CoordinatorEntity):
         return {"possible_values": list(possible_values)}
 
     def _attrs_from_data(self, *keys: str) -> dict[str, object] | None:
-        attrs = {key: self.coordinator.data.get(key) for key in keys}
+        attrs = {key: _normalize_exposed_value(self.coordinator.data.get(key), key) for key in keys}
         clean = {k: v for k, v in attrs.items() if v is not None}
         return clean or None
 

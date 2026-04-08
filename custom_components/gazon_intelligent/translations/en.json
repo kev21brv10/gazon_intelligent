@@ -19,6 +19,23 @@
           "type_sol": "Soil type (required)"
         }
       },
+      "reconfigure": {
+        "title": "Base settings",
+        "description": "Update the zones, flow rates and soil type here.",
+        "data": {
+          "zone_1": "Zone 1",
+          "zone_2": "Zone 2",
+          "zone_3": "Zone 3",
+          "zone_4": "Zone 4",
+          "zone_5": "Zone 5",
+          "debit_zone_1": "Zone 1 flow (mm/h, 0 if unused)",
+          "debit_zone_2": "Zone 2 flow (mm/h, 0 if unused)",
+          "debit_zone_3": "Zone 3 flow (mm/h, 0 if unused)",
+          "debit_zone_4": "Zone 4 flow (mm/h, 0 if unused)",
+          "debit_zone_5": "Zone 5 flow (mm/h, 0 if unused)",
+          "type_sol": "Soil type (required)"
+        }
+      },
       "sensors": {
         "title": "Primary weather and complementary sensors",
         "description": "Fill in one primary weather entity, then any complementary sensors if you have them. Weather stays the priority, and provided sensors override or complete missing values.",

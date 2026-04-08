@@ -19,6 +19,23 @@
           "type_sol": "Type de sol (obligatoire)"
         }
       },
+      "reconfigure": {
+        "title": "Paramètres de base",
+        "description": "Mettez à jour ici les zones, les débits et le type de sol.",
+        "data": {
+          "zone_1": "Zone 1",
+          "zone_2": "Zone 2",
+          "zone_3": "Zone 3",
+          "zone_4": "Zone 4",
+          "zone_5": "Zone 5",
+          "debit_zone_1": "Débit zone 1 (mm/h, 0 si non utilisée)",
+          "debit_zone_2": "Débit zone 2 (mm/h, 0 si non utilisée)",
+          "debit_zone_3": "Débit zone 3 (mm/h, 0 si non utilisée)",
+          "debit_zone_4": "Débit zone 4 (mm/h, 0 si non utilisée)",
+          "debit_zone_5": "Débit zone 5 (mm/h, 0 si non utilisée)",
+          "type_sol": "Type de sol (obligatoire)"
+        }
+      },
       "sensors": {
         "title": "Météo principale et capteurs complémentaires",
         "description": "Renseignez ici une météo principale, puis les capteurs complémentaires si vous les avez. La météo est utilisée en priorité, et les capteurs fournis remplacent ou complètent les valeurs manquantes.",

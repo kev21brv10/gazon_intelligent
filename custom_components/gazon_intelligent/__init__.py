@@ -8,6 +8,7 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.typing import ConfigType
 
 from .const import (
     DOMAIN,
@@ -20,6 +21,7 @@ from .entity_migration import (
 )
 from .coordinator import GazonIntelligentCoordinator
 from .date_utils import parse_optional_date
+from .migration import async_migrate_entry as _async_migrate_entry
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -39,21 +41,7 @@ SERVICE_REGISTER_PRODUCT = "register_product"
 SERVICE_REMOVE_PRODUCT = "remove_product"
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    coordinator = GazonIntelligentCoordinator(hass, entry)
-    await coordinator.async_config_entry_first_refresh()
-
-    hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN][entry.entry_id] = coordinator
-
-    await async_cleanup_obsolete_entities(hass, entry.entry_id)
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    await async_align_entity_ids(hass, entry.entry_id)
-    await coordinator.async_start_source_monitoring()
-    await coordinator.async_start_zone_monitoring()
-    await coordinator.async_start_auto_irrigation_monitoring()
-    coordinator.schedule_post_start_refresh(delay_seconds=30)
-
+def _async_register_services(hass: HomeAssistant) -> None:
     if not hass.services.has_service(DOMAIN, SERVICE_SET_MODE):
         hass.services.async_register(
             DOMAIN,
@@ -225,6 +213,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             ),
         )
 
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    _async_register_services(hass)
+    return True
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    return await _async_migrate_entry(hass, entry)
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    _async_register_services(hass)
+    coordinator = GazonIntelligentCoordinator(hass, entry)
+    await coordinator.async_config_entry_first_refresh()
+
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][entry.entry_id] = coordinator
+
+    await async_cleanup_obsolete_entities(hass, entry.entry_id)
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    await async_align_entity_ids(hass, entry.entry_id)
+    await coordinator.async_start_source_monitoring()
+    await coordinator.async_start_zone_monitoring()
+    await coordinator.async_start_auto_irrigation_monitoring()
+    coordinator.schedule_post_start_refresh(delay_seconds=30)
+
     return True
 
 
@@ -234,24 +248,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok:
         await coordinator.async_shutdown()
         hass.data[DOMAIN].pop(entry.entry_id)
-
-    if not hass.data[DOMAIN]:
-        for service in (
-            SERVICE_SET_MODE,
-            SERVICE_SET_DATE_ACTION,
-            SERVICE_RESET_MODE,
-            SERVICE_START_MANUAL_IRRIGATION,
-            SERVICE_START_AUTO_IRRIGATION,
-            SERVICE_START_APPLICATION_IRRIGATION,
-            SERVICE_DECLARE_INTERVENTION,
-            SERVICE_REMOVE_LAST_APPLICATION,
-            SERVICE_DECLARE_MOWING,
-            SERVICE_DECLARE_WATERING,
-            SERVICE_REGISTER_PRODUCT,
-            SERVICE_REMOVE_PRODUCT,
-        ):
-            if hass.services.has_service(DOMAIN, service):
-                hass.services.async_remove(DOMAIN, service)
 
     return unload_ok
 

@@ -36,6 +36,7 @@ from .const import (
     DEFAULT_TYPE_SOL,
     TYPES_SOL,
 )
+from .entity_migration import CURRENT_CONFIG_ENTRY_VERSION
 
 
 def _d(val):
@@ -142,7 +143,7 @@ def build_advanced_schema(current: dict | None = None):
 
 
 class GazonIntelligentConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    VERSION = 2
+    VERSION = CURRENT_CONFIG_ENTRY_VERSION
 
     def _current_reconfigure_entry(self):
         entry = getattr(self, "_reconfigure_entry_data", None)

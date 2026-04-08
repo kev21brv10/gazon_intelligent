@@ -158,6 +158,8 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             temperature_reference_hydrique = forecast_temperature_today
         elif temperature is not None:
             temperature_reference_hydrique = temperature
+        if temperature_reference_hydrique is not None:
+            temperature_reference_hydrique = round(float(temperature_reference_hydrique), 1)
         etp_capteur = self._get_float_state(self._get_conf(CONF_CAPTEUR_ETP))
         et0_source = "capteur" if etp_capteur is not None else "fallback_temperature"
         humidite = self._get_float_state(self._get_conf(CONF_CAPTEUR_HUMIDITE))

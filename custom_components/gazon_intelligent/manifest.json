@@ -4,7 +4,7 @@
   "codeowners": ["@kev21brv10"],
   "config_flow": true,
   "documentation": "https://github.com/kev21brv10/gazon_intelligent",
-  "integration_type": "hub",
+  "integration_type": "service",
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/kev21brv10/gazon_intelligent/issues",
   "loggers": ["custom_components.gazon_intelligent"],
