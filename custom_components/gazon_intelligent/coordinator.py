@@ -147,7 +147,19 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 temperature_source = "meteo_forecast"
         elif temperature is None:
             temperature_source = "non disponible"
+        temperature_reference_hydrique = None
+        if forecast_temperature_today is not None and temperature is not None:
+            current_hour = dt_util.now().hour
+            if current_hour < 12:
+                temperature_reference_hydrique = (0.7 * forecast_temperature_today) + (0.3 * temperature)
+            else:
+                temperature_reference_hydrique = (0.3 * forecast_temperature_today) + (0.7 * temperature)
+        elif forecast_temperature_today is not None:
+            temperature_reference_hydrique = forecast_temperature_today
+        elif temperature is not None:
+            temperature_reference_hydrique = temperature
         etp_capteur = self._get_float_state(self._get_conf(CONF_CAPTEUR_ETP))
+        et0_source = "capteur" if etp_capteur is not None else "fallback_temperature"
         humidite = self._get_float_state(self._get_conf(CONF_CAPTEUR_HUMIDITE))
         if humidite is None:
             humidite = weather_profile.get("weather_humidity")
@@ -179,6 +191,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             temperature=temperature,
             forecast_temperature_today=forecast_temperature_today,
             temperature_source=temperature_source,
+            temperature_reference_hydrique=temperature_reference_hydrique,
             pluie_24h=pluie_24h,
             pluie_demain=pluie_demain,
             humidite=humidite,
@@ -197,6 +210,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             pluie_j2=forecast_pluie_j2,
             pluie_3j=forecast_pluie_3j,
             pluie_probabilite_max_3j=forecast_probabilite_max_3j,
+            et0_source=et0_source,
         )
         _LOGGER.debug("Gazon Intelligent V2 observability: %s", self._build_observability_payload(snapshot))
         await self._async_save_state()
@@ -209,7 +223,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "phase_active": snapshot["phase_active"],
             "pluie_demain_source": pluie_demain_source,
             "temperature_source": temperature_source,
+            "temperature_reference_hydrique": temperature_reference_hydrique,
             "forecast_temperature_today": forecast_temperature_today,
+            "et0_source": et0_source,
             "forecast_pluie_j2": forecast_pluie_j2,
             "forecast_pluie_3j": forecast_pluie_3j,
             "forecast_probabilite_max_3j": forecast_probabilite_max_3j,

@@ -69,6 +69,10 @@ class DecisionContext:
     today: date
     hour_of_day: int | None = None
     temperature: float | None = None
+    forecast_temperature_today: float | None = None
+    temperature_source: str | None = None
+    temperature_reference_hydrique: float | None = None
+    et0_source: str | None = None
     pluie_24h: float | None = None
     pluie_demain: float | None = None
     pluie_j2: float | None = None
@@ -99,6 +103,10 @@ class DecisionContext:
         today: date | None = None,
         hour_of_day: int | None = None,
         temperature: float | None = None,
+        forecast_temperature_today: float | None = None,
+        temperature_source: str | None = None,
+        temperature_reference_hydrique: float | None = None,
+        et0_source: str | None = None,
         pluie_24h: float | None = None,
         pluie_demain: float | None = None,
         pluie_j2: float | None = None,
@@ -126,6 +134,10 @@ class DecisionContext:
             today=today,
             hour_of_day=hour_of_day,
             temperature=temperature,
+            forecast_temperature_today=forecast_temperature_today,
+            temperature_source=temperature_source,
+            temperature_reference_hydrique=temperature_reference_hydrique,
+            et0_source=et0_source,
             pluie_24h=pluie_24h,
             pluie_demain=pluie_demain,
             pluie_j2=pluie_j2,

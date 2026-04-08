@@ -24,6 +24,25 @@ from .scores import classify_stress_level
 from .water import compute_advanced_context, compute_etp, compute_water_balance
 
 _LOGGER = logging.getLogger(__name__)
+USE_DEPLETION_LOGIC = False
+
+
+def compute_kc_gazon(phase_dominante: str, sous_phase: str | None = None) -> float:
+    phase = str(phase_dominante or "").strip()
+    sous_phase = str(sous_phase or "").strip()
+    if phase == "Normal":
+        return 0.8
+    if phase == "Sursemis":
+        if sous_phase == "Germination":
+            return 1.0
+        return 0.95
+    if phase == "Hivernage":
+        return 0.55
+    if phase == "Scarification":
+        return 0.85
+    if phase in {"Traitement", "Fertilisation", "Biostimulant", "Agent Mouillant"}:
+        return 0.8
+    return 0.75
 
 
 def build_water_bundle(
@@ -44,6 +63,7 @@ def build_water_bundle(
         temperature=context.temperature,
         pluie_24h=context.pluie_24h,
         etp_capteur=context.etp_capteur,
+        temperature_reference_hydrique=context.temperature_reference_hydrique,
         weather_profile=context.weather_profile,
     )
     water_balance = compute_water_balance(
@@ -57,7 +77,15 @@ def build_water_bundle(
         recent_watering_mm_override=context.retour_arrosage,
         advanced_context=advanced_context,
         weather_profile=context.weather_profile,
+        soil_balance=context.soil_balance,
+        phase_dominante=phase_bundle["phase_dominante"],
     )
+    kc_gazon = compute_kc_gazon(phase_bundle["phase_dominante"], phase_bundle["sous_phase"])
+    et0_mm = float(water_balance.get("et0_mm") or etp or 0.0)
+    etc_mm = round(max(0.0, et0_mm * kc_gazon), 1)
+    reserve_utile_mm = float(water_balance.get("reserve_utile_mm") or 0.0)
+    reserve_actuelle_mm = float(water_balance.get("reserve_actuelle_mm") or 0.0)
+    mm_cible_depletion = round(max(0.0, reserve_utile_mm - reserve_actuelle_mm), 1)
     balance_snapshot = dict(water_balance)
     balance_snapshot["bilan_hydrique_journalier_mm"] = balance_snapshot.get("bilan_hydrique_mm", 0.0)
     if context.soil_balance:
@@ -92,6 +120,13 @@ def build_water_bundle(
     )
     return {
         "etp": etp,
+        "et0_mm": round(max(0.0, et0_mm), 1),
+        "et0_source": context.et0_source,
+        "kc_gazon": round(min(max(kc_gazon, 0.4), 1.1), 2),
+        "etc_mm": etc_mm,
+        "use_depletion_logic": USE_DEPLETION_LOGIC,
+        "mm_cible_depletion": mm_cible_depletion,
+        "objective_from_depletion_mm": mm_cible_depletion,
         "advanced_context": advanced_context,
         "water_balance": balance_snapshot,
         "objectif_mm": watering_profile["mm_final_recommande"],

@@ -4,7 +4,15 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .decision_models import DecisionResult
+from .decision_models import (
+    DecisionResult,
+    POSSIBLE_FENETRE_OPTIMALE_VALUES,
+    POSSIBLE_NIVEAU_ACTION_VALUES,
+    POSSIBLE_PHASE_DOMINANTE_VALUES,
+    POSSIBLE_SOUS_PHASE_VALUES,
+    POSSIBLE_TONTE_STATUT_VALUES,
+    POSSIBLE_TYPE_ARROSAGE_VALUES,
+)
 from .entity_ids import public_entity_id
 
 
@@ -76,9 +84,14 @@ class GazonEntityBase(CoordinatorEntity):
 
     def _possible_values_attr(self, key: str) -> dict[str, object] | None:
         result = self.decision_result
-        if result is None:
-            return None
-        possible_values = result.possible_values_for(key)
+        possible_values = result.possible_values_for(key) if result is not None else {
+            "phase_dominante": POSSIBLE_PHASE_DOMINANTE_VALUES,
+            "sous_phase": POSSIBLE_SOUS_PHASE_VALUES,
+            "niveau_action": POSSIBLE_NIVEAU_ACTION_VALUES,
+            "tonte_statut": POSSIBLE_TONTE_STATUT_VALUES,
+            "fenetre_optimale": POSSIBLE_FENETRE_OPTIMALE_VALUES,
+            "type_arrosage": POSSIBLE_TYPE_ARROSAGE_VALUES,
+        }.get(key)
         if not possible_values:
             return None
         return {"possible_values": list(possible_values)}

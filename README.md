@@ -151,6 +151,22 @@ Au quotidien, le principe est simple :
 - `sensor.gazon_intelligent_fenetre_optimale`
 - `sensor.gazon_intelligent_objectif_d_arrosage`
 
+### Lecture publique recommandée
+
+- `sensor.gazon_intelligent_assistant` : que faire maintenant ?
+- `sensor.gazon_intelligent_conseil_principal` : pourquoi ?
+- `binary_sensor.gazon_intelligent_signal_irrigation` : puis-je ou dois-je arroser ?
+- `sensor.gazon_intelligent_fenetre_optimale` : quand agir ?
+- `sensor.gazon_intelligent_prochaine_intervention` : quelle intervention préparer ou déclarer ?
+
+### Attributs publics utiles
+
+- `sensor.gazon_intelligent_conseil_principal.niveau_action_hydrique` : lecture hydrique seule, distincte du niveau global
+- `binary_sensor.gazon_intelligent_signal_irrigation.reason_kind` : raison publique du signal (`no_need`, `waiting`, `blocked`, `post_application`, `hydric_need`)
+- `binary_sensor.gazon_intelligent_signal_irrigation.action_label` : libellé d’action lisible côté irrigation
+- `sensor.gazon_intelligent_fenetre_optimale.window_reason_summary` : résumé court et public de la fenêtre retenue
+- `sensor.gazon_intelligent_debug_intervention` : détails techniques et contraintes, à réserver au debug
+
 ### Lecture rapide
 
 - si `assistant = aucune_action`, il n’y a rien à faire
@@ -206,6 +222,8 @@ Avant de parcourir toute la liste :
 
 - diagnostics téléchargeables via l’intégration
 - logs du module `custom_components.gazon_intelligent`
+- capteurs de suivi hydrique avancé disponibles en diagnostic, désactivés par défaut :
+  `sensor.gazon_intelligent_et0`, `sensor.gazon_intelligent_etc`, `sensor.gazon_intelligent_reserve_actuelle`, `sensor.gazon_intelligent_depletion_ratio`, `sensor.gazon_intelligent_etat_hydrique`, `sensor.gazon_intelligent_objectif_legacy`, `sensor.gazon_intelligent_objectif_depletion`
 
 ---
 
@@ -296,9 +314,9 @@ python3 -m unittest discover -s tests
 
 ## 🧾 Version
 
-- manifest : `0.5.3`
-- README : `0.5.3`
-- changelog : `0.5.3`
+- manifest : `0.6.0`
+- README : `0.6.0`
+- changelog : `0.6.0`
 
 ---
 

@@ -8,8 +8,9 @@ from homeassistant.util import dt as dt_util
 
 from .assistant import build_assistant_decision
 from .const import DOMAIN
+from .decision_models import TYPE_ARROSAGE_DISPLAY_LABELS
 from .entity_base import GazonEntityBase
-from .intervention_recommendation import build_intervention_recommendation
+from .intervention_recommendation import build_intervention_recommendation, public_intervention_ui
 from .memory import compute_application_state, normalize_post_application_status
 from .watering_plan import build_watering_plan
 
@@ -149,27 +150,35 @@ def _assistant_public_summary(payload: dict[str, object] | None) -> str | None:
     return None
 
 
+def _assistant_payload_for_public(entity: GazonEntityBase) -> dict[str, object] | None:
+    assistant_payload = entity._decision_value("assistant")
+    snapshot = getattr(entity.coordinator, "data", None)
+    if not isinstance(assistant_payload, dict) and isinstance(snapshot, dict):
+        assistant_payload = build_assistant_decision(snapshot)
+    if not isinstance(assistant_payload, dict) or not assistant_payload:
+        return None
+    action = str(assistant_payload.get("action") or "none").strip().lower()
+    if action in {"none", "", "aucune_action"}:
+        return None
+    return assistant_payload
+
+
 def _intervention_public_summary(entity: GazonEntityBase) -> str | None:
     payload = entity._decision_value("intervention_recommendation")
     if not isinstance(payload, dict) or not payload:
         return None
+    ui = public_intervention_ui(payload)
     status = str(payload.get("status") or "").strip().lower()
     ready_to_declare = bool(payload.get("ready_to_declare"))
-    product = payload.get("product")
-    if not isinstance(product, dict):
-        product = {}
-    product_name = str(
-        product.get("name")
-        or payload.get("product_name")
-        or payload.get("product_id")
-        or ""
-    ).strip()
+    summary = str(ui.get("summary") or "").strip()
     if ready_to_declare:
-        return f"Intervention prête à déclarer : {product_name}." if product_name else "Intervention prête à déclarer."
+        return f"{summary}." if summary else "Intervention prête à déclarer."
     if status == "recommended":
-        return f"Intervention recommandée : {product_name}." if product_name else "Intervention recommandée."
+        return f"{summary}." if summary else "Intervention recommandée."
     if status == "preparation":
-        return f"Intervention à préparer : {product_name}." if product_name else "Intervention à préparer."
+        return f"{summary}." if summary else "Intervention à préparer."
+    if status == "blocked":
+        return f"{summary}." if summary else "Intervention bloquée."
     return None
 
 
@@ -188,10 +197,7 @@ def _watering_public_summary(entity: GazonEntityBase) -> str | None:
 
 
 def _public_conseil_principal(entity: GazonEntityBase) -> str | None:
-    assistant_payload = entity._decision_value("assistant")
-    snapshot = getattr(entity.coordinator, "data", None)
-    if not isinstance(assistant_payload, dict) and isinstance(snapshot, dict):
-        assistant_payload = build_assistant_decision(snapshot)
+    assistant_payload = _assistant_payload_for_public(entity)
 
     raw_conseil = entity._decision_value("conseil_principal")
     raw_text = str(raw_conseil).strip() if raw_conseil not in (None, [], {}) else ""
@@ -346,6 +352,53 @@ def _objective_mm_value(entity: GazonEntityBase) -> float:
         return 0.0
 
 
+def _niveau_action_hydrique(entity: GazonEntityBase) -> str:
+    post_status = normalize_post_application_status(entity._decision_value("application_post_watering_status"))
+    hydric_actionable = bool(entity._decision_value("arrosage_recommande", False)) or post_status == "autorise"
+    global_level = str(entity._decision_value("niveau_action") or "").strip().lower()
+    objective_mm = _objective_mm_value(entity)
+
+    if hydric_actionable:
+        return "critique" if global_level == "critique" else "a_faire"
+    if objective_mm > 0.0 or post_status in {"bloque", "en_attente"}:
+        return "surveiller"
+    return "aucune_action"
+
+
+def _normalized_public_niveau_action(entity: GazonEntityBase) -> str:
+    niveau_action = str(entity._decision_value("niveau_action") or "").strip().lower()
+    if niveau_action not in {"aucune_action", "surveiller", "a_faire", "critique"}:
+        niveau_action = "aucune_action"
+
+    decision_resume = entity._decision_value("decision_resume")
+    objectif_mm = _objective_mm_value(entity)
+    assistant_payload = _assistant_payload_for_public(entity)
+
+    if (
+        niveau_action == "surveiller"
+        and objectif_mm <= 0.0
+        and isinstance(decision_resume, dict)
+        and str(decision_resume.get("action") or "").strip() in {"aucune_action", "none"}
+        and not assistant_payload
+    ):
+        niveau_action = "aucune_action"
+
+    if not assistant_payload:
+        return niveau_action
+
+    action = str(assistant_payload.get("action") or "none").strip().lower()
+    status = str(assistant_payload.get("status") or "ok").strip().lower()
+
+    if action in {"none", "", "aucune_action", "arrosage"}:
+        return niveau_action
+
+    if status == "action_required":
+        return "critique" if niveau_action == "critique" else "a_faire"
+    if status == "blocked" and niveau_action == "aucune_action":
+        return "surveiller"
+    return niveau_action
+
+
 def _is_passive_irrigation_context(entity: GazonEntityBase) -> bool:
     post_status = normalize_post_application_status(entity._decision_value("application_post_watering_status"))
     return (
@@ -367,6 +420,46 @@ def _hydric_state_from_depletion_ratio(value: object | None) -> str | None:
     if ratio <= 0.75:
         return "depletion"
     return "critique"
+
+
+def _hydric_state_from_reserve_ratio(current: object | None, useful: object | None) -> str | None:
+    try:
+        current_value = float(current)
+        useful_value = float(useful)
+    except (TypeError, ValueError):
+        return None
+    if useful_value <= 0.0:
+        return None
+    fill_ratio = max(0.0, min(1.0, current_value / useful_value))
+    if fill_ratio >= 0.90:
+        return "plein"
+    if fill_ratio >= 0.55:
+        return "confort"
+    if fill_ratio >= 0.25:
+        return "depletion"
+    return "critique"
+
+
+def _hydric_state_for_objective_sensor(entity: GazonEntityBase, attrs: dict[str, object]) -> str | None:
+    hydric_state = _hydric_state_from_depletion_ratio(attrs.get("depletion_ratio"))
+    if hydric_state is not None:
+        return hydric_state
+
+    hydric_state = _hydric_state_from_reserve_ratio(
+        attrs.get("reserve_actuelle_mm"),
+        attrs.get("reserve_utile_mm"),
+    )
+    if hydric_state is not None:
+        return hydric_state
+
+    if _objective_mm_value(entity) > 0.0 or bool(entity._decision_value("arrosage_recommande", False)):
+        return None
+
+    try:
+        legacy_reserve = float(attrs.get("reserve_hydrique_sol_mm"))
+    except (TypeError, ValueError):
+        return None
+    return "plein" if legacy_reserve > 0.0 else None
 
 
 def _harmonized_hydric_labels(
@@ -451,6 +544,67 @@ def _block_reason_display_label(value: object) -> str | None:
     return labels.get(normalized, normalized.replace("_", " "))
 
 
+def _minute_range_display(start_minute: object, end_minute: object) -> str | None:
+    try:
+        start = int(start_minute)
+        end = int(end_minute)
+    except (TypeError, ValueError):
+        return None
+    if start < 0 or end < 0:
+        return None
+
+    def _fmt(value: int) -> str:
+        hours = value // 60
+        minutes = value % 60
+        return f"{hours:02d}:{minutes:02d}"
+
+    return f"{_fmt(start)}–{_fmt(end)}"
+
+
+def _window_reason_summary(
+    entity: GazonEntityBase,
+    attrs: dict[str, object],
+    contextual_state: dict[str, object] | None,
+) -> str | None:
+    summary = str((contextual_state or {}).get("summary") or "").strip()
+    if summary == "Aucun arrosage nécessaire":
+        return summary
+
+    status = str((contextual_state or {}).get("status") or "").strip().lower()
+    objective_mm = _objective_mm_value(entity)
+    block_reason = str(attrs.get("block_reason") or "").strip()
+    window_value = str(entity._decision_value("fenetre_optimale") or "").strip()
+    window_label = (_window_display_label(window_value) or "").strip()
+
+    if status == "bloque" and block_reason:
+        label = _block_reason_display_label(block_reason) or block_reason.replace("_", " ")
+        return f"Arrosage bloqué : {label}"
+    if status == "auto":
+        return "Arrosage automatique planifié"
+    if status == "autorise":
+        post_status = normalize_post_application_status(entity._decision_value("application_post_watering_status"))
+        if post_status == "autorise":
+            return "Arrosage post-application disponible"
+        return "Arrosage autorisé"
+    if status == "en_attente":
+        post_status = normalize_post_application_status(entity._decision_value("application_post_watering_status"))
+        if post_status == "en_attente":
+            return "Arrosage post-application en attente"
+        if objective_mm <= 0.0:
+            return "Aucun arrosage nécessaire"
+        if block_reason:
+            label = _block_reason_display_label(block_reason) or block_reason.replace("_", " ")
+            return f"Arrosage reporté : {label}"
+        if window_label:
+            return f"Créneau conseillé : {window_label.lower()}"
+        return "Arrosage en attente"
+    if objective_mm <= 0.0:
+        return "Aucun arrosage nécessaire"
+    if window_label:
+        return f"Créneau conseillé : {window_label.lower()}"
+    return summary or None
+
+
 def _compact_application_summary(summary: object) -> dict[str, object] | None:
     if not isinstance(summary, dict) or not summary:
         return None
@@ -471,9 +625,7 @@ def _public_intervention_attributes(payload: dict[str, object]) -> dict[str, obj
     context = payload.get("context")
     if not isinstance(context, dict):
         context = {}
-    ui = payload.get("ui")
-    if not isinstance(ui, dict):
-        ui = {}
+    ui = public_intervention_ui(payload)
     attrs = {
         "runtime_probe": RECOMMENDATION_RUNTIME_PROBE,
         "recommended_action": payload.get("recommended_action"),
@@ -513,6 +665,13 @@ async def async_setup_entry(hass, entry, async_add_entities):
             GazonPhaseActiveSensor(coordinator),
             GazonSousPhaseSensor(coordinator),
             GazonObjectifMmSensor(coordinator),
+            GazonObjectifLegacySensor(coordinator),
+            GazonObjectifDepletionSensor(coordinator),
+            GazonEt0Sensor(coordinator),
+            GazonEtcSensor(coordinator),
+            GazonReserveActuelleSensor(coordinator),
+            GazonDepletionRatioSensor(coordinator),
+            GazonEtatHydriqueSensor(coordinator),
             GazonTypeArrosageSensor(coordinator),
             GazonPlanArrosageSensor(coordinator),
             GazonArrosageEnCoursSensor(coordinator),
@@ -694,6 +853,23 @@ class GazonObjectifMmSensor(GazonEntityBase, SensorEntity):
             "temperature_source",
             "etp",
             "depletion_ratio",
+            "reserve_utile_mm",
+            "reserve_actuelle_mm",
+            "reserve_stock_mm",
+            "reserve_stock_max_mm",
+            "reserve_surplus_mm",
+            "reserve_fill_ratio",
+            "reserve_available_ratio",
+            "reserve_minimale_mm",
+            "depletion_mm",
+            "depletion_allowed_mm",
+            "mad_ratio",
+            "soil_moisture_override_state",
+            "soil_moisture_confidence_adjustment",
+            "et0_mm",
+            "et0_source",
+            "kc_gazon",
+            "etc_mm",
         )
 
     @property
@@ -720,7 +896,7 @@ class GazonObjectifMmSensor(GazonEntityBase, SensorEntity):
             attrs["hydric_balance_level"] = hydric_balance_level
         if hydric_strategy is not None:
             attrs["hydric_strategy"] = hydric_strategy
-        hydric_state = _hydric_state_from_depletion_ratio(attrs.get("depletion_ratio"))
+        hydric_state = _hydric_state_for_objective_sensor(self, attrs)
         if hydric_state is not None:
             attrs["hydric_state"] = hydric_state
         harmonized_level, harmonized_strategy = _harmonized_hydric_labels(
@@ -733,6 +909,247 @@ class GazonObjectifMmSensor(GazonEntityBase, SensorEntity):
             attrs["hydric_balance_level"] = harmonized_level
         if harmonized_strategy is not None:
             attrs["hydric_strategy"] = harmonized_strategy
+        return attrs or None
+
+
+class GazonObjectifLegacySensor(GazonEntityBase, SensorEntity):
+    _attr_name = "Objectif legacy"
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
+    _attr_native_unit_of_measurement = "mm"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:water-minus"
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._set_entity_identity("sensor", "objectif_legacy_mm")
+
+    @property
+    def native_value(self):
+        for key in ("mm_cible", "objectif_legacy_mm", "objectif_legacy"):
+            try:
+                value = self._decision_value(key, None)
+                if value not in (None, "", [], {}):
+                    return float(value)
+            except (TypeError, ValueError):
+                continue
+        return 0.0
+
+    @property
+    def extra_state_attributes(self):
+        attrs = self._attrs_from_result(
+            "objectif_mm",
+            "mm_final_recommande",
+            "use_depletion_logic",
+            "type_arrosage",
+        ) or {}
+        attrs["comparison_mode"] = "legacy"
+        return attrs or None
+
+
+class GazonObjectifDepletionSensor(GazonEntityBase, SensorEntity):
+    _attr_name = "Objectif déplétion"
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
+    _attr_native_unit_of_measurement = "mm"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:water-sync"
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._set_entity_identity("sensor", "objectif_depletion_mm")
+
+    @property
+    def native_value(self):
+        for key in ("mm_cible_depletion", "objectif_depletion_mm", "objectif_depletion"):
+            try:
+                value = self._decision_value(key, None)
+                if value not in (None, "", [], {}):
+                    return float(value)
+            except (TypeError, ValueError):
+                continue
+        return 0.0
+
+    @property
+    def extra_state_attributes(self):
+        attrs = self._attrs_from_result(
+            "reserve_actuelle_mm",
+            "reserve_stock_mm",
+            "reserve_stock_max_mm",
+            "reserve_surplus_mm",
+            "reserve_fill_ratio",
+            "reserve_available_ratio",
+            "reserve_minimale_mm",
+            "depletion_mm",
+            "depletion_ratio",
+            "use_depletion_logic",
+        ) or {}
+        attrs["comparison_mode"] = "depletion"
+        return attrs or None
+
+
+class GazonEt0Sensor(GazonEntityBase, SensorEntity):
+    _attr_name = "ET0"
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
+    _attr_native_unit_of_measurement = "mm"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:weather-sunny"
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._set_entity_identity("sensor", "et0")
+
+    @property
+    def native_value(self):
+        try:
+            return float(self._decision_value("et0_mm", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    @property
+    def extra_state_attributes(self):
+        return self._attrs_from_result(
+            "et0_source",
+            "temperature",
+            "forecast_temperature_today",
+            "temperature_reference_hydrique",
+        )
+
+
+class GazonEtcSensor(GazonEntityBase, SensorEntity):
+    _attr_name = "ETc"
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
+    _attr_native_unit_of_measurement = "mm"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:grass"
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._set_entity_identity("sensor", "etc")
+
+    @property
+    def native_value(self):
+        try:
+            return float(self._decision_value("etc_mm", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    @property
+    def extra_state_attributes(self):
+        return self._attrs_from_result("et0_mm", "kc_gazon", "phase_dominante", "sous_phase")
+
+
+class GazonReserveActuelleSensor(GazonEntityBase, SensorEntity):
+    _attr_name = "Réserve actuelle"
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
+    _attr_native_unit_of_measurement = "mm"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:cup-water"
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._set_entity_identity("sensor", "reserve_actuelle")
+
+    @property
+    def native_value(self):
+        try:
+            return float(self._decision_value("reserve_actuelle_mm", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    @property
+    def extra_state_attributes(self):
+        attrs = self._attrs_from_result(
+            "reserve_utile_mm",
+            "reserve_stock_mm",
+            "reserve_stock_max_mm",
+            "reserve_surplus_mm",
+            "reserve_fill_ratio",
+            "reserve_available_ratio",
+            "reserve_minimale_mm",
+            "depletion_mm",
+            "depletion_ratio",
+        ) or {}
+        hydric_state = _hydric_state_for_objective_sensor(self, attrs)
+        if hydric_state is not None:
+            attrs["hydric_state"] = hydric_state
+        return attrs or None
+
+
+class GazonDepletionRatioSensor(GazonEntityBase, SensorEntity):
+    _attr_name = "Déplétion"
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
+    _attr_native_unit_of_measurement = "%"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:gauge"
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._set_entity_identity("sensor", "depletion_ratio")
+
+    @property
+    def native_value(self):
+        try:
+            ratio = float(self._decision_value("depletion_ratio", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            ratio = 0.0
+        return round(max(0.0, min(ratio, 1.0)) * 100.0, 1)
+
+    @property
+    def extra_state_attributes(self):
+        raw_ratio = self._decision_value("depletion_ratio")
+        attrs = {"depletion_ratio_raw": raw_ratio}
+        hydric_state = _hydric_state_from_depletion_ratio(raw_ratio)
+        if hydric_state is not None:
+            attrs["hydric_state"] = hydric_state
+        return attrs or None
+
+
+class GazonEtatHydriqueSensor(GazonEntityBase, SensorEntity):
+    _attr_name = "État hydrique"
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
+    _attr_icon = "mdi:water-percent-alert"
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._set_entity_identity("sensor", "etat_hydrique")
+
+    @property
+    def native_value(self):
+        hydric_state = self._decision_value("hydric_state")
+        if hydric_state not in (None, "", [], {}):
+            return hydric_state
+        attrs = self.extra_state_attributes or {}
+        return _hydric_state_for_objective_sensor(self, attrs)
+
+    @property
+    def extra_state_attributes(self):
+        attrs = self._attrs_from_result(
+            "reserve_actuelle_mm",
+            "reserve_stock_mm",
+            "reserve_stock_max_mm",
+            "reserve_surplus_mm",
+            "reserve_fill_ratio",
+            "reserve_available_ratio",
+            "reserve_minimale_mm",
+            "depletion_mm",
+            "depletion_ratio",
+        ) or {}
+        hydric_state = _hydric_state_for_objective_sensor(self, attrs)
+        if hydric_state is not None:
+            attrs["hydric_state"] = hydric_state
         return attrs or None
 
 
@@ -762,13 +1179,21 @@ class GazonTypeArrosageSensor(GazonEntityBase, SensorEntity):
             ):
                 return "Aucune action"
             return result.display_label_for("type_arrosage")
-        return self._decision_value("type_arrosage")
+        raw_value = _normalized_public_type_arrosage(self)
+        return TYPE_ARROSAGE_DISPLAY_LABELS.get(raw_value, raw_value)
 
     @property
     def extra_state_attributes(self):
         result = self.decision_result
         if result is None:
-            return self._possible_values_attr("type_arrosage")
+            raw_values = (self._possible_values_attr("type_arrosage") or {}).get("possible_values") or []
+            if not raw_values:
+                return None
+            possible_values = [
+                TYPE_ARROSAGE_DISPLAY_LABELS.get(str(value), str(value))
+                for value in raw_values
+            ]
+            return {"possible_values": possible_values}
         possible_values = list(result.possible_display_values_for("type_arrosage") or [])
         objective = self._decision_value("objectif_mm", 0.0)
         try:
@@ -2020,6 +2445,7 @@ class GazonConseilPrincipalSensor(GazonEntityBase, SensorEntity):
                 "next_action_date",
                 "next_action_display",
             ) or {}
+        attrs["niveau_action"] = _normalized_public_niveau_action(self)
         public_action = _public_action_recommandee(self)
         if public_action is not None:
             attrs["action_recommandee"] = public_action
@@ -2037,6 +2463,7 @@ class GazonConseilPrincipalSensor(GazonEntityBase, SensorEntity):
                 attrs["next_action_display"] = display_date
 
         decision_resume = self._decision_value("decision_resume")
+        attrs["niveau_action_hydrique"] = _niveau_action_hydrique(self)
         if isinstance(decision_resume, dict):
             if decision_resume.get("action") is not None:
                 attrs["action_type"] = decision_resume.get("action")
@@ -2098,25 +2525,13 @@ class GazonNiveauActionSensor(GazonEntityBase, SensorEntity):
 
     @property
     def native_value(self):
-        niveau_action = self._decision_value("niveau_action")
-        decision_resume = self._decision_value("decision_resume")
-        objectif_mm = self._decision_value("objectif_mm", 0.0)
-        try:
-            objectif_mm = float(objectif_mm or 0.0)
-        except (TypeError, ValueError):
-            objectif_mm = 0.0
-        if (
-            niveau_action == "surveiller"
-            and objectif_mm <= 0.0
-            and isinstance(decision_resume, dict)
-            and str(decision_resume.get("action") or "").strip() in {"aucune_action", "none"}
-        ):
-            return "aucune_action"
-        return niveau_action
+        return _normalized_public_niveau_action(self)
 
     @property
     def extra_state_attributes(self):
-        return self._possible_values_attr("niveau_action")
+        attrs = self._possible_values_attr("niveau_action") or {}
+        attrs["niveau_action_hydrique"] = _niveau_action_hydrique(self)
+        return attrs or None
 
 
 class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
@@ -2133,13 +2548,15 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
         return self._decision_value("fenetre_optimale")
 
     def _contextual_watering_state(self) -> dict[str, object] | None:
+        snapshot = getattr(self.coordinator, "data", None)
         result = self.decision_result
-        if result is None:
-            return None
-
-        extra = getattr(result, "extra", None)
+        extra = getattr(result, "extra", None) if result is not None else None
         if not isinstance(extra, dict):
             extra = {}
+        if isinstance(snapshot, dict):
+            merged_extra = dict(snapshot)
+            merged_extra.update(extra)
+            extra = merged_extra
 
         objective = self._decision_value("objectif_mm", 0.0)
         try:
@@ -2284,13 +2701,15 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
         }
 
     def _next_action_date_attributes(self) -> dict[str, object] | None:
+        snapshot = getattr(self.coordinator, "data", None)
         result = self.decision_result
-        if result is None:
-            return None
-
-        extra = getattr(result, "extra", None)
+        extra = getattr(result, "extra", None) if result is not None else None
         if not isinstance(extra, dict):
             extra = {}
+        if isinstance(snapshot, dict):
+            merged_extra = dict(snapshot)
+            merged_extra.update(extra)
+            extra = merged_extra
 
         target_date = str(
             extra.get("next_action_date")
@@ -2407,6 +2826,30 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
                         attrs["confidence_reasons"] = filtered_reasons
                     else:
                         attrs.pop("confidence_reasons", None)
+        attrs = attrs or {}
+        watering_window_display = _minute_range_display(
+            attrs.get("watering_window_start_minute"),
+            attrs.get("watering_window_end_minute"),
+        )
+        optimal_window_display = _minute_range_display(
+            attrs.get("watering_window_optimal_start_minute"),
+            attrs.get("watering_window_optimal_end_minute"),
+        )
+        evening_window_display = None
+        if bool(attrs.get("watering_evening_allowed")):
+            evening_window_display = _minute_range_display(
+                attrs.get("watering_evening_start_minute"),
+                attrs.get("watering_evening_end_minute"),
+            )
+        if watering_window_display:
+            attrs["watering_window_display"] = watering_window_display
+        if optimal_window_display:
+            attrs["optimal_window_display"] = optimal_window_display
+        if evening_window_display:
+            attrs["evening_window_display"] = evening_window_display
+        window_reason_summary = _window_reason_summary(self, attrs, contextual_state)
+        if window_reason_summary:
+            attrs["window_reason_summary"] = window_reason_summary
         next_action_date_attrs = self._next_action_date_attributes()
         if next_action_date_attrs:
             attrs = attrs or {}

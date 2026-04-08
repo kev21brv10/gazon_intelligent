@@ -196,6 +196,46 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertEqual(snapshot["type_sol"], "limoneux")
         self.assertEqual(snapshot["soil_balance"]["reserve_mm"], 14.0)
 
+    def test_build_decision_snapshot_exposes_hydric_observability_metrics(self) -> None:
+        snapshot = decision.build_decision_snapshot(
+            history=[],
+            today=date(2026, 4, 8),
+            hour_of_day=9,
+            temperature=20.0,
+            forecast_temperature_today=24.0,
+            temperature_source="capteur",
+            temperature_reference_hydrique=22.8,
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            humidite=60.0,
+            type_sol="limoneux",
+            etp_capteur=None,
+            soil_balance={
+                "date": "2026-04-08",
+                "reserve_mm": 10.0,
+                "previous_reserve_mm": 9.0,
+                "pluie_mm": 0.0,
+                "arrosage_mm": 0.0,
+                "etp_mm": 1.4,
+                "delta_mm": -1.0,
+                "type_sol": "limoneux",
+                "reserve_max_mm": 24.0,
+                "reserve_min_mm": 0.0,
+                "ledger": [],
+            },
+            et0_source="fallback_temperature",
+        )
+
+        self.assertEqual(snapshot["temperature_reference_hydrique"], 22.8)
+        self.assertEqual(snapshot["et0_source"], "fallback_temperature")
+        self.assertGreater(snapshot["et0_mm"], 0.0)
+        self.assertEqual(snapshot["kc_gazon"], 0.8)
+        self.assertGreater(snapshot["etc_mm"], 0.0)
+        self.assertEqual(snapshot["reserve_actuelle_mm"], 10.0)
+        self.assertEqual(snapshot["reserve_utile_mm"], 12.0)
+        self.assertEqual(snapshot["depletion_mm"], 2.0)
+        self.assertAlmostEqual(snapshot["depletion_ratio"], 0.167, places=3)
+
     def test_compute_advanced_context_uses_weather_probability(self) -> None:
         context = decision.compute_advanced_context(
             humidite_sol=22,
