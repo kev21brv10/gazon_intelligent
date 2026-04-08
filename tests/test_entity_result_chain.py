@@ -407,7 +407,9 @@ class DecisionResultChainTests(unittest.TestCase):
         recommendation_sensor = sensor.GazonInterventionRecommendationSensor(coordinator)
 
         attrs = recommendation_sensor.extra_state_attributes
-        self.assertEqual(attrs["runtime_probe"], "constraints_probe_20260404_01")
+        self.assertNotIn("runtime_probe", attrs)
+        self.assertNotIn("constraints", attrs)
+        self.assertNotIn("missing_requirements", attrs)
         self.assertEqual(attrs["current_phase"], "Normal")
         self.assertEqual(attrs["current_month"], 4)
         self.assertEqual(attrs["summary"], "À préparer : H2Pro TriSmart")
@@ -518,7 +520,9 @@ class DecisionResultChainTests(unittest.TestCase):
 
         recommendation_sensor = sensor.GazonInterventionRecommendationSensor(coordinator)
         attrs = recommendation_sensor.extra_state_attributes
-        self.assertEqual(attrs["runtime_probe"], "constraints_probe_20260404_01")
+        self.assertNotIn("runtime_probe", attrs)
+        self.assertNotIn("constraints", attrs)
+        self.assertNotIn("missing_requirements", attrs)
         self.assertEqual(attrs["current_phase"], "Normal")
         self.assertEqual(attrs["current_month"], 4)
         self.assertEqual(attrs["product_id"], "h2pro_trismart")
@@ -1072,6 +1076,44 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(depletion_ratio_sensor.extra_state_attributes["hydric_state"], "plein")
         self.assertEqual(hydric_sensor.native_value, "plein")
         self.assertEqual(hydric_sensor.extra_state_attributes["reserve_stock_mm"], 21.6)
+
+    def test_entity_exposure_rounds_float_attributes_consistently(self) -> None:
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={
+                "et0_mm": 1.3999999999999999,
+                "et0_source": "fallback_temperature",
+                "temperature": 23.200000000000003,
+                "forecast_temperature_today": 24.900000000000002,
+                "temperature_reference_hydrique": 23.709999999999997,
+                "etc_mm": 1.1199999999999999,
+                "kc_gazon": 0.8000000000000002,
+                "phase_dominante": "Normal",
+                "sous_phase": "Normal",
+                "depletion_ratio": 0.1234567,
+                "reserve_utile_mm": 12,
+                "reserve_stock_max_mm": 24,
+                "depletion_ratio_raw": 0,
+            },
+            result=None,
+            history=[],
+            memory={},
+        )
+
+        et0_sensor = sensor.GazonEt0Sensor(coordinator)
+        etc_sensor = sensor.GazonEtcSensor(coordinator)
+        depletion_ratio_sensor = sensor.GazonDepletionRatioSensor(coordinator)
+        reserve_sensor = sensor.GazonReserveActuelleSensor(coordinator)
+
+        self.assertEqual(et0_sensor.native_value, 1.4)
+        self.assertEqual(et0_sensor.extra_state_attributes["temperature"], 23.2)
+        self.assertEqual(et0_sensor.extra_state_attributes["forecast_temperature_today"], 24.9)
+        self.assertEqual(et0_sensor.extra_state_attributes["temperature_reference_hydrique"], 23.7)
+        self.assertEqual(etc_sensor.native_value, 1.1)
+        self.assertEqual(etc_sensor.extra_state_attributes["kc_gazon"], 0.8)
+        self.assertEqual(depletion_ratio_sensor.extra_state_attributes["depletion_ratio_raw"], 0.123)
+        self.assertEqual(reserve_sensor.extra_state_attributes["reserve_utile_mm"], 12.0)
+        self.assertEqual(reserve_sensor.extra_state_attributes["reserve_stock_max_mm"], 24.0)
 
     def test_intervention_product_select_includes_application_months(self) -> None:
         coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=None, history=[], memory={})

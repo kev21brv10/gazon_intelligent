@@ -147,8 +147,20 @@ config_flow_mod = util.module_from_spec(config_flow_spec)
 sys.modules["custom_components.gazon_intelligent.config_flow"] = config_flow_mod
 config_flow_spec.loader.exec_module(config_flow_mod)
 
+entity_migration_spec = _load("custom_components.gazon_intelligent.entity_migration", PACKAGE_DIR / "entity_migration.py")
+assert entity_migration_spec and entity_migration_spec.loader
+entity_migration_mod = util.module_from_spec(entity_migration_spec)
+sys.modules["custom_components.gazon_intelligent.entity_migration"] = entity_migration_mod
+entity_migration_spec.loader.exec_module(entity_migration_mod)
+
 
 class ConfigFlowTests(unittest.TestCase):
+    def test_config_flow_version_matches_current_migration_version(self) -> None:
+        self.assertEqual(
+            config_flow_mod.GazonIntelligentConfigFlow.VERSION,
+            entity_migration_mod.CURRENT_CONFIG_ENTRY_VERSION,
+        )
+
     def test_base_schema_requires_only_primary_zone(self) -> None:
         schema = config_flow_mod.build_schema(None)
         required_fields = {

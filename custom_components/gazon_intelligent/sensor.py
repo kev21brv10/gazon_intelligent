@@ -627,7 +627,6 @@ def _public_intervention_attributes(payload: dict[str, object]) -> dict[str, obj
         context = {}
     ui = public_intervention_ui(payload)
     attrs = {
-        "runtime_probe": RECOMMENDATION_RUNTIME_PROBE,
         "recommended_action": payload.get("recommended_action"),
         "priority": payload.get("priority"),
         "score": payload.get("score"),
@@ -1609,7 +1608,6 @@ class GazonCatalogueProduitsSensor(GazonEntityBase, SensorEntity):
 class GazonInterventionRecommendationSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Prochaine intervention"
     _attr_has_entity_name = True
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:spray-bottle"
 
     def __init__(self, coordinator):
@@ -1726,7 +1724,7 @@ class GazonInterventionRecommendationSensor(GazonEntityBase, SensorEntity):
     @property
     def extra_state_attributes(self):
         payload = self._recommendation_payload()
-        return _public_intervention_attributes(payload) or {"runtime_probe": RECOMMENDATION_RUNTIME_PROBE}
+        return _public_intervention_attributes(payload) or None
 
 
 class GazonDebugInterventionSensor(GazonEntityBase, SensorEntity):
@@ -2413,7 +2411,6 @@ class GazonAssistantSensor(GazonEntityBase, SensorEntity):
 class GazonConseilPrincipalSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Conseil principal"
     _attr_has_entity_name = True
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:message-text-outline"
 
     def __init__(self, coordinator):
@@ -2486,7 +2483,6 @@ class GazonConseilPrincipalSensor(GazonEntityBase, SensorEntity):
 class GazonActionRecommandeeSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Action recommandée"
     _attr_has_entity_name = True
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:check-circle-outline"
 
     def __init__(self, coordinator):
@@ -2501,7 +2497,6 @@ class GazonActionRecommandeeSensor(GazonEntityBase, SensorEntity):
 class GazonActionAEviterSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Action à éviter"
     _attr_has_entity_name = True
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:alert-circle-outline"
 
     def __init__(self, coordinator):
@@ -2516,7 +2511,6 @@ class GazonActionAEviterSensor(GazonEntityBase, SensorEntity):
 class GazonNiveauActionSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Niveau d'action"
     _attr_has_entity_name = True
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:signal"
 
     def __init__(self, coordinator):
@@ -2865,7 +2859,6 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
 class GazonRisqueGazonSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Risque gazon"
     _attr_has_entity_name = True
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:shield-alert-outline"
 
     def __init__(self, coordinator):
