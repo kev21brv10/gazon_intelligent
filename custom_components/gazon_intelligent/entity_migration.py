@@ -61,6 +61,8 @@ def iter_entity_id_updates(
         current_entity_id = getattr(entity, "entity_id", None)
         if not isinstance(current_entity_id, str) or not current_entity_id:
             continue
+        if not isinstance(unique_id, str) or not unique_id:
+            continue
         desired_entity_id = public_entity_id(public_entity_domain(suffix), suffix)
         if current_entity_id == desired_entity_id:
             continue
