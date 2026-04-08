@@ -339,6 +339,51 @@ def _hydric_strategy(balance_mm: float | None, deficit_3j: float | None, deficit
     return "arroser rapidement en profondeur"
 
 
+def _objective_mm_value(entity: GazonEntityBase) -> float:
+    try:
+        return float(entity._decision_value("objectif_mm", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _is_passive_irrigation_context(entity: GazonEntityBase) -> bool:
+    post_status = normalize_post_application_status(entity._decision_value("application_post_watering_status"))
+    return (
+        _objective_mm_value(entity) <= 0.0
+        and not bool(entity._decision_value("arrosage_recommande", False))
+        and post_status in {"indisponible", "non_requis"}
+    )
+
+
+def _hydric_state_from_depletion_ratio(value: object | None) -> str | None:
+    try:
+        ratio = float(value)
+    except (TypeError, ValueError):
+        return None
+    if ratio <= 0.10:
+        return "plein"
+    if ratio <= 0.45:
+        return "confort"
+    if ratio <= 0.75:
+        return "depletion"
+    return "critique"
+
+
+def _harmonized_hydric_labels(
+    objective_mm: float,
+    hydric_state: str | None,
+    hydric_balance_level: str | None,
+    hydric_strategy: str | None,
+) -> tuple[str | None, str | None]:
+    if objective_mm > 0.0:
+        return hydric_balance_level, hydric_strategy
+    if hydric_state == "plein":
+        return "excédentaire", "reporter"
+    if hydric_state == "confort":
+        return "équilibré", "surveiller"
+    return hydric_balance_level, hydric_strategy
+
+
 def _objective_display_balance(attrs: dict[str, object]) -> float | None:
     reference = attrs.get("bilan_hydrique_journalier_mm")
     if reference in (None, "", [], {}):
@@ -359,6 +404,14 @@ def _score_level_and_tone(score: object) -> tuple[str | None, str]:
     if value <= 70.0:
         return "moyen", "warning"
     return "élevé", "success"
+
+
+def _score_level_summary_label(level: str | None) -> str | None:
+    if level == "moyen":
+        return "moyenne"
+    if level == "élevé":
+        return "élevée"
+    return level
 
 
 def _window_display_label(value: object) -> str | None:
@@ -640,6 +693,7 @@ class GazonObjectifMmSensor(GazonEntityBase, SensorEntity):
             "forecast_temperature_today",
             "temperature_source",
             "etp",
+            "depletion_ratio",
         )
 
     @property
@@ -666,6 +720,19 @@ class GazonObjectifMmSensor(GazonEntityBase, SensorEntity):
             attrs["hydric_balance_level"] = hydric_balance_level
         if hydric_strategy is not None:
             attrs["hydric_strategy"] = hydric_strategy
+        hydric_state = _hydric_state_from_depletion_ratio(attrs.get("depletion_ratio"))
+        if hydric_state is not None:
+            attrs["hydric_state"] = hydric_state
+        harmonized_level, harmonized_strategy = _harmonized_hydric_labels(
+            _objective_mm_value(self),
+            hydric_state,
+            attrs.get("hydric_balance_level"),
+            attrs.get("hydric_strategy"),
+        )
+        if harmonized_level is not None:
+            attrs["hydric_balance_level"] = harmonized_level
+        if harmonized_strategy is not None:
+            attrs["hydric_strategy"] = harmonized_strategy
         return attrs or None
 
 
@@ -1398,7 +1465,7 @@ class GazonScoreNiveauSensor(GazonEntityBase, SensorEntity):
         return {
             "score": score_value,
             "score_level": level,
-            "summary": f"Pertinence {level} ({score_value}/100)",
+            "summary": f"Pertinence {_score_level_summary_label(level)} ({score_value}/100)",
             "tone": tone,
             "source_entity": f"sensor.{DOMAIN}_prochaine_intervention",
         }
@@ -1422,9 +1489,12 @@ class GazonProchaineFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
         data = getattr(self.coordinator, "data", None)
         if not isinstance(data, dict):
             data = {}
+        block_reason = str(self._decision_value("block_reason") or "").strip() or None
+        if _is_passive_irrigation_context(self):
+            block_reason = None
         return {
             "source_state": str(self._decision_value("fenetre_optimale") or "attendre").strip().lower() or "attendre",
-            "block_reason": str(self._decision_value("block_reason") or "").strip() or None,
+            "block_reason": block_reason,
             "confidence_score": self._decision_value("confidence_score"),
             "phase": context.get("current_phase") or self._decision_value("phase_active"),
             "month": context.get("current_month") or dt_util.now().date().month,
@@ -1472,7 +1542,9 @@ class GazonProchainBlocageAttenduSensor(GazonEntityBase, SensorEntity):
         if not isinstance(context, dict):
             context = {}
         block_reason = str(self._decision_value("block_reason") or "").strip() or None
-        source_status = "bloque" if block_reason else str(self._decision_value("fenetre_optimale") or "").strip().lower() or "attendre"
+        if _is_passive_irrigation_context(self):
+            block_reason = None
+        source_status = str(self._decision_value("fenetre_optimale") or "").strip().lower() or "attendre"
         return {
             "source_status": source_status,
             "block_reason": block_reason,
@@ -2319,6 +2391,22 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
         if contextual_state:
             attrs = attrs or {}
             attrs.update(contextual_state)
+            if (
+                contextual_state.get("status") == "en_attente"
+                and contextual_state.get("summary") == "Aucun arrosage nécessaire"
+            ):
+                attrs.pop("block_reason", None)
+                confidence_reasons = attrs.get("confidence_reasons")
+                if isinstance(confidence_reasons, list):
+                    filtered_reasons = [
+                        reason
+                        for reason in confidence_reasons
+                        if not str(reason or "").strip().lower().startswith("blocage=")
+                    ]
+                    if filtered_reasons:
+                        attrs["confidence_reasons"] = filtered_reasons
+                    else:
+                        attrs.pop("confidence_reasons", None)
         next_action_date_attrs = self._next_action_date_attributes()
         if next_action_date_attrs:
             attrs = attrs or {}

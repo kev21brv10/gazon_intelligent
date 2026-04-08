@@ -585,26 +585,36 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(score_attrs["summary"], "Pertinence faible (7/100)")
         self.assertEqual(score_attrs["source_entity"], "sensor.gazon_intelligent_prochaine_intervention")
 
+        coordinator.data["intervention_recommendation"] = {
+            **coordinator.data["intervention_recommendation"],
+            "score": 31,
+        }
+        score_attrs = score_sensor.extra_state_attributes
+        self.assertIsNotNone(score_attrs)
+        assert score_attrs is not None
+        self.assertEqual(score_attrs["score_level"], "moyen")
+        self.assertEqual(score_attrs["summary"], "Pertinence moyenne (31/100)")
+
         self.assertEqual(window_sensor.native_value, "attendre")
         window_attrs = window_sensor.extra_state_attributes
         self.assertIsNotNone(window_attrs)
         assert window_attrs is not None
         self.assertEqual(window_attrs["source_state"], "attendre")
-        self.assertEqual(window_attrs["block_reason"], "sol_deja_humide")
         self.assertEqual(window_attrs["confidence_score"], 90)
         self.assertEqual(window_attrs["phase"], "Normal")
         self.assertEqual(window_attrs["month"], 4)
         self.assertEqual(window_attrs["temperature"], 6.9)
         self.assertEqual(window_attrs["summary"], "Prochaine fenêtre: Attendre")
+        self.assertNotIn("block_reason", window_attrs)
 
-        self.assertEqual(block_sensor.native_value, "sol_deja_humide")
+        self.assertEqual(block_sensor.native_value, "aucun")
         block_attrs = block_sensor.extra_state_attributes
         self.assertIsNotNone(block_attrs)
         assert block_attrs is not None
-        self.assertEqual(block_attrs["source_status"], "bloque")
-        self.assertEqual(block_attrs["block_reason"], "sol_deja_humide")
-        self.assertEqual(block_attrs["block_label"], "Sol déjà humide")
-        self.assertEqual(block_attrs["summary"], "Blocage attendu: Sol déjà humide")
+        self.assertEqual(block_attrs["source_status"], "attendre")
+        self.assertEqual(block_attrs["summary"], "Aucun blocage attendu")
+        self.assertNotIn("block_reason", block_attrs)
+        self.assertNotIn("block_label", block_attrs)
 
         self.assertFalse(irrigation_signal.is_on)
         irrigation_attrs = irrigation_signal.extra_state_attributes
@@ -726,6 +736,66 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(attrs["reserve_hydrique_sol_mm"], 15.6)
         self.assertEqual(attrs["hydric_balance_level"], "déficit")
         self.assertEqual(attrs["hydric_strategy"], "arroser profondément")
+
+    def test_objectif_sensor_harmonizes_hydric_labels_when_no_irrigation_is_needed(self) -> None:
+        result = _make_result()
+        result.objectif_arrosage = 0.0
+        result.arrosage_recommande = False
+        result.type_arrosage = "aucune_action"
+        result.extra.update(
+            {
+                "bilan_hydrique_mm": 15.6,
+                "bilan_hydrique_journalier_mm": -1.1,
+                "deficit_3j": 3.4,
+                "deficit_7j": 8.0,
+                "depletion_ratio": 0.0,
+                "reserve_actuelle_mm": 16.0,
+                "reserve_utile_mm": 16.0,
+                "application_post_watering_status": "non_requis",
+            }
+        )
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={},
+            result=result,
+            history=[],
+            memory={},
+        )
+
+        objectif_sensor = sensor.GazonObjectifMmSensor(coordinator)
+        attrs = objectif_sensor.extra_state_attributes
+
+        self.assertEqual(objectif_sensor.native_value, 0.0)
+        self.assertEqual(attrs["hydric_state"], "plein")
+        self.assertEqual(attrs["hydric_balance_level"], "excédentaire")
+        self.assertEqual(attrs["hydric_strategy"], "reporter")
+
+    def test_watering_window_sensor_hides_block_reason_when_no_irrigation_is_needed(self) -> None:
+        result = _make_result()
+        result.objectif_arrosage = 0.0
+        result.arrosage_recommande = False
+        result.type_arrosage = "aucune_action"
+        result.fenetre_optimale = "attendre"
+        result.extra.update(
+            {
+                "block_reason": "garde_fou_hebdomadaire",
+                "confidence_score": 90,
+                "confidence_reasons": ["blocage=garde_fou_hebdomadaire"],
+                "application_post_watering_status": "non_requis",
+                "temperature": 16.0,
+            }
+        )
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=result, history=[], memory={})
+
+        fenetre_sensor = sensor.GazonFenetreOptimaleSensor(coordinator)
+
+        attrs = fenetre_sensor.extra_state_attributes
+        self.assertIsNotNone(attrs)
+        assert attrs is not None
+        self.assertEqual(attrs["status"], "en_attente")
+        self.assertEqual(attrs["summary"], "Aucun arrosage nécessaire")
+        self.assertNotIn("block_reason", attrs)
+        self.assertNotIn("confidence_reasons", attrs)
 
     def test_intervention_product_select_includes_application_months(self) -> None:
         coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=None, history=[], memory={})
