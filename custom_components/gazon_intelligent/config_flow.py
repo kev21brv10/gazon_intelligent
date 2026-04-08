@@ -142,7 +142,7 @@ def build_advanced_schema(current: dict | None = None):
     )
 
 
-class GazonIntelligentConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+class GazonIntelligentConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
     VERSION = CURRENT_CONFIG_ENTRY_VERSION
 
     def _current_reconfigure_entry(self):
