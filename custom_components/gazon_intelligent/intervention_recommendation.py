@@ -1072,6 +1072,7 @@ def _ui_for_state(
     reason: str,
     why_now: str,
     today: date,
+    opportunity_level: str | None = None,
 ) -> dict[str, str]:
     selected_name = (selected_details or {}).get("name")
     selected_months_label = (selected_details or {}).get("months_label")
@@ -1095,7 +1096,10 @@ def _ui_for_state(
             action_label = "Choisir le produit"
     elif state == "preparation":
         product_name = selected_display or (candidate or {}).get("product_name")
-        summary = f"À préparer : {product_name}" if product_name else "À préparer"
+        if opportunity_level == "weak":
+            summary = f"À envisager : {product_name}" if product_name else "À envisager"
+        else:
+            summary = f"À préparer : {product_name}" if product_name else "À préparer"
         hint = reason or "La prochaine intervention est à préparer."
         action_label = "Choisir le produit"
     elif state == "blocked":
@@ -1534,6 +1538,7 @@ def build_intervention_recommendation(
         reason=reason,
         why_now=why_now,
         today=today,
+        opportunity_level=str(opportunity.get("level") or "").strip().lower() or None,
     )
     recommended_action = (
         "declare_intervention"

@@ -513,6 +513,53 @@ class MemoryCatalogTests(unittest.TestCase):
         self.assertIn("Agent mouillant préventif", recommendation["reason"])
         self.assertIn("sol déjà humide", recommendation["reason"])
 
+    def test_build_intervention_recommendation_softens_preparation_summary_for_weak_opportunity(self) -> None:
+        recommendation = intervention.build_intervention_recommendation(
+            today=date(2026, 4, 10),
+            phase_active="Normal",
+            phase_source="absence_phase",
+            sous_phase="Normal",
+            selected_product_id=None,
+            selected_product_name=None,
+            products={
+                "humuslight": {
+                    "id": "humuslight",
+                    "nom": "Humuslight",
+                    "type": "Biostimulant",
+                    "usage_mode": "entretien",
+                    "phase_compatible": ["Sursemis", "Croissance", "Entretien"],
+                    "application_months": [3, 4, 5, 6, 7, 8, 9, 10],
+                    "reapplication_after_days": 25,
+                    "temperature_min": 8,
+                    "temperature_max": 25,
+                }
+            },
+            history=[
+                {
+                    "type": "Biostimulant",
+                    "produit_id": "humuslight",
+                    "produit": "Humuslight",
+                    "date": "2026-03-12",
+                    "date_action": "2026-03-12",
+                    "reapplication_after_days": 25,
+                }
+            ],
+            application_state={
+                "type_arrosage": "aucune_action",
+                "application_block_active": False,
+                "application_post_watering_pending": False,
+                "application_post_watering_status": "non_requis",
+                "bilan_hydrique_mm": 21.7,
+            },
+            temperature=13.9,
+            forecast_temperature_today=24.9,
+            temperature_source="capteur",
+        )
+
+        self.assertEqual(recommendation["status"], "preparation")
+        self.assertEqual(recommendation["context"]["opportunity_level"], "weak")
+        self.assertEqual(recommendation["ui"]["summary"], "À envisager : Humuslight")
+
     def test_build_intervention_recommendation_penalizes_fertilisation_more_than_biostimulant_in_normal_phase(self) -> None:
         fertilisation = intervention.build_intervention_recommendation(
             today=date(2026, 4, 10),
