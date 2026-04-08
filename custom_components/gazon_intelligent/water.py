@@ -17,6 +17,10 @@ def _round_half_up_1(value: float) -> float:
     return float(int(value * 10.0 + 0.5)) / 10.0
 
 
+def _bound(value: float, lower: float, upper: float) -> float:
+    return max(lower, min(value, upper))
+
+
 _SOIL_MODEL_BASES: dict[str, dict[str, float]] = {
     "sableux": {
         "retention_factor": 0.84,
@@ -323,11 +327,14 @@ def compute_etp(
     temperature: float | None,
     pluie_24h: float | None,
     etp_capteur: float | None,
+    temperature_reference_hydrique: float | None = None,
     weather_profile: dict[str, Any] | None = None,
 ) -> float | None:
     if etp_capteur is not None:
         return etp_capteur
     weather_profile = weather_profile or {}
+    if temperature_reference_hydrique is not None:
+        temperature = temperature_reference_hydrique
     if temperature is None:
         weather_temperature = weather_profile.get("weather_temperature")
         weather_apparent_temperature = weather_profile.get("weather_apparent_temperature")
@@ -374,6 +381,8 @@ def compute_water_balance(
     recent_watering_mm_override: float | None = None,
     advanced_context: dict[str, Any] | None = None,
     weather_profile: dict[str, Any] | None = None,
+    soil_balance: dict[str, Any] | None = None,
+    phase_dominante: str | None = None,
 ) -> dict[str, Any]:
     today = today or date.today()
     advanced_context = advanced_context or {}
@@ -384,13 +393,13 @@ def compute_water_balance(
     pluie_j2 = max(0.0, pluie_j2 or 0.0)
     pluie_source = advanced_context.get("pluie_source", "capteur_pluie_24h")
 
-    reserve_sol = {
+    reserve_utile_mm = {
         "sableux": 8.0,
         "limoneux": 12.0,
         "argileux": 16.0,
     }.get(type_sol, 12.0)
     soil_need_factor = float(advanced_context.get("soil_need_factor", advanced_context.get("soil_factor", 1.0)))
-    soil_factor = (12.0 / reserve_sol) * soil_need_factor
+    soil_factor = (12.0 / reserve_utile_mm) * soil_need_factor
     soil_factor *= float(advanced_context.get("wind_factor", 1.0))
     soil_factor *= float(advanced_context.get("dew_factor", 1.0))
 
@@ -418,8 +427,33 @@ def compute_water_balance(
     bilan_hydrique_mm = _round_half_up_1((pluie_efficace + arrosage_recent_jour) - etp_j)
     bilan_hydrique_3j = _round_half_up_1((pluie_efficace * 1.4 + arrosage_recent_3j) - (etp_j * 3.0))
     bilan_hydrique_7j = _round_half_up_1((pluie_efficace * 2.4 + arrosage_recent_7j) - (etp_j * 7.0))
+    if phase_dominante == "Sursemis":
+        mad_ratio = 0.35
+    elif phase_dominante == "Hivernage":
+        mad_ratio = 0.6
+    else:
+        mad_ratio = 0.5
+    reserve_actuelle_source = None
+    if isinstance(soil_balance, dict):
+        reserve_actuelle_source = _to_float(soil_balance.get("reserve_mm"))
+    if reserve_actuelle_source is None:
+        reserve_actuelle_source = reserve_utile_mm + bilan_hydrique_mm
+    reserve_stock_max_mm = _to_float(soil_balance.get("reserve_max_mm")) if isinstance(soil_balance, dict) else None
+    if reserve_stock_max_mm is None:
+        reserve_stock_max_mm = max(reserve_utile_mm, reserve_utile_mm * 2.0)
+    reserve_stock_max_mm = max(reserve_utile_mm, float(reserve_stock_max_mm))
+    reserve_stock_mm = _bound(float(reserve_actuelle_source), 0.0, reserve_stock_max_mm)
+    reserve_actuelle_mm = _bound(reserve_stock_mm, 0.0, reserve_utile_mm)
+    depletion_allowed_mm = reserve_utile_mm * mad_ratio
+    reserve_minimale_mm = reserve_utile_mm - depletion_allowed_mm
+    depletion_mm = max(0.0, reserve_utile_mm - reserve_actuelle_mm)
+    depletion_ratio = depletion_mm / reserve_utile_mm if reserve_utile_mm > 0 else 0.0
+    reserve_surplus_mm = max(0.0, reserve_stock_mm - reserve_utile_mm)
+    reserve_fill_ratio = reserve_stock_mm / reserve_stock_max_mm if reserve_stock_max_mm > 0 else 0.0
+    reserve_available_ratio = reserve_actuelle_mm / reserve_utile_mm if reserve_utile_mm > 0 else 0.0
 
     return {
+        "et0_mm": _round_half_up_1(max(0.0, etp_j)),
         "bilan_hydrique_mm": bilan_hydrique_mm,
         "bilan_hydrique_3j": bilan_hydrique_3j,
         "bilan_hydrique_7j": bilan_hydrique_7j,
@@ -439,6 +473,18 @@ def compute_water_balance(
         "rosee": advanced_context.get("rosee"),
         "hauteur_gazon": advanced_context.get("hauteur_gazon"),
         "retour_arrosage": advanced_context.get("retour_arrosage"),
+        "reserve_utile_mm": _round_half_up_1(reserve_utile_mm),
+        "reserve_stock_mm": _round_half_up_1(reserve_stock_mm),
+        "reserve_stock_max_mm": _round_half_up_1(reserve_stock_max_mm),
+        "reserve_surplus_mm": _round_half_up_1(reserve_surplus_mm),
+        "reserve_actuelle_mm": _round_half_up_1(reserve_actuelle_mm),
+        "reserve_fill_ratio": round(_bound(reserve_fill_ratio, 0.0, 1.0), 3),
+        "reserve_available_ratio": round(_bound(reserve_available_ratio, 0.0, 1.0), 3),
+        "mad_ratio": round(_bound(mad_ratio, 0.0, 1.0), 2),
+        "depletion_allowed_mm": _round_half_up_1(depletion_allowed_mm),
+        "reserve_minimale_mm": _round_half_up_1(reserve_minimale_mm),
+        "depletion_mm": _round_half_up_1(depletion_mm),
+        "depletion_ratio": round(_bound(depletion_ratio, 0.0, 1.0), 3),
         "soil_factor": _round_half_up_1(soil_factor),
         "soil_profile": advanced_context.get("soil_profile"),
         "soil_retention_factor": advanced_context.get("soil_retention_factor"),

@@ -1182,6 +1182,73 @@ def _ui_for_state(
     }
 
 
+def public_intervention_ui(payload: dict[str, Any] | None) -> dict[str, str]:
+    if not isinstance(payload, dict) or not payload:
+        return {}
+
+    status = str(payload.get("status") or "unavailable").strip().lower()
+    if status == "possible":
+        status = "preparation"
+
+    ready_to_declare = bool(payload.get("ready_to_declare"))
+    product = payload.get("product")
+    if not isinstance(product, dict):
+        product = {}
+    context = payload.get("context")
+    if not isinstance(context, dict):
+        context = {}
+    existing_ui = payload.get("ui")
+    ui = dict(existing_ui) if isinstance(existing_ui, dict) else {}
+
+    product_name = str(
+        product.get("name")
+        or payload.get("product_name")
+        or payload.get("product_id")
+        or ""
+    ).strip()
+    opportunity_level = str(context.get("opportunity_level") or "").strip().lower()
+    public_hint = ""
+
+    if ready_to_declare:
+        public_hint = "Déclaration possible maintenant."
+    elif status == "recommended":
+        public_hint = "Sélectionne le produit pour préparer la déclaration."
+    elif status == "preparation":
+        public_hint = (
+            "Pertinence limitée dans le contexte actuel."
+            if opportunity_level == "weak"
+            else "Prépare le produit pour la prochaine intervention."
+        )
+    elif status == "blocked":
+        public_hint = "Intervention indisponible pour le moment."
+    elif status == "unavailable":
+        public_hint = "Ajoute un produit au catalogue pour obtenir une recommandation."
+
+    if ready_to_declare:
+        ui["summary"] = f"Prêt à déclarer : {product_name}" if product_name else "Prêt à déclarer"
+    elif status == "preparation":
+        if opportunity_level == "weak":
+            ui["summary"] = f"À envisager : {product_name}" if product_name else "À envisager"
+        else:
+            ui["summary"] = f"À préparer : {product_name}" if product_name else "À préparer"
+    elif status == "blocked":
+        ui["summary"] = (
+            f"Intervention bloquée : {product_name}" if product_name else "Intervention bloquée"
+        )
+    elif status == "unavailable":
+        ui["summary"] = "Aucune intervention disponible"
+    elif status == "recommended" and not ui.get("summary"):
+        ui["summary"] = f"Recommandé : {product_name}" if product_name else "Recommandé"
+    if public_hint:
+        ui["hint"] = public_hint
+
+    return {
+        key: value
+        for key, value in ui.items()
+        if value not in (None, "", [], {})
+    }
+
+
 def build_intervention_recommendation(
     *,
     today: date,

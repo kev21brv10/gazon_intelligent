@@ -604,6 +604,7 @@ class GazonBrain:
         temperature: float | None,
         forecast_temperature_today: float | None = None,
         temperature_source: str | None = None,
+        temperature_reference_hydrique: float | None = None,
         pluie_24h: float | None,
         pluie_demain: float | None,
         humidite: float | None,
@@ -623,12 +624,14 @@ class GazonBrain:
         pluie_j2: float | None = None,
         pluie_3j: float | None = None,
         pluie_probabilite_max_3j: float | None = None,
+        et0_source: str | None = None,
     ) -> dict[str, Any]:
         weather_profile = weather_profile or {}
         etp = compute_etp(
             temperature=temperature,
             pluie_24h=pluie_24h,
             etp_capteur=etp_capteur,
+            temperature_reference_hydrique=temperature_reference_hydrique,
             weather_profile=weather_profile,
         )
         arrosage_reel_jour = compute_recent_watering_mm(self.history, today=today, days=0)
@@ -645,6 +648,10 @@ class GazonBrain:
             today=today,
             hour_of_day=hour_of_day,
             temperature=temperature,
+            forecast_temperature_today=forecast_temperature_today,
+            temperature_source=temperature_source,
+            temperature_reference_hydrique=temperature_reference_hydrique,
+            et0_source=et0_source,
             pluie_24h=pluie_24h,
             pluie_demain=pluie_demain,
             pluie_j2=pluie_j2,
@@ -690,6 +697,8 @@ class GazonBrain:
         result.extra.setdefault("type_sol", type_sol)
         result.extra.setdefault("forecast_temperature_today", forecast_temperature_today)
         result.extra.setdefault("temperature_source", temperature_source)
+        result.extra.setdefault("temperature_reference_hydrique", temperature_reference_hydrique)
+        result.extra.setdefault("et0_source", et0_source)
         if pluie_demain_source is not None:
             result.extra.setdefault("pluie_demain_source", pluie_demain_source)
         self.last_result = result
@@ -715,6 +724,10 @@ class GazonBrain:
                 "forecast_pluie_j2": pluie_j2,
                 "forecast_pluie_3j": pluie_3j,
                 "forecast_probabilite_max_3j": pluie_probabilite_max_3j,
+                "forecast_temperature_today": forecast_temperature_today,
+                "temperature_source": temperature_source,
+                "temperature_reference_hydrique": temperature_reference_hydrique,
+                "et0_source": et0_source,
                 "water_balance": water_balance,
                 "deficit_jour": water_balance.get("deficit_jour"),
                 "deficit_3j": water_balance.get("deficit_3j"),

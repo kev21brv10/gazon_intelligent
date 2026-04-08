@@ -410,8 +410,8 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(attrs["runtime_probe"], "constraints_probe_20260404_01")
         self.assertEqual(attrs["current_phase"], "Normal")
         self.assertEqual(attrs["current_month"], 4)
-        self.assertEqual(attrs["summary"], "À préparer")
-        self.assertEqual(attrs["hint"], "Phase moins adaptée (Croissance, Entretien)")
+        self.assertEqual(attrs["summary"], "À préparer : H2Pro TriSmart")
+        self.assertEqual(attrs["hint"], "Prépare le produit pour la prochaine intervention.")
 
         debug_sensor = sensor.GazonDebugInterventionSensor(coordinator)
         payload = debug_sensor.extra_state_attributes
@@ -531,6 +531,45 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(phase_constraint["value"]["current"], "Normal")
         self.assertEqual(month_constraint["value"]["current_month"], 4)
 
+    def test_intervention_recommendation_sensor_uses_standardized_public_summary_for_weak_opportunity(self) -> None:
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={
+                "intervention_recommendation": {
+                    "status": "preparation",
+                    "score": 31,
+                    "recommended_action": "select_product",
+                    "ready_to_declare": False,
+                    "selected_product_ready": False,
+                    "product": {
+                        "id": "humuslight",
+                        "name": "Humuslight",
+                    },
+                    "context": {
+                        "current_phase": "Normal",
+                        "current_month": 4,
+                        "opportunity_level": "weak",
+                    },
+                    "ui": {
+                        "summary": "À préparer : Humuslight",
+                        "hint": "Phase moins adaptée (Sursemis, Croissance, Entretien)",
+                        "action_label": "Choisir le produit",
+                    },
+                }
+            },
+            result=None,
+            history=[],
+            memory={},
+        )
+
+        recommendation_sensor = sensor.GazonInterventionRecommendationSensor(coordinator)
+
+        attrs = recommendation_sensor.extra_state_attributes
+        self.assertEqual(recommendation_sensor.native_value, "preparation")
+        self.assertEqual(attrs["summary"], "À envisager : Humuslight")
+        self.assertEqual(attrs["hint"], "Pertinence limitée dans le contexte actuel.")
+        self.assertEqual(attrs["action_label"], "Choisir le produit")
+
     def test_projection_entities_use_existing_states_and_signals(self) -> None:
         coordinator = _FakeCoordinator(
             entry=_FakeEntry(),
@@ -622,6 +661,8 @@ class DecisionResultChainTests(unittest.TestCase):
         assert irrigation_attrs is not None
         self.assertEqual(irrigation_attrs["trigger_kind"], "none")
         self.assertEqual(irrigation_attrs["application_post_watering_status"], "non_requis")
+        self.assertEqual(irrigation_attrs["reason_kind"], "no_need")
+        self.assertEqual(irrigation_attrs["action_label"], "Aucune action")
         self.assertEqual(irrigation_attrs["summary"], "Aucune irrigation actionnable")
 
         self.assertFalse(intervention_signal.is_on)
@@ -661,7 +702,7 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertIsNotNone(intervention_attrs)
         assert intervention_attrs is not None
         self.assertEqual(intervention_attrs["trigger_kind"], "ready")
-        self.assertEqual(intervention_attrs["summary"], "Prêt à déclarer")
+        self.assertEqual(intervention_attrs["summary"], "Prêt à déclarer : Floranid Twin Permanent")
 
         coordinator.data["application_post_watering_status"] = "autorise"
         self.assertTrue(irrigation_signal.is_on)
@@ -670,6 +711,8 @@ class DecisionResultChainTests(unittest.TestCase):
         assert irrigation_attrs is not None
         self.assertEqual(irrigation_attrs["trigger_kind"], "post_application")
         self.assertEqual(irrigation_attrs["source_status"], "autorise")
+        self.assertEqual(irrigation_attrs["reason_kind"], "post_application")
+        self.assertEqual(irrigation_attrs["action_label"], "Arrosage post-application")
         self.assertEqual(irrigation_attrs["summary"], "Irrigation post-application autorisée")
 
         coordinator.data["application_post_watering_status"] = "non_requis"
@@ -681,6 +724,8 @@ class DecisionResultChainTests(unittest.TestCase):
         assert irrigation_attrs is not None
         self.assertEqual(irrigation_attrs["trigger_kind"], "hydrique")
         self.assertEqual(irrigation_attrs["source_status"], "auto")
+        self.assertEqual(irrigation_attrs["reason_kind"], "hydric_need")
+        self.assertEqual(irrigation_attrs["action_label"], "Arrosage automatique")
         self.assertEqual(irrigation_attrs["summary"], "Irrigation hydrique actionnable")
 
     def test_expected_block_sensor_reports_none_cleanly_without_real_block_reason(self) -> None:
@@ -770,6 +815,37 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(attrs["hydric_balance_level"], "excédentaire")
         self.assertEqual(attrs["hydric_strategy"], "reporter")
 
+    def test_objectif_sensor_infers_full_state_from_legacy_reserve_when_passive(self) -> None:
+        result = _make_result()
+        result.objectif_arrosage = 0.0
+        result.arrosage_recommande = False
+        result.type_arrosage = "aucune_action"
+        result.extra.update(
+            {
+                "bilan_hydrique_mm": 21.8,
+                "bilan_hydrique_journalier_mm": -1.0,
+                "deficit_3j": 0.0,
+                "deficit_7j": 0.0,
+                "application_post_watering_status": "non_requis",
+            }
+        )
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={},
+            result=result,
+            history=[],
+            memory={},
+        )
+
+        objectif_sensor = sensor.GazonObjectifMmSensor(coordinator)
+        attrs = objectif_sensor.extra_state_attributes
+
+        self.assertEqual(objectif_sensor.native_value, 0.0)
+        self.assertEqual(attrs["reserve_hydrique_sol_mm"], 21.8)
+        self.assertEqual(attrs["hydric_state"], "plein")
+        self.assertEqual(attrs["hydric_balance_level"], "excédentaire")
+        self.assertEqual(attrs["hydric_strategy"], "reporter")
+
     def test_watering_window_sensor_hides_block_reason_when_no_irrigation_is_needed(self) -> None:
         result = _make_result()
         result.objectif_arrosage = 0.0
@@ -796,6 +872,206 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(attrs["summary"], "Aucun arrosage nécessaire")
         self.assertNotIn("block_reason", attrs)
         self.assertNotIn("confidence_reasons", attrs)
+        self.assertEqual(attrs["window_reason_summary"], "Aucun arrosage nécessaire")
+
+    def test_signal_irrigation_prefers_no_need_over_blocked_when_objective_is_zero(self) -> None:
+        result = _make_result()
+        result.objectif_arrosage = 0.0
+        result.arrosage_recommande = False
+        result.type_arrosage = "bloque"
+        result.extra.update(
+            {
+                "block_reason": "garde_fou_hebdomadaire",
+                "application_post_watering_status": "non_requis",
+            }
+        )
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=result, history=[], memory={})
+
+        irrigation_signal = binary_sensor.GazonSignalIrrigationBinarySensor(coordinator)
+
+        self.assertFalse(irrigation_signal.is_on)
+        attrs = irrigation_signal.extra_state_attributes
+        self.assertIsNotNone(attrs)
+        assert attrs is not None
+        self.assertEqual(attrs["reason_kind"], "no_need")
+        self.assertEqual(attrs["action_label"], "Aucune action")
+        self.assertEqual(attrs["summary"], "Aucune irrigation actionnable")
+
+    def test_snapshot_only_public_entities_keep_public_contracts(self) -> None:
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={
+                "conseil_principal": "Tonte possible maintenant.",
+                "action_recommandee": "Tonte possible maintenant.",
+                "action_a_eviter": "Éviter tout arrosage inutile.",
+                "niveau_action": "aucune_action",
+                "fenetre_optimale": "attendre",
+                "risque_gazon": "faible",
+                "application_post_watering_status": "non_requis",
+                "type_arrosage": "aucune_action",
+                "objectif_mm": 0.0,
+                "arrosage_recommande": False,
+                "assistant": {
+                    "action": "tonte",
+                    "moment": "maintenant",
+                    "quantity_mm": 0.0,
+                    "status": "action_required",
+                    "reason": "Tonte autorisée",
+                },
+                "intervention_recommendation": {
+                    "status": "preparation",
+                    "recommended_action": "select_product",
+                    "priority": "medium",
+                    "score": 31,
+                    "reason": "Phase moins adaptée",
+                    "why_now": "Phase moins adaptée · Phase actuelle: Normal.",
+                    "product": {"id": "humuslight", "name": "Humuslight"},
+                    "ready_to_declare": False,
+                    "selected_product_ready": False,
+                    "month_match": True,
+                    "context": {
+                        "current_phase": "Normal",
+                        "current_month": 4,
+                        "opportunity_level": "weak",
+                    },
+                    "ui": {
+                        "summary": "À préparer : Humuslight",
+                        "hint": "Phase moins adaptée",
+                        "action_label": "Choisir le produit",
+                    },
+                },
+                "watering_window_start_minute": 240,
+                "watering_window_end_minute": 600,
+                "watering_window_optimal_start_minute": 240,
+                "watering_window_optimal_end_minute": 480,
+                "watering_evening_start_minute": 1080,
+                "watering_evening_end_minute": 1200,
+                "watering_window_profile": "mild",
+                "watering_evening_allowed": False,
+                "heat_stress_level": "normal",
+                "heat_stress_phase": "normal",
+                "confidence_score": 90,
+                "mm_requested": 0.0,
+                "mm_applied": 0.0,
+                "mm_detected": 0.0,
+                "weekly_guardrail_mm_min": 19.0,
+                "weekly_guardrail_mm_max": 24.0,
+                "weekly_guardrail_reason": "saison=shoulder; sol=limoneux; phase=normal; pluie_support=0.0",
+                "phase_active": "Normal",
+                "phase_dominante": "Normal",
+                "sous_phase": "Normal",
+                "bilan_hydrique_mm": -1.1,
+                "bilan_hydrique_journalier_mm": -1.1,
+                "bilan_hydrique_precedent_mm": 22.9,
+                "deficit_3j": 0.0,
+                "deficit_7j": 0.0,
+                "pluie_demain": 0.0,
+                "temperature": 20.8,
+                "forecast_temperature_today": 24.9,
+                "temperature_source": "capteur",
+                "etp": 1.2,
+                "reserve_actuelle_mm": 12.0,
+                "reserve_utile_mm": 12.0,
+                "reserve_stock_mm": 21.7,
+            },
+            result=None,
+            history=[],
+            memory={},
+        )
+
+        niveau_sensor = sensor.GazonNiveauActionSensor(coordinator)
+        fenetre_sensor = sensor.GazonFenetreOptimaleSensor(coordinator)
+        irrigation_signal = binary_sensor.GazonSignalIrrigationBinarySensor(coordinator)
+        intervention_sensor = sensor.GazonInterventionRecommendationSensor(coordinator)
+        objectif_sensor = sensor.GazonObjectifMmSensor(coordinator)
+        type_sensor = sensor.GazonTypeArrosageSensor(coordinator)
+
+        self.assertIn("aucune_action", niveau_sensor.extra_state_attributes["possible_values"])
+        self.assertEqual(niveau_sensor.extra_state_attributes["niveau_action_hydrique"], "aucune_action")
+        self.assertEqual(type_sensor.native_value, "Aucune action")
+        self.assertIn("Aucune action", type_sensor.extra_state_attributes["possible_values"])
+
+        fenetre_attrs = fenetre_sensor.extra_state_attributes
+        self.assertEqual(fenetre_attrs["status"], "en_attente")
+        self.assertEqual(fenetre_attrs["summary"], "Aucun arrosage nécessaire")
+        self.assertEqual(fenetre_attrs["watering_window_display"], "04:00–10:00")
+        self.assertEqual(fenetre_attrs["optimal_window_display"], "04:00–08:00")
+        self.assertNotIn("evening_window_display", fenetre_attrs)
+        self.assertEqual(fenetre_attrs["window_reason_summary"], "Aucun arrosage nécessaire")
+        self.assertIn("attendre", fenetre_attrs["possible_values"])
+
+        irrigation_attrs = irrigation_signal.extra_state_attributes
+        self.assertEqual(irrigation_attrs["reason_kind"], "no_need")
+        self.assertEqual(irrigation_attrs["action_label"], "Aucune action")
+
+        intervention_attrs = intervention_sensor.extra_state_attributes
+        self.assertEqual(intervention_attrs["summary"], "À envisager : Humuslight")
+        self.assertEqual(intervention_attrs["hint"], "Pertinence limitée dans le contexte actuel.")
+
+        objectif_attrs = objectif_sensor.extra_state_attributes
+        self.assertEqual(objectif_attrs["hydric_state"], "plein")
+        self.assertEqual(objectif_attrs["hydric_balance_level"], "excédentaire")
+        self.assertEqual(objectif_attrs["hydric_strategy"], "reporter")
+
+    def test_optional_hydric_diagnostic_sensors_expose_monitoring_snapshot(self) -> None:
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={
+                "mm_cible": 0.0,
+                "mm_cible_depletion": 0.0,
+                "objectif_mm": 0.0,
+                "mm_final_recommande": 0.0,
+                "use_depletion_logic": False,
+                "type_arrosage": "aucune_action",
+                "et0_mm": 1.3,
+                "et0_source": "fallback_temperature",
+                "etc_mm": 1.0,
+                "kc_gazon": 0.8,
+                "phase_dominante": "Normal",
+                "sous_phase": "Normal",
+                "temperature": 15.9,
+                "forecast_temperature_today": 24.9,
+                "temperature_reference_hydrique": 22.2,
+                "reserve_utile_mm": 12.0,
+                "reserve_actuelle_mm": 12.0,
+                "reserve_stock_mm": 21.6,
+                "reserve_stock_max_mm": 24.0,
+                "reserve_surplus_mm": 9.6,
+                "reserve_fill_ratio": 0.9,
+                "reserve_available_ratio": 1.0,
+                "reserve_minimale_mm": 6.0,
+                "depletion_mm": 0.0,
+                "depletion_ratio": 0.0,
+                "hydric_state": "plein",
+            },
+            result=None,
+            history=[],
+            memory={},
+        )
+
+        legacy_sensor = sensor.GazonObjectifLegacySensor(coordinator)
+        depletion_sensor = sensor.GazonObjectifDepletionSensor(coordinator)
+        et0_sensor = sensor.GazonEt0Sensor(coordinator)
+        etc_sensor = sensor.GazonEtcSensor(coordinator)
+        reserve_sensor = sensor.GazonReserveActuelleSensor(coordinator)
+        depletion_ratio_sensor = sensor.GazonDepletionRatioSensor(coordinator)
+        hydric_sensor = sensor.GazonEtatHydriqueSensor(coordinator)
+
+        self.assertEqual(legacy_sensor.native_value, 0.0)
+        self.assertEqual(legacy_sensor.extra_state_attributes["comparison_mode"], "legacy")
+        self.assertEqual(depletion_sensor.native_value, 0.0)
+        self.assertEqual(depletion_sensor.extra_state_attributes["comparison_mode"], "depletion")
+        self.assertEqual(et0_sensor.native_value, 1.3)
+        self.assertEqual(et0_sensor.extra_state_attributes["et0_source"], "fallback_temperature")
+        self.assertEqual(etc_sensor.native_value, 1.0)
+        self.assertEqual(etc_sensor.extra_state_attributes["kc_gazon"], 0.8)
+        self.assertEqual(reserve_sensor.native_value, 12.0)
+        self.assertEqual(reserve_sensor.extra_state_attributes["hydric_state"], "plein")
+        self.assertEqual(depletion_ratio_sensor.native_value, 0.0)
+        self.assertEqual(depletion_ratio_sensor.extra_state_attributes["depletion_ratio_raw"], 0.0)
+        self.assertEqual(depletion_ratio_sensor.extra_state_attributes["hydric_state"], "plein")
+        self.assertEqual(hydric_sensor.native_value, "plein")
+        self.assertEqual(hydric_sensor.extra_state_attributes["reserve_stock_mm"], 21.6)
 
     def test_intervention_product_select_includes_application_months(self) -> None:
         coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=None, history=[], memory={})
@@ -908,12 +1184,16 @@ class DecisionResultChainTests(unittest.TestCase):
 
         self.assertEqual(niveau_sensor.native_value, "aucune_action")
         self.assertIn("aucune_action", niveau_sensor.extra_state_attributes["possible_values"])
+        self.assertEqual(niveau_sensor.extra_state_attributes["niveau_action_hydrique"], "aucune_action")
         self.assertEqual(type_sensor.native_value, "Aucune action")
         self.assertIn("Aucune action", type_sensor.extra_state_attributes["possible_values"])
         self.assertNotIn("Réglage personnalisé", type_sensor.extra_state_attributes["possible_values"])
+        self.assertEqual(conseil_sensor.extra_state_attributes["niveau_action_hydrique"], "aucune_action")
         self.assertEqual(conseil_sensor.extra_state_attributes["type_arrosage"], "aucune_action")
         self.assertEqual(irrigation_sensor.extra_state_attributes["type_arrosage"], "aucune_action")
         self.assertEqual(irrigation_signal.extra_state_attributes["type_arrosage"], "aucune_action")
+        self.assertEqual(irrigation_signal.extra_state_attributes["reason_kind"], "no_need")
+        self.assertEqual(irrigation_signal.extra_state_attributes["action_label"], "Aucune action")
 
     def test_watering_progress_sensor_exposes_active_session(self) -> None:
         coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=None, history=[], memory={})
@@ -985,6 +1265,9 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(window_sensor.extra_state_attributes["summary"], "Arrosage prévu demain matin (auto)")
         self.assertEqual(window_sensor.extra_state_attributes["next_action_date"], "2026-03-18")
         self.assertEqual(window_sensor.extra_state_attributes["next_action_display"], "18/03/2026")
+        self.assertEqual(window_sensor.extra_state_attributes["watering_window_display"], "06:00–09:30")
+        self.assertNotIn("evening_window_display", window_sensor.extra_state_attributes)
+        self.assertEqual(window_sensor.extra_state_attributes["window_reason_summary"], "Arrosage automatique planifié")
         self.assertNotIn("watering_target_date", window_sensor.extra_state_attributes)
 
     def test_watering_window_sensor_exposes_morning_same_day_status(self) -> None:
@@ -1250,6 +1533,7 @@ class DecisionResultChainTests(unittest.TestCase):
 
     def test_conseil_principal_sensor_surfaces_summary_in_attributes(self) -> None:
         result = _make_result()
+        result.niveau_action = "a_faire"
         result.decision_resume = {
             "faire": True,
             "action": "arrosage",
@@ -1274,6 +1558,7 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(advice_sensor.extra_state_attributes["action_moment"], "demain_matin")
         self.assertEqual(advice_sensor.extra_state_attributes["objectif_mm"], 1.2)
         self.assertEqual(advice_sensor.extra_state_attributes["type_arrosage"], "manuel_frequent")
+        self.assertEqual(advice_sensor.extra_state_attributes["niveau_action_hydrique"], "a_faire")
         self.assertEqual(advice_sensor.extra_state_attributes["next_action_date"], "2026-03-18")
         self.assertEqual(advice_sensor.extra_state_attributes["next_action_display"], "18/03/2026")
         self.assertNotIn("conseil_principal", advice_sensor.extra_state_attributes)
@@ -1388,6 +1673,8 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(objectif_sensor.extra_state_attributes["etp"], 3.1)
         self.assertEqual(objectif_sensor.extra_state_attributes["hydric_balance_level"], "déficit")
         self.assertEqual(objectif_sensor.extra_state_attributes["hydric_strategy"], "arroser profondément")
+        niveau_sensor = sensor.GazonNiveauActionSensor(coordinator)
+        self.assertEqual(niveau_sensor.extra_state_attributes["niveau_action_hydrique"], "critique")
         self.assertEqual(fenetre_sensor.native_value, "demain_matin")
         self.assertEqual(fenetre_sensor.extra_state_attributes["watering_window_start_minute"], 360)
         self.assertEqual(fenetre_sensor.extra_state_attributes["watering_window_end_minute"], 570)
@@ -1395,6 +1682,9 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(fenetre_sensor.extra_state_attributes["watering_evening_end_minute"], 1260)
         self.assertEqual(fenetre_sensor.extra_state_attributes["watering_window_profile"], "mild")
         self.assertFalse(fenetre_sensor.extra_state_attributes["watering_evening_allowed"])
+        self.assertEqual(fenetre_sensor.extra_state_attributes["watering_window_display"], "06:00–09:30")
+        self.assertNotIn("evening_window_display", fenetre_sensor.extra_state_attributes)
+        self.assertEqual(fenetre_sensor.extra_state_attributes["window_reason_summary"], "Arrosage automatique planifié")
         self.assertEqual(fenetre_sensor.extra_state_attributes["next_action_date"], "2026-03-18")
         self.assertEqual(fenetre_sensor.extra_state_attributes["next_action_display"], "18/03/2026")
         self.assertEqual(type_arrosage_sensor.native_value, "Arrosage fractionné")

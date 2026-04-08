@@ -154,6 +154,13 @@ class EntityRegistryTests(unittest.TestCase):
             sensor.GazonPhaseActiveSensor(coordinator),
             sensor.GazonSousPhaseSensor(coordinator),
             sensor.GazonObjectifMmSensor(coordinator),
+            sensor.GazonObjectifLegacySensor(coordinator),
+            sensor.GazonObjectifDepletionSensor(coordinator),
+            sensor.GazonEt0Sensor(coordinator),
+            sensor.GazonEtcSensor(coordinator),
+            sensor.GazonReserveActuelleSensor(coordinator),
+            sensor.GazonDepletionRatioSensor(coordinator),
+            sensor.GazonEtatHydriqueSensor(coordinator),
             sensor.GazonTypeArrosageSensor(coordinator),
             sensor.GazonPlanArrosageSensor(coordinator),
             sensor.GazonDernierArrosageDetecteSensor(coordinator),
@@ -223,6 +230,21 @@ class EntityRegistryTests(unittest.TestCase):
                 for suffix in entity_ids.ACTIVE_ENTITY_SUFFIXES
             },
         )
+
+    def test_optional_hydric_diagnostic_sensors_are_disabled_by_default(self) -> None:
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={})
+        entities = [
+            sensor.GazonObjectifLegacySensor(coordinator),
+            sensor.GazonObjectifDepletionSensor(coordinator),
+            sensor.GazonEt0Sensor(coordinator),
+            sensor.GazonEtcSensor(coordinator),
+            sensor.GazonReserveActuelleSensor(coordinator),
+            sensor.GazonDepletionRatioSensor(coordinator),
+            sensor.GazonEtatHydriqueSensor(coordinator),
+        ]
+
+        for entity in entities:
+            self.assertFalse(entity._attr_entity_registry_enabled_default)  # noqa: SLF001
 
     def test_button_labels_are_explicit(self) -> None:
         coordinator = _FakeCoordinator(entry=_FakeEntry(), data={})

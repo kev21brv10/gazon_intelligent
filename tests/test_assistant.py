@@ -270,3 +270,31 @@ class AssistantDecisionTests(unittest.TestCase):
         expected = "Tonte possible maintenant."
         self.assertEqual(entity.native_value, expected)
         self.assertEqual(entity.extra_state_attributes["summary"], expected)
+        self.assertEqual(entity.extra_state_attributes["niveau_action_hydrique"], "aucune_action")
+
+    def test_public_niveau_action_promotes_non_hydric_required_action(self) -> None:
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={
+                "niveau_action": "aucune_action",
+                "objectif_mm": 0.0,
+                "arrosage_recommande": False,
+                "application_post_watering_status": "non_requis",
+                "tonte_autorisee": True,
+                "tonte_statut": "autorisee",
+                "decision_resume": {
+                    "action": "aucune_action",
+                    "moment": "attendre",
+                    "objectif_mm": 0.0,
+                    "type_arrosage": "aucune_action",
+                },
+            },
+        )
+
+        niveau_entity = sensor.GazonNiveauActionSensor(coordinator)
+        conseil_entity = sensor.GazonConseilPrincipalSensor(coordinator)
+
+        self.assertEqual(niveau_entity.native_value, "a_faire")
+        self.assertEqual(niveau_entity.extra_state_attributes["niveau_action_hydrique"], "aucune_action")
+        self.assertEqual(conseil_entity.extra_state_attributes["niveau_action"], "a_faire")
+        self.assertEqual(conseil_entity.extra_state_attributes["niveau_action_hydrique"], "aucune_action")

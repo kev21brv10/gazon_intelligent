@@ -227,6 +227,53 @@ class GazonBrainTests(unittest.TestCase):
         self.assertIsNotNone(item["declared_at"])
         self.assertIn("produit_catalogue", item)
 
+    def test_compute_snapshot_exposes_hydric_observability_fields(self) -> None:
+        brain = GazonBrain()
+
+        with patch.object(gazon_brain_module, "update_soil_balance") as update_soil_balance:
+            update_soil_balance.return_value = {
+                "date": "2026-04-08",
+                "reserve_mm": 10.0,
+                "previous_reserve_mm": 9.0,
+                "pluie_mm": 0.0,
+                "arrosage_mm": 0.0,
+                "etp_mm": 1.4,
+                "delta_mm": -1.0,
+                "type_sol": "limoneux",
+                "reserve_max_mm": 24.0,
+                "reserve_min_mm": 0.0,
+                "ledger": [],
+            }
+            snapshot = brain.compute_snapshot(
+                today=date(2026, 4, 8),
+                temperature=20.0,
+                forecast_temperature_today=24.0,
+                temperature_source="capteur",
+                temperature_reference_hydrique=22.8,
+                pluie_24h=0.0,
+                pluie_demain=0.0,
+                humidite=60.0,
+                type_sol="limoneux",
+                etp_capteur=None,
+                humidite_sol=None,
+                vent=None,
+                rosee=None,
+                hauteur_gazon=None,
+                retour_arrosage=None,
+                pluie_source="capteur_pluie_24h",
+                pluie_demain_source="meteo_forecast",
+                weather_profile={},
+                et0_source="fallback_temperature",
+            )
+
+        self.assertEqual(snapshot["temperature_reference_hydrique"], 22.8)
+        self.assertEqual(snapshot["et0_source"], "fallback_temperature")
+        self.assertEqual(snapshot["forecast_temperature_today"], 24.0)
+        self.assertEqual(snapshot["temperature_source"], "capteur")
+        self.assertEqual(snapshot["reserve_actuelle_mm"], 10.0)
+        self.assertEqual(snapshot["reserve_utile_mm"], 12.0)
+        self.assertAlmostEqual(snapshot["depletion_ratio"], 0.167, places=3)
+
     def test_declare_intervention_resolves_registered_product_by_name(self) -> None:
         brain = GazonBrain()
         brain.register_product(

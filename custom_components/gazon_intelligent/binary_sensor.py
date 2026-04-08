@@ -2,8 +2,21 @@ from __future__ import annotations
 
 from homeassistant.components.binary_sensor import BinarySensorEntity
 
-from .const import DOMAIN
+from .const import (
+    DOMAIN,
+    IRRIGATION_ACTION_LABEL_AUTO,
+    IRRIGATION_ACTION_LABEL_NONE,
+    IRRIGATION_ACTION_LABEL_NOW,
+    IRRIGATION_ACTION_LABEL_POST_APPLICATION,
+    IRRIGATION_ACTION_LABEL_WAIT,
+    IRRIGATION_REASON_KIND_BLOCKED,
+    IRRIGATION_REASON_KIND_HYDRIC_NEED,
+    IRRIGATION_REASON_KIND_NO_NEED,
+    IRRIGATION_REASON_KIND_POST_APPLICATION,
+    IRRIGATION_REASON_KIND_WAITING,
+)
 from .entity_base import GazonEntityBase
+from .intervention_recommendation import public_intervention_ui
 from .memory import compute_application_state, normalize_post_application_status
 
 _APPLICATION_SUMMARY_PUBLIC_KEYS = (
@@ -54,6 +67,50 @@ def _normalized_public_type_arrosage(entity: GazonEntityBase, raw_value: object 
     ):
         return "aucune_action"
     return raw_type
+
+
+def _objective_mm_value(entity: GazonEntityBase) -> float:
+    try:
+        return float(entity._decision_value("objectif_mm", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _irrigation_reason_kind(entity: GazonEntityBase) -> str:
+    post_status = normalize_post_application_status(entity._decision_value("application_post_watering_status"))
+    objective_mm = _objective_mm_value(entity)
+    hydric_actionable = bool(entity._decision_value("arrosage_recommande", False))
+    type_arrosage = _normalized_public_type_arrosage(entity)
+    block_reason = str(entity._decision_value("block_reason") or "").strip()
+
+    if post_status == "autorise":
+        return IRRIGATION_REASON_KIND_POST_APPLICATION
+    if hydric_actionable:
+        return IRRIGATION_REASON_KIND_HYDRIC_NEED
+    if objective_mm <= 0.0 and post_status in {"indisponible", "non_requis", "termine"}:
+        return IRRIGATION_REASON_KIND_NO_NEED
+    if post_status == "bloque":
+        return IRRIGATION_REASON_KIND_BLOCKED
+    if post_status == "en_attente":
+        return IRRIGATION_REASON_KIND_WAITING
+    if objective_mm > 0.0:
+        if type_arrosage == "bloque" or block_reason:
+            return IRRIGATION_REASON_KIND_BLOCKED
+        return IRRIGATION_REASON_KIND_WAITING
+    return IRRIGATION_REASON_KIND_NO_NEED
+
+
+def _irrigation_action_label(entity: GazonEntityBase, reason_kind: str) -> str:
+    if reason_kind == IRRIGATION_REASON_KIND_POST_APPLICATION:
+        return IRRIGATION_ACTION_LABEL_POST_APPLICATION
+    if reason_kind == IRRIGATION_REASON_KIND_HYDRIC_NEED:
+        type_arrosage = _normalized_public_type_arrosage(entity)
+        if type_arrosage == "auto":
+            return IRRIGATION_ACTION_LABEL_AUTO
+        return IRRIGATION_ACTION_LABEL_NOW
+    if reason_kind in {IRRIGATION_REASON_KIND_WAITING, IRRIGATION_REASON_KIND_BLOCKED}:
+        return IRRIGATION_ACTION_LABEL_WAIT
+    return IRRIGATION_ACTION_LABEL_NONE
 
 
 def _normalize_intervention_payload(payload: dict[str, object]) -> dict[str, object]:
@@ -266,12 +323,12 @@ class GazonSignalIrrigationBinarySensor(GazonEntityBase, BinarySensorEntity):
         post_status = normalize_post_application_status(
             self._decision_value("application_post_watering_status")
         )
-        hydric_actionable = bool(self._decision_value("arrosage_recommande", False))
         type_arrosage = _normalized_public_type_arrosage(self)
-        if post_status == "autorise":
+        reason_kind = _irrigation_reason_kind(self)
+        if reason_kind == IRRIGATION_REASON_KIND_POST_APPLICATION:
             trigger_kind = "post_application"
             source_status = post_status
-        elif hydric_actionable:
+        elif reason_kind == IRRIGATION_REASON_KIND_HYDRIC_NEED:
             trigger_kind = "hydrique"
             source_status = type_arrosage or "on"
         else:
@@ -291,6 +348,8 @@ class GazonSignalIrrigationBinarySensor(GazonEntityBase, BinarySensorEntity):
             "application_post_watering_status": post_status,
             "type_arrosage": type_arrosage or None,
             "trigger_kind": trigger_kind,
+            "reason_kind": reason_kind,
+            "action_label": _irrigation_action_label(self, reason_kind),
             "summary": summary_map[trigger_kind],
         }
         return {key: value for key, value in attrs.items() if value not in (None, "", [], {})}
@@ -341,9 +400,7 @@ class GazonSignalInterventionBinarySensor(GazonEntityBase, BinarySensorEntity):
         product = payload.get("product")
         if not isinstance(product, dict):
             product = {}
-        ui = payload.get("ui")
-        if not isinstance(ui, dict):
-            ui = {}
+        ui = public_intervention_ui(payload)
         summary = ui.get("summary") or {
             "recommended": "Recommandé",
             "preparation": "À préparer",
