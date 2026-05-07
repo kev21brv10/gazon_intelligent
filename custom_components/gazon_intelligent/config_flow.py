@@ -7,6 +7,7 @@ from homeassistant.helpers import selector
 
 from .const import (
     DOMAIN,
+    CONF_INSTANCE_SLUG,
     CONF_ZONE_1,
     CONF_ZONE_2,
     CONF_ZONE_3,
@@ -28,6 +29,13 @@ from .const import (
     CONF_CAPTEUR_ROSEE,
     CONF_CAPTEUR_HAUTEUR_GAZON,
     CONF_CAPTEUR_RETOUR_ARROSAGE,
+    CONF_ENTITE_TONDEUSE,
+    CONF_CAPTEUR_TONDEUSE_ERREUR,
+    CONF_CAPTEUR_TONDEUSE_BATTERIE,
+    CONF_CAPTEUR_TONDEUSE_PLUIE,
+    CONF_CAPTEUR_TONDEUSE_EN_CHARGE,
+    CONF_CAPTEUR_TONDEUSE_PROCHAIN_DEPART,
+    CONF_CAPTEUR_TONDEUSE_HAUTEUR_COUPE,
     CONF_HAUTEUR_MAX_TONDEUSE_CM,
     CONF_HAUTEUR_MIN_TONDEUSE_CM,
     DEFAULT_HAUTEUR_MAX_TONDEUSE_CM,
@@ -35,17 +43,32 @@ from .const import (
     CONF_TYPE_SOL,
     DEFAULT_TYPE_SOL,
     TYPES_SOL,
+    SHARED_WEATHER_CONFIG_KEYS,
 )
+from .entity_ids import normalize_instance_slug
 from .entity_migration import CURRENT_CONFIG_ENTRY_VERSION
+from .shared_state import get_shared_state
 
 
 def _d(val):
     return val if val is not None else vol.UNDEFINED
 
 
-def _build_base_fields(current: dict | None) -> dict:
+def _build_instance_title(instance_slug: str | None) -> str:
+    if not instance_slug:
+        return "Gazon Intelligent"
+    humanized = instance_slug.replace("_", " ").strip()
+    if not humanized:
+        return "Gazon Intelligent"
+    return f"Gazon Intelligent - {humanized.title()}"
+
+
+def _build_base_fields(current: dict | None, *, include_instance_slug: bool = False) -> dict:
     current = current or {}
-    return {
+    fields = {}
+    if include_instance_slug:
+        fields[vol.Required(CONF_INSTANCE_SLUG, default=_d(current.get(CONF_INSTANCE_SLUG)))] = str
+    fields.update({
         vol.Required(CONF_ZONE_1, default=_d(current.get(CONF_ZONE_1))): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="switch")
         ),
@@ -61,36 +84,40 @@ def _build_base_fields(current: dict | None) -> dict:
         vol.Optional(CONF_ZONE_5, default=_d(current.get(CONF_ZONE_5))): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="switch")
         ),
-        vol.Required(CONF_DEBIT_ZONE_1, default=_d(current.get(CONF_DEBIT_ZONE_1, 0.0))): selector.NumberSelector(
-            selector.NumberSelectorConfig(min=0, max=200, step=1, unit_of_measurement="mm/h")
-        ),
-        vol.Required(CONF_DEBIT_ZONE_2, default=_d(current.get(CONF_DEBIT_ZONE_2, 0.0))): selector.NumberSelector(
-            selector.NumberSelectorConfig(min=0, max=200, step=1, unit_of_measurement="mm/h")
-        ),
-        vol.Required(CONF_DEBIT_ZONE_3, default=_d(current.get(CONF_DEBIT_ZONE_3, 0.0))): selector.NumberSelector(
-            selector.NumberSelectorConfig(min=0, max=200, step=1, unit_of_measurement="mm/h")
-        ),
-        vol.Required(CONF_DEBIT_ZONE_4, default=_d(current.get(CONF_DEBIT_ZONE_4, 0.0))): selector.NumberSelector(
-            selector.NumberSelectorConfig(min=0, max=200, step=1, unit_of_measurement="mm/h")
-        ),
-        vol.Required(CONF_DEBIT_ZONE_5, default=_d(current.get(CONF_DEBIT_ZONE_5, 0.0))): selector.NumberSelector(
-            selector.NumberSelectorConfig(min=0, max=200, step=1, unit_of_measurement="mm/h")
-        ),
-        vol.Required(CONF_TYPE_SOL, default=_d(current.get(CONF_TYPE_SOL, DEFAULT_TYPE_SOL))): selector.SelectSelector(
-            selector.SelectSelectorConfig(
-                options=TYPES_SOL,
-            )
-        ),
+        vol.Required(CONF_DEBIT_ZONE_1, default=_d(current.get(CONF_DEBIT_ZONE_1, 0.0))): vol.All(vol.Coerce(float), vol.Range(min=0, max=200)),
+        vol.Required(CONF_DEBIT_ZONE_2, default=_d(current.get(CONF_DEBIT_ZONE_2, 0.0))): vol.All(vol.Coerce(float), vol.Range(min=0, max=200)),
+        vol.Required(CONF_DEBIT_ZONE_3, default=_d(current.get(CONF_DEBIT_ZONE_3, 0.0))): vol.All(vol.Coerce(float), vol.Range(min=0, max=200)),
+        vol.Required(CONF_DEBIT_ZONE_4, default=_d(current.get(CONF_DEBIT_ZONE_4, 0.0))): vol.All(vol.Coerce(float), vol.Range(min=0, max=200)),
+        vol.Required(CONF_DEBIT_ZONE_5, default=_d(current.get(CONF_DEBIT_ZONE_5, 0.0))): vol.All(vol.Coerce(float), vol.Range(min=0, max=200)),
+        vol.Required(CONF_TYPE_SOL, default=_d(current.get(CONF_TYPE_SOL, DEFAULT_TYPE_SOL))): vol.In(TYPES_SOL),
+    })
+    return fields
+
+
+def build_schema(current: dict | None = None, *, include_instance_slug: bool = False):
+    current = current or {}
+    return vol.Schema(_build_base_fields(current, include_instance_slug=include_instance_slug))
+
+
+def _shared_config_defaults(hass=None) -> dict[str, object]:
+    if hass is None:
+        return {}
+    shared_state = get_shared_state(hass, create=False)
+    if shared_state is None:
+        return {}
+    return {
+        key: value
+        for key, value in shared_state.shared_config.items()
+        if key in SHARED_WEATHER_CONFIG_KEYS and value not in (None, "", [], {})
     }
 
 
-def build_schema(current: dict | None = None):
-    current = current or {}
-    return vol.Schema(_build_base_fields(current))
-
-
-def build_advanced_schema(current: dict | None = None):
-    current = current or {}
+def build_advanced_schema(current: dict | None = None, *, shared_defaults: dict | None = None):
+    current = dict(current or {})
+    if isinstance(shared_defaults, dict):
+        for key, value in shared_defaults.items():
+            if key in SHARED_WEATHER_CONFIG_KEYS and key not in current and value not in (None, "", [], {}):
+                current[key] = value
     return vol.Schema(
         {
             vol.Required(CONF_ENTITE_METEO, default=_d(current.get(CONF_ENTITE_METEO))): selector.EntitySelector(
@@ -114,18 +141,41 @@ def build_advanced_schema(current: dict | None = None):
             vol.Optional(CONF_CAPTEUR_HAUTEUR_GAZON, default=_d(current.get(CONF_CAPTEUR_HAUTEUR_GAZON))): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="sensor")
             ),
+            vol.Optional(CONF_ENTITE_TONDEUSE, default=_d(current.get(CONF_ENTITE_TONDEUSE))): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="lawn_mower")
+            ),
+            vol.Optional(
+                CONF_CAPTEUR_TONDEUSE_ERREUR,
+                default=_d(current.get(CONF_CAPTEUR_TONDEUSE_ERREUR)),
+            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+            vol.Optional(
+                CONF_CAPTEUR_TONDEUSE_BATTERIE,
+                default=_d(current.get(CONF_CAPTEUR_TONDEUSE_BATTERIE)),
+            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+            vol.Optional(
+                CONF_CAPTEUR_TONDEUSE_PLUIE,
+                default=_d(current.get(CONF_CAPTEUR_TONDEUSE_PLUIE)),
+            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="binary_sensor")),
+            vol.Optional(
+                CONF_CAPTEUR_TONDEUSE_EN_CHARGE,
+                default=_d(current.get(CONF_CAPTEUR_TONDEUSE_EN_CHARGE)),
+            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="binary_sensor")),
+            vol.Optional(
+                CONF_CAPTEUR_TONDEUSE_PROCHAIN_DEPART,
+                default=_d(current.get(CONF_CAPTEUR_TONDEUSE_PROCHAIN_DEPART)),
+            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+            vol.Optional(
+                CONF_CAPTEUR_TONDEUSE_HAUTEUR_COUPE,
+                default=_d(current.get(CONF_CAPTEUR_TONDEUSE_HAUTEUR_COUPE)),
+            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="number")),
             vol.Optional(
                 CONF_HAUTEUR_MIN_TONDEUSE_CM,
                 default=_d(current.get(CONF_HAUTEUR_MIN_TONDEUSE_CM, DEFAULT_HAUTEUR_MIN_TONDEUSE_CM)),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0.5, max=15.0, step=0.5, unit_of_measurement="cm")
-            ),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.5, max=15.0)),
             vol.Optional(
                 CONF_HAUTEUR_MAX_TONDEUSE_CM,
                 default=_d(current.get(CONF_HAUTEUR_MAX_TONDEUSE_CM, DEFAULT_HAUTEUR_MAX_TONDEUSE_CM)),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0.5, max=15.0, step=0.5, unit_of_measurement="cm")
-            ),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.5, max=15.0)),
             vol.Optional(CONF_CAPTEUR_RETOUR_ARROSAGE, default=_d(current.get(CONF_CAPTEUR_RETOUR_ARROSAGE))): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="sensor")
             ),
@@ -145,36 +195,51 @@ def build_advanced_schema(current: dict | None = None):
 class GazonIntelligentConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
     VERSION = CURRENT_CONFIG_ENTRY_VERSION
 
-    def _current_reconfigure_entry(self):
-        entry = getattr(self, "_reconfigure_entry_data", None)
-        if entry is not None:
-            return entry
-        getter = getattr(self, "_get_reconfigure_entry", None)
-        if callable(getter):
-            return getter()
-        raise RuntimeError("Reconfigure entry is not available")
-
     async def async_step_user(self, user_input=None):
         if user_input is not None:
-            self._base_user_input = dict(user_input)
-            return self.async_show_form(step_id="sensors", data_schema=build_advanced_schema())
+            instance_slug = normalize_instance_slug(user_input.get(CONF_INSTANCE_SLUG))
+            if instance_slug is None:
+                return self.async_show_form(
+                    step_id="user",
+                    data_schema=build_schema(include_instance_slug=True),
+                    errors={"base": "invalid_instance_slug"},
+                )
+            self._base_user_input = {**dict(user_input), CONF_INSTANCE_SLUG: instance_slug}
+            return self.async_show_form(
+                step_id="sensors",
+                data_schema=build_advanced_schema(shared_defaults=_shared_config_defaults(getattr(self, "hass", None))),
+            )
 
-        return self.async_show_form(step_id="user", data_schema=build_schema())
+        return self.async_show_form(step_id="user", data_schema=build_schema(include_instance_slug=True))
 
     async def async_step_sensors(self, user_input=None):
         if user_input is not None:
-            await self.async_set_unique_id(DOMAIN)
-            self._abort_if_unique_id_configured()
             data = {**getattr(self, "_base_user_input", {}), **user_input}
+            instance_slug = normalize_instance_slug(data.get(CONF_INSTANCE_SLUG))
+            if instance_slug is None:
+                return self.async_show_form(
+                    step_id="user",
+                    data_schema=build_schema(include_instance_slug=True),
+                    errors={"base": "invalid_instance_slug"},
+                )
+            data[CONF_INSTANCE_SLUG] = instance_slug
+            await self.async_set_unique_id(f"{DOMAIN}:{instance_slug}")
+            self._abort_if_unique_id_configured()
             return self.async_create_entry(
-                title="Gazon Intelligent",
+                title=_build_instance_title(instance_slug),
                 data=data,
             )
 
-        return self.async_show_form(step_id="sensors", data_schema=build_advanced_schema())
+        return self.async_show_form(
+            step_id="sensors",
+            data_schema=build_advanced_schema(
+                getattr(self, "_base_user_input", {}),
+                shared_defaults=_shared_config_defaults(getattr(self, "hass", None)),
+            ),
+        )
 
     async def async_step_reconfigure(self, user_input=None):
-        entry = self._current_reconfigure_entry()
+        entry = self._get_reconfigure_entry()
         current = {**entry.data, **entry.options}
 
         if user_input is not None:
@@ -199,4 +264,7 @@ class GazonOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
-        return self.async_show_form(step_id="user", data_schema=build_advanced_schema(current))
+        return self.async_show_form(
+            step_id="user",
+            data_schema=build_advanced_schema(current, shared_defaults=_shared_config_defaults(getattr(self, "hass", None))),
+        )

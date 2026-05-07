@@ -3,13 +3,16 @@ from __future__ import annotations
 import asyncio
 import unittest
 from pathlib import Path
+from datetime import datetime
 import sys
 import types
 from importlib import util
+from zoneinfo import ZoneInfo
 
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_DIR = ROOT / "custom_components" / "gazon_intelligent"
+TEST_TZ = ZoneInfo("Europe/Paris")
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -65,6 +68,11 @@ def _install_stubs() -> None:
     homeassistant = ensure_module("homeassistant")
     ensure_module("homeassistant.config_entries")
     ensure_module("homeassistant.helpers")
+    util_mod = ensure_module("homeassistant.util")
+    if not hasattr(util_mod, "__path__"):
+        util_mod.__path__ = []  # type: ignore[attr-defined]
+    dt_mod = ensure_module("homeassistant.util.dt")
+    dt_mod.now = lambda: datetime(2026, 4, 4, 14, 15, tzinfo=TEST_TZ)  # type: ignore[attr-defined]
 
     config_entries = sys.modules["homeassistant.config_entries"]
     if not hasattr(config_entries, "ConfigEntry"):
@@ -112,6 +120,8 @@ def _install_stubs() -> None:
         selector_mod.EntitySelectorConfig = EntitySelectorConfig
     if not hasattr(selector_mod, "EntitySelector"):
         selector_mod.EntitySelector = lambda *args, **kwargs: ("EntitySelector", args, kwargs)
+    if not hasattr(selector_mod, "TextSelector"):
+        selector_mod.TextSelector = lambda *args, **kwargs: ("TextSelector", args, kwargs)
     if not hasattr(selector_mod, "NumberSelectorConfig"):
         class NumberSelectorConfig:
             def __init__(self, **kwargs):
@@ -181,6 +191,16 @@ class ConfigFlowTests(unittest.TestCase):
         self.assertIn(config_flow_mod.CONF_ZONE_4, optional_fields)
         self.assertIn(config_flow_mod.CONF_ZONE_5, optional_fields)
 
+    def test_new_setup_schema_requires_instance_slug(self) -> None:
+        schema = config_flow_mod.build_schema(include_instance_slug=True)
+        required_fields = {
+            key.args[0]
+            for key in schema.schema
+            if getattr(key, "kind", None) == "required"
+        }
+
+        self.assertIn(config_flow_mod.CONF_INSTANCE_SLUG, required_fields)
+
     def test_build_schema_handles_first_install_without_current_data(self) -> None:
         schema = config_flow_mod.build_schema()
 
@@ -202,10 +222,30 @@ class ConfigFlowTests(unittest.TestCase):
         }
         self.assertIn(config_flow_mod.CONF_HAUTEUR_MIN_TONDEUSE_CM, optional_fields)
         self.assertIn(config_flow_mod.CONF_HAUTEUR_MAX_TONDEUSE_CM, optional_fields)
+        self.assertIn(config_flow_mod.CONF_ENTITE_TONDEUSE, optional_fields)
+        self.assertIn(config_flow_mod.CONF_CAPTEUR_TONDEUSE_ERREUR, optional_fields)
+        self.assertIn(config_flow_mod.CONF_CAPTEUR_TONDEUSE_BATTERIE, optional_fields)
+        self.assertIn(config_flow_mod.CONF_CAPTEUR_TONDEUSE_PLUIE, optional_fields)
+        self.assertIn(config_flow_mod.CONF_CAPTEUR_TONDEUSE_EN_CHARGE, optional_fields)
+        self.assertIn(config_flow_mod.CONF_CAPTEUR_TONDEUSE_PROCHAIN_DEPART, optional_fields)
+        self.assertIn(config_flow_mod.CONF_CAPTEUR_TONDEUSE_HAUTEUR_COUPE, optional_fields)
+
+    def test_shared_weather_defaults_are_loaded_from_shared_state(self) -> None:
+        fake_hass = types.SimpleNamespace(data={})
+        shared_state = config_flow_mod.get_shared_state(fake_hass)
+        assert shared_state is not None
+        shared_state.shared_config[config_flow_mod.CONF_ENTITE_METEO] = "weather.maison"
+        shared_state.shared_config[config_flow_mod.CONF_CAPTEUR_PLUIE_24H] = "sensor.pluie_24h"
+
+        defaults = config_flow_mod._shared_config_defaults(fake_hass)
+
+        self.assertEqual(defaults[config_flow_mod.CONF_ENTITE_METEO], "weather.maison")
+        self.assertEqual(defaults[config_flow_mod.CONF_CAPTEUR_PLUIE_24H], "sensor.pluie_24h")
 
     def test_initial_flow_shows_sensors_second_page(self) -> None:
         flow = config_flow_mod.GazonIntelligentConfigFlow()
         base_input = {
+            config_flow_mod.CONF_INSTANCE_SLUG: "jardin_avant",
             config_flow_mod.CONF_ZONE_1: "switch.zone_1",
             config_flow_mod.CONF_DEBIT_ZONE_1: 10,
             config_flow_mod.CONF_DEBIT_ZONE_2: 0,
@@ -219,9 +259,36 @@ class ConfigFlowTests(unittest.TestCase):
 
         self.assertEqual(result["step_id"], "sensors")
 
+    def test_new_instance_flow_uses_slugged_unique_id_and_title(self) -> None:
+        flow = config_flow_mod.GazonIntelligentConfigFlow()
+        recorded: dict[str, str] = {}
+
+        async def fake_async_set_unique_id(value):
+            recorded["unique_id"] = value
+
+        flow.async_set_unique_id = fake_async_set_unique_id  # type: ignore[method-assign]
+        flow._abort_if_unique_id_configured = lambda: None  # type: ignore[method-assign]
+
+        base_input = {
+            config_flow_mod.CONF_INSTANCE_SLUG: "jardin_avant",
+            config_flow_mod.CONF_ZONE_1: "switch.zone_1",
+            config_flow_mod.CONF_DEBIT_ZONE_1: 10,
+            config_flow_mod.CONF_DEBIT_ZONE_2: 0,
+            config_flow_mod.CONF_DEBIT_ZONE_3: 0,
+            config_flow_mod.CONF_DEBIT_ZONE_4: 0,
+            config_flow_mod.CONF_DEBIT_ZONE_5: 0,
+            config_flow_mod.CONF_TYPE_SOL: "limoneux",
+        }
+
+        asyncio.run(flow.async_step_user(base_input))
+        result = asyncio.run(flow.async_step_sensors({}))
+
+        self.assertEqual(recorded["unique_id"], "gazon_intelligent:jardin_avant")
+        self.assertEqual(result["title"], "Gazon Intelligent - Jardin Avant")
+
     def test_reconfigure_flow_updates_base_configuration(self) -> None:
         flow = config_flow_mod.GazonIntelligentConfigFlow()
-        flow._reconfigure_entry_data = types.SimpleNamespace(
+        flow._reconfigure_entry = types.SimpleNamespace(
             data={
                 config_flow_mod.CONF_ZONE_1: "switch.zone_1",
                 config_flow_mod.CONF_DEBIT_ZONE_1: 10,
@@ -249,6 +316,14 @@ class ConfigFlowTests(unittest.TestCase):
         self.assertEqual(updated["data_updates"][config_flow_mod.CONF_ZONE_1], "switch.zone_2")
         self.assertEqual(updated["data_updates"][config_flow_mod.CONF_DEBIT_ZONE_1], 12)
         self.assertEqual(updated["data_updates"][config_flow_mod.CONF_TYPE_SOL], "argileux")
+
+    def test_reconfigure_flow_handles_empty_existing_config(self) -> None:
+        flow = config_flow_mod.GazonIntelligentConfigFlow()
+        flow._reconfigure_entry = types.SimpleNamespace(data={}, options={})
+
+        form = asyncio.run(flow.async_step_reconfigure())
+
+        self.assertEqual(form["step_id"], "reconfigure")
 
 
 if __name__ == "__main__":

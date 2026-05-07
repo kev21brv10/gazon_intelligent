@@ -57,7 +57,7 @@ class MigrationRuntimeTests(unittest.TestCase):
             calls.append((hass, entry_id))
             return ["sensor.gazon_intelligent_score_tonte"]
 
-        async def fake_align(hass, entry_id, entity_registry=None):
+        async def fake_align(hass, entry_id, instance_slug=None, entity_registry=None):
             align_calls.append((hass, entry_id))
             return [("sensor.old", "sensor.new")]
 

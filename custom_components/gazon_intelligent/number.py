@@ -2,10 +2,17 @@ from __future__ import annotations
 
 from homeassistant.components.number import NumberEntity
 from homeassistant.helpers.entity import EntityCategory
+try:
+    from homeassistant.helpers.restore_state import RestoreEntity
+except Exception:  # pragma: no cover - fallback for unit tests / stripped envs
+    class RestoreEntity:  # type: ignore[too-many-ancestors]
+        async def async_get_last_state(self):
+            return None
 
 from .const import (
     CONF_HAUTEUR_MAX_TONDEUSE_CM,
     CONF_HAUTEUR_MIN_TONDEUSE_CM,
+    CONF_HAUTEUR_COUPE_TONDEUSE_MM,
     CONF_DEBIT_ZONE_1,
     CONF_DEBIT_ZONE_2,
     CONF_DEBIT_ZONE_3,
@@ -13,6 +20,7 @@ from .const import (
     CONF_DEBIT_ZONE_5,
     DEFAULT_HAUTEUR_MAX_TONDEUSE_CM,
     DEFAULT_HAUTEUR_MIN_TONDEUSE_CM,
+    DEFAULT_MOWING_COOLDOWN_AFTER_WATERING_MINUTES,
     DOMAIN,
 )
 from .entity_base import GazonEntityBase
@@ -52,6 +60,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
                 15.0,
                 DEFAULT_HAUTEUR_MAX_TONDEUSE_CM,
             ),
+            GazonMowerCuttingHeightNumber(coordinator),
+            GazonMowingCooldownNumber(coordinator),
         ]
     )
 
@@ -123,3 +133,94 @@ class GazonMowerSettingNumber(GazonEntityBase, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         await self.coordinator.async_update_config({self._config_key: _round_to_mower_step(value)})
+
+
+class GazonMowerCuttingHeightNumber(RestoreEntity, GazonEntityBase, NumberEntity):
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_native_min_value = 0.0
+    _attr_native_max_value = 100.0
+    _attr_native_step = 5.0
+    _attr_native_unit_of_measurement = "mm"
+    _attr_icon = "mdi:content-cut"
+
+    def __init__(self, coordinator) -> None:
+        super().__init__(coordinator)
+        self._config_key = CONF_HAUTEUR_COUPE_TONDEUSE_MM
+        self._default_value: float | None = None
+        self._restored_native_value: float | None = None
+        self._attr_name = "Hauteur de coupe tondeuse"
+        self._set_entity_identity("number", "hauteur_coupe_tondeuse")
+
+    async def async_added_to_hass(self) -> None:
+        parent_added = getattr(super(), "async_added_to_hass", None)
+        if callable(parent_added):
+            await parent_added()
+        self._restored_native_value = await self._async_get_last_state_float()
+
+    async def _async_get_last_state_float(self) -> float | None:
+        getter = getattr(self, "async_get_last_state", None)
+        if not callable(getter):
+            return None
+        state = await getter()
+        if state is None:
+            return None
+        raw = getattr(state, "state", None)
+        try:
+            value = float(raw) if raw is not None else None
+        except (TypeError, ValueError):
+            return None
+        if value is None or value <= 0:
+            return None
+        return value
+
+    @staticmethod
+    def _round_to_cutting_height_step(value: float) -> float:
+        return round(round(float(value) / 5.0) * 5.0, 2)
+
+    @property
+    def native_value(self):
+        value = self.coordinator._get_conf(self._config_key)
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            numeric = None
+        if numeric is not None and numeric > 0:
+            rounded = self._round_to_cutting_height_step(numeric)
+            return max(self._attr_native_min_value, min(rounded, self._attr_native_max_value))
+
+        restored = self._restored_native_value
+        if restored is not None and restored > 0:
+            rounded = self._round_to_cutting_height_step(restored)
+            return max(self._attr_native_min_value, min(rounded, self._attr_native_max_value))
+
+        return self._default_value
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self.coordinator.async_update_config({self._config_key: self._round_to_cutting_height_step(value)})
+
+
+class GazonMowingCooldownNumber(GazonEntityBase, NumberEntity):
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_native_min_value = 0.0
+    _attr_native_max_value = 1440.0
+    _attr_native_step = 5.0
+    _attr_native_unit_of_measurement = "min"
+    _attr_icon = "mdi:timer-sand"
+
+    def __init__(self, coordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_name = "Délai reprise tonte après arrosage"
+        self._set_entity_identity("number", "delai_reprise_tonte_apres_arrosage")
+
+    @property
+    def native_value(self):
+        value = self.coordinator.mowing_cooldown_after_watering_minutes
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(DEFAULT_MOWING_COOLDOWN_AFTER_WATERING_MINUTES)
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self.coordinator.async_set_mowing_cooldown_after_watering_minutes(value)

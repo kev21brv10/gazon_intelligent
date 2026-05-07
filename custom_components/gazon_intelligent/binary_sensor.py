@@ -3,6 +3,7 @@ from __future__ import annotations
 from homeassistant.components.binary_sensor import BinarySensorEntity
 
 from .const import (
+    APPLICATION_INTERVENTIONS,
     DOMAIN,
     IRRIGATION_ACTION_LABEL_AUTO,
     IRRIGATION_ACTION_LABEL_NONE,
@@ -10,12 +11,15 @@ from .const import (
     IRRIGATION_ACTION_LABEL_POST_APPLICATION,
     IRRIGATION_ACTION_LABEL_WAIT,
     IRRIGATION_REASON_KIND_BLOCKED,
+    IRRIGATION_REASON_KIND_BLOCKED_DUE_TO_CONDITIONS,
     IRRIGATION_REASON_KIND_HYDRIC_NEED,
     IRRIGATION_REASON_KIND_NO_NEED,
+    IRRIGATION_REASON_KIND_PHASE_SUPPORT,
     IRRIGATION_REASON_KIND_POST_APPLICATION,
     IRRIGATION_REASON_KIND_WAITING,
 )
 from .entity_base import GazonEntityBase
+from .entity_ids import public_entity_id
 from .intervention_recommendation import public_intervention_ui
 from .memory import compute_application_state, normalize_post_application_status
 
@@ -69,6 +73,19 @@ def _normalized_public_type_arrosage(entity: GazonEntityBase, raw_value: object 
     return raw_type
 
 
+def _watering_cause_value(entity: GazonEntityBase, raw_value: object | None = None) -> str:
+    raw_cause = str(raw_value if raw_value is not None else entity._decision_value("watering_cause") or "").strip().lower()
+    if raw_cause in {"hydrique", "post_application"}:
+        return raw_cause
+    post_status = normalize_post_application_status(entity._decision_value("application_post_watering_status"))
+    raw_type = _normalized_public_type_arrosage(entity)
+    if post_status in {"bloque", "en_attente", "autorise"}:
+        return "post_application"
+    if raw_type in {"application_technique", "application_technique_auto"}:
+        return "post_application"
+    return "hydrique"
+
+
 def _objective_mm_value(entity: GazonEntityBase) -> float:
     try:
         return float(entity._decision_value("objectif_mm", 0.0) or 0.0)
@@ -76,20 +93,104 @@ def _objective_mm_value(entity: GazonEntityBase) -> float:
         return 0.0
 
 
+def _requested_mm_value(entity: GazonEntityBase) -> float:
+    for key in ("mm_requested", "mm_cible", "objectif_legacy_mm", "objectif_legacy"):
+        try:
+            value = float(entity._decision_value(key, 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if value > 0.0:
+            return value
+    return 0.0
+
+
+def _block_reason_display_label(value: object) -> str | None:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return None
+    labels = {
+        "pluie_prevue_suffisante": "Pluie prévue suffisante",
+        "temperature_trop_basse": "Température trop basse",
+        "arrosage_recent": "Arrosage récent",
+        "sol_deja_humide": "Sol déjà humide",
+        "sol_non_adapte": "Sol non adapté",
+        "pluie_probabilite_elevee": "Pluie probable élevée",
+        "surface_non_seche": "Surface non sèche",
+        "cooldown_24h": "Cooldown 24 h",
+        "humidite_excessive": "Humidité excessive",
+        "humidite_elevee": "Humidité élevée",
+        "garde_fou_hebdomadaire": "Garde-fou hebdomadaire",
+        "mode_bloque": "Mode bloqué",
+        "pluie_active": "Pluie active",
+        "bloque": "Bloqué",
+        "mower_mowing": "Tondeuse en cours de tonte",
+        "mower_returning": "Tondeuse en retour station",
+        "mower_not_stowed": "Tondeuse non rangée",
+        "mower_unreliable": "Coordination tondeuse indisponible",
+        "post_application_active": "Post-produit actif",
+        "watering_in_progress": "Arrosage en cours",
+        "watering_cooldown": "Cooldown tonte après arrosage",
+    }
+    return labels.get(normalized, normalized.replace("_", " "))
+
+
+def _phase_support_phase(entity: GazonEntityBase) -> str | None:
+    phase = str(
+        entity._decision_value("phase_dominante")
+        or entity._decision_value("phase_active")
+        or ""
+    ).strip()
+    if phase in APPLICATION_INTERVENTIONS:
+        return phase
+    return None
+
+
+def _is_phase_support_irrigation_context(entity: GazonEntityBase) -> bool:
+    if _objective_mm_value(entity) <= 0.0 or not bool(entity._decision_value("arrosage_recommande", False)):
+        return False
+    if _phase_support_phase(entity) is None:
+        return False
+
+    hydric_state = str(entity._decision_value("hydric_state") or "").strip().lower()
+    if hydric_state in {"plein", "confort"}:
+        return True
+
+    for key, threshold in (("depletion_ratio", 0.10), ("reserve_available_ratio", 0.95)):
+        try:
+            value = float(entity._decision_value(key))
+        except (TypeError, ValueError):
+            continue
+        if key == "depletion_ratio" and value <= threshold:
+            return True
+        if key == "reserve_available_ratio" and value >= threshold:
+            return True
+    return False
+
+
 def _irrigation_reason_kind(entity: GazonEntityBase) -> str:
     post_status = normalize_post_application_status(entity._decision_value("application_post_watering_status"))
     objective_mm = _objective_mm_value(entity)
+    requested_mm = _requested_mm_value(entity)
     hydric_actionable = bool(entity._decision_value("arrosage_recommande", False))
     type_arrosage = _normalized_public_type_arrosage(entity)
     block_reason = str(entity._decision_value("block_reason") or "").strip()
 
     if post_status == "autorise":
         return IRRIGATION_REASON_KIND_POST_APPLICATION
+    if hydric_actionable and _is_phase_support_irrigation_context(entity):
+        return IRRIGATION_REASON_KIND_PHASE_SUPPORT
     if hydric_actionable:
         return IRRIGATION_REASON_KIND_HYDRIC_NEED
+    if type_arrosage == "bloque" or block_reason:
+        if objective_mm <= 0.0 and requested_mm <= 0.0 and _phase_support_phase(entity) is None:
+            return IRRIGATION_REASON_KIND_BLOCKED_DUE_TO_CONDITIONS
+        if requested_mm > 0.0 or objective_mm > 0.0 or _phase_support_phase(entity) is not None:
+            return IRRIGATION_REASON_KIND_BLOCKED
     if objective_mm <= 0.0 and post_status in {"indisponible", "non_requis", "termine"}:
         return IRRIGATION_REASON_KIND_NO_NEED
     if post_status == "bloque":
+        if objective_mm <= 0.0 and requested_mm <= 0.0:
+            return IRRIGATION_REASON_KIND_BLOCKED_DUE_TO_CONDITIONS
         return IRRIGATION_REASON_KIND_BLOCKED
     if post_status == "en_attente":
         return IRRIGATION_REASON_KIND_WAITING
@@ -103,7 +204,7 @@ def _irrigation_reason_kind(entity: GazonEntityBase) -> str:
 def _irrigation_action_label(entity: GazonEntityBase, reason_kind: str) -> str:
     if reason_kind == IRRIGATION_REASON_KIND_POST_APPLICATION:
         return IRRIGATION_ACTION_LABEL_POST_APPLICATION
-    if reason_kind == IRRIGATION_REASON_KIND_HYDRIC_NEED:
+    if reason_kind in {IRRIGATION_REASON_KIND_HYDRIC_NEED, IRRIGATION_REASON_KIND_PHASE_SUPPORT}:
         type_arrosage = _normalized_public_type_arrosage(entity)
         if type_arrosage == "auto":
             return IRRIGATION_ACTION_LABEL_AUTO
@@ -162,18 +263,78 @@ class GazonTonteAutoriseeBinarySensor(GazonEntityBase, BinarySensorEntity):
 
     @property
     def extra_state_attributes(self):
-        return self._attrs_from_result(
+        attrs = self._attrs_from_result(
             "phase_active",
             "tonte_statut",
             "risque_gazon",
             "hauteur_tonte_recommandee_cm",
             "hauteur_tonte_min_cm",
             "hauteur_tonte_max_cm",
+            "mowing_frequency_target_per_week",
+            "mowing_frequency_label",
+            "mowing_window_state",
+            "mowing_window_label",
+            "mowing_window_reason",
+            "mowing_daily_session_limit",
+            "mowing_daily_session_policy",
+            "mowing_resume_requires_full_battery",
             "next_mowing_date",
             "next_mowing_display",
             "raison_blocage_tonte",
             "raison_blocage_code",
+            "tondeuse_source_entity",
+            "tondeuse_nom",
+            "tondeuse_statut",
+            "tondeuse_statut_libelle",
+            "tondeuse_connectee",
+            "tondeuse_prete",
+            "tondeuse_raison",
+            "tondeuse_en_charge",
+            "tondeuse_pluie",
+            "tondeuse_erreur",
+            "tondeuse_erreur_libelle",
+            "tondeuse_batterie",
+            "tondeuse_prochain_depart",
+            "tondeuse_prochain_depart_display",
+            "tondeuse_hauteur_coupe_mm",
+            "tondeuse_resolution_state",
+            "tondeuse_resolution_reason",
+            "tondeuse_resolution_candidate_count",
+            "mower_coordination_enabled",
+            "mower_coordination_ready",
+            "mower_presence_state",
+            "mower_presence_label",
+            "mower_operation_state",
+            "mower_operation_label",
+            "mower_is_docked",
+            "mower_is_outside",
+            "mower_is_safe_for_watering",
+            "mower_reason_code",
+            "mower_reason_label",
+            "mower_resolution_state",
+            "mower_resolution_reason",
+            "mower_resolution_candidate_count",
+            "mowing_blocked_by_watering",
+            "mowing_blocked",
+            "mowing_block_reason_code",
+            "mowing_block_reason_label",
+            "mowing_block_reason",
+            "mowing_machine_unavailable_detail",
+            "mowing_machine_unavailable_label",
+            "mowing_cooldown_remaining_minutes",
+            "mowing_post_application_active",
         )
+        if attrs is None:
+            attrs = {}
+        attrs["gazon_permet_tonte"] = bool(self._decision_value("tonte_autorisee", False))
+        attrs["machine_permet_tonte"] = (
+            bool(self._decision_value("tondeuse_prete", False))
+            and self._decision_value("mower_coordination_enabled", True) is not False
+            and self._decision_value("mower_coordination_ready", True) is not False
+        )
+        attrs["mowing_blocked"] = bool(self._decision_value("mowing_blocked", False))
+        attrs["action_possible"] = attrs["gazon_permet_tonte"] and attrs["machine_permet_tonte"] and not attrs["mowing_blocked"]
+        return attrs
 
 
 class GazonArrosageRecommandeBinarySensor(GazonEntityBase, BinarySensorEntity):
@@ -191,9 +352,23 @@ class GazonArrosageRecommandeBinarySensor(GazonEntityBase, BinarySensorEntity):
 
     @property
     def extra_state_attributes(self):
-        attrs = self._attrs_from_result("objectif_mm", "type_arrosage") or {}
+        attrs = self._attrs_from_result(
+            "objectif_mm",
+            "type_arrosage",
+            "watering_cause",
+            "watering_blocked_by_mower",
+            "watering_block_reason_code",
+            "watering_block_reason_label",
+            "tondeuse_resolution_state",
+            "tondeuse_resolution_reason",
+            "tondeuse_resolution_candidate_count",
+            "mower_resolution_state",
+            "mower_resolution_reason",
+            "mower_resolution_candidate_count",
+        ) or {}
         if "type_arrosage" in attrs:
             attrs["type_arrosage"] = _normalized_public_type_arrosage(self, attrs.get("type_arrosage")) or None
+        attrs["watering_cause"] = _watering_cause_value(self, attrs.get("watering_cause"))
         return attrs or None
 
 
@@ -314,9 +489,14 @@ class GazonSignalIrrigationBinarySensor(GazonEntityBase, BinarySensorEntity):
         post_status = normalize_post_application_status(
             self._decision_value("application_post_watering_status")
         )
-        if post_status == "autorise":
+        if post_status == "en_attente":
+            return False
+        reason_kind = _irrigation_reason_kind(self)
+        if reason_kind == IRRIGATION_REASON_KIND_POST_APPLICATION:
             return True
-        return bool(self._decision_value("arrosage_recommande", False))
+        if reason_kind in {IRRIGATION_REASON_KIND_HYDRIC_NEED, IRRIGATION_REASON_KIND_PHASE_SUPPORT}:
+            return True
+        return False
 
     @property
     def extra_state_attributes(self):
@@ -324,32 +504,91 @@ class GazonSignalIrrigationBinarySensor(GazonEntityBase, BinarySensorEntity):
             self._decision_value("application_post_watering_status")
         )
         type_arrosage = _normalized_public_type_arrosage(self)
+        watering_cause = _watering_cause_value(self)
         reason_kind = _irrigation_reason_kind(self)
-        if reason_kind == IRRIGATION_REASON_KIND_POST_APPLICATION:
+        waiting_post_application = post_status == "en_attente"
+        if waiting_post_application:
+            trigger_kind = "waiting"
+            source_status = post_status
+        elif reason_kind == IRRIGATION_REASON_KIND_POST_APPLICATION:
             trigger_kind = "post_application"
             source_status = post_status
-        elif reason_kind == IRRIGATION_REASON_KIND_HYDRIC_NEED:
+        elif reason_kind == IRRIGATION_REASON_KIND_WAITING:
+            trigger_kind = "waiting"
+            source_status = post_status or type_arrosage or "attendre"
+        elif reason_kind in {IRRIGATION_REASON_KIND_HYDRIC_NEED, IRRIGATION_REASON_KIND_PHASE_SUPPORT}:
             trigger_kind = "hydrique"
             source_status = type_arrosage or "on"
+        elif reason_kind == IRRIGATION_REASON_KIND_BLOCKED_DUE_TO_CONDITIONS:
+            trigger_kind = "blocked_due_to_conditions"
+            source_status = type_arrosage or post_status or "bloque"
+        elif reason_kind == IRRIGATION_REASON_KIND_BLOCKED:
+            trigger_kind = "blocked"
+            source_status = type_arrosage or post_status or "bloque"
         else:
             trigger_kind = "none"
             source_status = post_status if post_status != "indisponible" else "off"
         summary_map = {
-            "post_application": "Irrigation post-application autorisée",
+            "post_application": "Arrosage post-produit autorisé",
+            "waiting": "Arrosage en attente",
             "hydrique": "Irrigation hydrique actionnable",
+            "blocked_due_to_conditions": "Arrosage bloqué par conditions",
+            "blocked": "Irrigation bloquée",
             "none": "Aucune irrigation actionnable",
         }
+        if reason_kind == IRRIGATION_REASON_KIND_PHASE_SUPPORT:
+            summary_map["hydrique"] = "Irrigation de soutien actionnable"
+        if trigger_kind == "waiting" and watering_cause == "post_application":
+            summary_map["waiting"] = "Arrosage post-produit en attente"
+        elif trigger_kind == "waiting":
+            summary_map["waiting"] = "Irrigation en attente"
+        if trigger_kind == "blocked":
+            block_label = _block_reason_display_label(self._decision_value("block_reason"))
+            if watering_cause == "post_application" and block_label:
+                summary_map["blocked"] = f"Arrosage post-produit bloqué : {block_label}"
+            elif watering_cause == "post_application":
+                summary_map["blocked"] = "Arrosage post-produit bloqué"
+            elif block_label:
+                summary_map["blocked"] = f"Irrigation bloquée : {block_label}"
+        if reason_kind == IRRIGATION_REASON_KIND_BLOCKED_DUE_TO_CONDITIONS:
+            block_label = _block_reason_display_label(self._decision_value("block_reason"))
+            if watering_cause == "post_application" and block_label:
+                summary_map["blocked_due_to_conditions"] = f"Arrosage bloqué par conditions : {block_label}"
+            elif block_label:
+                summary_map["blocked_due_to_conditions"] = f"Arrosage bloqué par conditions : {block_label}"
+        action_label = (
+            IRRIGATION_ACTION_LABEL_WAIT if trigger_kind == "waiting" else _irrigation_action_label(self, reason_kind)
+        )
         attrs = {
             "source_entities": [
-                f"binary_sensor.{DOMAIN}_arrosage_apres_application_autorise",
-                f"binary_sensor.{DOMAIN}_arrosage_recommande",
+                public_entity_id("binary_sensor", "arrosage_apres_application_autorise", instance_slug=self.instance_slug),
+                public_entity_id("binary_sensor", "arrosage_recommande", instance_slug=self.instance_slug),
             ],
             "source_status": source_status,
             "application_post_watering_status": post_status,
+            "watering_cause": watering_cause,
             "type_arrosage": type_arrosage or None,
+            "watering_blocked_by_mower": bool(self._decision_value("watering_blocked_by_mower", False)),
+            "watering_block_reason_code": self._decision_value("watering_block_reason_code"),
+            "watering_block_reason_label": self._decision_value("watering_block_reason_label"),
+            "tondeuse_resolution_state": self._decision_value("tondeuse_resolution_state"),
+            "tondeuse_resolution_reason": self._decision_value("tondeuse_resolution_reason"),
+            "tondeuse_resolution_candidate_count": self._decision_value("tondeuse_resolution_candidate_count"),
+            "mower_resolution_state": self._decision_value("mower_resolution_state"),
+            "mower_resolution_reason": self._decision_value("mower_resolution_reason"),
+            "mower_resolution_candidate_count": self._decision_value("mower_resolution_candidate_count"),
             "trigger_kind": trigger_kind,
+            "execution_state": "executable"
+            if trigger_kind in {"post_application", "hydrique"}
+            else "waiting"
+            if trigger_kind == "waiting"
+            else "blocked"
+            if trigger_kind in {"blocked", "blocked_due_to_conditions"}
+            else "none",
+            "action_executable": trigger_kind in {"post_application", "hydrique"} and not waiting_post_application,
             "reason_kind": reason_kind,
-            "action_label": _irrigation_action_label(self, reason_kind),
+            "support_phase": _phase_support_phase(self),
+            "action_label": action_label,
             "summary": summary_map[trigger_kind],
         }
         return {key: value for key, value in attrs.items() if value not in (None, "", [], {})}
@@ -408,7 +647,7 @@ class GazonSignalInterventionBinarySensor(GazonEntityBase, BinarySensorEntity):
             "unavailable": "Non disponible",
         }.get(status, "Non disponible")
         attrs = {
-            "source_entity": f"sensor.{DOMAIN}_prochaine_intervention",
+            "source_entity": public_entity_id("sensor", "prochaine_intervention", instance_slug=self.instance_slug),
             "source_status": status,
             "recommended_action": payload.get("recommended_action"),
             "product_id": product.get("id"),

@@ -3,6 +3,30 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable
 
+"""Canonical watering-plan model.
+
+Contract:
+- ``objective_mm`` is the requested target depth on the lawn surface, applied
+  uniformly across the full irrigated surface.
+- ``zones[].mm`` is the effective depth delivered by each zone for that same
+  surface target after duration rounding, not a per-zone target or a per-passage
+  target.
+- ``zones_total_mm`` is only a diagnostic sum of the zone outputs and must not
+  be interpreted as the lawn objective.
+- ``plan_type`` only describes zone topology (single or multiple zones).
+- ``objective_mm`` and ``duration_seconds`` are canonical keys; French aliases
+  are kept for backward compatibility in serialized dictionaries.
+- ``normalize_existing_plan`` is intentionally best-effort when reading an
+  already-persisted plan that may be partially incomplete.
+"""
+
+PLAN_SOURCE_CALCULATED = "calculated_from_objective"
+PLAN_SOURCE_NORMALIZED = "normalized_existing_plan"
+
+_MIN_ZONE_DURATION_MIN = 0.5
+_MAX_ZONE_DURATION_MIN = 180.0
+_DURATION_ROUNDING_STEP_MIN = 0.5
+
 
 @dataclass(frozen=True)
 class ZonePlan:
@@ -38,43 +62,96 @@ class WateringPlan:
     passage_count: int
     pause_between_passages_s: int
     zones: tuple[ZonePlan, ...]
-    source: str = "calculated_from_objective"
+    source: str = PLAN_SOURCE_CALCULATED
+    watering_strategy: str | None = None
+    objective_scope: str | None = None
+    watering_stage: str | None = None
+    surface_cycle_mm: float | None = None
+    daily_cycles_target: int | None = None
+    cycle_spacing_minutes: int | None = None
+    surface_moisture_target: str | None = None
+    surface_dryness_risk: str | None = None
+    runoff_risk: str | None = None
+    seeding_transition_ready: bool | None = None
+    seeding_block_reason: str | None = None
 
     @property
-    def per_passage_duration_s(self) -> int:
+    def watering_duration_s(self) -> int:
         return sum(zone.duration_s for zone in self.zones)
 
     @property
-    def total_duration_s(self) -> int:
+    def per_passage_duration_s(self) -> int:
         if self.passage_count <= 1:
-            return self.per_passage_duration_s
-        return (
-            self.per_passage_duration_s * self.passage_count
-            + self.pause_between_passages_s * (self.passage_count - 1)
-        )
+            return self.watering_duration_s
+        return sum(self.zone_for_passage(index, 1).duration_s for index in range(len(self.zones)))
+
+    @property
+    def total_duration_s(self) -> int:
+        total = self.watering_duration_s
+        if self.passage_count > 1:
+            total += self.pause_between_passages_s * (self.passage_count - 1)
+        return total
 
     @property
     def total_duration_min(self) -> float:
-        return round(self.per_passage_duration_s / 60.0, 1)
+        return round(self.watering_duration_s / 60.0, 1)
+
+    def zone_for_passage(self, zone_index: int, passage: int) -> ZonePlan:
+        zone = self.zones[zone_index]
+        if self.passage_count <= 1:
+            return zone
+        safe_passage = min(max(1, int(passage)), self.passage_count)
+        base_duration_s = zone.duration_s // self.passage_count
+        remainder_s = zone.duration_s % self.passage_count
+        duration_s = base_duration_s + (1 if safe_passage <= remainder_s else 0)
+        total_tenths = int(round(zone.mm * 10.0))
+        base_tenths = total_tenths // self.passage_count
+        remainder_tenths = total_tenths % self.passage_count
+        mm = (base_tenths + (1 if safe_passage <= remainder_tenths else 0)) / 10.0
+        return ZonePlan(
+            zone=zone.zone,
+            rate_mm_h=zone.rate_mm_h,
+            duration_s=duration_s,
+            mm=mm,
+        )
 
     def as_dict(self) -> dict[str, Any]:
         zone_count = len(self.zones)
+        zones_total_mm = round(sum(zone.mm for zone in self.zones), 1)
         return {
             "objective_mm": round(self.objective_mm, 1),
             "objectif_mm": round(self.objective_mm, 1),
+            "mm_scope": "global_surface",
+            "mm_interpretation": "surface_uniform",
+            "surface_mm": round(self.objective_mm, 1),
+            "surface_cycle_mm": round(self.surface_cycle_mm, 1)
+            if self.surface_cycle_mm is not None
+            else None,
+            "zones_total_mm": zones_total_mm,
             "zones": [zone.as_dict() for zone in self.zones],
             "zone_count": zone_count,
             "total_duration_min": self.total_duration_min,
-            "duration_human": _duration_human(self.per_passage_duration_s),
+            "duration_human": _duration_human(self.watering_duration_s),
             "fractionation": self.passage_count > 1,
             "passages": self.passage_count,
             "pause_between_passages_minutes": int(round(self.pause_between_passages_s / 60.0)),
             "pause_between_passages_s": self.pause_between_passages_s,
             "source": self.source,
             "plan_type": self.plan_type,
+            "watering_strategy": self.watering_strategy,
+            "objective_scope": self.objective_scope,
+            "watering_stage": self.watering_stage,
+            "daily_cycles_target": self.daily_cycles_target,
+            "cycle_spacing_minutes": self.cycle_spacing_minutes,
+            "surface_moisture_target": self.surface_moisture_target,
+            "surface_dryness_risk": self.surface_dryness_risk,
+            "runoff_risk": self.runoff_risk,
+            "seeding_transition_ready": self.seeding_transition_ready,
+            "seeding_block_reason": self.seeding_block_reason,
             "summary": (
                 f"{zone_count} zone{'s' if zone_count != 1 else ''} • "
-                f"{round(self.objective_mm, 1):.1f} mm • {_duration_human(self.per_passage_duration_s)}"
+                f"{round(self.objective_mm, 1):.1f} mm sur la surface • "
+                f"{_duration_human(self.watering_duration_s)}"
             ),
         }
 
@@ -84,6 +161,19 @@ class WateringPlan:
             "passages": self.passage_count,
             "pause_between_passages_s": int(self.pause_between_passages_s),
             "zones": [zone.as_runtime_dict() for zone in self.zones],
+            "watering_strategy": self.watering_strategy,
+            "objective_scope": self.objective_scope,
+            "watering_stage": self.watering_stage,
+            "surface_cycle_mm": round(self.surface_cycle_mm, 1)
+            if self.surface_cycle_mm is not None
+            else None,
+            "daily_cycles_target": self.daily_cycles_target,
+            "cycle_spacing_minutes": self.cycle_spacing_minutes,
+            "surface_moisture_target": self.surface_moisture_target,
+            "surface_dryness_risk": self.surface_dryness_risk,
+            "runoff_risk": self.runoff_risk,
+            "seeding_transition_ready": self.seeding_transition_ready,
+            "seeding_block_reason": self.seeding_block_reason,
         }
 
 
@@ -145,7 +235,18 @@ def build_watering_plan(
     *,
     passages: int = 1,
     pause_minutes: int = 0,
-    source: str = "calculated_from_objective",
+    source: str = PLAN_SOURCE_CALCULATED,
+    watering_strategy: str | None = None,
+    objective_scope: str | None = None,
+    watering_stage: str | None = None,
+    surface_cycle_mm: float | None = None,
+    daily_cycles_target: int | None = None,
+    cycle_spacing_minutes: int | None = None,
+    surface_moisture_target: str | None = None,
+    surface_dryness_risk: str | None = None,
+    runoff_risk: str | None = None,
+    seeding_transition_ready: bool | None = None,
+    seeding_block_reason: str | None = None,
 ) -> WateringPlan | None:
     try:
         objective = float(objective_mm)
@@ -165,8 +266,11 @@ def build_watering_plan(
         duration_minutes = (objective / rate) * 60.0
         if duration_minutes <= 0:
             continue
-        rounded_duration_minutes = max(0.5, round(duration_minutes * 2.0) / 2.0)
-        rounded_duration_minutes = min(rounded_duration_minutes, 180.0)
+        rounded_duration_minutes = max(
+            _MIN_ZONE_DURATION_MIN,
+            round(duration_minutes / _DURATION_ROUNDING_STEP_MIN) * _DURATION_ROUNDING_STEP_MIN,
+        )
+        rounded_duration_minutes = min(rounded_duration_minutes, _MAX_ZONE_DURATION_MIN)
         duration_seconds = int(round(rounded_duration_minutes * 60.0))
         if duration_seconds <= 0:
             continue
@@ -192,6 +296,17 @@ def build_watering_plan(
         pause_between_passages_s=pause_between_passages_s,
         zones=tuple(normalized_zones),
         source=source,
+        watering_strategy=watering_strategy,
+        objective_scope=objective_scope,
+        watering_stage=watering_stage,
+        surface_cycle_mm=surface_cycle_mm,
+        daily_cycles_target=daily_cycles_target,
+        cycle_spacing_minutes=cycle_spacing_minutes,
+        surface_moisture_target=surface_moisture_target,
+        surface_dryness_risk=surface_dryness_risk,
+        runoff_risk=runoff_risk,
+        seeding_transition_ready=seeding_transition_ready,
+        seeding_block_reason=seeding_block_reason,
     )
 
 
@@ -213,6 +328,9 @@ def normalize_existing_plan(plan_state_attrs: dict[str, Any] | None) -> Watering
     except (TypeError, ValueError):
         objective_mm = 0.0
     if objective_mm <= 0:
+        # Best-effort reconstruction: all zones are expected to target the same
+        # water depth, so we keep the highest effective zone depth as a
+        # conservative proxy when the original objective is missing.
         objective_mm = round(max(zone.mm for zone in normalized_zones), 1)
     try:
         passage_count = max(1, int(plan_state_attrs.get("passages", 1)))
@@ -231,8 +349,25 @@ def normalize_existing_plan(plan_state_attrs: dict[str, Any] | None) -> Watering
             ) * 60
         except (TypeError, ValueError):
             pause_between_passages_s = 0
-    source = str(plan_state_attrs.get("source") or "normalized_existing_plan")
+    source = str(plan_state_attrs.get("source") or PLAN_SOURCE_NORMALIZED)
     plan_type = str(plan_state_attrs.get("plan_type") or ("multi_zone" if len(normalized_zones) > 1 else "single_zone"))
+    try:
+        surface_cycle_mm = plan_state_attrs.get("surface_cycle_mm")
+        if surface_cycle_mm is None and plan_state_attrs.get("objective_scope") == "surface_cycle":
+            surface_cycle_mm = objective_mm
+        surface_cycle_mm = float(surface_cycle_mm) if surface_cycle_mm is not None else None
+    except (TypeError, ValueError):
+        surface_cycle_mm = None
+    try:
+        daily_cycles_target = plan_state_attrs.get("daily_cycles_target")
+        daily_cycles_target = int(daily_cycles_target) if daily_cycles_target is not None else None
+    except (TypeError, ValueError):
+        daily_cycles_target = None
+    try:
+        cycle_spacing_minutes = plan_state_attrs.get("cycle_spacing_minutes")
+        cycle_spacing_minutes = int(cycle_spacing_minutes) if cycle_spacing_minutes is not None else None
+    except (TypeError, ValueError):
+        cycle_spacing_minutes = None
     return WateringPlan(
         objective_mm=objective_mm,
         plan_type=plan_type,
@@ -240,4 +375,15 @@ def normalize_existing_plan(plan_state_attrs: dict[str, Any] | None) -> Watering
         pause_between_passages_s=pause_between_passages_s,
         zones=normalized_zones,
         source=source,
+        watering_strategy=plan_state_attrs.get("watering_strategy"),
+        objective_scope=plan_state_attrs.get("objective_scope"),
+        watering_stage=plan_state_attrs.get("watering_stage"),
+        surface_cycle_mm=surface_cycle_mm,
+        daily_cycles_target=daily_cycles_target,
+        cycle_spacing_minutes=cycle_spacing_minutes,
+        surface_moisture_target=plan_state_attrs.get("surface_moisture_target"),
+        surface_dryness_risk=plan_state_attrs.get("surface_dryness_risk"),
+        runoff_risk=plan_state_attrs.get("runoff_risk"),
+        seeding_transition_ready=plan_state_attrs.get("seeding_transition_ready"),
+        seeding_block_reason=plan_state_attrs.get("seeding_block_reason"),
     )

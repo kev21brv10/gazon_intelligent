@@ -8,7 +8,17 @@ from typing import Any
 
 from homeassistant.util import dt as dt_util
 
-from .const import DEFAULT_TYPE_SOL
+from .const import (
+    DEFAULT_TYPE_SOL,
+    OBJECTIVE_SCOPE_GLOBAL_SURFACE,
+    OBJECTIVE_SCOPE_SURFACE_CYCLE,
+    WATERING_STAGE_ENRACINEMENT,
+    WATERING_STAGE_GERMINATION,
+    WATERING_STAGE_LEVEE,
+    WATERING_STAGE_NORMAL,
+    WATERING_STRATEGY_ADULT_DEEP,
+    WATERING_STRATEGY_SEMIS_FREQUENT,
+)
 from .phases import PHASE_DURATIONS_DAYS, SUBPHASE_RULES
 
 POSSIBLE_PHASE_DOMINANTE_VALUES: tuple[str, ...] = tuple(PHASE_DURATIONS_DAYS.keys())
@@ -47,7 +57,22 @@ POSSIBLE_TYPE_ARROSAGE_VALUES: tuple[str, ...] = (
     "manuel_frequent",
     "fractionne",
     "application_technique",
+    "application_technique_auto",
     "auto",
+)
+POSSIBLE_WATERING_STRATEGY_VALUES: tuple[str, ...] = (
+    WATERING_STRATEGY_ADULT_DEEP,
+    WATERING_STRATEGY_SEMIS_FREQUENT,
+)
+POSSIBLE_OBJECTIVE_SCOPE_VALUES: tuple[str, ...] = (
+    OBJECTIVE_SCOPE_GLOBAL_SURFACE,
+    OBJECTIVE_SCOPE_SURFACE_CYCLE,
+)
+POSSIBLE_WATERING_STAGE_VALUES: tuple[str, ...] = (
+    WATERING_STAGE_NORMAL,
+    WATERING_STAGE_GERMINATION,
+    WATERING_STAGE_LEVEE,
+    WATERING_STAGE_ENRACINEMENT,
 )
 
 TYPE_ARROSAGE_DISPLAY_LABELS: dict[str, str] = {
@@ -57,8 +82,60 @@ TYPE_ARROSAGE_DISPLAY_LABELS: dict[str, str] = {
     "manuel_frequent": "Arrosage manuel fréquent",
     "fractionne": "Arrosage fractionné",
     "application_technique": "Arrosage technique",
+    "application_technique_auto": "Arrosage post-produit auto",
     "auto": "Arrosage automatique",
 }
+
+_POSSIBLE_VALUES_BY_KEY: dict[str, tuple[str, ...]] = {
+    "phase_dominante": POSSIBLE_PHASE_DOMINANTE_VALUES,
+    "sous_phase": POSSIBLE_SOUS_PHASE_VALUES,
+    "niveau_action": POSSIBLE_NIVEAU_ACTION_VALUES,
+    "tonte_statut": POSSIBLE_TONTE_STATUT_VALUES,
+    "fenetre_optimale": POSSIBLE_FENETRE_OPTIMALE_VALUES,
+    "type_arrosage": POSSIBLE_TYPE_ARROSAGE_VALUES,
+    "watering_strategy": POSSIBLE_WATERING_STRATEGY_VALUES,
+    "objective_scope": POSSIBLE_OBJECTIVE_SCOPE_VALUES,
+    "watering_stage": POSSIBLE_WATERING_STAGE_VALUES,
+}
+
+_DECISION_RESULT_DEFAULTS: dict[str, str] = {
+    "phase_dominante": "Normal",
+    "sous_phase": "Normal",
+    "niveau_action": "a_faire",
+    "tonte_statut": "a_surveiller",
+    "fenetre_optimale": "attendre",
+    "type_arrosage": "personnalise",
+    "watering_strategy": WATERING_STRATEGY_ADULT_DEEP,
+    "objective_scope": OBJECTIVE_SCOPE_GLOBAL_SURFACE,
+    "watering_stage": WATERING_STAGE_NORMAL,
+}
+
+
+def _normalize_choice(value: Any, allowed: tuple[str, ...], fallback: str) -> str:
+    text = str(value or "").strip()
+    if text in allowed:
+        return text
+    return fallback
+
+
+def normalize_watering_contract(
+    type_arrosage: Any,
+    arrosage_conseille: Any,
+) -> tuple[str, str]:
+    """Retourne un contrat d'arrosage canonique et non contradictoire.
+
+    Le type d'arrosage fait foi pour la façade publique; le conseil suit la
+    même branche métier pour éviter les histoires divergentes entre vues.
+    """
+    normalized_type = _normalize_choice(
+        type_arrosage,
+        POSSIBLE_TYPE_ARROSAGE_VALUES,
+        _DECISION_RESULT_DEFAULTS["type_arrosage"],
+    )
+    normalized_conseille = normalized_type
+    if normalized_conseille not in POSSIBLE_TYPE_ARROSAGE_VALUES:
+        normalized_conseille = normalized_type
+    return normalized_type, normalized_conseille
 
 
 @dataclass
@@ -95,6 +172,9 @@ class DecisionContext:
     config: dict[str, Any] = field(default_factory=dict)
     weather_today: dict[str, Any] = field(default_factory=dict)
     weather_tomorrow: dict[str, Any] = field(default_factory=dict)
+    sun_context: dict[str, Any] = field(default_factory=dict)
+    mower_context: dict[str, Any] = field(default_factory=dict)
+    runtime_context: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_legacy_args(
@@ -126,9 +206,23 @@ class DecisionContext:
         weather_profile: dict[str, Any] | None = None,
         soil_balance: dict[str, Any] | None = None,
         memory: dict[str, Any] | None = None,
+        sun_context: dict[str, Any] | None = None,
+        mower_context: dict[str, Any] | None = None,
+        runtime_context: dict[str, Any] | None = None,
     ) -> "DecisionContext":
         today = today or dt_util.now().date()
         weather_profile = weather_profile or {}
+        weather_today = {
+            "date": today.isoformat(),
+            "temperature": temperature,
+            "pluie_24h": pluie_24h,
+            "humidite": humidite,
+            "etp_capteur": etp_capteur,
+        }
+        weather_tomorrow = {
+            "date": (today + timedelta(days=1)).isoformat(),
+            "pluie_demain": pluie_demain,
+        }
         return cls(
             history=[item for item in history if isinstance(item, dict)],
             today=today,
@@ -158,18 +252,12 @@ class DecisionContext:
             soil_balance=soil_balance,
             memory=memory,
             config={"type_sol": type_sol},
-            weather_today={
-            "date": today.isoformat(),
-            "temperature": temperature,
-            "pluie_24h": pluie_24h,
-            "humidite": humidite,
-            "etp_capteur": etp_capteur,
-        },
-        weather_tomorrow={
-            "date": (today + timedelta(days=1)).isoformat(),
-            "pluie_demain": pluie_demain,
-        },
-    )
+            weather_today=weather_today,
+            weather_tomorrow=weather_tomorrow,
+            sun_context=sun_context or {},
+            mower_context=mower_context or {},
+            runtime_context=runtime_context or {},
+        )
 
 
 @dataclass
@@ -192,10 +280,24 @@ class DecisionResult:
     tonte_statut: str = "a_surveiller"
     arrosage_recommande: bool = False
     arrosage_auto_autorise: bool = False
+    watering_cause: str = "hydrique"
     type_arrosage: str = "personnalise"
     arrosage_conseille: str = "personnalise"
     watering_passages: int = 1
     watering_pause_minutes: int = 25
+    watering_strategy: str = WATERING_STRATEGY_ADULT_DEEP
+    objective_scope: str = OBJECTIVE_SCOPE_GLOBAL_SURFACE
+    watering_stage: str = WATERING_STAGE_NORMAL
+    surface_cycle_mm: float | None = None
+    daily_cycles_target: int | None = None
+    cycle_spacing_minutes: int | None = None
+    surface_moisture_target: str | None = None
+    surface_dryness_risk: str | None = None
+    runoff_risk: str | None = None
+    surface_saturation_level: float | None = None
+    surface_saturation_limit: float | None = None
+    seeding_transition_ready: bool | None = None
+    seeding_block_reason: str | None = None
     deficit_brut_mm: float | None = None
     deficit_mm_ajuste: float | None = None
     mm_cible: float | None = None
@@ -219,6 +321,54 @@ class DecisionResult:
     water_balance: dict[str, Any] | None = None
     phase_context: dict[str, Any] | None = None
     extra: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.phase_dominante = _normalize_choice(
+            self.phase_dominante,
+            POSSIBLE_PHASE_DOMINANTE_VALUES,
+            _DECISION_RESULT_DEFAULTS["phase_dominante"],
+        )
+        self.sous_phase = _normalize_choice(
+            self.sous_phase,
+            POSSIBLE_SOUS_PHASE_VALUES,
+            _DECISION_RESULT_DEFAULTS["sous_phase"],
+        )
+        self.niveau_action = _normalize_choice(
+            self.niveau_action,
+            POSSIBLE_NIVEAU_ACTION_VALUES,
+            _DECISION_RESULT_DEFAULTS["niveau_action"],
+        )
+        self.tonte_statut = _normalize_choice(
+            self.tonte_statut,
+            POSSIBLE_TONTE_STATUT_VALUES,
+            _DECISION_RESULT_DEFAULTS["tonte_statut"],
+        )
+        self.fenetre_optimale = _normalize_choice(
+            self.fenetre_optimale,
+            POSSIBLE_FENETRE_OPTIMALE_VALUES,
+            _DECISION_RESULT_DEFAULTS["fenetre_optimale"],
+        )
+        self.type_arrosage, self.arrosage_conseille = normalize_watering_contract(
+            self.type_arrosage,
+            self.arrosage_conseille,
+        )
+        self.watering_strategy = _normalize_choice(
+            self.watering_strategy,
+            POSSIBLE_WATERING_STRATEGY_VALUES,
+            _DECISION_RESULT_DEFAULTS["watering_strategy"],
+        )
+        self.objective_scope = _normalize_choice(
+            self.objective_scope,
+            POSSIBLE_OBJECTIVE_SCOPE_VALUES,
+            _DECISION_RESULT_DEFAULTS["objective_scope"],
+        )
+        self.watering_stage = _normalize_choice(
+            self.watering_stage,
+            POSSIBLE_WATERING_STAGE_VALUES,
+            _DECISION_RESULT_DEFAULTS["watering_stage"],
+        )
+        if not isinstance(self.extra, dict):
+            self.extra = {}
 
     @property
     def mode(self) -> str:
@@ -247,14 +397,7 @@ class DecisionResult:
     @property
     def possible_values(self) -> dict[str, tuple[str, ...]]:
         """Liste des valeurs possibles exposées à l'UI pour l'aide utilisateur."""
-        return {
-            "phase_dominante": POSSIBLE_PHASE_DOMINANTE_VALUES,
-            "sous_phase": POSSIBLE_SOUS_PHASE_VALUES,
-            "niveau_action": POSSIBLE_NIVEAU_ACTION_VALUES,
-            "tonte_statut": POSSIBLE_TONTE_STATUT_VALUES,
-            "fenetre_optimale": POSSIBLE_FENETRE_OPTIMALE_VALUES,
-            "type_arrosage": POSSIBLE_TYPE_ARROSAGE_VALUES,
-        }
+        return _POSSIBLE_VALUES_BY_KEY
 
     def possible_values_for(self, key: str) -> tuple[str, ...] | None:
         """Retourne les valeurs possibles pour un attribut métier donné."""
@@ -267,7 +410,7 @@ class DecisionResult:
             extra = getattr(self, "extra", None)
             if isinstance(extra, dict):
                 value = extra.get(key)
-        if key == "type_arrosage" and value is not None:
+        if key in {"type_arrosage", "arrosage_conseille"} and value is not None:
             return TYPE_ARROSAGE_DISPLAY_LABELS.get(str(value), str(value))
         if value is None:
             return ""
@@ -275,7 +418,7 @@ class DecisionResult:
 
     def possible_display_values_for(self, key: str) -> tuple[str, ...] | None:
         """Retourne les valeurs possibles sous forme lisible par l'utilisateur."""
-        if key == "type_arrosage":
+        if key in {"type_arrosage", "arrosage_conseille"}:
             return tuple(TYPE_ARROSAGE_DISPLAY_LABELS.get(value, value) for value in POSSIBLE_TYPE_ARROSAGE_VALUES)
         return self.possible_values_for(key)
 
@@ -292,6 +435,19 @@ class DecisionResult:
             "sous_phase_progression": self.sous_phase_progression,
             "objectif_mm": self.objectif_arrosage,
             "objectif_arrosage": self.objectif_arrosage,
+            "watering_strategy": self.watering_strategy,
+            "objective_scope": self.objective_scope,
+            "watering_stage": self.watering_stage,
+            "surface_cycle_mm": self.surface_cycle_mm,
+            "daily_cycles_target": self.daily_cycles_target,
+            "cycle_spacing_minutes": self.cycle_spacing_minutes,
+            "surface_moisture_target": self.surface_moisture_target,
+            "surface_dryness_risk": self.surface_dryness_risk,
+            "runoff_risk": self.runoff_risk,
+            "surface_saturation_level": self.surface_saturation_level,
+            "surface_saturation_limit": self.surface_saturation_limit,
+            "seeding_transition_ready": self.seeding_transition_ready,
+            "seeding_block_reason": self.seeding_block_reason,
             "tonte_autorisee": self.tonte_autorisee,
             "hauteur_tonte_recommandee_cm": self.hauteur_tonte_recommandee_cm,
             "hauteur_tonte_min_cm": self.hauteur_tonte_min_cm,
@@ -299,6 +455,7 @@ class DecisionResult:
             "tonte_statut": self.tonte_statut,
             "arrosage_recommande": self.arrosage_recommande,
             "arrosage_auto_autorise": self.arrosage_auto_autorise,
+            "watering_cause": self.watering_cause,
             "type_arrosage": self.type_arrosage,
             "arrosage_conseille": self.arrosage_conseille,
             "watering_passages": self.watering_passages,
@@ -333,5 +490,9 @@ class DecisionResult:
             payload.setdefault("date_fin", self.phase_context.get("date_fin"))
             payload.setdefault("phase_age_days", self.phase_context.get("phase_age_days"))
             payload.setdefault("jours_restants", self.phase_context.get("jours_restants"))
-        payload.update(self.extra)
+        protected_keys = set(payload)
+        for key, value in self.extra.items():
+            if key in protected_keys:
+                continue
+            payload[key] = value
         return {key: value for key, value in payload.items() if value is not None}

@@ -48,6 +48,7 @@ def iter_obsolete_entity_ids(
 def iter_entity_id_updates(
     entities: Iterable[Any],
     entry_id: str,
+    instance_slug: str | None = None,
 ) -> list[tuple[str, str, str]]:
     updates: list[tuple[str, str, str]] = []
     for entity in entities:
@@ -63,7 +64,7 @@ def iter_entity_id_updates(
             continue
         if not isinstance(unique_id, str) or not unique_id:
             continue
-        desired_entity_id = public_entity_id(public_entity_domain(suffix), suffix)
+        desired_entity_id = public_entity_id(public_entity_domain(suffix), suffix, instance_slug=instance_slug)
         if current_entity_id == desired_entity_id:
             continue
         updates.append((current_entity_id, desired_entity_id, unique_id))
@@ -90,6 +91,7 @@ async def async_cleanup_obsolete_entities(
 async def async_align_entity_ids(
     hass: "HomeAssistant | None",
     entry_id: str,
+    instance_slug: str | None = None,
     entity_registry: Any | None = None,
 ) -> list[tuple[str, str]]:
     if entity_registry is None:
@@ -99,7 +101,11 @@ async def async_align_entity_ids(
     else:
         registry = entity_registry
     applied_updates: list[tuple[str, str]] = []
-    for current_entity_id, desired_entity_id, unique_id in iter_entity_id_updates(registry.entities.values(), entry_id):
+    for current_entity_id, desired_entity_id, unique_id in iter_entity_id_updates(
+        registry.entities.values(),
+        entry_id,
+        instance_slug=instance_slug,
+    ):
         existing = registry.entities.get(desired_entity_id)
         if existing is not None and getattr(existing, "unique_id", None) != unique_id:
             continue

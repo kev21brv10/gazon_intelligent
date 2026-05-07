@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.7.0
+- Refonte majeure du moteur tonte / arrosage et de la façade publique de l’intégration.
+- Clarifie la hiérarchie entre phase, météo, humidité, machine et action réellement possible.
+- Renforce le support multi-pelouse avec `instance_slug`, une meilleure isolation par gazon et des entités publiques plus stables.
+- Ajoute une couche de coordination tondeuse structurée avec états machine normalisés et meilleure distinction entre gazon, machine et exécution.
+- Revoit les projections publiques `prochain_arrosage`, `prochaine_tonte`, `assistant` et les capteurs de synthèse pour Home Assistant.
+- Rend les libellés publics plus compréhensibles pour la pluie, les attentes météo, les blocages post-produit et les phases sensibles comme `Sursemis`.
+- Étend les traductions, les services, la documentation et la couverture de tests pour accompagner la refonte.
+
+## 0.6.1
+- Corrections de publication sans changement du moteur métier.
+- Correction du workflow Hassfest.
+- Correction d’erreurs mypy dans la couche de structure.
+- Aucun changement de logique runtime publique.
+
 ## 0.5.0
 - Stabilise les `entity_id` publics de l'intégration et ajoute une migration pour réaligner le registre Home Assistant.
 - Renforce fortement le moteur d'irrigation, la structuration des plans d'arrosage et le suivi runtime des sessions et des zones.

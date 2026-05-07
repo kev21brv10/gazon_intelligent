@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 import importlib
 from pathlib import Path
 import sys
 import types
+from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 
 
@@ -26,7 +28,20 @@ def _ensure_package(name: str, path: Path) -> None:
 _ensure_package("custom_components", PACKAGE_DIR.parent)
 _ensure_package("custom_components.gazon_intelligent", PACKAGE_DIR)
 
+homeassistant = types.ModuleType("homeassistant")
+homeassistant.__path__ = []  # type: ignore[attr-defined]
+sys.modules["homeassistant"] = homeassistant
+util = types.ModuleType("homeassistant.util")
+util.__path__ = []  # type: ignore[attr-defined]
+sys.modules["homeassistant.util"] = util
+dt_module = types.ModuleType("homeassistant.util.dt")
+dt_module.now = lambda: datetime(2026, 4, 17, 12, 0, tzinfo=ZoneInfo("Europe/Paris"))  # type: ignore[attr-defined]
+dt_module.utcnow = lambda: dt_module.now().astimezone(timezone.utc)  # type: ignore[attr-defined]
+sys.modules["homeassistant.util.dt"] = dt_module
+util.dt = dt_module  # type: ignore[attr-defined]
+
 weather_sources = importlib.import_module("custom_components.gazon_intelligent.weather_sources")
+weather_sources = importlib.reload(weather_sources)
 
 
 class WeatherSourcesTests(unittest.TestCase):
@@ -90,7 +105,7 @@ class WeatherSourcesTests(unittest.TestCase):
         self.assertEqual(profile["weather_condition"], "sunny")
 
     def test_extract_weather_forecast_summary_collects_day_values(self) -> None:
-        today = date.today()
+        today = date(2026, 4, 17)
         forecasts = [
             {
                 "datetime": (today + timedelta(days=2)).isoformat(),
@@ -114,7 +129,12 @@ class WeatherSourcesTests(unittest.TestCase):
             },
         ]
 
-        summary = weather_sources.extract_weather_forecast_summary(forecasts)
+        with patch.object(
+            weather_sources.dt_util,
+            "now",
+            return_value=datetime(2026, 4, 17, 12, 0, tzinfo=ZoneInfo("Europe/Paris")),
+        ):
+            summary = weather_sources.extract_weather_forecast_summary(forecasts)
 
         self.assertEqual(summary["forecast_temperature_today"], 19.4)
         self.assertEqual(summary["forecast_pluie_24h"], 0.8)

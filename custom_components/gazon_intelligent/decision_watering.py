@@ -11,8 +11,16 @@ from .const import (
     APPLICATION_TYPE_FOLIAIRE,
     APPLICATION_TYPE_SOL,
     DEFAULT_AUTO_IRRIGATION_ENABLED,
+    OBJECTIVE_SCOPE_GLOBAL_SURFACE,
+    OBJECTIVE_SCOPE_SURFACE_CYCLE,
+    WATERING_STAGE_ENRACINEMENT,
+    WATERING_STAGE_GERMINATION,
+    WATERING_STAGE_LEVEE,
+    WATERING_STAGE_NORMAL,
+    WATERING_STRATEGY_ADULT_DEEP,
+    WATERING_STRATEGY_SEMIS_FREQUENT,
 )
-from .decision_models import DecisionContext
+from .decision_models import DecisionContext, normalize_watering_contract
 from .guidance import (
     _confidence_assessment,
     _reference_hydric_balance_mm,
@@ -25,6 +33,16 @@ from .water import compute_advanced_context, compute_etp, compute_water_balance
 
 _LOGGER = logging.getLogger(__name__)
 USE_DEPLETION_LOGIC = False
+
+_MOWER_WATERING_BLOCK_LABELS = {
+    "mower_mowing": "Arrosage bloqué: tondeuse en cours de tonte.",
+    "mower_returning": "Arrosage bloqué: tondeuse en retour vers sa station.",
+    "mower_not_stowed": "Arrosage bloqué: tondeuse non rangée.",
+    "mower_unreliable": "Arrosage bloqué: coordination tondeuse indisponible.",
+    "ambiguous": "Tondeuse ambiguë: plusieurs robots détectés, configuration requise.",
+    "missing": "Tondeuse absente: aucune tondeuse détectée.",
+    "configured_missing": "Tondeuse configurée introuvable.",
+}
 
 
 def compute_kc_gazon(phase_dominante: str, sous_phase: str | None = None) -> float:
@@ -49,6 +67,7 @@ def build_water_bundle(
     context: DecisionContext,
     phase_bundle: dict[str, Any],
 ) -> dict[str, Any]:
+    application_state = compute_application_state(context.history)
     advanced_context = compute_advanced_context(
         humidite_sol=context.humidite_sol,
         vent=context.vent,
@@ -117,7 +136,25 @@ def build_water_bundle(
         pluie_j2=context.pluie_j2,
         pluie_3j=context.pluie_3j,
         pluie_probabilite_max_3j=context.pluie_probabilite_max_3j,
+        application_type=application_state.get("application_type"),
     )
+    hydric_observability = {
+        "weekly_guardrail_mm_min": watering_profile.get("weekly_guardrail_mm_min"),
+        "weekly_guardrail_mm_max": watering_profile.get("weekly_guardrail_mm_max"),
+        "weekly_guardrail_reason": watering_profile.get("weekly_guardrail_reason"),
+        "season_label": watering_profile.get("season_label"),
+        "season_phase": watering_profile.get("season_phase"),
+        "month_profile": watering_profile.get("month_profile"),
+        "watering_bias": watering_profile.get("watering_bias"),
+        "mowing_bias": watering_profile.get("mowing_bias"),
+        "intervention_bias": watering_profile.get("intervention_bias"),
+        "risk_bias": watering_profile.get("risk_bias"),
+        "soil_profile": watering_profile.get("soil_profile"),
+        "soil_retention_factor": watering_profile.get("soil_retention_factor"),
+        "soil_drainage_factor": watering_profile.get("soil_drainage_factor"),
+        "soil_infiltration_factor": watering_profile.get("soil_infiltration_factor"),
+        "soil_need_factor": watering_profile.get("soil_need_factor"),
+    }
     return {
         "etp": etp,
         "et0_mm": round(max(0.0, et0_mm), 1),
@@ -128,6 +165,7 @@ def build_water_bundle(
         "mm_cible_depletion": mm_cible_depletion,
         "objective_from_depletion_mm": mm_cible_depletion,
         "advanced_context": advanced_context,
+        "application_state": application_state,
         "water_balance": balance_snapshot,
         "objectif_mm": watering_profile["mm_final_recommande"],
         "objectif_mm_brut": watering_profile["deficit_brut_mm"],
@@ -158,6 +196,13 @@ def build_water_bundle(
         "weekly_guardrail_mm_min": watering_profile.get("weekly_guardrail_mm_min"),
         "weekly_guardrail_mm_max": watering_profile.get("weekly_guardrail_mm_max"),
         "weekly_guardrail_reason": watering_profile.get("weekly_guardrail_reason"),
+        "season_label": watering_profile.get("season_label"),
+        "season_phase": watering_profile.get("season_phase"),
+        "month_profile": watering_profile.get("month_profile"),
+        "watering_bias": watering_profile.get("watering_bias"),
+        "mowing_bias": watering_profile.get("mowing_bias"),
+        "intervention_bias": watering_profile.get("intervention_bias"),
+        "risk_bias": watering_profile.get("risk_bias"),
         "cooldown_24h_hours": watering_profile.get("cooldown_24h_hours"),
         "pluie_probabilite_24h": watering_profile.get("pluie_probabilite_24h"),
         "mm_detected_24h": watering_profile.get("mm_detected_24h"),
@@ -169,11 +214,19 @@ def build_water_bundle(
         "sursemis_policy": watering_profile.get("sursemis_policy"),
         "sursemis_transition_ready": watering_profile.get("sursemis_transition_ready"),
         "sursemis_tonte_count": watering_profile.get("sursemis_tonte_count"),
-        "soil_profile": watering_profile.get("soil_profile"),
-        "soil_retention_factor": watering_profile.get("soil_retention_factor"),
-        "soil_drainage_factor": watering_profile.get("soil_drainage_factor"),
-        "soil_infiltration_factor": watering_profile.get("soil_infiltration_factor"),
-        "soil_need_factor": watering_profile.get("soil_need_factor"),
+        "watering_strategy": watering_profile.get("watering_strategy") or WATERING_STRATEGY_ADULT_DEEP,
+        "objective_scope": watering_profile.get("objective_scope") or OBJECTIVE_SCOPE_GLOBAL_SURFACE,
+        "watering_stage": watering_profile.get("watering_stage") or WATERING_STAGE_NORMAL,
+        "surface_cycle_mm": watering_profile.get("surface_cycle_mm"),
+        "daily_cycles_target": watering_profile.get("daily_cycles_target"),
+        "cycle_spacing_minutes": watering_profile.get("cycle_spacing_minutes"),
+        "surface_moisture_target": watering_profile.get("surface_moisture_target"),
+        "surface_dryness_risk": watering_profile.get("surface_dryness_risk"),
+        "runoff_risk": watering_profile.get("runoff_risk"),
+        "surface_saturation_level": watering_profile.get("surface_saturation_level"),
+        "surface_saturation_limit": watering_profile.get("surface_saturation_limit"),
+        "seeding_transition_ready": watering_profile.get("seeding_transition_ready"),
+        "seeding_block_reason": watering_profile.get("seeding_block_reason"),
         "watering_window_start_minute": watering_profile.get("watering_window_start_minute"),
         "watering_window_end_minute": watering_profile.get("watering_window_end_minute"),
         "watering_window_optimal_start_minute": watering_profile.get("watering_window_optimal_start_minute"),
@@ -183,14 +236,7 @@ def build_water_bundle(
         "watering_evening_end_minute": watering_profile.get("watering_evening_end_minute"),
         "watering_window_profile": watering_profile.get("watering_window_profile"),
         "watering_evening_allowed": watering_profile.get("watering_evening_allowed"),
-        "weekly_guardrail_mm_min": watering_profile.get("weekly_guardrail_mm_min"),
-        "weekly_guardrail_mm_max": watering_profile.get("weekly_guardrail_mm_max"),
-        "weekly_guardrail_reason": watering_profile.get("weekly_guardrail_reason"),
-        "soil_profile": watering_profile.get("soil_profile"),
-        "soil_retention_factor": watering_profile.get("soil_retention_factor"),
-        "soil_drainage_factor": watering_profile.get("soil_drainage_factor"),
-        "soil_infiltration_factor": watering_profile.get("soil_infiltration_factor"),
-        "soil_need_factor": watering_profile.get("soil_need_factor"),
+        **hydric_observability,
     }
 
 
@@ -282,7 +328,7 @@ def _soil_fractionation_passages(
         passages = max(passages, 2)
     if stress_level == "fort" and objectif_mm >= 2.0:
         passages = max(passages, 2)
-    return max(1, passages)
+    return min(3, max(1, passages))
 
 
 def _watering_style_text(
@@ -366,6 +412,882 @@ def _application_payload(application_state: dict[str, Any]) -> dict[str, Any]:
             application_state.get("application_post_watering_remaining_mm") or 0.0
         ),
     }
+
+
+def _decision_resume_payload(
+    *,
+    faire: bool,
+    action: str,
+    moment: str,
+    objectif_mm: float,
+    type_arrosage: str,
+    niveau_action: str,
+    risque_gazon: str,
+) -> dict[str, Any]:
+    return {
+        "faire": faire,
+        "action": action,
+        "moment": moment,
+        "objectif_mm": objectif_mm,
+        "type_arrosage": type_arrosage,
+        "niveau_action": niveau_action,
+        "risque_gazon": risque_gazon,
+    }
+
+
+def _build_watering_bundle_base(
+    *,
+    water_bundle: dict[str, Any],
+    phase_bundle: dict[str, Any],
+    risk_bundle: dict[str, Any],
+    mowing_bundle: dict[str, Any],
+    mower_context: dict[str, Any],
+    application_payload: dict[str, Any],
+    watering_target_date: str | None,
+) -> dict[str, Any]:
+    return {
+        "objectif_mm": float(water_bundle.get("objectif_mm") or 0.0),
+        "objectif_mm_brut": float(water_bundle.get("objectif_mm_brut") or 0.0),
+        "deficit_brut_mm": float(water_bundle.get("deficit_brut_mm") or water_bundle.get("objectif_mm_brut") or 0.0),
+        "deficit_mm_brut": float(water_bundle.get("deficit_mm_brut") or water_bundle.get("objectif_mm_brut") or 0.0),
+        "deficit_mm_ajuste": float(
+            water_bundle.get("deficit_mm_ajuste") or water_bundle.get("objectif_mm_brut") or 0.0
+        ),
+        "mm_cible": float(water_bundle.get("mm_cible") or 0.0),
+        "mm_final_recommande": float(water_bundle.get("mm_final_recommande") or water_bundle.get("objectif_mm") or 0.0),
+        "mm_final": float(water_bundle.get("mm_final") or water_bundle.get("mm_final_recommande") or 0.0),
+        "mm_requested": water_bundle.get("mm_requested"),
+        "mm_applied": water_bundle.get("mm_applied"),
+        "mm_detected": water_bundle.get("mm_detected"),
+        "conseil_principal": None,
+        "action_recommandee": None,
+        "action_a_eviter": None,
+        "arrosage_recommande": False,
+        "arrosage_auto_autorise": False,
+        "watering_cause": "hydrique",
+        "type_arrosage": "aucune_action",
+        "arrosage_conseille": "aucune_action",
+        "fractionnement": water_bundle.get("fractionnement"),
+        "niveau_confiance": water_bundle.get("niveau_confiance"),
+        "confidence_score": water_bundle.get("confidence_score"),
+        "confidence_reasons": water_bundle.get("confidence_reasons"),
+        "heat_stress_level": water_bundle.get("heat_stress_level") or risk_bundle.get("heat_stress_level"),
+        "heat_stress_phase": water_bundle.get("heat_stress_phase") or risk_bundle.get("heat_stress_phase") or "normal",
+        "decision_resume": None,
+        "block_reason": water_bundle.get("block_reason"),
+        "raison_decision": None,
+        "niveau_action": risk_bundle["niveau_action"],
+        "fenetre_optimale": risk_bundle["fenetre_optimale"],
+        "risque_gazon": risk_bundle["risque_gazon"],
+        "prochaine_reevaluation": risk_bundle["prochaine_reevaluation"],
+        "tonte_autorisee": mowing_bundle["tonte_autorisee"],
+        "tonte_statut": mowing_bundle["tonte_statut"],
+        "watering_passages": 1,
+        "watering_pause_minutes": 0,
+        "watering_target_date": watering_target_date,
+        "weekly_guardrail_mm_min": water_bundle.get("weekly_guardrail_mm_min"),
+        "weekly_guardrail_mm_max": water_bundle.get("weekly_guardrail_mm_max"),
+        "weekly_guardrail_reason": water_bundle.get("weekly_guardrail_reason"),
+        "watering_strategy": water_bundle.get("watering_strategy") or WATERING_STRATEGY_ADULT_DEEP,
+        "objective_scope": water_bundle.get("objective_scope") or OBJECTIVE_SCOPE_GLOBAL_SURFACE,
+        "watering_stage": water_bundle.get("watering_stage") or WATERING_STAGE_NORMAL,
+        "surface_cycle_mm": water_bundle.get("surface_cycle_mm"),
+        "daily_cycles_target": water_bundle.get("daily_cycles_target"),
+        "cycle_spacing_minutes": water_bundle.get("cycle_spacing_minutes"),
+        "surface_moisture_target": water_bundle.get("surface_moisture_target"),
+        "surface_dryness_risk": water_bundle.get("surface_dryness_risk"),
+        "runoff_risk": water_bundle.get("runoff_risk"),
+        "seeding_transition_ready": water_bundle.get("seeding_transition_ready"),
+        "seeding_block_reason": water_bundle.get("seeding_block_reason"),
+        "season_label": water_bundle.get("season_label"),
+        "season_phase": water_bundle.get("season_phase"),
+        "month_profile": water_bundle.get("month_profile"),
+        "watering_bias": water_bundle.get("watering_bias"),
+        "mowing_bias": water_bundle.get("mowing_bias"),
+        "intervention_bias": water_bundle.get("intervention_bias"),
+        "risk_bias": water_bundle.get("risk_bias"),
+        "soil_profile": water_bundle.get("soil_profile"),
+        "soil_retention_factor": water_bundle.get("soil_retention_factor"),
+        "soil_drainage_factor": water_bundle.get("soil_drainage_factor"),
+        "soil_infiltration_factor": water_bundle.get("soil_infiltration_factor"),
+        "soil_need_factor": water_bundle.get("soil_need_factor"),
+        "watering_window_start_minute": water_bundle.get("watering_window_start_minute") or risk_bundle.get(
+            "watering_window_start_minute"
+        ),
+        "watering_window_end_minute": water_bundle.get("watering_window_end_minute") or risk_bundle.get(
+            "watering_window_end_minute"
+        ),
+        "watering_window_optimal_start_minute": water_bundle.get("watering_window_optimal_start_minute")
+        or risk_bundle.get("watering_window_optimal_start_minute"),
+        "watering_window_optimal_end_minute": water_bundle.get("watering_window_optimal_end_minute")
+        or risk_bundle.get("watering_window_optimal_end_minute"),
+        "watering_window_acceptable_end_minute": water_bundle.get("watering_window_acceptable_end_minute")
+        or risk_bundle.get("watering_window_acceptable_end_minute"),
+        "watering_evening_start_minute": water_bundle.get("watering_evening_start_minute")
+        or risk_bundle.get("watering_evening_start_minute"),
+        "watering_evening_end_minute": water_bundle.get("watering_evening_end_minute")
+        or risk_bundle.get("watering_evening_end_minute"),
+        "watering_window_profile": water_bundle.get("watering_window_profile") or risk_bundle.get(
+            "watering_window_profile"
+        ),
+        "watering_evening_allowed": water_bundle.get("watering_evening_allowed") or risk_bundle.get(
+            "watering_evening_allowed"
+        ),
+        "_mower_coordination_context": dict(mower_context or {}),
+        **application_payload,
+    }
+
+
+def _reset_semis_fields_for_non_sursemis(bundle: dict[str, Any]) -> None:
+    bundle.update(
+        {
+            "watering_strategy": WATERING_STRATEGY_ADULT_DEEP,
+            "objective_scope": OBJECTIVE_SCOPE_GLOBAL_SURFACE,
+            "watering_stage": WATERING_STAGE_NORMAL,
+            "surface_cycle_mm": None,
+            "daily_cycles_target": None,
+            "cycle_spacing_minutes": None,
+            "surface_moisture_target": None,
+            "surface_dryness_risk": None,
+            "runoff_risk": None,
+            "surface_saturation_level": None,
+            "surface_saturation_limit": None,
+            "seeding_transition_ready": None,
+            "seeding_block_reason": None,
+            "sursemis_micro_apport_allowed": None,
+            "sursemis_block_reason": None,
+            "sursemis_reason": None,
+            "sursemis_seuil_declencheur": None,
+            "sursemis_policy": None,
+            "sursemis_transition_ready": None,
+            "sursemis_tonte_count": None,
+        }
+    )
+
+
+def _mower_watering_block_reason(mower_context: dict[str, Any]) -> str | None:
+    if not mower_context or mower_context.get("mower_coordination_enabled") is not True:
+        return None
+    if mower_context.get("mower_is_mowing") is True:
+        return "mower_mowing"
+    if mower_context.get("mower_is_returning") is True:
+        return "mower_returning"
+    reason_code = str(mower_context.get("mower_reason_code") or "").strip().lower()
+    if reason_code in {"ambiguous", "missing", "configured_missing"}:
+        return reason_code
+    if mower_context.get("mower_coordination_ready") is not True:
+        return "mower_unreliable"
+    if mower_context.get("mower_is_safe_for_watering") is not True:
+        return "mower_not_stowed"
+    return None
+
+
+def _payload_has_watering_intent(payload: dict[str, Any]) -> bool:
+    objectif_mm = float(payload.get("objectif_mm") or 0.0)
+    type_arrosage = str(payload.get("type_arrosage") or "").strip().lower()
+    if payload.get("arrosage_recommande") is True:
+        return True
+    if payload.get("arrosage_auto_autorise") is True:
+        return True
+    if objectif_mm > 0 and type_arrosage not in {"", "aucune_action"}:
+        return True
+    return False
+
+
+def _apply_mower_coordination_block(payload: dict[str, Any]) -> dict[str, Any]:
+    mower_context = payload.get("_mower_coordination_context")
+    if not isinstance(mower_context, dict):
+        return payload
+
+    for key, value in mower_context.items():
+        if key.startswith("mower_") and key not in payload and value is not None:
+            payload[key] = value
+
+    block_reason = _mower_watering_block_reason(mower_context)
+    if not block_reason or not _payload_has_watering_intent(payload):
+        payload.setdefault("watering_blocked_by_mower", False)
+        payload.setdefault("watering_block_reason_code", None)
+        payload.setdefault("watering_block_reason_label", None)
+        return payload
+
+    label = _MOWER_WATERING_BLOCK_LABELS[block_reason]
+    payload["watering_blocked_by_mower"] = True
+    payload["watering_block_reason_code"] = block_reason
+    payload["watering_block_reason_label"] = label
+    payload["block_reason"] = block_reason
+    payload["arrosage_auto_autorise"] = False
+    payload["fenetre_optimale"] = "attendre"
+    payload["type_arrosage"] = "bloque"
+    if payload.get("arrosage_recommande"):
+        payload["arrosage_conseille"] = "personnalise"
+    if payload.get("niveau_action") in (None, "aucune_action"):
+        payload["niveau_action"] = "surveiller"
+    if not payload.get("conseil_principal"):
+        payload["conseil_principal"] = label
+    if not payload.get("action_recommandee"):
+        payload["action_recommandee"] = "Attends que la tondeuse soit réellement rangée avant d'arroser."
+    if not payload.get("action_a_eviter"):
+        payload["action_a_eviter"] = "Lancer un arrosage pendant que la tondeuse est dehors."
+
+    raison = str(payload.get("raison_decision") or "").strip()
+    if raison:
+        payload["raison_decision"] = f"{label} {raison}"
+    else:
+        payload["raison_decision"] = label
+
+    decision_resume = payload.get("decision_resume")
+    if isinstance(decision_resume, dict):
+        payload["decision_resume"] = {
+            **decision_resume,
+            "faire": False,
+            "action": "aucune_action",
+            "moment": "attendre",
+            "type_arrosage": "bloque",
+        }
+    return payload
+
+
+def _bundle_with(base_bundle: dict[str, Any], **updates: Any) -> dict[str, Any]:
+    payload = dict(base_bundle)
+    payload.update(updates)
+    payload = _apply_mower_coordination_block(payload)
+    payload["type_arrosage"], payload["arrosage_conseille"] = normalize_watering_contract(
+        payload.get("type_arrosage"),
+        payload.get("arrosage_conseille"),
+    )
+    payload.pop("_mower_coordination_context", None)
+    return payload
+
+
+def _resolve_hivernage_override(state: dict[str, Any]) -> dict[str, Any] | None:
+    if state["phase_dominante"] != "Hivernage":
+        return None
+    return _bundle_with(
+        state["base_bundle"],
+        objectif_mm=0.0,
+        watering_cause="post_application",
+        tonte_autorisee=False,
+        tonte_statut="interdite",
+        arrosage_auto_autorise=False,
+        arrosage_recommande=False,
+        type_arrosage="bloque",
+        arrosage_conseille="personnalise",
+        conseil_principal="N'arrose pas et limite les interventions.",
+        action_recommandee="Surveille uniquement.",
+        action_a_eviter="Arroser fréquemment.",
+        raison_decision=(
+            f"Hivernage actif: repos végétatif. "
+            f"{_hydric_summary_text(state['objectif_mm_brut'], state['deficit_mm_ajuste'], 0.0)}"
+        ),
+        decision_resume=_decision_resume_payload(
+            faire=False,
+            action="aucune_action",
+            moment="attendre",
+            objectif_mm=0.0,
+            type_arrosage="bloque",
+            niveau_action=state["niveau_action"],
+            risque_gazon=state["risque_gazon"],
+        ),
+    )
+
+
+def _resolve_unknown_application_override(state: dict[str, Any]) -> dict[str, Any] | None:
+    if not state["application_summary"] or state["application_type_known"]:
+        return None
+    return _bundle_with(
+        state["base_bundle"],
+        objectif_mm=0.0,
+        watering_cause="post_application",
+        tonte_autorisee=False,
+        tonte_statut="interdite",
+        arrosage_auto_autorise=False,
+        arrosage_recommande=False,
+        type_arrosage="bloque",
+        arrosage_conseille="personnalise",
+        conseil_principal=(
+            f"{state['application_label']}: type d'application inconnu, aucun arrosage automatique ne doit être lancé."
+        ),
+        action_recommandee="Vérifie l'étiquette ou renseigne le type d'application avant d'arroser.",
+        action_a_eviter="Lancer un arrosage sans type d'application confirmé.",
+        raison_decision=(
+            "Type d'application inconnu: sécurité renforcée, aucun arrosage automatique. "
+            f"{_hydric_summary_text(state['objectif_mm_brut'], state['deficit_mm_ajuste'], 0.0)}"
+        ),
+        decision_resume=_decision_resume_payload(
+            faire=False,
+            action="aucune_action",
+            moment="attendre",
+            objectif_mm=0.0,
+            type_arrosage="bloque",
+            niveau_action="surveiller",
+            risque_gazon=state["risque_gazon"],
+        ),
+        niveau_action="surveiller",
+        fenetre_optimale="attendre",
+    )
+
+
+def _resolve_application_block_override(state: dict[str, Any]) -> dict[str, Any] | None:
+    if not state["application_block_active"]:
+        return None
+    return _bundle_with(
+        state["base_bundle"],
+        objectif_mm=0.0,
+        watering_cause="post_application",
+        tonte_autorisee=False,
+        tonte_statut="interdite",
+        arrosage_auto_autorise=False,
+        arrosage_recommande=False,
+        type_arrosage="bloque",
+        arrosage_conseille="personnalise",
+        conseil_principal=f"{state['application_label']}: l'arrosage est bloqué jusqu'à la fin de la fenêtre de protection.",
+        action_recommandee="Attends la fin du bloc applicatif avant d'arroser.",
+        action_a_eviter="Arroser pendant la fenêtre de protection.",
+        raison_decision=(
+            f"Bloc applicatif actif jusqu'au {state['application_block_until'] or 'prochain créneau autorisé'}. "
+            f"Temps restant={state['application_block_remaining_minutes']:.0f} min. "
+            f"{_hydric_summary_text(state['objectif_mm_brut'], state['deficit_mm_ajuste'], 0.0)}"
+        ),
+        decision_resume=_decision_resume_payload(
+            faire=False,
+            action="aucune_action",
+            moment="attendre",
+            objectif_mm=0.0,
+            type_arrosage="bloque",
+            niveau_action="surveiller",
+            risque_gazon=state["risque_gazon"],
+        ),
+        niveau_action="surveiller",
+        fenetre_optimale="attendre",
+    )
+
+
+def _resolve_foliar_application_override(state: dict[str, Any]) -> dict[str, Any] | None:
+    if not state["application_summary"] or state["application_type"] != APPLICATION_TYPE_FOLIAIRE:
+        return None
+    return _bundle_with(
+        state["base_bundle"],
+        objectif_mm=0.0,
+        tonte_autorisee=False,
+        tonte_statut="interdite",
+        arrosage_auto_autorise=False,
+        arrosage_recommande=False,
+        type_arrosage="bloque",
+        arrosage_conseille="personnalise",
+        conseil_principal=(
+            f"{state['application_label']}: traitement foliaire sans arrosage automatique pendant la fenêtre de protection."
+        ),
+        action_recommandee="Attends la fin de la protection avant toute irrigation.",
+        action_a_eviter="Arroser une application foliaire trop tôt.",
+        raison_decision=(
+            f"Application foliaire: arrosage automatique interdit, "
+            f"bloc restant={state['application_block_remaining_minutes']:.0f} min, "
+            f"mode={state['application_mode'] or 'suggestion'}. "
+            f"{_hydric_summary_text(state['objectif_mm_brut'], state['deficit_mm_ajuste'], 0.0)}"
+        ),
+        decision_resume=_decision_resume_payload(
+            faire=False,
+            action="aucune_action",
+            moment="attendre",
+            objectif_mm=0.0,
+            type_arrosage="bloque",
+            niveau_action="surveiller",
+            risque_gazon=state["risque_gazon"],
+        ),
+        niveau_action="surveiller",
+        fenetre_optimale="attendre",
+    )
+
+
+def _resolve_pending_sol_application_override(state: dict[str, Any]) -> dict[str, Any] | None:
+    if not (
+        state["application_requires_watering_after"]
+        and state["application_type"] == APPLICATION_TYPE_SOL
+        and state["application_post_watering_pending"]
+    ):
+        return None
+
+    if not state["application_post_watering_ready"]:
+        return _bundle_with(
+            state["base_bundle"],
+            objectif_mm=0.0,
+            watering_cause="post_application",
+            arrosage_auto_autorise=False,
+            arrosage_recommande=False,
+            type_arrosage="personnalise",
+            arrosage_conseille="personnalise",
+            conseil_principal=(
+                f"{state['application_label']}: attendre encore {state['application_post_watering_delay_remaining_minutes']:.0f} min "
+                "avant l'arrosage technique."
+            ),
+            action_recommandee="Attends la fin du délai applicatif avant d'arroser.",
+            action_a_eviter="Arroser avant la fin du délai d'incorporation.",
+            raison_decision=(
+                f"Application technique différée: délai restant {state['application_post_watering_delay_remaining_minutes']:.0f} min, "
+                f"mode={state['application_mode'] or 'auto'}. "
+                f"{_hydric_summary_text(state['objectif_mm_brut'], state['deficit_mm_ajuste'], 0.0)}"
+            ),
+            decision_resume=_decision_resume_payload(
+                faire=False,
+                action="aucune_action",
+                moment="attendre",
+                objectif_mm=0.0,
+                type_arrosage="personnalise",
+                niveau_action=state["niveau_action"],
+                risque_gazon=state["risque_gazon"],
+            ),
+        )
+
+    objectif_mm = round(max(0.5, state["application_post_watering_remaining_mm"] or 0.0), 1)
+    passages = _soil_fractionation_passages(
+        state["phase_dominante"],
+        state["sous_phase"],
+        state["soil_style"],
+        objectif_mm,
+        state["stress_level"],
+        temperature=state["temperature"],
+        humidite=state["humidite"],
+        etp=state["etp"],
+    )
+    style_text = _watering_style_text(
+        state["phase_dominante"], state["soil_style"], objectif_mm, state["stress_level"], passages
+    )
+
+    if state["application_mode"] == "suggestion":
+        return _bundle_with(
+            state["base_bundle"],
+            objectif_mm=0.0,
+            fenetre_optimale="maintenant",
+            watering_cause="post_application",
+            arrosage_auto_autorise=False,
+            arrosage_recommande=False,
+            type_arrosage="personnalise",
+            arrosage_conseille="personnalise",
+            conseil_principal=f"{state['application_label']}: arrosage technique suggéré, sans lancement automatique.",
+            action_recommandee=(
+                f"Suggestion d'arrosage technique: {objectif_mm:.1f} mm {style_text} "
+                "si l'étiquette du produit l'autorise."
+            ),
+            action_a_eviter="Lancer un arrosage automatique non confirmé.",
+            raison_decision=(
+                f"Application technique en suggestion uniquement: {state['application_label']}, "
+                f"mode=suggestion. "
+                f"{_hydric_summary_text(state['objectif_mm_brut'], state['deficit_mm_ajuste'], 0.0)}"
+            ),
+            decision_resume=_decision_resume_payload(
+                faire=False,
+                action="aucune_action",
+                moment="attendre",
+                objectif_mm=0.0,
+                type_arrosage="personnalise",
+                niveau_action=state["niveau_action"],
+                risque_gazon=state["risque_gazon"],
+            ),
+        )
+
+    conseil_principal = (
+        f"{state['application_label']}: arrosage manuel immédiat pour activer ou incorporer le produit."
+        if state["application_mode"] == "manuel"
+        else f"{state['application_label']}: arrose maintenant pour activer/incorporer le produit."
+    )
+    action_recommandee = (
+        f"Arrosage manuel immédiat requis: applique {objectif_mm:.1f} mm {style_text}."
+        if state["application_mode"] == "manuel"
+        else f"Applique {objectif_mm:.1f} mm {style_text} en arrosage technique."
+    )
+    auto_autorise = state["application_mode"] in {"", "auto"}
+    return _bundle_with(
+        state["base_bundle"],
+        objectif_mm=objectif_mm,
+        mm_cible=objectif_mm,
+        mm_final_recommande=objectif_mm,
+        mm_final=objectif_mm,
+        mm_requested=objectif_mm,
+        mm_applied=objectif_mm,
+        fenetre_optimale="maintenant",
+        watering_target_date=state["context"].today.isoformat(),
+        watering_cause="post_application",
+        arrosage_auto_autorise=auto_autorise,
+        arrosage_recommande=True,
+        type_arrosage="application_technique_auto" if auto_autorise else "application_technique",
+        arrosage_conseille="application_technique",
+        conseil_principal=conseil_principal,
+        action_recommandee=action_recommandee,
+        action_a_eviter="Arroser en excès ou trop tard.",
+        raison_decision=(
+            f"Application technique en attente: {state['application_label']}, "
+            f"mm restant={state['application_post_watering_remaining_mm']:.1f}, "
+            f"fenêtre={state['fenetre_texte']}, bilan={state['bilan_hydrique_mm']:.1f} mm, mode={state['application_mode'] or 'auto'}. "
+            f"{_hydric_summary_text(state['objectif_mm_brut'], state['deficit_mm_ajuste'], objectif_mm)}"
+        ),
+        decision_resume=_decision_resume_payload(
+            faire=True,
+            action="arrosage",
+            moment="maintenant",
+            objectif_mm=objectif_mm,
+            type_arrosage="application_technique_auto" if auto_autorise else "application_technique",
+            niveau_action=state["niveau_action"],
+            risque_gazon=state["risque_gazon"],
+        ),
+        watering_passages=passages,
+        watering_pause_minutes=_watering_pause_minutes(passages),
+    )
+
+
+def _resolve_traitement_override(state: dict[str, Any]) -> dict[str, Any] | None:
+    if state["phase_dominante"] != "Traitement":
+        return None
+    return _bundle_with(
+        state["base_bundle"],
+        objectif_mm=0.0,
+        tonte_autorisee=False,
+        tonte_statut="interdite",
+        arrosage_auto_autorise=False,
+        arrosage_recommande=False,
+        type_arrosage="bloque",
+        arrosage_conseille="personnalise",
+        conseil_principal=f"Laisser agir le traitement encore {state['phase_bundle']['jours_restants']} jour(s).",
+        action_recommandee="Surveiller l'état du gazon sans intervention hydrique.",
+        action_a_eviter="Tondre ou arroser.",
+        raison_decision=(
+            f"Traitement actif: tonte et arrosage bloqués. "
+            f"{_hydric_summary_text(state['objectif_mm_brut'], state['deficit_mm_ajuste'], 0.0)}"
+        ),
+        decision_resume=_decision_resume_payload(
+            faire=False,
+            action="aucune_action",
+            moment="attendre",
+            objectif_mm=0.0,
+            type_arrosage="bloque",
+            niveau_action=state["niveau_action"],
+            risque_gazon=state["risque_gazon"],
+        ),
+    )
+
+
+def _resolve_fertilization_window_override(state: dict[str, Any]) -> dict[str, Any] | None:
+    if state["phase_dominante"] not in {"Fertilisation", "Biostimulant"} or state["fertilization_allowed"]:
+        return None
+    return _bundle_with(
+        state["base_bundle"],
+        objectif_mm=0.0,
+        arrosage_auto_autorise=False,
+        arrosage_recommande=False,
+        type_arrosage="bloque",
+        arrosage_conseille="personnalise",
+        conseil_principal=(
+            f"{state['phase_dominante']}: reporte l'application, la fenêtre est trop chaude ou trop sèche."
+        ),
+        action_recommandee="Attends un créneau plus frais et moins stressant.",
+        action_a_eviter="Fertiliser sous chaleur ou stress hydrique.",
+        raison_decision=(
+            f"{state['phase_dominante']} bloqué: bilan={state['bilan_hydrique_mm']:.1f} mm, "
+            f"stress={state['stress_level']}, température={state['temperature']:.1f}°C, ETP={state['etp']:.1f} mm. "
+            f"{_hydric_summary_text(state['objectif_mm_brut'], state['deficit_mm_ajuste'], 0.0)}"
+        ),
+        decision_resume=_decision_resume_payload(
+            faire=False,
+            action="aucune_action",
+            moment="attendre",
+            objectif_mm=0.0,
+            type_arrosage="bloque",
+            niveau_action="surveiller",
+            risque_gazon=state["risque_gazon"],
+        ),
+        niveau_action="surveiller",
+        fenetre_optimale="attendre",
+    )
+
+
+def _resolve_sursemis_override(state: dict[str, Any]) -> dict[str, Any] | None:
+    if state["phase_dominante"] != "Sursemis":
+        return None
+    sursemis_allowed = bool(state["water_bundle"].get("sursemis_micro_apport_allowed"))
+    surface_sec = bool(state["water_bundle"].get("surface_sec"))
+    pluie_probabilite_24h = float(state["water_bundle"].get("pluie_probabilite_24h") or 0.0)
+    mm_detected_24h = float(state["water_bundle"].get("mm_detected_24h") or 0.0)
+    sursemis_reason = str(state["water_bundle"].get("sursemis_reason") or "")
+    sursemis_thresholds = str(state["water_bundle"].get("sursemis_seuil_declencheur") or "")
+    sursemis_block_reason = state["water_bundle"].get("sursemis_block_reason")
+    watering_strategy = str(
+        state["water_bundle"].get("watering_strategy") or WATERING_STRATEGY_SEMIS_FREQUENT
+    )
+    objective_scope = str(
+        state["water_bundle"].get("objective_scope") or OBJECTIVE_SCOPE_SURFACE_CYCLE
+    )
+    watering_stage = str(state["water_bundle"].get("watering_stage") or WATERING_STAGE_LEVEE)
+    surface_cycle_mm = float(state["water_bundle"].get("surface_cycle_mm") or 0.0)
+    daily_cycles_target = int(state["water_bundle"].get("daily_cycles_target") or 1)
+    cycle_spacing_minutes = int(state["water_bundle"].get("cycle_spacing_minutes") or 0)
+    surface_moisture_target = str(state["water_bundle"].get("surface_moisture_target") or "")
+    surface_dryness_risk = str(state["water_bundle"].get("surface_dryness_risk") or "")
+    runoff_risk = str(state["water_bundle"].get("runoff_risk") or "")
+    transition_ready = bool(state["water_bundle"].get("seeding_transition_ready") or False)
+    runtime_context = getattr(state["context"], "runtime_context", {}) or {}
+    semis_followup_state = str(runtime_context.get("semis_followup_state") or "").strip()
+    semis_cycles_remaining_today_raw = runtime_context.get("semis_cycles_remaining_today")
+    semis_cycles_remaining_today = (
+        int(semis_cycles_remaining_today_raw)
+        if semis_cycles_remaining_today_raw not in (None, "")
+        else None
+    )
+    semis_followup_due_display = str(runtime_context.get("semis_followup_due_display") or "").strip()
+    semis_followup_due_at = runtime_context.get("semis_followup_due_at")
+
+    if semis_followup_state == "complete":
+        return _bundle_with(
+            state["base_bundle"],
+            objectif_mm=0.0,
+            mm_cible=0.0,
+            mm_final_recommande=0.0,
+            mm_final=0.0,
+            mm_requested=0.0,
+            mm_applied=0.0,
+            tonte_autorisee=False,
+            tonte_statut="interdite",
+            arrosage_auto_autorise=False,
+            arrosage_recommande=False,
+            type_arrosage="aucune_action",
+            arrosage_conseille="personnalise",
+            conseil_principal=(
+                f"Sursemis {watering_stage}: stratégie semis_frequent déjà satisfaite pour aujourd'hui."
+            ),
+            action_recommandee="Aucun cycle supplémentaire aujourd'hui.",
+            action_a_eviter="Lancer un cycle supplémentaire inutilement.",
+            raison_decision=(
+                f"Sursemis / {state['sous_phase']}: objectif de cycles quotidiens atteint. "
+                f"{_hydric_summary_text(state['objectif_mm_brut'], state['deficit_mm_ajuste'], 0.0)}"
+            ),
+            niveau_confiance="info",
+            confidence_score=100,
+            confidence_reasons=["objectif de cycles quotidiens atteint"],
+            decision_resume=_decision_resume_payload(
+                faire=False,
+                action="aucune_action",
+                moment="attendre",
+                objectif_mm=0.0,
+                type_arrosage="aucune_action",
+                niveau_action="surveiller",
+                risque_gazon=state["risque_gazon"],
+            ),
+            niveau_action="surveiller",
+            fenetre_optimale="attendre",
+            watering_passages=1,
+            watering_pause_minutes=0,
+            surface_sec=surface_sec,
+            pluie_probabilite_24h=pluie_probabilite_24h,
+            mm_detected_24h=mm_detected_24h,
+            sursemis_micro_apport_allowed=sursemis_allowed,
+            sursemis_block_reason="semis_cycle_daily_target_reached",
+            sursemis_reason=sursemis_reason,
+            sursemis_seuil_declencheur=sursemis_thresholds,
+            watering_strategy=watering_strategy,
+            objective_scope=objective_scope,
+            watering_stage=watering_stage,
+            surface_cycle_mm=surface_cycle_mm,
+            daily_cycles_target=daily_cycles_target,
+            cycle_spacing_minutes=cycle_spacing_minutes,
+            surface_moisture_target=surface_moisture_target,
+            surface_dryness_risk=surface_dryness_risk,
+            runoff_risk=runoff_risk,
+            seeding_transition_ready=transition_ready,
+            seeding_block_reason="semis_cycle_daily_target_reached",
+            semis_followup_state=semis_followup_state or "complete",
+            semis_followup_due_display=semis_followup_due_display or None,
+            semis_followup_due_at=semis_followup_due_at,
+            semis_cycles_completed_today=daily_cycles_target,
+            semis_cycles_remaining_today=0,
+            fractionnement={
+                "enabled": False,
+                "passages": 1,
+                "pause_minutes": 0,
+                "max_mm_per_passage": 0.0,
+                "reason": "semis_cycle_daily_target_reached",
+            },
+        )
+
+    if semis_followup_state == "waiting" and (semis_cycles_remaining_today or 0) > 0:
+        return _bundle_with(
+            state["base_bundle"],
+            objectif_mm=0.0,
+            mm_cible=0.0,
+            mm_final_recommande=0.0,
+            mm_final=0.0,
+            mm_requested=0.0,
+            mm_applied=0.0,
+            tonte_autorisee=False,
+            tonte_statut="interdite",
+            arrosage_auto_autorise=False,
+            arrosage_recommande=False,
+            type_arrosage="bloque",
+            arrosage_conseille="personnalise",
+            conseil_principal=(
+                f"Sursemis {watering_stage}: prochain cycle déjà programmé, attends l'échéance."
+            ),
+            action_recommandee=(
+                f"Prochain cycle semis_frequent à {semis_followup_due_display or 'bientôt'}."
+            ),
+            action_a_eviter="Déclencher un nouveau cycle avant l'échéance.",
+            raison_decision=(
+                f"Sursemis / {state['sous_phase']}: cycle suivant déjà planifié. "
+                f"Prochain créneau={semis_followup_due_display or 'bientôt'}. "
+                f"{_hydric_summary_text(state['objectif_mm_brut'], state['deficit_mm_ajuste'], 0.0)}"
+            ),
+            niveau_confiance="info",
+            confidence_score=100,
+            confidence_reasons=["cycle suivant déjà planifié"],
+            decision_resume=_decision_resume_payload(
+                faire=False,
+                action="aucune_action",
+                moment="attendre",
+                objectif_mm=0.0,
+                type_arrosage="bloque",
+                niveau_action="surveiller",
+                risque_gazon=state["risque_gazon"],
+            ),
+            niveau_action="surveiller",
+            fenetre_optimale="attendre",
+            watering_passages=1,
+            watering_pause_minutes=0,
+            surface_sec=surface_sec,
+            pluie_probabilite_24h=pluie_probabilite_24h,
+            mm_detected_24h=mm_detected_24h,
+            sursemis_micro_apport_allowed=sursemis_allowed,
+            sursemis_block_reason="semis_cycle_pending",
+            sursemis_reason=sursemis_reason,
+            sursemis_seuil_declencheur=sursemis_thresholds,
+            watering_strategy=watering_strategy,
+            objective_scope=objective_scope,
+            watering_stage=watering_stage,
+            surface_cycle_mm=surface_cycle_mm,
+            daily_cycles_target=daily_cycles_target,
+            cycle_spacing_minutes=cycle_spacing_minutes,
+            surface_moisture_target=surface_moisture_target,
+            surface_dryness_risk=surface_dryness_risk,
+            runoff_risk=runoff_risk,
+            seeding_transition_ready=transition_ready,
+            seeding_block_reason="semis_cycle_pending",
+            semis_followup_state=semis_followup_state or "waiting",
+            semis_followup_due_display=semis_followup_due_display or None,
+            semis_followup_due_at=semis_followup_due_at,
+            semis_cycles_completed_today=max(0, daily_cycles_target - semis_cycles_remaining_today),
+            semis_cycles_remaining_today=semis_cycles_remaining_today,
+            fractionnement={
+                "enabled": False,
+                "passages": 1,
+                "pause_minutes": 0,
+                "max_mm_per_passage": 0.0,
+                "reason": "semis_cycle_pending",
+            },
+        )
+
+    if sursemis_allowed and surface_cycle_mm > 0:
+        objectif_mm = surface_cycle_mm
+        arrosage_recommande = True
+        type_arrosage = "manuel_frequent"
+        conseil_principal = (
+            f"Sursemis {watering_stage}: maintiens la surface humide avec une stratégie {watering_strategy}."
+        )
+        action_recommandee = (
+            f"Appliquer {surface_cycle_mm:.1f} mm en cycle de surface, "
+            f"avec objectif {daily_cycles_target} cycle(s)/jour et {cycle_spacing_minutes} min entre cycles."
+        )
+        action_a_eviter = "Lancer un gros cycle profond ou saturer le sol."
+    else:
+        objectif_mm = 0.0
+        arrosage_recommande = False
+        type_arrosage = "bloque" if sursemis_block_reason else "aucune_action"
+        conseil_principal = sursemis_reason or "Sursemis: cycle de surface reporté."
+        action_recommandee = "Surveille l'humidité et réévalue au prochain créneau."
+        action_a_eviter = "Multiplier les petits cycles."
+
+    confidence_score, confidence_level, confidence_reasons = _confidence_assessment(
+        phase_dominante=state["phase_dominante"],
+        temperature=state["temperature"],
+        humidite=state["humidite"],
+        etp=state["etp"],
+        weather_profile=state["context"].weather_profile,
+        soil_profile=state["soil_style"],
+        heat_stress_level=state["heat_stress_level"],
+        heat_stress_phase=state["heat_stress_phase"],
+        block_reason=sursemis_block_reason,
+        mm_final=objectif_mm,
+    )
+    raison_decision_sursemis = (
+        f"Sursemis / {state['sous_phase']}: stratégie semis_frequent en cycle de surface. "
+        f"Surface cycle={surface_cycle_mm:.1f} mm, "
+        f"objectif={daily_cycles_target} cycle(s)/jour, "
+        f"espacement={cycle_spacing_minutes} min. "
+        f"pluie_24h={state['pluie_24h']:.1f} mm, pluie_demain={state['pluie_demain']:.1f} mm, "
+        f"pluie_probabilite_24h={pluie_probabilite_24h:.1f}%, bilan_hydrique_mm={state['bilan_hydrique_mm']:.1f} mm, "
+        f"mm_detected_24h={mm_detected_24h:.1f} mm, temperature={state['temperature']:.1f}°C, "
+        f"surface_sec={surface_sec}. "
+        f"{sursemis_reason} "
+        f"Seuil={sursemis_thresholds}. "
+        f"{_hydric_summary_text(state['objectif_mm_brut'], state['deficit_mm_ajuste'], objectif_mm)}"
+    )
+    return _bundle_with(
+        state["base_bundle"],
+        objectif_mm=objectif_mm,
+        mm_cible=objectif_mm,
+        mm_final_recommande=objectif_mm,
+        mm_final=objectif_mm,
+        mm_requested=objectif_mm,
+        mm_applied=objectif_mm,
+        tonte_autorisee=False,
+        tonte_statut="interdite",
+        arrosage_auto_autorise=False,
+        arrosage_recommande=objectif_mm > 0,
+        type_arrosage=type_arrosage,
+        arrosage_conseille="personnalise",
+        conseil_principal=conseil_principal,
+        action_recommandee=action_recommandee,
+        action_a_eviter=action_a_eviter,
+        raison_decision=raison_decision_sursemis,
+        niveau_confiance=confidence_level,
+        confidence_score=confidence_score,
+        confidence_reasons=confidence_reasons,
+        decision_resume=_decision_resume_payload(
+            faire=objectif_mm > 0,
+            action="arrosage" if objectif_mm > 0 else "aucune_action",
+            moment=state["fenetre_optimale"] if objectif_mm > 0 else "attendre",
+            objectif_mm=objectif_mm,
+            type_arrosage=type_arrosage,
+            niveau_action="a_faire" if objectif_mm > 0 else "surveiller",
+            risque_gazon=state["risque_gazon"],
+        ),
+        niveau_action="a_faire" if objectif_mm > 0 else "surveiller",
+        fenetre_optimale=state["fenetre_optimale"] if objectif_mm > 0 else "attendre",
+        watering_passages=1,
+        watering_pause_minutes=0,
+        surface_sec=surface_sec,
+        pluie_probabilite_24h=pluie_probabilite_24h,
+        mm_detected_24h=mm_detected_24h,
+        sursemis_micro_apport_allowed=sursemis_allowed,
+        sursemis_block_reason=sursemis_block_reason,
+        sursemis_reason=sursemis_reason,
+        sursemis_seuil_declencheur=sursemis_thresholds,
+        watering_strategy=watering_strategy,
+        objective_scope=objective_scope,
+        watering_stage=watering_stage,
+        surface_cycle_mm=surface_cycle_mm,
+        daily_cycles_target=daily_cycles_target,
+        cycle_spacing_minutes=cycle_spacing_minutes,
+        surface_moisture_target=surface_moisture_target,
+        surface_dryness_risk=surface_dryness_risk,
+        runoff_risk=runoff_risk,
+        surface_saturation_level=state["water_bundle"].get("surface_saturation_level"),
+        surface_saturation_limit=state["water_bundle"].get("surface_saturation_limit"),
+        seeding_transition_ready=transition_ready,
+        seeding_block_reason=sursemis_block_reason,
+        fractionnement={
+            "enabled": False,
+            "passages": 1,
+            "pause_minutes": 0,
+            "max_mm_per_passage": round(objectif_mm, 1) if objectif_mm > 0 else 0.0,
+            "reason": "semis_surface_cycle" if objectif_mm > 0 else "sursemis_aucune_action",
+        },
+    )
 
 
 def build_watering_bundle(
@@ -465,7 +1387,7 @@ def build_watering_bundle(
     )
     stress_thermique = temperature >= 30 and etp >= 4
     humidite_haute = humidite >= 85
-    application_state = compute_application_state(context.history)
+    application_state = water_bundle.get("application_state") or compute_application_state(context.history)
     application_payload = _application_payload(application_state)
     application_type = application_state.get("application_type")
     application_mode = str(application_state.get("application_irrigation_mode") or "").strip().lower()
@@ -516,484 +1438,72 @@ def build_watering_bundle(
     block_reason_value = water_bundle.get("block_reason")
     watering_passages = 1
     watering_pause_minutes = 0
-
-    if phase_dominante == "Hivernage":
-        objectif_mm = 0.0
-        return {
-            "objectif_mm": 0.0,
-            "objectif_mm_brut": objectif_mm_brut,
-            "tonte_autorisee": False,
-            "tonte_statut": "interdite",
-            "arrosage_auto_autorise": False,
-            "arrosage_recommande": False,
-            "type_arrosage": "bloque",
-            "arrosage_conseille": "personnalise",
-            "conseil_principal": "N'arrose pas et limite les interventions.",
-            "action_recommandee": "Surveille uniquement.",
-            "action_a_eviter": "Arroser fréquemment.",
-            "raison_decision": (
-                f"Hivernage actif: repos végétatif. "
-                f"{_hydric_summary_text(objectif_mm_brut, deficit_mm_ajuste, 0.0)}"
-            ),
-            "decision_resume": {
-                "faire": False,
-                "action": "aucune_action",
-                "moment": "attendre",
-                "objectif_mm": objectif_mm,
-                "type_arrosage": "bloque",
-                "niveau_action": niveau_action,
-                "risque_gazon": risque_gazon,
-            },
-            "watering_passages": watering_passages,
-            "watering_pause_minutes": watering_pause_minutes,
-            "watering_target_date": watering_target_date,
-            **application_payload,
-        }
+    base_bundle = _build_watering_bundle_base(
+        water_bundle=water_bundle,
+        phase_bundle=phase_bundle,
+        risk_bundle=risk_bundle,
+        mowing_bundle=mowing_bundle,
+        mower_context=context.mower_context if isinstance(context.mower_context, dict) else {},
+        application_payload=application_payload,
+        watering_target_date=watering_target_date,
+    )
+    if phase_dominante != "Sursemis":
+        _reset_semis_fields_for_non_sursemis(base_bundle)
 
     application_type_known = application_type in {APPLICATION_TYPE_SOL, APPLICATION_TYPE_FOLIAIRE}
-
-    if application_summary and not application_type_known:
-        objectif_mm = 0.0
-        return {
-            "objectif_mm": 0.0,
-            "objectif_mm_brut": objectif_mm_brut,
-            "tonte_autorisee": False,
-            "tonte_statut": "interdite",
-            "arrosage_auto_autorise": False,
-            "arrosage_recommande": False,
-            "type_arrosage": "bloque",
-            "arrosage_conseille": "personnalise",
-            "conseil_principal": (
-                f"{application_label}: type d'application inconnu, aucun arrosage automatique ne doit être lancé."
-            ),
-            "action_recommandee": "Vérifie l'étiquette ou renseigne le type d'application avant d'arroser.",
-            "action_a_eviter": "Lancer un arrosage sans type d'application confirmé.",
-            "raison_decision": (
-                "Type d'application inconnu: sécurité renforcée, aucun arrosage automatique. "
-                f"{_hydric_summary_text(objectif_mm_brut, deficit_mm_ajuste, 0.0)}"
-            ),
-            "decision_resume": {
-                "faire": False,
-                "action": "aucune_action",
-                "moment": "attendre",
-                "objectif_mm": 0.0,
-                "type_arrosage": "bloque",
-                "niveau_action": "surveiller",
-                "risque_gazon": risque_gazon,
-            },
-            "niveau_action": "surveiller",
-            "fenetre_optimale": "attendre",
-            "risque_gazon": risque_gazon,
-            "prochaine_reevaluation": prochaine_reevaluation,
-            "watering_passages": watering_passages,
-            "watering_pause_minutes": watering_pause_minutes,
-            "watering_target_date": watering_target_date,
-            **application_payload,
-        }
-
-    if application_block_active:
-        objectif_mm = 0.0
-        return {
-            "objectif_mm": 0.0,
-            "objectif_mm_brut": objectif_mm_brut,
-            "tonte_autorisee": False,
-            "tonte_statut": "interdite",
-            "arrosage_auto_autorise": False,
-            "arrosage_recommande": False,
-            "type_arrosage": "bloque",
-            "arrosage_conseille": "personnalise",
-            "conseil_principal": f"{application_label}: l'arrosage est bloqué jusqu'à la fin de la fenêtre de protection.",
-            "action_recommandee": "Attends la fin du bloc applicatif avant d'arroser.",
-            "action_a_eviter": "Arroser pendant la fenêtre de protection.",
-            "raison_decision": (
-                f"Bloc applicatif actif jusqu'au {application_block_until or 'prochain créneau autorisé'}. "
-                f"Temps restant={application_block_remaining_minutes:.0f} min. "
-                f"{_hydric_summary_text(objectif_mm_brut, deficit_mm_ajuste, 0.0)}"
-            ),
-            "decision_resume": {
-                "faire": False,
-                "action": "aucune_action",
-                "moment": "attendre",
-                "objectif_mm": 0.0,
-                "type_arrosage": "bloque",
-                "niveau_action": "surveiller",
-                "risque_gazon": risque_gazon,
-            },
-            "niveau_action": "surveiller",
-            "fenetre_optimale": "attendre",
-            "risque_gazon": risque_gazon,
-            "prochaine_reevaluation": prochaine_reevaluation,
-            "watering_passages": watering_passages,
-            "watering_pause_minutes": watering_pause_minutes,
-            "watering_target_date": watering_target_date,
-            **application_payload,
-        }
-
-    if application_summary and application_type == APPLICATION_TYPE_FOLIAIRE:
-        objectif_mm = 0.0
-        return {
-            "objectif_mm": 0.0,
-            "objectif_mm_brut": objectif_mm_brut,
-            "tonte_autorisee": False,
-            "tonte_statut": "interdite",
-            "arrosage_auto_autorise": False,
-            "arrosage_recommande": False,
-            "type_arrosage": "bloque",
-            "arrosage_conseille": "personnalise",
-            "conseil_principal": (
-                f"{application_label}: traitement foliaire sans arrosage automatique pendant la fenêtre de protection."
-            ),
-            "action_recommandee": "Attends la fin de la protection avant toute irrigation.",
-            "action_a_eviter": "Arroser une application foliaire trop tôt.",
-            "raison_decision": (
-                f"Application foliaire: arrosage automatique interdit, "
-                f"bloc restant={application_block_remaining_minutes:.0f} min, "
-                f"mode={application_mode or 'suggestion'}. "
-                f"{_hydric_summary_text(objectif_mm_brut, deficit_mm_ajuste, 0.0)}"
-            ),
-            "decision_resume": {
-                "faire": False,
-                "action": "aucune_action",
-                "moment": "attendre",
-                "objectif_mm": 0.0,
-                "type_arrosage": "bloque",
-                "niveau_action": "surveiller",
-                "risque_gazon": risque_gazon,
-            },
-            "niveau_action": "surveiller",
-            "fenetre_optimale": "attendre",
-            "risque_gazon": risque_gazon,
-            "prochaine_reevaluation": prochaine_reevaluation,
-            "watering_passages": watering_passages,
-            "watering_pause_minutes": watering_pause_minutes,
-            "watering_target_date": watering_target_date,
-            **application_payload,
-        }
-
-    if application_requires_watering_after and application_type == APPLICATION_TYPE_SOL and application_post_watering_pending:
-        if not application_post_watering_ready:
-            return {
-                "objectif_mm": 0.0,
-                "objectif_mm_brut": objectif_mm_brut,
-                "tonte_autorisee": tonte_ok,
-                "tonte_statut": mowing_bundle["tonte_statut"],
-                "arrosage_auto_autorise": False,
-                "arrosage_recommande": False,
-                "type_arrosage": "personnalise",
-                "arrosage_conseille": "personnalise",
-                "conseil_principal": (
-                    f"{application_label}: attendre encore {application_post_watering_delay_remaining_minutes:.0f} min "
-                    "avant l'arrosage technique."
-                ),
-                "action_recommandee": "Attends la fin du délai applicatif avant d'arroser.",
-                "action_a_eviter": "Arroser avant la fin du délai d'incorporation.",
-                "raison_decision": (
-                    f"Application technique différée: délai restant {application_post_watering_delay_remaining_minutes:.0f} min, "
-                    f"mode={application_mode or 'auto'}. "
-                    f"{_hydric_summary_text(objectif_mm_brut, deficit_mm_ajuste, 0.0)}"
-                ),
-                "decision_resume": {
-                    "faire": False,
-                    "action": "aucune_action",
-                    "moment": "attendre",
-                    "objectif_mm": 0.0,
-                    "type_arrosage": "personnalise",
-                    "niveau_action": niveau_action,
-                    "risque_gazon": risque_gazon,
-                },
-                "watering_passages": watering_passages,
-                "watering_pause_minutes": watering_pause_minutes,
-                "watering_target_date": watering_target_date,
-                **application_payload,
-            }
-
-        objectif_mm = round(max(0.5, application_post_watering_remaining_mm or 0.0), 1)
-        passages = _soil_fractionation_passages(
-            phase_dominante,
-            sous_phase,
-            soil_style,
-            objectif_mm,
-            stress_level,
-            temperature=temperature,
-            humidite=humidite,
-            etp=etp,
-        )
-        style_text = _watering_style_text(phase_dominante, soil_style, objectif_mm, stress_level, passages)
-        if application_mode == "suggestion":
-            return {
-                "objectif_mm": 0.0,
-                "objectif_mm_brut": objectif_mm_brut,
-                "tonte_autorisee": tonte_ok,
-                "tonte_statut": mowing_bundle["tonte_statut"],
-                "arrosage_auto_autorise": False,
-                "arrosage_recommande": False,
-                "type_arrosage": "personnalise",
-                "arrosage_conseille": "personnalise",
-                "conseil_principal": f"{application_label}: arrosage technique suggéré, sans lancement automatique.",
-                "action_recommandee": (
-                    f"Suggestion d'arrosage technique: {objectif_mm:.1f} mm {style_text} "
-                    "si l'étiquette du produit l'autorise."
-                ),
-                "action_a_eviter": "Lancer un arrosage automatique non confirmé.",
-                "raison_decision": (
-                    f"Application technique en suggestion uniquement: {application_label}, "
-                    f"mode=suggestion. "
-                    f"{_hydric_summary_text(objectif_mm_brut, deficit_mm_ajuste, 0.0)}"
-                ),
-                "decision_resume": {
-                    "faire": False,
-                    "action": "aucune_action",
-                    "moment": "attendre",
-                    "objectif_mm": 0.0,
-                    "type_arrosage": "personnalise",
-                    "niveau_action": niveau_action,
-                    "risque_gazon": risque_gazon,
-                },
-                "watering_passages": watering_passages,
-                "watering_pause_minutes": watering_pause_minutes,
-                "watering_target_date": watering_target_date,
-                **application_payload,
-            }
-
-        if application_mode == "manuel":
-            conseil_principal = (
-                f"{application_label}: arrosage manuel immédiat pour activer ou incorporer le produit."
-            )
-        else:
-            conseil_principal = f"{application_label}: arrose maintenant pour activer/incorporer le produit."
-        if application_mode == "manuel":
-            action_recommandee = (
-                f"Arrosage manuel immédiat requis: applique {objectif_mm:.1f} mm {style_text}."
-            )
-        else:
-            action_recommandee = f"Applique {objectif_mm:.1f} mm {style_text} en arrosage technique."
-        action_a_eviter = "Arroser en excès ou trop tard."
-        auto_autorise = application_mode in {"", "auto"}
-        return {
-            "objectif_mm": objectif_mm,
-            "objectif_mm_brut": objectif_mm_brut,
-            "tonte_autorisee": tonte_ok,
-            "tonte_statut": mowing_bundle["tonte_statut"],
-            "arrosage_auto_autorise": auto_autorise,
-            "arrosage_recommande": True,
-            "type_arrosage": "application_technique",
-            "arrosage_conseille": "application_technique",
-            "conseil_principal": conseil_principal,
-            "action_recommandee": action_recommandee,
-            "action_a_eviter": action_a_eviter,
-            "raison_decision": (
-                f"Application technique en attente: {application_label}, "
-                f"mm restant={application_post_watering_remaining_mm:.1f}, "
-                f"fenêtre={fenetre_texte}, bilan={bilan_hydrique_mm:.1f} mm, mode={application_mode or 'auto'}. "
-                f"{_hydric_summary_text(objectif_mm_brut, deficit_mm_ajuste, objectif_mm)}"
-            ),
-            "decision_resume": {
-                "faire": True,
-                "action": "arrosage",
-                "moment": fenetre_optimale,
-                "objectif_mm": objectif_mm,
-                "type_arrosage": "application_technique",
-                "niveau_action": niveau_action,
-                "risque_gazon": risque_gazon,
-            },
-            "watering_passages": passages,
-            "watering_pause_minutes": _watering_pause_minutes(passages),
-            "watering_target_date": watering_target_date,
-            **application_payload,
-        }
-
-    if phase_dominante == "Traitement":
-        objectif_mm = 0.0
-        return {
-            "objectif_mm": 0.0,
-            "objectif_mm_brut": objectif_mm_brut,
-            "tonte_autorisee": False,
-            "tonte_statut": "interdite",
-            "arrosage_auto_autorise": False,
-            "arrosage_recommande": False,
-            "type_arrosage": "bloque",
-            "arrosage_conseille": "personnalise",
-            "conseil_principal": f"Laisser agir le traitement encore {phase_bundle['jours_restants']} jour(s).",
-            "action_recommandee": "Surveiller l'état du gazon sans intervention hydrique.",
-            "action_a_eviter": "Tondre ou arroser.",
-            "raison_decision": (
-                f"Traitement actif: tonte et arrosage bloqués. "
-                f"{_hydric_summary_text(objectif_mm_brut, deficit_mm_ajuste, 0.0)}"
-            ),
-            "decision_resume": {
-                "faire": False,
-                "action": "aucune_action",
-                "moment": "attendre",
-                "objectif_mm": objectif_mm,
-                "type_arrosage": "bloque",
-                "niveau_action": niveau_action,
-                "risque_gazon": risque_gazon,
-            },
-            "watering_passages": watering_passages,
-            "watering_pause_minutes": watering_pause_minutes,
-            "watering_target_date": watering_target_date,
-            **application_payload,
-        }
-
-    if phase_dominante in {"Fertilisation", "Biostimulant"} and not fertilization_allowed:
-        objectif_mm = 0.0
-        return {
-            "objectif_mm": 0.0,
-            "objectif_mm_brut": objectif_mm_brut,
-            "tonte_autorisee": tonte_ok,
-            "tonte_statut": mowing_bundle["tonte_statut"],
-            "arrosage_auto_autorise": False,
-            "arrosage_recommande": False,
-            "type_arrosage": "bloque",
-            "arrosage_conseille": "personnalise",
-            "conseil_principal": (
-                f"{phase_dominante}: reporte l'application, la fenêtre est trop chaude ou trop sèche."
-            ),
-            "action_recommandee": "Attends un créneau plus frais et moins stressant.",
-            "action_a_eviter": "Fertiliser sous chaleur ou stress hydrique.",
-            "raison_decision": (
-                f"{phase_dominante} bloqué: bilan={bilan_hydrique_mm:.1f} mm, "
-                f"stress={stress_level}, température={temperature:.1f}°C, ETP={etp:.1f} mm. "
-                f"{_hydric_summary_text(objectif_mm_brut, deficit_mm_ajuste, 0.0)}"
-            ),
-            "decision_resume": {
-                "faire": False,
-                "action": "aucune_action",
-                "moment": "attendre",
-                "objectif_mm": 0.0,
-                "type_arrosage": "bloque",
-                "niveau_action": "surveiller",
-                "risque_gazon": risque_gazon,
-            },
-            "niveau_action": "surveiller",
-            "fenetre_optimale": "attendre",
-            "risque_gazon": risque_gazon,
-            "prochaine_reevaluation": prochaine_reevaluation,
-            "watering_passages": watering_passages,
-            "watering_pause_minutes": watering_pause_minutes,
-            "watering_target_date": watering_target_date,
-        }
-
-    if phase_dominante == "Sursemis":
-        sursemis_allowed = bool(water_bundle.get("sursemis_micro_apport_allowed"))
-        surface_sec = bool(water_bundle.get("surface_sec"))
-        pluie_probabilite_24h = float(water_bundle.get("pluie_probabilite_24h") or 0.0)
-        mm_detected_24h = float(water_bundle.get("mm_detected_24h") or 0.0)
-        sursemis_reason = str(water_bundle.get("sursemis_reason") or "")
-        sursemis_thresholds = str(water_bundle.get("sursemis_seuil_declencheur") or "")
-        sursemis_block_reason = water_bundle.get("sursemis_block_reason")
-
-        if sursemis_allowed and objectif_mm > 0:
-            objectif_mm = 0.5
-            arrosage_recommande = True
-            arrosage_auto_autorise = False
-            type_arrosage = "manuel_frequent"
-            arrosage_conseille = "personnalise"
-            conseil_principal = f"Arrose {fenetre_texte} en un passage (micro-apport de 0.5 mm)."
-            action_recommandee = "Appliquer 0.5 mm en un passage."
-            action_a_eviter = "Répéter un micro-arrosage ou arroser plus fort."
-        else:
-            objectif_mm = 0.0
-            arrosage_recommande = False
-            arrosage_auto_autorise = False
-            type_arrosage = "personnalise"
-            arrosage_conseille = "personnalise"
-            conseil_principal = sursemis_reason or "Sursemis: micro-apport non nécessaire."
-            action_recommandee = "Surveille l'humidité et réévalue au prochain créneau."
-            action_a_eviter = "Multiplier les petits cycles."
-        watering_passages = 1
-        watering_pause_minutes = 0
-        confidence_score, confidence_level, confidence_reasons = _confidence_assessment(
-            phase_dominante=phase_dominante,
-            temperature=temperature,
-            humidite=humidite,
-            etp=etp,
-            weather_profile=context.weather_profile,
-            soil_profile=soil_style,
-            heat_stress_level=heat_stress_level,
-            heat_stress_phase=heat_stress_phase,
-            block_reason=sursemis_block_reason,
-            mm_final=objectif_mm,
-        )
-        raison_decision_sursemis = (
-            f"Sursemis / {sous_phase}: micro-apport 0.5 mm conditionné par pluie, humidité et température. "
-            f"pluie_24h={pluie_24h:.1f} mm, pluie_demain={pluie_demain:.1f} mm, "
-            f"pluie_probabilite_24h={pluie_probabilite_24h:.1f}%, bilan_hydrique_mm={bilan_hydrique_mm:.1f} mm, "
-            f"mm_detected_24h={mm_detected_24h:.1f} mm, temperature={temperature:.1f}°C, "
-            f"surface_sec={surface_sec}. "
-            f"{sursemis_reason} "
-            f"Seuil={sursemis_thresholds}. "
-            f"{_hydric_summary_text(objectif_mm_brut, deficit_mm_ajuste, objectif_mm)}"
-        )
-        return {
-            "objectif_mm": objectif_mm,
-            "objectif_mm_brut": objectif_mm_brut,
-            "deficit_brut_mm": deficit_mm_brut,
-            "deficit_mm_brut": deficit_mm_brut,
-            "deficit_mm_ajuste": deficit_mm_ajuste,
-            "mm_cible": objectif_mm,
-            "mm_final_recommande": objectif_mm,
-            "mm_final": objectif_mm,
-            "mm_requested": objectif_mm,
-            "mm_applied": objectif_mm,
-            "mm_detected": water_bundle.get("mm_detected"),
-            "tonte_autorisee": False,
-            "tonte_statut": "interdite",
-            "arrosage_auto_autorise": False,
-            "arrosage_recommande": objectif_mm > 0,
-            "type_arrosage": type_arrosage,
-            "arrosage_conseille": arrosage_conseille,
-            "conseil_principal": conseil_principal,
-            "action_recommandee": action_recommandee,
-            "action_a_eviter": action_a_eviter,
-            "raison_decision": raison_decision_sursemis,
-            "niveau_confiance": niveau_confiance,
-            "confidence_score": confidence_score,
-            "confidence_reasons": confidence_reasons,
-            "heat_stress_level": heat_stress_level,
-            "heat_stress_phase": heat_stress_phase,
-            "weekly_guardrail_mm_min": water_bundle.get("weekly_guardrail_mm_min"),
-            "weekly_guardrail_mm_max": water_bundle.get("weekly_guardrail_mm_max"),
-            "weekly_guardrail_reason": water_bundle.get("weekly_guardrail_reason"),
-            "soil_profile": water_bundle.get("soil_profile"),
-            "soil_retention_factor": water_bundle.get("soil_retention_factor"),
-            "soil_drainage_factor": water_bundle.get("soil_drainage_factor"),
-            "soil_infiltration_factor": water_bundle.get("soil_infiltration_factor"),
-            "soil_need_factor": water_bundle.get("soil_need_factor"),
-            "decision_resume": {
-                "faire": objectif_mm > 0,
-                "action": "arrosage" if objectif_mm > 0 else "aucune_action",
-                "moment": fenetre_optimale if objectif_mm > 0 else "attendre",
-                "objectif_mm": objectif_mm,
-                "type_arrosage": type_arrosage,
-                "niveau_action": "a_faire" if objectif_mm > 0 else "surveiller",
-                "risque_gazon": risque_gazon,
-            },
-            "niveau_action": "a_faire" if objectif_mm > 0 else "surveiller",
-            "fenetre_optimale": fenetre_optimale if objectif_mm > 0 else "attendre",
-            "risque_gazon": risque_gazon,
-            "prochaine_reevaluation": prochaine_reevaluation,
-            "tonte_autorisee": False,
-            "tonte_statut": "interdite",
-            "watering_passages": watering_passages,
-            "watering_pause_minutes": watering_pause_minutes,
-            "watering_target_date": watering_target_date,
-            "surface_sec": surface_sec,
-            "pluie_probabilite_24h": pluie_probabilite_24h,
-            "mm_detected_24h": mm_detected_24h,
-            "sursemis_micro_apport_allowed": sursemis_allowed,
-            "sursemis_block_reason": sursemis_block_reason,
-            "sursemis_reason": sursemis_reason,
-            "sursemis_seuil_declencheur": sursemis_thresholds,
-            "fractionnement": {
-                "enabled": False,
-                "passages": watering_passages,
-                "pause_minutes": watering_pause_minutes,
-                "max_mm_per_passage": round(objectif_mm / watering_passages, 1) if objectif_mm > 0 else 0.0,
-                "reason": "sursemis_micro_apport_0_5_mm" if objectif_mm > 0 else "sursemis_aucune_action",
-            },
-            **application_payload,
-        }
+    priority_state = {
+        "base_bundle": base_bundle,
+        "context": context,
+        "phase_bundle": phase_bundle,
+        "water_bundle": water_bundle,
+        "phase_dominante": phase_dominante,
+        "sous_phase": sous_phase,
+        "soil_style": soil_style,
+        "temperature": temperature,
+        "humidite": humidite,
+        "etp": etp,
+        "stress_level": stress_level,
+        "fenetre_optimale": fenetre_optimale,
+        "fenetre_texte": fenetre_texte,
+        "niveau_action": niveau_action,
+        "risque_gazon": risque_gazon,
+        "prochaine_reevaluation": prochaine_reevaluation,
+        "objectif_mm": objectif_mm,
+        "objectif_mm_brut": objectif_mm_brut,
+        "deficit_mm_ajuste": deficit_mm_ajuste,
+        "bilan_hydrique_mm": bilan_hydrique_mm,
+        "pluie_24h": pluie_24h,
+        "pluie_demain": pluie_demain,
+        "heat_stress_level": heat_stress_level,
+        "heat_stress_phase": heat_stress_phase,
+        "application_summary": application_summary,
+        "application_type_known": application_type_known,
+        "application_label": application_label,
+        "application_type": application_type,
+        "application_mode": application_mode,
+        "application_block_active": application_block_active,
+        "application_block_remaining_minutes": application_block_remaining_minutes,
+        "application_block_until": application_block_until,
+        "application_requires_watering_after": application_requires_watering_after,
+        "application_post_watering_pending": application_post_watering_pending,
+        "application_post_watering_ready": application_post_watering_ready,
+        "application_post_watering_delay_remaining_minutes": application_post_watering_delay_remaining_minutes,
+        "application_post_watering_remaining_mm": application_post_watering_remaining_mm,
+        "fertilization_allowed": fertilization_allowed,
+    }
+    for resolver in (
+        _resolve_hivernage_override,
+        _resolve_unknown_application_override,
+        _resolve_application_block_override,
+        _resolve_foliar_application_override,
+        _resolve_pending_sol_application_override,
+        _resolve_traitement_override,
+        _resolve_fertilization_window_override,
+        _resolve_sursemis_override,
+    ):
+        resolved = resolver(priority_state)
+        if resolved is not None:
+            return resolved
 
     if not recommande:
         watering_blocked = (
@@ -1192,15 +1702,15 @@ def build_watering_bundle(
         watering_passages = 1
         watering_pause_minutes = 0
 
-    decision_resume = {
-        "faire": arrosage_recommande,
-        "action": "arrosage" if arrosage_recommande else "aucune_action",
-        "moment": fenetre_optimale,
-        "objectif_mm": objectif_mm,
-        "type_arrosage": type_arrosage,
-        "niveau_action": niveau_action,
-        "risque_gazon": risque_gazon,
-    }
+    decision_resume = _decision_resume_payload(
+        faire=arrosage_recommande,
+        action="arrosage" if arrosage_recommande else "aucune_action",
+        moment=fenetre_optimale,
+        objectif_mm=objectif_mm,
+        type_arrosage=type_arrosage,
+        niveau_action=niveau_action,
+        risque_gazon=risque_gazon,
+    )
 
     weekly_guardrail_min = float(water_bundle.get("weekly_guardrail_mm_min") or 20.0)
     weekly_guardrail_max = float(water_bundle.get("weekly_guardrail_mm_max") or 25.0)
@@ -1271,6 +1781,15 @@ def build_watering_bundle(
     if block_reason_value == "cooldown_24h":
         raison_parts.append("Cooldown 24h: aucun arrosage normal dans les 24 dernières heures.")
         raison_parts.append("Motif exact: cooldown_24h.")
+    elif block_reason_value == "temperature_trop_basse":
+        raison_parts.append("Température trop basse: l'arrosage est différé.")
+        raison_parts.append("Motif exact: temperature_trop_basse.")
+    elif block_reason_value == "pluie_prevue_suffisante":
+        raison_parts.append("Pluie prévue suffisante: l'arrosage est reporté.")
+        raison_parts.append("Motif exact: pluie_prevue_suffisante.")
+    elif block_reason_value == "sol_non_adapte":
+        raison_parts.append("Sol non adapté: l'état du sol ne permet pas un arrosage cohérent.")
+        raison_parts.append("Motif exact: sol_non_adapte.")
     elif block_reason_value == "sol_deja_humide":
         raison_parts.append("Sol déjà humide: bilan hydrique au-dessus du seuil de saturation.")
         raison_parts.append("Motif exact: sol_deja_humide.")
@@ -1310,55 +1829,47 @@ def build_watering_bundle(
         observability_payload["feedback_observation"] = feedback_observation
     _LOGGER.debug("Gazon Intelligent V2 watering observability: %s", observability_payload)
 
-    return {
-        "objectif_mm": objectif_mm,
-        "objectif_mm_brut": objectif_mm_brut,
-        "deficit_brut_mm": deficit_mm_brut,
-        "deficit_mm_brut": deficit_mm_brut,
-        "deficit_mm_ajuste": deficit_mm_ajuste,
-        "mm_cible": mm_cible,
-        "mm_final_recommande": mm_final_recommande,
-        "mm_final": mm_final,
-        "mm_requested": water_bundle.get("mm_requested"),
-        "mm_applied": water_bundle.get("mm_applied"),
-        "mm_detected": water_bundle.get("mm_detected"),
-        "conseil_principal": conseil_principal,
-        "action_recommandee": action_recommandee,
-        "action_a_eviter": action_a_eviter,
-        "arrosage_recommande": arrosage_recommande,
-        "arrosage_auto_autorise": arrosage_auto_autorise,
-        "type_arrosage": type_arrosage,
-        "arrosage_conseille": arrosage_conseille,
-        "fractionnement": fractionnement,
-        "niveau_confiance": niveau_confiance,
-        "confidence_score": water_bundle.get("confidence_score"),
-        "confidence_reasons": water_bundle.get("confidence_reasons"),
-        "heat_stress_level": heat_stress_level,
-        "heat_stress_phase": water_bundle.get("heat_stress_phase"),
-        "decision_resume": decision_resume,
-        "block_reason": water_bundle.get("block_reason"),
-        "raison_decision": " ".join(raison_parts),
-        "niveau_action": niveau_action,
-        "fenetre_optimale": fenetre_optimale,
-        "risque_gazon": risque_gazon,
-        "prochaine_reevaluation": prochaine_reevaluation,
-        "tonte_autorisee": mowing_bundle["tonte_autorisee"],
-        "tonte_statut": mowing_bundle["tonte_statut"],
-        "watering_passages": watering_passages,
-        "watering_pause_minutes": watering_pause_minutes,
-        "watering_target_date": watering_target_date,
-        "weekly_guardrail_mm_min": water_bundle.get("weekly_guardrail_mm_min"),
-        "weekly_guardrail_mm_max": water_bundle.get("weekly_guardrail_mm_max"),
-        "weekly_guardrail_reason": water_bundle.get("weekly_guardrail_reason"),
-        "soil_profile": water_bundle.get("soil_profile"),
-        "soil_retention_factor": water_bundle.get("soil_retention_factor"),
-        "soil_drainage_factor": water_bundle.get("soil_drainage_factor"),
-        "soil_infiltration_factor": water_bundle.get("soil_infiltration_factor"),
-        "soil_need_factor": water_bundle.get("soil_need_factor"),
-        "watering_window_start_minute": watering_window_start_minute,
-        "watering_window_end_minute": watering_window_end_minute,
-        "watering_window_optimal_start_minute": watering_window_optimal_start_minute,
-        "watering_window_optimal_end_minute": watering_window_optimal_end_minute,
-        "watering_window_acceptable_end_minute": watering_window_acceptable_end_minute,
-        **application_payload,
-    }
+    return _bundle_with(
+        base_bundle,
+        objectif_mm=objectif_mm,
+        objectif_mm_brut=objectif_mm_brut,
+        deficit_brut_mm=deficit_mm_brut,
+        deficit_mm_brut=deficit_mm_brut,
+        deficit_mm_ajuste=deficit_mm_ajuste,
+        mm_cible=mm_cible,
+        mm_final_recommande=mm_final_recommande,
+        mm_final=mm_final,
+        mm_requested=water_bundle.get("mm_requested"),
+        mm_applied=water_bundle.get("mm_applied"),
+        mm_detected=water_bundle.get("mm_detected"),
+        conseil_principal=conseil_principal,
+        action_recommandee=action_recommandee,
+        action_a_eviter=action_a_eviter,
+        arrosage_recommande=arrosage_recommande,
+        arrosage_auto_autorise=arrosage_auto_autorise,
+        type_arrosage=type_arrosage,
+        arrosage_conseille=arrosage_conseille,
+        fractionnement=fractionnement,
+        niveau_confiance=niveau_confiance,
+        confidence_score=water_bundle.get("confidence_score"),
+        confidence_reasons=water_bundle.get("confidence_reasons"),
+        heat_stress_level=heat_stress_level,
+        heat_stress_phase=water_bundle.get("heat_stress_phase"),
+        decision_resume=decision_resume,
+        block_reason=water_bundle.get("block_reason"),
+        raison_decision=" ".join(raison_parts),
+        niveau_action=niveau_action,
+        fenetre_optimale=fenetre_optimale,
+        risque_gazon=risque_gazon,
+        prochaine_reevaluation=prochaine_reevaluation,
+        tonte_autorisee=mowing_bundle["tonte_autorisee"],
+        tonte_statut=mowing_bundle["tonte_statut"],
+        watering_passages=watering_passages,
+        watering_pause_minutes=watering_pause_minutes,
+        watering_target_date=watering_target_date,
+        watering_window_start_minute=watering_window_start_minute,
+        watering_window_end_minute=watering_window_end_minute,
+        watering_window_optimal_start_minute=watering_window_optimal_start_minute,
+        watering_window_optimal_end_minute=watering_window_optimal_end_minute,
+        watering_window_acceptable_end_minute=watering_window_acceptable_end_minute,
+    )
