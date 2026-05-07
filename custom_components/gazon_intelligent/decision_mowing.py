@@ -12,9 +12,81 @@ from .const import (
 )
 from .decision_models import DecisionContext
 from .guidance import compute_tonte_statut, is_active_rain_weather
+from .memory import compute_application_state
 from .scores import classify_stress_level
 
 _MOWER_STEP_CM = 0.5
+_MOWING_BLOCK_PRIORITIES = {
+    "post_application_active": 1,
+    "watering_in_progress": 2,
+    "watering_cooldown": 3,
+    "mowing_spacing": 4,
+    "mowing_night": 5,
+    "phase": 10,
+    "pluie_active": 20,
+    "vent_fort": 21,
+    "hauteur_trop_faible": 30,
+    "regle_tiers_impossible": 31,
+    "regle_tiers": 32,
+    "rosee": 40,
+    "humidite_elevee": 50,
+    "pluie_recente": 51,
+    "pluie_proche": 52,
+    "pluie_annoncee": 53,
+    "sol_humide_post_arrosage": 54,
+    "stress_thermique": 60,
+    "conditions_defavorables": 70,
+}
+_MOWING_FREQUENCY_BY_MONTH = {
+    1: (0.0, "0 / semaine"),
+    2: (0.0, "0 / semaine"),
+    3: (2.5, "2 à 3 / semaine"),
+    4: (2.5, "2 à 3 / semaine"),
+    5: (5.0, "4 à 6 / semaine"),
+    6: (5.0, "4 à 6 / semaine"),
+    7: (3.0, "2 à 4 / semaine"),
+    8: (3.0, "2 à 4 / semaine"),
+    9: (5.0, "4 à 6 / semaine"),
+    10: (5.0, "4 à 6 / semaine"),
+    11: (1.5, "1 à 2 / semaine"),
+    12: (0.0, "0 / semaine"),
+}
+_MOWING_WINDOW_LABELS = {
+    "ideal": "Fenêtre idéale",
+    "acceptable": "Fenêtre acceptable",
+    "discouraged": "À éviter",
+    "blocked": "Bloqué",
+}
+_MOWING_WINDOW_IDEAL_START = 10
+_MOWING_WINDOW_IDEAL_END = 12
+_MOWING_WINDOW_ACCEPTABLE_START = 17
+_MOWING_WINDOW_ACCEPTABLE_END = 19
+_MOWING_WINDOW_NIGHT_END = 22
+_MOWING_WINDOW_DISCOURAGED_WIND = 20
+_MOWING_WINDOW_BLOCK_WIND = 40
+_MOWING_WINDOW_DISCOURAGED_TEMP_MIN = 25
+_MOWING_WINDOW_BLOCK_TEMP_MIN = 30
+_MOWING_WINDOW_DISCOURAGED_HUMIDITY = 85
+_MOWING_WINDOW_BLOCK_HUMIDITY = 90
+_MOWING_BUNDLE_CORE_KEYS = (
+    "tonte_autorisee",
+    "tonte_statut",
+    "tonte_reason",
+    "raison_blocage_code",
+    "next_mowing_date",
+    "next_mowing_display",
+    "score_tonte",
+    "score_stress",
+    "hauteur_tonte_recommandee_cm",
+    "hauteur_tonte_min_cm",
+    "hauteur_tonte_max_cm",
+    "mowing_blocked_by_watering",
+    "mowing_blocked",
+    "mowing_block_reason_code",
+    "mowing_block_reason_label",
+    "mowing_cooldown_remaining_minutes",
+    "mowing_post_application_active",
+)
 
 
 def _mowing_height_settings(context: DecisionContext) -> tuple[float, float, float]:
@@ -46,21 +118,25 @@ def _round_to_step(value: float) -> float:
 
 def _seasonal_base_height(month: int) -> float:
     """Retourne une hauteur de coupe prudente selon la saison."""
-    if month in {1, 2}:
-        return 7.4
-    if month == 3:
-        return 6.8
-    if month in {4, 5}:
-        return 6.1
-    if month == 6:
-        return 6.5
+    if month in {1, 2, 11, 12}:
+        return 5.0
+    if month in {3, 4}:
+        return 5.8
+    if month in {5, 6}:
+        return 5.0
     if month in {7, 8}:
-        return 7.8
-    if month == 9:
-        return 6.6
-    if month == 10:
-        return 6.9
-    return 7.2
+        return 6.2
+    if month in {9, 10}:
+        return 5.0
+    return 5.5
+
+
+def _seasonal_mowing_frequency(month: int) -> tuple[float, str]:
+    return _MOWING_FREQUENCY_BY_MONTH.get(month, (3.0, "2 à 4 / semaine"))
+
+
+def _mowing_window_label(state: str) -> str:
+    return _MOWING_WINDOW_LABELS.get(str(state or "").strip().lower(), "À éviter")
 
 
 def _round_up_to_step(value: float, minimum: float, step: float) -> float:
@@ -113,6 +189,9 @@ def _last_sursemis_age_days(context: DecisionContext) -> int | None:
 def _parse_history_timestamp(item: dict[str, Any], today: date) -> datetime:
     """Retourne le meilleur horodatage disponible pour une entrée d'historique."""
     candidates = (
+        item.get("ended_at"),
+        item.get("started_at"),
+        item.get("recorded_at"),
         item.get("detected_at_utc"),
         item.get("detected_at"),
         item.get("triggered_at"),
@@ -143,10 +222,225 @@ def _parse_history_timestamp(item: dict[str, Any], today: date) -> datetime:
 
 def _latest_watering_timestamp(context: DecisionContext) -> datetime:
     """Retourne l'horodatage du dernier arrosage détecté ou la date du jour."""
+    runtime_context = context.runtime_context if isinstance(context.runtime_context, dict) else {}
+    last_execution = runtime_context.get("last_irrigation_execution")
+    if isinstance(last_execution, dict):
+        parsed = _parse_history_timestamp(last_execution, context.today)
+        if parsed:
+            return parsed
     for item in reversed(context.history):
         if item.get("type") != "arrosage":
             continue
         return _parse_history_timestamp(item, context.today)
+    return datetime.combine(context.today, time(6, 0), tzinfo=timezone.utc)
+
+
+def _active_irrigation_session(context: DecisionContext) -> dict[str, Any] | None:
+    runtime_context = context.runtime_context if isinstance(context.runtime_context, dict) else {}
+    session = runtime_context.get("active_irrigation_session")
+    if not isinstance(session, dict):
+        return None
+    if session.get("status") in {"completed", "cancelled", "failed"}:
+        return None
+    return session
+
+
+def _mowing_cooldown_state(context: DecisionContext) -> tuple[bool, int]:
+    runtime_context = context.runtime_context if isinstance(context.runtime_context, dict) else {}
+    raw_minutes = runtime_context.get("mowing_cooldown_after_watering_minutes", 0)
+    try:
+        cooldown_minutes = max(0, int(float(raw_minutes)))
+    except (TypeError, ValueError):
+        cooldown_minutes = 0
+    if cooldown_minutes <= 0:
+        return False, 0
+
+    latest_watering = _latest_watering_timestamp(context)
+    reference_hour = context.hour_of_day if context.hour_of_day is not None else 6
+    now_dt = datetime.combine(context.today, time(reference_hour % 24, 0), tzinfo=timezone.utc)
+    elapsed_minutes = max(0, int((now_dt - latest_watering).total_seconds() // 60))
+    remaining_minutes = max(0, cooldown_minutes - elapsed_minutes)
+    return remaining_minutes > 0, remaining_minutes
+
+
+def _has_recent_watering_history(context: DecisionContext) -> bool:
+    runtime_context = context.runtime_context if isinstance(context.runtime_context, dict) else {}
+    if isinstance(runtime_context.get("last_irrigation_execution"), dict):
+        return True
+    return any(isinstance(item, dict) and item.get("type") == "arrosage" for item in context.history)
+
+
+def _watering_related_mowing_block(
+    context: DecisionContext,
+    water_bundle: dict[str, Any],
+) -> tuple[bool, str | None, str | None]:
+    if not _has_recent_watering_history(context):
+        return False, None, None
+
+    latest_watering = _latest_watering_timestamp(context)
+    reference_hour = context.hour_of_day if context.hour_of_day is not None else 6
+    now_dt = datetime.combine(context.today, time(reference_hour % 24, 0), tzinfo=timezone.utc)
+    elapsed_minutes = max(0, int((now_dt - latest_watering).total_seconds() // 60))
+    if elapsed_minutes < 24 * 60:
+        return True, "recent_watering", "Arrosage récent: attendre 24 h avant de tondre."
+
+    humidite_sol = water_bundle["advanced_context"].get("humidite_sol")
+    if humidite_sol is None:
+        humidite_sol = context.humidite_sol
+    if humidite_sol is not None:
+        try:
+            humidite_sol_value = float(humidite_sol)
+        except (TypeError, ValueError):
+            humidite_sol_value = None
+        if humidite_sol_value is not None and humidite_sol_value >= 70:
+            return True, "soil_wet", "Sol humide: attendre le ressuyage."
+
+    if float(context.humidite or 0.0) >= _MOWING_WINDOW_BLOCK_HUMIDITY:
+        return True, "soil_wet", "Sol humide: attendre le ressuyage."
+
+    return False, None, None
+
+
+def _resolve_mowing_window(
+    context: DecisionContext,
+    *,
+    weather_profile: dict[str, Any],
+) -> tuple[str, str | None]:
+    hour = context.hour_of_day
+    if hour is None:
+        return "blocked", "Heure de tonte inconnue."
+
+    temperature = float(context.temperature or 0.0)
+    vent = float(context.vent or 0.0)
+    rosee = context.rosee
+    month = context.today.month
+
+    if is_active_rain_weather(weather_profile):
+        return "blocked", "Pluie en cours ou imminente."
+    if rosee is not None and float(rosee) > 0:
+        return "blocked", "Rosée présente: attendre le ressuyage du feuillage."
+    if temperature < 8:
+        return "blocked", "Température trop basse pour tondre."
+    if temperature > 30:
+        return "blocked", "Température trop élevée pour tondre."
+    if vent > 40:
+        return "blocked", "Vent trop fort pour tondre."
+    if vent >= 20:
+        return "discouraged", "Vent soutenu: à éviter."
+    if 25 <= temperature <= 30:
+        return "discouraged", "Température élevée: à éviter."
+    if hour < _MOWING_WINDOW_IDEAL_START:
+        return "blocked", "Matin trop tôt: attendre le ressuyage."
+    if _MOWING_WINDOW_IDEAL_START <= hour < _MOWING_WINDOW_IDEAL_END:
+        return "ideal", "Fenêtre idéale du matin."
+    if _MOWING_WINDOW_ACCEPTABLE_START <= hour < _MOWING_WINDOW_ACCEPTABLE_END:
+        if month in {7, 8} and temperature >= 28:
+            return "discouraged", "Fin de journée chaude: à éviter."
+        return "acceptable", "Fenêtre acceptable de fin de journée."
+    if _MOWING_WINDOW_IDEAL_END <= hour < _MOWING_WINDOW_ACCEPTABLE_START:
+        if month in {7, 8} and temperature >= 28:
+            return "discouraged", "Plein après-midi en été: à éviter."
+        return "discouraged", "Créneau intermédiaire: à éviter."
+    if _MOWING_WINDOW_ACCEPTABLE_END <= hour < _MOWING_WINDOW_NIGHT_END:
+        return "discouraged", "Fin de journée tardive: à éviter."
+    return "blocked", "Nuit: attendre le lever du soleil."
+
+
+def _soil_is_wet(advanced_context: dict[str, Any], context: DecisionContext) -> bool:
+    humidite_sol = advanced_context.get("humidite_sol")
+    if humidite_sol is None:
+        humidite_sol = context.humidite_sol
+    if humidite_sol is None:
+        return False
+    try:
+        return float(humidite_sol) >= 70
+    except (TypeError, ValueError):
+        return False
+
+
+def _post_application_mowing_block(context: DecisionContext) -> tuple[bool, str | None, str | None]:
+    application_state = compute_application_state(context.history)
+    status = str(application_state.get("application_post_watering_status") or "").strip().lower()
+    if status not in {"bloque", "en_attente", "autorise"}:
+        return False, None, None
+    return True, "post_application_active", "Post-produit actif: attends la fin du post-arrosage."
+
+
+def _machine_unavailable_detail(
+    mower_context: dict[str, Any],
+) -> tuple[str, str] | None:
+    mower_operation_state = str(mower_context.get("mower_operation_state") or "").strip().lower()
+    mower_reason_code = str(mower_context.get("mower_reason_code") or "").strip().lower()
+    mower_is_mowing = bool(mower_context.get("mower_is_mowing")) or mower_operation_state in {"tonte", "mowing"}
+    mower_is_returning = bool(mower_context.get("mower_is_returning")) or mower_operation_state in {"transit", "retour", "retour_station"}
+    mower_is_ready = mower_context.get("mower_coordination_ready") is not False and mower_context.get("tondeuse_prete") is not False
+    mower_is_connected = mower_context.get("tondeuse_connectee") is not False
+    mower_is_charging = bool(mower_context.get("tondeuse_en_charge"))
+
+    if not mower_is_connected:
+        return "offline", "Robot hors ligne: attendre qu'il redevienne joignable."
+    if mower_is_charging:
+        return "charging", "Robot en charge: attendre qu'il soit prêt."
+    if mower_is_mowing or mower_reason_code == "mower_mowing":
+        return "mowing", "Robot déjà en tonte: attendre la fin du cycle en cours."
+    if mower_is_returning or mower_reason_code == "mower_returning":
+        return "returning", "Robot en retour station: attendre qu'il soit prêt."
+    if mower_reason_code == "mower_unreliable":
+        return "unreliable", "Robot instable: vérifie sa disponibilité avant de reprendre."
+    if not mower_is_ready:
+        return "not_ready", "Robot indisponible: attendre qu'il soit prêt."
+    return None
+
+
+def _resolve_mowing_block(
+    context: DecisionContext,
+    water_bundle: dict[str, Any],
+) -> tuple[bool, str | None, str | None, str | None, str | None]:
+    """Résout le blocage réel prioritaire, indépendant de la fenêtre métier."""
+    post_application_active, post_application_code, post_application_label = _post_application_mowing_block(context)
+    if post_application_active:
+        return True, post_application_code, post_application_label, None, None
+
+    mower_context = context.mower_context if isinstance(context.mower_context, dict) else {}
+    if mower_context:
+        machine_detail = _machine_unavailable_detail(mower_context)
+        if machine_detail is not None:
+            detail_code, detail_label = machine_detail
+            return True, "machine_unavailable", "Robot indisponible: attendre qu'il soit prêt.", detail_code, detail_label
+
+    temperature = float(context.temperature or 0.0)
+    if temperature < 8 or temperature > 30:
+        return True, "temp_extreme", "Température extrême: attendre une fenêtre plus clémente.", None, None
+
+    advanced_context = water_bundle.get("advanced_context")
+    if not isinstance(advanced_context, dict):
+        advanced_context = {}
+    rosee = advanced_context.get("rosee")
+    pluie_24h = float(context.pluie_24h or 0.0)
+    if rosee is not None:
+        try:
+            if float(rosee) > 0:
+                return True, "wet_grass", "Herbe mouillée: attendre le ressuyage.", None, None
+        except (TypeError, ValueError):
+            pass
+
+    if is_active_rain_weather(context.weather_profile):
+        return True, "wet_grass", "Herbe mouillée: pluie en cours ou récente.", None, None
+    if _soil_is_wet(advanced_context, context):
+        return True, "soil_wet", "Sol humide: attendre le ressuyage.", None, None
+
+    watering_block_active, watering_block_reason_code, watering_block_reason_label = _watering_related_mowing_block(
+        context,
+        water_bundle,
+    )
+    if watering_block_active:
+        return True, watering_block_reason_code, watering_block_reason_label, None, None
+
+    return False, None, None, None, None
+
+
+def _default_projection_anchor(context: DecisionContext) -> datetime:
+    """Ancre technique minimale utilisée quand aucune source métier plus précise n'existe."""
     return datetime.combine(context.today, time(6, 0), tzinfo=timezone.utc)
 
 
@@ -201,33 +495,220 @@ def _estimate_mowing_ressuyage_hours(
     return max(6.0, min(hours, 48.0))
 
 
+def _mowing_projection_forecast_offset_days(
+    context: DecisionContext,
+    phase_bundle: dict[str, Any],
+) -> tuple[int, list[str]]:
+    """Décale la projection si la fenêtre sèche des prochains jours reste mauvaise."""
+    offsets: list[int] = [0]
+    reasons: list[str] = []
+
+    pluie_demain = float(context.pluie_demain or 0.0)
+    pluie_j2 = float(context.pluie_j2 or 0.0)
+    pluie_3j = float(context.pluie_3j or 0.0)
+    pluie_probabilite_max_3j = float(context.pluie_probabilite_max_3j or 0.0)
+    humidite = float(context.humidite or 0.0)
+    rosee = context.rosee
+    weather_profile = context.weather_profile if isinstance(context.weather_profile, dict) else {}
+    precip_probability = float(
+        weather_profile.get("weather_precipitation_probability")
+        or pluie_probabilite_max_3j
+        or 0.0
+    )
+    cloud_coverage = float(weather_profile.get("weather_cloud_coverage") or 0.0)
+    wind = float(context.vent or weather_profile.get("weather_wind_speed") or 0.0)
+    temperature = float(context.temperature or 0.0)
+    phase_dominante = str(phase_bundle.get("phase_dominante") or "")
+    sous_phase = str(phase_bundle.get("sous_phase") or "")
+
+    if pluie_demain >= 2.0 or precip_probability >= 85.0:
+        offsets.append(1)
+        reasons.append("meteo_j1_humide")
+    elif pluie_demain >= 1.0 or precip_probability >= 70.0:
+        offsets.append(1)
+        reasons.append("meteo_j1_incertaine")
+
+    if pluie_j2 >= 2.0:
+        offsets.append(2)
+        reasons.append("meteo_j2_humide")
+    elif pluie_j2 >= 1.0 and precip_probability >= 75.0:
+        offsets.append(2)
+        reasons.append("meteo_j2_incertaine")
+
+    if pluie_3j >= 6.0:
+        offsets.append(3)
+        reasons.append("meteo_3j_tres_humide")
+    elif pluie_3j >= 3.0 and precip_probability >= 80.0:
+        offsets.append(3)
+        reasons.append("meteo_3j_humide")
+
+    if humidite >= 88.0 or (rosee is not None and float(rosee) > 0):
+        offsets.append(1)
+        reasons.append("ressuyage_lent")
+
+    if cloud_coverage >= 90.0 and wind <= 8.0 and temperature <= 16.0:
+        offsets.append(1)
+        reasons.append("sechage_faible")
+
+    if phase_dominante == "Sursemis" and sous_phase in {"Germination", "Enracinement"}:
+        offsets.append(1)
+        reasons.append(f"sous_phase={sous_phase.lower()}")
+    elif phase_dominante in {"Traitement", "Hivernage"}:
+        offsets.append(1)
+        reasons.append(f"phase={phase_dominante.lower()}")
+
+    return max(offsets), reasons
+
+
+def _mowing_projection_application_offset_hours(context: DecisionContext) -> tuple[float, list[str]]:
+    """Ajoute une prudence si une application récente peut encore gêner la tonte."""
+    application_state = compute_application_state(context.history)
+    raw_date = application_state.get("date_action") or application_state.get("date")
+    if not raw_date:
+        return 0.0, []
+
+    try:
+        application_date = date.fromisoformat(str(raw_date))
+    except ValueError:
+        return 0.0, []
+
+    age_days = max((context.today - application_date).days, 0)
+    if age_days > 3:
+        return 0.0, []
+
+    application_type = str(application_state.get("application_type") or "").strip().lower()
+    requires_watering = bool(application_state.get("application_requires_watering_after"))
+    post_status = str(application_state.get("application_post_watering_status") or "").strip().lower()
+
+    hours = 0.0
+    reasons: list[str] = []
+
+    if requires_watering or post_status in {"termine", "en_attente", "bloque"}:
+        hours = max(hours, 18.0)
+        reasons.append("post_application_recent")
+
+    if application_type in {"sol", "foliaire"} and age_days <= 1:
+        hours = max(hours, 12.0)
+        reasons.append(f"application_{application_type}")
+
+    if age_days == 0:
+        hours += 6.0
+        reasons.append("application_j0")
+
+    return hours, reasons
+
+
+def _last_mowing_date(context: DecisionContext) -> date | None:
+    """Retourne la date de la dernière tonte déclarée dans l'historique."""
+    history = context.history if isinstance(context.history, list) else []
+    latest: date | None = None
+    for item in history:
+        if not isinstance(item, dict) or item.get("type") != "tonte":
+            continue
+        raw_date = item.get("date")
+        if not raw_date:
+            continue
+        try:
+            mowing_date = date.fromisoformat(str(raw_date))
+        except ValueError:
+            continue
+        if latest is None or mowing_date > latest:
+            latest = mowing_date
+    return latest
+
+
+def _mowing_spacing_min_days(
+    phase_bundle: dict[str, Any],
+) -> int:
+    """Politique métier actuelle: tondre un jour sur deux."""
+    return 2
+
+
 def _project_next_mowing_date(
     context: DecisionContext,
     phase_bundle: dict[str, Any],
     water_bundle: dict[str, Any],
     tonte_ok: bool,
+    reason_code: str | None,
 ) -> tuple[str | None, str | None, str | None]:
     """Projette la prochaine date de tonte autorisable."""
     if tonte_ok:
         today_iso = context.today.isoformat()
         return today_iso, context.today.strftime("%d/%m/%Y"), None
 
-    anchor = _latest_watering_timestamp(context)
-    ressuyage_hours = _estimate_mowing_ressuyage_hours(context, phase_bundle, water_bundle)
-    projected = anchor + timedelta(hours=ressuyage_hours)
+    anchor: datetime | None = None
     reason_hint: str | None = None
 
-    phase_end = phase_bundle.get("date_fin")
-    if phase_bundle["phase_dominante"] in {"Sursemis", "Traitement", "Hivernage"} and phase_end:
-        try:
-            phase_end_dt = datetime.combine(date.fromisoformat(str(phase_end)), time(6, 0), tzinfo=timezone.utc)
-            projected = max(projected, phase_end_dt)
-            reason_hint = f"phase={phase_bundle['phase_dominante']}"
-        except ValueError:
-            pass
+    if reason_code in {"phase_sursemis", "phase_traitement", "phase_hivernage"}:
+        phase_end = phase_bundle.get("date_fin")
+        if phase_end:
+            try:
+                phase_end_dt = datetime.combine(
+                    date.fromisoformat(str(phase_end)),
+                    time(6, 0),
+                    tzinfo=timezone.utc,
+                )
+                anchor = phase_end_dt
+                reason_hint = f"phase={phase_bundle['phase_dominante']}"
+            except ValueError:
+                anchor = None
+    elif reason_code == "mowing_night":
+        projected_date = context.today
+        if context.hour_of_day is not None and context.hour_of_day >= 22:
+            projected_date = context.today + timedelta(days=1)
+        return projected_date.isoformat(), projected_date.strftime("%d/%m/%Y"), "nuit"
+    elif reason_code == "mowing_spacing":
+        last_mowing = _last_mowing_date(context)
+        spacing_days = _mowing_spacing_min_days(phase_bundle)
+        if last_mowing is not None:
+            projected_date = max(context.today, last_mowing + timedelta(days=spacing_days))
+            return (
+                projected_date.isoformat(),
+                projected_date.strftime("%d/%m/%Y"),
+                f"espacement={spacing_days}j",
+            )
+        anchor = _default_projection_anchor(context)
+    elif reason_code in {
+        "watering_in_progress",
+        "watering_cooldown",
+        "post_application_active",
+        "pluie_en_cours",
+        "pluie_annoncee",
+        "pluie_proche",
+        "pluie_recente",
+        "sol_humide_post_arrosage",
+        "humidite_elevee",
+    }:
+        anchor = _latest_watering_timestamp(context)
+    elif reason_code == "rosee_persistante":
+        anchor = _default_projection_anchor(context)
+    elif reason_code == "stress_thermique":
+        anchor = _default_projection_anchor(context) + timedelta(hours=24)
+    elif reason_code in {"hauteur_trop_faible", "regle_tiers", "regle_tiers_impossible"}:
+        return None, None, "croissance"
+    else:
+        anchor = _default_projection_anchor(context)
+
+    ressuyage_hours = _estimate_mowing_ressuyage_hours(context, phase_bundle, water_bundle)
+    application_offset_hours, application_reasons = _mowing_projection_application_offset_hours(context)
+    projected = (anchor or _default_projection_anchor(context)) + timedelta(
+        hours=ressuyage_hours + application_offset_hours
+    )
+
+    if projected.hour >= 18:
+        projected += timedelta(days=1)
+        projected = projected.replace(hour=6, minute=0, second=0, microsecond=0)
+
+    forecast_offset_days, forecast_reasons = _mowing_projection_forecast_offset_days(context, phase_bundle)
+    if forecast_offset_days > 0:
+        projected += timedelta(days=forecast_offset_days)
+        projected = projected.replace(hour=6, minute=0, second=0, microsecond=0)
 
     projected_date = projected.date()
-    return projected_date.isoformat(), projected_date.strftime("%d/%m/%Y"), reason_hint
+    if projected_date < context.today:
+        projected_date = context.today
+
+    return projected_date.isoformat(), projected_date.strftime("%d/%m/%Y"), None
 
 
 def _post_sursemis_bonus(age_days: int | None) -> float:
@@ -320,9 +801,282 @@ def _theoretical_mowing_height(
     else:
         post_sursemis_age = _last_sursemis_age_days(context)
         if post_sursemis_age is not None and post_sursemis_age <= 35:
-            target = max(target, target + _post_sursemis_bonus(post_sursemis_age))
+            target += _post_sursemis_bonus(post_sursemis_age)
 
     return target
+
+
+def _select_mowing_block_reason(
+    *,
+    context: DecisionContext,
+    phase_bundle: dict[str, Any],
+    water_bundle: dict[str, Any],
+    weather_profile: dict[str, Any],
+    humidite: float,
+    pluie_demain: float,
+    pluie_j2: float,
+    pluie_3j: float,
+    pluie_probabilite_max_3j: float,
+    arrosage_recent_jour: float,
+    rosee: Any,
+    temperature: float,
+    etp: float,
+    score_tonte: int,
+    score_stress: int,
+    current_height: float | None,
+    target_height: float,
+    effective_max: float,
+) -> tuple[str | None, str | None, bool]:
+    """Résout une cause de blocage unique selon une priorité métier explicite."""
+    phase_dominante = str(phase_bundle["phase_dominante"])
+    min_height_after_cut = None if current_height is None else current_height * (2.0 / 3.0)
+    last_mowing = _last_mowing_date(context)
+    spacing_days = _mowing_spacing_min_days(phase_bundle)
+
+    if phase_dominante == "Sursemis":
+        return "Phase Sursemis: tonte interdite pendant l'installation du gazon.", "phase_sursemis", False
+    if phase_dominante in {"Traitement", "Hivernage"}:
+        return f"Phase {phase_dominante}: mieux vaut différer la tonte.", f"phase_{phase_dominante.lower()}", False
+
+    candidates: list[tuple[int, str, str, bool]] = []
+
+    sun_context = context.sun_context if isinstance(context.sun_context, dict) else {}
+    sun_state = str(sun_context.get("sun_state") or "").strip().lower()
+    sun_above_horizon = sun_context.get("sun_above_horizon")
+    sun_below_horizon = sun_context.get("sun_below_horizon")
+    if sun_below_horizon is True or sun_state == "below_horizon":
+        candidates.append(
+            (
+                _MOWING_BLOCK_PRIORITIES["mowing_night"],
+                "mowing_night",
+                "Nuit: attendre le lever du soleil.",
+                False,
+            )
+        )
+    elif sun_above_horizon is None and context.hour_of_day is not None and (
+        context.hour_of_day < 7 or context.hour_of_day >= 22
+    ):
+        candidates.append(
+            (
+                _MOWING_BLOCK_PRIORITIES["mowing_night"],
+                "mowing_night",
+                "Nuit: attendre le lever du soleil.",
+                False,
+            )
+        )
+
+    if last_mowing is not None:
+        days_since_last_mowing = max((context.today - last_mowing).days, 0)
+        if days_since_last_mowing < spacing_days:
+            next_allowed = last_mowing + timedelta(days=spacing_days)
+            candidates.append(
+                (
+                    _MOWING_BLOCK_PRIORITIES["mowing_spacing"],
+                    "mowing_spacing",
+                    f"Dernière tonte récente: laisse un jour de repos au gazon avant le {next_allowed.strftime('%d/%m/%Y')}.",
+                    False,
+                )
+            )
+
+    if phase_dominante in {"Sursemis", "Traitement", "Hivernage"}:
+        candidates.append(
+            (
+                _MOWING_BLOCK_PRIORITIES["phase"],
+                f"phase_{phase_dominante.lower()}",
+                f"Phase {phase_dominante}: mieux vaut différer la tonte.",
+                False,
+            )
+        )
+
+    if is_active_rain_weather(weather_profile):
+        candidates.append(
+            (
+                _MOWING_BLOCK_PRIORITIES["pluie_active"],
+                "pluie_en_cours",
+                "Pluie en cours ou imminente: attendre le ressuyage du gazon.",
+                False,
+            )
+        )
+
+    if float(context.vent or 0.0) > 40:
+        candidates.append(
+            (
+                _MOWING_BLOCK_PRIORITIES["vent_fort"],
+                "vent_fort",
+                "Vent fort: tonte interdite.",
+                False,
+            )
+        )
+
+    if current_height is not None:
+        if current_height <= target_height:
+            candidates.append(
+                (
+                    _MOWING_BLOCK_PRIORITIES["hauteur_trop_faible"],
+                    "hauteur_trop_faible",
+                    f"Hauteur actuelle trop faible: vise au moins {target_height:.1f} cm avant de tondre.",
+                    True,
+                )
+            )
+        elif min_height_after_cut is not None and target_height < min_height_after_cut:
+            if effective_max < min_height_after_cut:
+                candidates.append(
+                    (
+                        _MOWING_BLOCK_PRIORITIES["regle_tiers_impossible"],
+                        "regle_tiers_impossible",
+                        (
+                            f"Règle du tiers impossible avec cette tondeuse: il faudrait au moins {min_height_after_cut:.1f} cm, "
+                            f"mais la machine plafonne à {effective_max:.1f} cm."
+                        ),
+                        True,
+                    )
+                )
+            else:
+                candidates.append(
+                    (
+                        _MOWING_BLOCK_PRIORITIES["regle_tiers"],
+                        "regle_tiers",
+                        (
+                            f"Règle du tiers: conserve au moins {min_height_after_cut:.1f} cm sur une hauteur actuelle de {current_height:.1f} cm."
+                        ),
+                        True,
+                    )
+                )
+
+    if rosee is not None and float(rosee) > 0:
+        candidates.append(
+            (
+                _MOWING_BLOCK_PRIORITIES["rosee"],
+                "rosee_persistante",
+                "Rosée présente: attendre le ressuyage du feuillage.",
+                False,
+            )
+        )
+
+    advanced_context = water_bundle.get("advanced_context")
+    if not isinstance(advanced_context, dict):
+        advanced_context = {}
+    if _soil_is_wet(advanced_context, context):
+        candidates.append(
+            (
+                _MOWING_BLOCK_PRIORITIES["humidite_elevee"],
+                "soil_wet",
+                "Sol humide: attendre le ressuyage.",
+                False,
+            )
+        )
+
+    if arrosage_recent_jour > 0.5:
+        candidates.append(
+            (
+                _MOWING_BLOCK_PRIORITIES["sol_humide_post_arrosage"],
+                "recent_watering",
+                "Arrosage récent: attendre 24 h avant de tondre.",
+                False,
+            )
+        )
+
+    if score_stress >= 70 or (temperature >= 30 and etp >= 4):
+        candidates.append(
+            (
+                _MOWING_BLOCK_PRIORITIES["stress_thermique"],
+                "stress_thermique",
+                "Stress thermique élevé: limiter la tonte.",
+                False,
+            )
+        )
+    elif score_tonte >= 65:
+        candidates.append(
+            (
+                _MOWING_BLOCK_PRIORITIES["conditions_defavorables"],
+                "conditions_defavorables",
+                "Conditions défavorables à la tonte.",
+                False,
+            )
+        )
+
+    if not candidates:
+        return None, None, False
+
+    _priority, reason_code, reason, height_rule_blocked = min(candidates, key=lambda item: item[0])
+    return reason, reason_code, height_rule_blocked
+
+
+def _compute_mowing_status(
+    *,
+    phase_bundle: dict[str, Any],
+    risk_bundle: dict[str, Any],
+    tonte_ok: bool,
+    height_rule_blocked: bool,
+    score_tonte: int,
+) -> str:
+    tonte_statut = compute_tonte_statut(
+        phase_dominante=phase_bundle["phase_dominante"],
+        tonte_autorisee=tonte_ok,
+        score_tonte=score_tonte,
+        risque_gazon=risk_bundle["risque_gazon"],
+    )
+    if height_rule_blocked and tonte_statut != "interdite":
+        return "deconseillee"
+    return tonte_statut
+
+
+def _mowing_daily_session_policy(
+    phase_bundle: dict[str, Any],
+) -> tuple[int, str]:
+    """Retourne la politique métier de sessions de tonte par jour."""
+    phase_dominante = str(phase_bundle.get("phase_dominante") or "").strip()
+    if phase_dominante in {"Sursemis", "Traitement", "Scarification", "Hivernage"}:
+        return 1, "phase_sensitive"
+    return 2, "standard"
+
+
+def _build_mowing_bundle_payload(
+    *,
+    tonte_ok: bool,
+    tonte_statut: str,
+    reason: str,
+    reason_code: str | None,
+    next_mowing_date: str | None,
+    next_mowing_display: str | None,
+    score_tonte: int,
+    score_stress: int,
+    height_recommendation: dict[str, float | None],
+    mowing_frequency_target_per_week: float,
+    mowing_frequency_label: str,
+    mowing_window_state: str,
+    mowing_window_label: str,
+    mowing_window_reason: str | None,
+    mowing_daily_session_limit: int,
+    mowing_daily_session_policy: str,
+) -> dict[str, Any]:
+    bundle = {
+        "tonte_autorisee": tonte_ok,
+        "tonte_statut": tonte_statut,
+        "tonte_reason": reason,
+        "raison_blocage_code": reason_code,
+        "next_mowing_date": next_mowing_date,
+        "next_mowing_display": next_mowing_display,
+        "score_tonte": score_tonte,
+        "score_stress": score_stress,
+        "mowing_frequency_target_per_week": mowing_frequency_target_per_week,
+        "mowing_frequency_label": mowing_frequency_label,
+        "mowing_window_state": mowing_window_state,
+        "mowing_window_label": mowing_window_label,
+        "mowing_window_reason": mowing_window_reason,
+        "mowing_daily_session_limit": mowing_daily_session_limit,
+        "mowing_daily_session_policy": mowing_daily_session_policy,
+        "mowing_resume_requires_full_battery": True,
+        "mowing_blocked_by_watering": False,
+        "mowing_blocked": False,
+        "mowing_block_reason_code": None,
+        "mowing_block_reason_label": None,
+        "mowing_block_reason": None,
+        "mowing_cooldown_remaining_minutes": 0,
+        "mowing_post_application_active": False,
+        **height_recommendation,
+    }
+    return bundle
 
 
 def _recommended_mowing_height(
@@ -336,6 +1090,8 @@ def _recommended_mowing_height(
     theoretical_height = _theoretical_mowing_height(context, phase_bundle, water_bundle, risk_bundle)
     current_height = water_bundle["advanced_context"].get("hauteur_gazon")
     third_floor = None
+    robot_min_height = 4.0
+    robot_max_height = 6.5
 
     if current_height is not None:
         try:
@@ -348,11 +1104,16 @@ def _recommended_mowing_height(
 
     effective_max = _round_down_to_step(max_height, min_height, step)
     recommended_height = _round_up_to_step(theoretical_height, min_height, step)
-    recommended_height = max(min_height, min(recommended_height, effective_max))
+    allowed_min = max(min_height, robot_min_height)
+    allowed_max = min(effective_max, robot_max_height)
+    if allowed_max < allowed_min:
+        allowed_min = min_height
+        allowed_max = effective_max
+    recommended_height = max(allowed_min, min(recommended_height, allowed_max))
 
     previous_height = _previous_recommended_height(context)
     if previous_height is not None:
-        previous_height = max(min_height, min(previous_height, effective_max))
+        previous_height = max(allowed_min, min(previous_height, allowed_max))
         previous_height = _round_to_step(previous_height)
         diff = recommended_height - previous_height
         if abs(diff) < step:
@@ -360,7 +1121,7 @@ def _recommended_mowing_height(
         else:
             direction = step if diff > 0 else -step
             recommended_height = _round_to_step(previous_height + direction)
-            recommended_height = max(min_height, min(recommended_height, effective_max))
+            recommended_height = max(allowed_min, min(recommended_height, allowed_max))
 
     return {
         "hauteur_tonte_recommandee_cm": round(recommended_height, 2),
@@ -388,134 +1149,213 @@ def build_mowing_bundle(
         temperature=context.temperature,
         etp=water_bundle["etp"],
     )
-    tonte_ok = score_tonte < 45 and score_stress < 70
-    if phase_bundle["phase_dominante"] in {"Sursemis", "Traitement", "Hivernage"}:
-        tonte_ok = False
+    baseline_tonte_ok = score_tonte < 55 and score_stress < 70
 
-    if is_active_rain_weather(context.weather_profile):
-        tonte_ok = False
-
+    mowing_frequency_target_per_week, mowing_frequency_label = _seasonal_mowing_frequency(context.today.month)
     height_recommendation = _recommended_mowing_height(context, phase_bundle, water_bundle, risk_bundle)
     target_height = float(height_recommendation["hauteur_tonte_recommandee_cm"] or 0.0)
     current_height = water_bundle["advanced_context"].get("hauteur_gazon")
     height_rule_blocked = False
-    reason_code: str | None = None
+    try:
+        current_height_float = float(current_height) if current_height is not None else None
+    except (TypeError, ValueError):
+        current_height_float = None
+    effective_max = float(height_recommendation["_hauteur_tonte_effective_max_cm"] or 0.0)
 
-    if phase_bundle["phase_dominante"] in {"Sursemis", "Traitement", "Hivernage"}:
-        reason_code = f"phase_{phase_bundle['phase_dominante'].lower()}"
+    post_application_active, post_application_code, post_application_label = _post_application_mowing_block(context)
+    active_session = _active_irrigation_session(context)
+    watering_in_progress = active_session is not None
+    cooldown_active, cooldown_remaining_minutes = _mowing_cooldown_state(context)
+    mowing_window_state, mowing_window_reason = _resolve_mowing_window(
+        context,
+        weather_profile=context.weather_profile,
+    )
+    mowing_blocked, mowing_block_reason_code, mowing_block_reason_label, mowing_machine_unavailable_detail, mowing_machine_unavailable_label = _resolve_mowing_block(
+        context,
+        water_bundle,
+    )
+    if mowing_blocked:
+        mowing_window_state = "blocked"
+        mowing_window_reason = mowing_block_reason_label
+    mowing_window_label = _mowing_window_label(mowing_window_state)
+    mowing_window_blocked_by_schedule = mowing_window_state == "blocked" and not mowing_blocked
 
-    if not tonte_ok:
-        humidite = context.humidite or 0.0
-        pluie_24h = context.pluie_24h or 0.0
-        pluie_demain = context.pluie_demain or 0.0
-        pluie_j2 = context.pluie_j2 or 0.0
-        pluie_3j = context.pluie_3j or 0.0
-        pluie_probabilite_max_3j = context.pluie_probabilite_max_3j or 0.0
-        temperature = context.temperature or 0.0
-        etp = water_bundle["etp"] or 0.0
-        rosee = water_bundle["advanced_context"].get("rosee")
-        arrosage_recent = water_bundle["water_balance"].get("arrosage_recent", 0.0)
-        if humidite >= 85:
-            reason = "Humidité trop élevée: pelouse humide."
-            reason_code = "humidite_elevee"
-        elif pluie_24h >= 3:
-            reason = "Pluie récente: sol encore humide."
-            reason_code = "pluie_recente"
-        elif pluie_demain >= 2 and humidite >= 70:
-            reason = "Pluie proche: mieux vaut attendre."
-            reason_code = "pluie_proche"
-        elif pluie_j2 >= 2 or pluie_3j >= 4 or pluie_probabilite_max_3j >= 80:
-            reason = "Pluie annoncée: mieux vaut attendre le ressuyage."
-            reason_code = "pluie_annoncee"
-        elif arrosage_recent > 0:
-            reason = "Arrosage récent: attendre un ressuyage."
-            reason_code = "sol_humide_post_arrosage"
-        elif rosee is not None and rosee > 0:
-            reason = "Rosée présente: attendre le ressuyage du feuillage."
-            reason_code = "rosee_persistante"
-        elif temperature >= 30 and etp >= 4:
-            reason = "Stress thermique élevé: limiter la tonte."
-            reason_code = "stress_thermique"
-        else:
-            reason = "Conditions défavorables à la tonte."
-            reason_code = reason_code or "conditions_defavorables"
+    reason, reason_code, height_rule_blocked = _select_mowing_block_reason(
+        context=context,
+        phase_bundle=phase_bundle,
+        water_bundle=water_bundle,
+        weather_profile=context.weather_profile,
+        humidite=float(context.humidite or 0.0),
+        pluie_demain=float(context.pluie_demain or 0.0),
+        pluie_j2=float(context.pluie_j2 or 0.0),
+        pluie_3j=float(context.pluie_3j or 0.0),
+        pluie_probabilite_max_3j=float(context.pluie_probabilite_max_3j or 0.0),
+        arrosage_recent_jour=float(water_bundle["water_balance"].get("arrosage_recent_jour") or 0.0),
+        rosee=water_bundle["advanced_context"].get("rosee"),
+        temperature=float(context.temperature or 0.0),
+        etp=float(water_bundle.get("etp") or 0.0),
+        score_tonte=score_tonte,
+        score_stress=score_stress,
+        current_height=current_height_float,
+        target_height=target_height,
+        effective_max=effective_max,
+    )
+    selected_reason = reason
+    selected_reason_code = reason_code
+
+    mowing_window_blocked = mowing_window_state == "blocked"
+    mowing_blocked_by_watering = False
+    if post_application_active:
+        reason = post_application_label
+        reason_code = post_application_code
+        mowing_blocked = True
+        mowing_blocked_by_watering = True
+        mowing_block_reason_code = post_application_code
+        mowing_block_reason_label = post_application_label
+        mowing_block_reason = "recent_watering"
+        height_rule_blocked = False
+    elif watering_in_progress:
+        reason = "Arrosage en cours: attends la fin du cycle avant de tondre."
+        reason_code = "watering_in_progress"
+        mowing_blocked = True
+        mowing_blocked_by_watering = True
+        mowing_block_reason_code = reason_code
+        mowing_block_reason_label = reason
+        mowing_block_reason = "recent_watering"
+        height_rule_blocked = False
+    elif cooldown_active:
+        reason = (
+            f"Arrosage récent: attends encore {cooldown_remaining_minutes} min avant de reprendre la tonte."
+        )
+        reason_code = "watering_cooldown"
+        mowing_blocked = True
+        mowing_blocked_by_watering = True
+        mowing_block_reason_code = reason_code
+        mowing_block_reason_label = reason
+        mowing_block_reason = "recent_watering"
+        height_rule_blocked = False
+    elif mowing_blocked and mowing_block_reason_code:
+        mowing_blocked_by_watering = mowing_block_reason_code in {"recent_watering", "soil_wet", "wet_grass"}
+        mowing_block_reason = mowing_block_reason_code
+        if reason_code not in {"phase_sursemis", "phase_traitement", "phase_hivernage"}:
+            reason = mowing_block_reason_label or reason
+            reason_code = mowing_block_reason_code
+        height_rule_blocked = False
     else:
+        mowing_block_reason = None
+
+    if selected_reason_code in {"phase_sursemis", "phase_traitement", "phase_hivernage"}:
+        reason = selected_reason
+        reason_code = selected_reason_code
+        mowing_blocked = True
+        mowing_blocked_by_watering = False
+        mowing_block_reason_code = selected_reason_code
+        mowing_block_reason_label = selected_reason
+        mowing_block_reason = selected_reason_code
+        height_rule_blocked = False
+
+    if reason_code and mowing_block_reason_code is None and not mowing_blocked:
+        mowing_block_reason_code = reason_code
+        mowing_block_reason_label = reason
+
+    if mowing_window_blocked_by_schedule and reason_code is None:
+        reason_code = "mowing_window_blocked"
+        reason = mowing_window_reason or "Fenêtre de tonte bloquée."
+        if mowing_block_reason_code is None:
+            mowing_block_reason_code = reason_code
+            mowing_block_reason_label = reason
+
+    agronomic_block_codes = {
+        "mowing_night",
+        "mowing_spacing",
+        "phase_sursemis",
+        "phase_traitement",
+        "phase_hivernage",
+        "hauteur_trop_faible",
+        "regle_tiers",
+        "regle_tiers_impossible",
+        "stress_thermique",
+        "conditions_defavorables",
+        "wet_grass",
+        "rosee_persistante",
+        "soil_wet",
+        "pluie_en_cours",
+        "recent_watering",
+        "post_application_active",
+        "watering_in_progress",
+        "watering_cooldown",
+    }
+    soil_wet_is_permssive = reason_code == "soil_wet" and _has_recent_watering_history(context)
+    tonte_ok = baseline_tonte_ok and not mowing_window_blocked_by_schedule and (
+        reason_code not in agronomic_block_codes or soil_wet_is_permssive
+    )
+    if reason is None:
         reason = "Fenêtre tonte acceptable."
-        reason_code = None
-
-    rosee = water_bundle["advanced_context"].get("rosee")
-    if tonte_ok and rosee is not None and rosee > 0:
-        tonte_ok = False
-        reason = "Rosée présente: attendre le ressuyage du feuillage."
-        reason_code = "rosee_persistante"
-
-    if not tonte_ok and is_active_rain_weather(context.weather_profile):
-        reason = "Pluie en cours ou imminente: attendre le ressuyage du gazon."
-        reason_code = "pluie_en_cours"
-
-    if current_height is not None:
-        try:
-            current_height = float(current_height)
-            min_height_after_cut = current_height * (2.0 / 3.0)
-            effective_max = float(height_recommendation["_hauteur_tonte_effective_max_cm"] or 0.0)
-            if current_height <= target_height:
-                tonte_ok = False
-                height_rule_blocked = True
-                reason = (
-                    f"Hauteur actuelle trop faible: vise au moins {target_height:.1f} cm avant de tondre."
-                )
-                reason_code = "hauteur_trop_faible"
-            elif target_height < min_height_after_cut:
-                tonte_ok = False
-                height_rule_blocked = True
-                if effective_max < min_height_after_cut:
-                    reason = (
-                        f"Règle du tiers impossible avec cette tondeuse: il faudrait au moins {min_height_after_cut:.1f} cm, "
-                        f"mais la machine plafonne à {effective_max:.1f} cm."
-                    )
-                    reason_code = "regle_tiers_impossible"
-                else:
-                    reason = (
-                        f"Règle du tiers: conserve au moins {min_height_after_cut:.1f} cm sur une hauteur actuelle de {current_height:.1f} cm."
-                    )
-                    reason_code = "regle_tiers"
-        except (TypeError, ValueError):
-            current_height = None
-
-    if is_active_rain_weather(context.weather_profile):
-        tonte_ok = False
-        reason = "Pluie en cours ou imminente: attendre le ressuyage du gazon."
-        reason_code = "pluie_en_cours"
 
     next_mowing_date, next_mowing_display, next_mowing_reason_hint = _project_next_mowing_date(
         context,
         phase_bundle,
         water_bundle,
         tonte_ok,
+        reason_code,
     )
 
     if not tonte_ok and next_mowing_display:
         reason = f"{reason} Prochaine tonte estimée le {next_mowing_display}."
-        if next_mowing_reason_hint:
-            reason = f"{reason} ({next_mowing_reason_hint})"
 
-    tonte_statut = compute_tonte_statut(
-        phase_dominante=phase_bundle["phase_dominante"],
-        tonte_autorisee=tonte_ok,
+    tonte_statut = _compute_mowing_status(
+        phase_bundle=phase_bundle,
+        risk_bundle=risk_bundle,
+        tonte_ok=tonte_ok,
+        height_rule_blocked=height_rule_blocked,
         score_tonte=score_tonte,
-        risque_gazon=risk_bundle["risque_gazon"],
     )
-    if height_rule_blocked and tonte_statut != "interdite":
-        tonte_statut = "deconseillee"
+    if reason_code == "mowing_night":
+        tonte_statut = "interdite"
 
-    return {
-        "tonte_autorisee": tonte_ok,
-        "tonte_statut": tonte_statut,
-        "tonte_reason": reason,
-        "raison_blocage_code": reason_code,
-        "next_mowing_date": next_mowing_date,
-        "next_mowing_display": next_mowing_display,
-        "score_tonte": score_tonte,
-        "score_stress": score_stress,
-        **height_recommendation,
-    }
+    mowing_daily_session_limit, mowing_daily_session_policy = _mowing_daily_session_policy(
+        phase_bundle
+    )
+
+    bundle = _build_mowing_bundle_payload(
+        tonte_ok=tonte_ok,
+        tonte_statut=tonte_statut,
+        reason=reason,
+        reason_code=reason_code,
+        next_mowing_date=next_mowing_date,
+        next_mowing_display=next_mowing_display,
+        score_tonte=score_tonte,
+        score_stress=score_stress,
+        height_recommendation=height_recommendation,
+        mowing_frequency_target_per_week=mowing_frequency_target_per_week,
+        mowing_frequency_label=mowing_frequency_label,
+        mowing_window_state=mowing_window_state,
+        mowing_window_label=mowing_window_label,
+        mowing_window_reason=mowing_window_reason,
+        mowing_daily_session_limit=mowing_daily_session_limit,
+        mowing_daily_session_policy=mowing_daily_session_policy,
+    )
+    bundle["mowing_blocked"] = bool(mowing_blocked)
+    bundle["mowing_blocked_by_watering"] = mowing_blocked_by_watering
+    bundle["mowing_block_reason_code"] = mowing_block_reason_code
+    bundle["mowing_block_reason_label"] = mowing_block_reason_label
+    bundle["mowing_block_reason"] = mowing_block_reason
+    bundle["mowing_machine_unavailable_detail"] = mowing_machine_unavailable_detail
+    bundle["mowing_machine_unavailable_label"] = mowing_machine_unavailable_label
+    bundle["mowing_cooldown_remaining_minutes"] = cooldown_remaining_minutes
+    bundle["mowing_post_application_active"] = post_application_active
+    mower_context = context.mower_context if isinstance(context.mower_context, dict) else {}
+    if mower_context:
+        bundle.update(
+            {
+                key: value
+                for key, value in mower_context.items()
+                if (key.startswith("tondeuse_") or key.startswith("mower_")) and value is not None
+            }
+        )
+    mower_coordination_ready = bundle.get("mower_coordination_ready", True)
+    machine_permet_tonte = bool(bundle.get("tondeuse_prete", False)) and mower_coordination_ready is not False
+    bundle["gazon_permet_tonte"] = bool(bundle.get("tonte_autorisee", False))
+    bundle["machine_permet_tonte"] = machine_permet_tonte
+    bundle["action_possible"] = bool(bundle["gazon_permet_tonte"] and machine_permet_tonte and not bundle.get("mowing_blocked", False))
+    return bundle

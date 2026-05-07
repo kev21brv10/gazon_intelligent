@@ -44,6 +44,11 @@ class _FakeEntityRegistry:
         self.removed.append(entity_id)
         self.entities.pop(entity_id, None)
 
+    def async_update_entity(self, current_entity_id: str, *, new_entity_id: str) -> None:
+        entry = self.entities.pop(current_entity_id)
+        entry.entity_id = new_entity_id
+        self.entities[new_entity_id] = entry
+
 
 class EntityMigrationTests(unittest.TestCase):
     def test_current_entities_are_not_obsolete(self) -> None:
@@ -89,6 +94,41 @@ class EntityMigrationTests(unittest.TestCase):
         self.assertIn("sensor.gazon_intelligent_assistant", registry.entities)
         self.assertNotIn("sensor.gazon_intelligent_bilan_hydrique", registry.entities)
         self.assertNotIn("sensor.gazon_intelligent_score_tonte", registry.entities)
+
+    def test_align_entity_ids_uses_instance_slug_for_new_instances(self) -> None:
+        registry = _FakeEntityRegistry(
+            [
+                _FakeEntity("select.gazon_intelligent_produit_selectionne", "entry123_produit_intervention", "entry123"),
+                _FakeEntity("switch.gazon_intelligent_auto_irrigation_enabled", "entry123_arrosage_automatique", "entry123"),
+            ]
+        )
+
+        import asyncio
+
+        updates = asyncio.run(
+            entity_migration.async_align_entity_ids(
+                hass=None,
+                entry_id="entry123",
+                instance_slug="jardin_avant",
+                entity_registry=registry,
+            )
+        )
+
+        self.assertEqual(
+            updates,
+            [
+                (
+                    "select.gazon_intelligent_produit_selectionne",
+                    "select.gazon_intelligent_jardin_avant_produit_d_intervention",
+                ),
+                (
+                    "switch.gazon_intelligent_auto_irrigation_enabled",
+                    "switch.gazon_intelligent_jardin_avant_arrosage_automatique_autorise",
+                ),
+            ],
+        )
+        self.assertIn("select.gazon_intelligent_jardin_avant_produit_d_intervention", registry.entities)
+        self.assertIn("switch.gazon_intelligent_jardin_avant_arrosage_automatique_autorise", registry.entities)
 
     def _run_cleanup(self, registry: _FakeEntityRegistry) -> list[str]:
         import asyncio

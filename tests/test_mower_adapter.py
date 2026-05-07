@@ -1,0 +1,114 @@
+from __future__ import annotations
+
+import unittest
+from datetime import datetime
+from pathlib import Path
+import sys
+import types
+from zoneinfo import ZoneInfo
+
+
+ROOT = Path(__file__).resolve().parents[1]
+PACKAGE_DIR = ROOT / "custom_components" / "gazon_intelligent"
+TEST_TZ = ZoneInfo("Europe/Paris")
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+def _ensure_package(name: str, path: Path) -> None:
+    if name in sys.modules:
+        return
+    module = types.ModuleType(name)
+    module.__path__ = [str(path)]  # type: ignore[attr-defined]
+    sys.modules[name] = module
+
+
+_ensure_package("custom_components", PACKAGE_DIR.parent)
+_ensure_package("custom_components.gazon_intelligent", PACKAGE_DIR)
+
+homeassistant = types.ModuleType("homeassistant")
+homeassistant.__path__ = []  # type: ignore[attr-defined]
+sys.modules.setdefault("homeassistant", homeassistant)
+util = types.ModuleType("homeassistant.util")
+util.__path__ = []  # type: ignore[attr-defined]
+sys.modules.setdefault("homeassistant.util", util)
+dt_module = types.ModuleType("homeassistant.util.dt")
+dt_module.now = lambda: datetime(2026, 4, 4, 14, 15, tzinfo=TEST_TZ)  # type: ignore[attr-defined]
+sys.modules.setdefault("homeassistant.util.dt", dt_module)
+
+from custom_components.gazon_intelligent.mower_adapter import build_mower_context, derive_related_entity_id
+
+
+class MowerAdapterTests(unittest.TestCase):
+    def test_build_mower_context_maps_idle_mower_to_ready_rest_state(self) -> None:
+        payload = build_mower_context(
+            entity_id="lawn_mower.esperance_jr",
+            entity_name="Esperance Jr",
+            raw_state="docked",
+            available=True,
+            charging=False,
+            rain=False,
+            error_raw="no_error",
+            battery_percent=44,
+            next_schedule_raw="2026-04-16T13:00:00+02:00",
+            cutting_height_mm=40,
+        )
+
+        self.assertEqual(payload["tondeuse_statut"], "au_repos")
+        self.assertEqual(payload["tondeuse_statut_libelle"], "Au repos")
+        self.assertTrue(payload["tondeuse_prete"])
+        self.assertEqual(payload["tondeuse_batterie"], 44)
+        self.assertEqual(payload["tondeuse_hauteur_coupe_mm"], 40)
+        self.assertEqual(payload["tondeuse_prochain_depart"], "2026-04-16T13:00:00+02:00")
+
+    def test_build_mower_context_formats_departure_in_local_time(self) -> None:
+        payload = build_mower_context(
+            entity_id="lawn_mower.esperance_jr",
+            entity_name="Esperance Jr",
+            raw_state="docked",
+            available=True,
+            next_schedule_raw="2026-04-18T11:00:00+00:00",
+        )
+
+        self.assertEqual(payload["tondeuse_prochain_depart"], "2026-04-18T11:00:00+00:00")
+        self.assertEqual(payload["tondeuse_prochain_depart_display"], "18/04/2026 à 13:00")
+
+    def test_build_mower_context_prioritizes_error_and_rain_signals(self) -> None:
+        payload = build_mower_context(
+            entity_id="lawn_mower.robot",
+            entity_name="Robot",
+            raw_state="docked",
+            available=True,
+            charging=False,
+            rain=True,
+            error_raw="rain_delay",
+        )
+        self.assertEqual(payload["tondeuse_statut"], "pluie")
+        self.assertFalse(payload["tondeuse_prete"])
+
+        payload = build_mower_context(
+            entity_id="lawn_mower.robot",
+            entity_name="Robot",
+            raw_state="mowing",
+            available=True,
+            charging=False,
+            rain=False,
+            error_raw="wire_missing",
+        )
+        self.assertEqual(payload["tondeuse_statut"], "erreur")
+        self.assertEqual(payload["tondeuse_erreur"], "wire_missing")
+        self.assertFalse(payload["tondeuse_prete"])
+
+    def test_derive_related_entity_id_uses_mower_prefix(self) -> None:
+        self.assertEqual(
+            derive_related_entity_id("lawn_mower.esperance_jr", "sensor", "batterie"),
+            "sensor.esperance_jr_batterie",
+        )
+        self.assertEqual(
+            derive_related_entity_id("lawn_mower.esperance_jr", "binary_sensor", "en_charge"),
+            "binary_sensor.esperance_jr_en_charge",
+        )
+        self.assertIsNone(derive_related_entity_id(None, "sensor", "batterie"))
+
+
+if __name__ == "__main__":
+    unittest.main()

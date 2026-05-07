@@ -15,7 +15,18 @@ from .decision_models import (
     POSSIBLE_TONTE_STATUT_VALUES,
     POSSIBLE_TYPE_ARROSAGE_VALUES,
 )
-from .entity_ids import public_entity_id
+from .entity_ids import public_entity_id, resolve_entry_instance_slug
+
+_MISSING = object()
+
+_LEGACY_POSSIBLE_VALUES_BY_KEY: dict[str, tuple[str, ...]] = {
+    "phase_dominante": POSSIBLE_PHASE_DOMINANTE_VALUES,
+    "sous_phase": POSSIBLE_SOUS_PHASE_VALUES,
+    "niveau_action": POSSIBLE_NIVEAU_ACTION_VALUES,
+    "tonte_statut": POSSIBLE_TONTE_STATUT_VALUES,
+    "fenetre_optimale": POSSIBLE_FENETRE_OPTIMALE_VALUES,
+    "type_arrosage": POSSIBLE_TYPE_ARROSAGE_VALUES,
+}
 
 
 _EXACT_VALUE_PRECISIONS: dict[str, int] = {
@@ -77,14 +88,61 @@ def _normalize_exposed_value(value, key: str | None = None):
     return value
 
 
+def _coordinator_snapshot(coordinator) -> dict[str, object]:
+    attrs = getattr(coordinator, "data", None)
+    return attrs if isinstance(attrs, dict) else {}
+
+
+def _result_extra(result: DecisionResult | None) -> dict[str, object]:
+    if result is None:
+        return {}
+    extra = getattr(result, "extra", None)
+    return extra if isinstance(extra, dict) else {}
+
+
+def _result_value(result: DecisionResult | None, key: str):
+    if result is None:
+        return _MISSING
+    value = getattr(result, key, _MISSING)
+    if value not in (_MISSING, None):
+        return value
+    extra = _result_extra(result)
+    if key in extra and extra[key] is not None:
+        return extra[key]
+    return _MISSING
+
+
+def _snapshot_value(snapshot: dict[str, object], key: str, default=_MISSING):
+    if key in snapshot:
+        return snapshot[key]
+    return default
+
+
+def _normalized_public_value(value, key: str | None = None, default=None):
+    if value is _MISSING:
+        return default
+    return _normalize_exposed_value(value, key)
+
+
+def _legacy_possible_values_for(key: str) -> tuple[str, ...] | None:
+    return _LEGACY_POSSIBLE_VALUES_BY_KEY.get(key)
+
+
 class GazonEntityBase(CoordinatorEntity):
     """Base commune pour les entités de Gazon Intelligent."""
 
     _device_model = "Gestion gazon"
 
+    @property
+    def instance_slug(self) -> str | None:
+        entry = getattr(self.coordinator, "entry", None)
+        if entry is None:
+            return None
+        return resolve_entry_instance_slug(entry)
+
     def _set_entity_identity(self, platform: str, suffix: str) -> None:
         entry_id = self.coordinator.entry.entry_id
-        resolved_entity_id = public_entity_id(platform, suffix)
+        resolved_entity_id = public_entity_id(platform, suffix, instance_slug=self.instance_slug)
         _domain, object_id = resolved_entity_id.split(".", 1)
         self._attr_unique_id = f"{entry_id}_{suffix}"
         self._attr_entity_id = resolved_entity_id
@@ -94,9 +152,10 @@ class GazonEntityBase(CoordinatorEntity):
     @property
     def device_info(self) -> DeviceInfo:
         entry_id = self.coordinator.entry.entry_id
+        entry_title = getattr(self.coordinator.entry, "title", None)
         return DeviceInfo(
             identifiers={(DOMAIN, entry_id)},
-            name="Gazon Intelligent",
+            name=entry_title or "Gazon Intelligent",
             manufacturer="Custom",
             model=self._device_model,
         )
@@ -112,53 +171,47 @@ class GazonEntityBase(CoordinatorEntity):
             return legacy_result
         return None
 
+    def _snapshot_data(self) -> dict[str, object]:
+        return _coordinator_snapshot(self.coordinator)
+
     def _decision_value(self, key: str, default=None):
         result = self.decision_result
-        if result is not None:
-            value = getattr(result, key, None)
-            if value is not None:
-                return _normalize_exposed_value(value, key)
-            extra = getattr(result, "extra", None)
-            if isinstance(extra, dict) and key in extra and extra[key] is not None:
-                return _normalize_exposed_value(extra[key], key)
+        value = _result_value(result, key)
+        if value is not _MISSING:
+            return _normalized_public_value(value, key)
 
-        attrs = getattr(self.coordinator, "data", None)
-        if isinstance(attrs, dict):
-            return _normalize_exposed_value(attrs.get(key, default), key)
-        return default
+        snapshot = self._snapshot_data()
+        value = _snapshot_value(snapshot, key, default)
+        if value is _MISSING:
+            return default
+        return _normalized_public_value(value, key)
 
     def _decision_attrs(self, *keys: str) -> dict[str, object] | None:
         result = self.decision_result
         if result is not None:
             attrs: dict[str, object] = {}
             for key in keys:
-                value = getattr(result, key, None)
-                if value is None:
-                    extra = getattr(result, "extra", None)
-                    if isinstance(extra, dict):
-                        value = extra.get(key)
-                if value is not None:
-                    attrs[key] = _normalize_exposed_value(value, key)
+                value = _result_value(result, key)
+                if value is _MISSING:
+                    continue
+                attrs[key] = _normalized_public_value(value, key)
             if attrs:
                 return attrs
         return self._attrs_from_data(*keys)
 
     def _possible_values_attr(self, key: str) -> dict[str, object] | None:
         result = self.decision_result
-        possible_values = result.possible_values_for(key) if result is not None else {
-            "phase_dominante": POSSIBLE_PHASE_DOMINANTE_VALUES,
-            "sous_phase": POSSIBLE_SOUS_PHASE_VALUES,
-            "niveau_action": POSSIBLE_NIVEAU_ACTION_VALUES,
-            "tonte_statut": POSSIBLE_TONTE_STATUT_VALUES,
-            "fenetre_optimale": POSSIBLE_FENETRE_OPTIMALE_VALUES,
-            "type_arrosage": POSSIBLE_TYPE_ARROSAGE_VALUES,
-        }.get(key)
+        possible_values = result.possible_values_for(key) if result is not None else _legacy_possible_values_for(key)
         if not possible_values:
             return None
         return {"possible_values": list(possible_values)}
 
     def _attrs_from_data(self, *keys: str) -> dict[str, object] | None:
-        attrs = {key: _normalize_exposed_value(self.coordinator.data.get(key), key) for key in keys}
+        snapshot = self._snapshot_data()
+        attrs = {
+            key: _normalized_public_value(_snapshot_value(snapshot, key), key)
+            for key in keys
+        }
         clean = {k: v for k, v in attrs.items() if v is not None}
         return clean or None
 

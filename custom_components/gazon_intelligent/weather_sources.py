@@ -1,8 +1,13 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from collections.abc import Mapping
 from typing import Any
+
+try:
+    from homeassistant.util import dt as dt_util
+except Exception:  # pragma: no cover - standalone fallback
+    dt_util = None
 
 
 def _to_float(value: Any) -> float | None:
@@ -115,7 +120,18 @@ def extract_weather_forecast_summary(forecasts: list[Mapping[str, Any]] | None) 
             continue
         by_date.setdefault(forecast_date, forecast)
 
-    today_date = date.today()
+    if dt_util is not None:
+        now_getter = getattr(dt_util, "now", None)
+        if callable(now_getter):
+            current = now_getter()
+            if isinstance(current, datetime):
+                today_date = current.date()
+            else:
+                today_date = datetime.now(timezone.utc).date()
+        else:
+            today_date = datetime.now(timezone.utc).date()
+    else:
+        today_date = datetime.now(timezone.utc).date()
     horizon_dates = [today_date + timedelta(days=offset) for offset in range(3)]
     horizon_forecasts: list[Mapping[str, Any] | None] = [by_date.get(forecast_date) for forecast_date in horizon_dates]
     if horizon_forecasts[0] is None:

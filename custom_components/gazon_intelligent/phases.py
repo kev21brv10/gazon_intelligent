@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+"""Référentiel des phases métier.
+
+`Hivernage` est volontairement traité comme un mode explicite:
+- il reste présent dans l'historique et les règles de priorité/sous-phase
+- il n'est plus activé implicitement par la météo ou la saison
+- hors phase active connue, le moteur retombe sur `Normal`
+"""
+
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -17,6 +25,7 @@ PHASE_DURATIONS_DAYS: dict[str, int] = {
 }
 
 PHASE_PRIORITIES: dict[str, int] = {
+    "Normal": 0,
     "Traitement": 100,
     "Hivernage": 95,
     "Sursemis": 90,
@@ -68,12 +77,39 @@ def phase_duration_days(phase: str) -> int:
     return PHASE_DURATIONS_DAYS.get(phase, 0)
 
 
-def is_hivernage(today: date, temperature: float | None) -> bool:
-    if today.month in {11, 12, 1, 2}:
-        return True
-    if temperature is not None and temperature <= 5:
-        return True
-    return False
+def _validate_phase_referentials() -> None:
+    duration_keys = set(PHASE_DURATIONS_DAYS)
+    priority_keys = set(PHASE_PRIORITIES)
+    subphase_keys = set(SUBPHASE_RULES)
+
+    missing_subphases = duration_keys - subphase_keys
+    if missing_subphases:
+        raise ValueError(
+            "SUBPHASE_RULES incomplet pour les phases: "
+            + ", ".join(sorted(missing_subphases))
+        )
+
+    required_priorities = {phase for phase in duration_keys if phase != "Normal"}
+    missing_priorities = required_priorities - priority_keys
+    if missing_priorities:
+        raise ValueError(
+            "PHASE_PRIORITIES incomplet pour les phases: "
+            + ", ".join(sorted(missing_priorities))
+        )
+
+    unknown_priorities = priority_keys - duration_keys
+    if unknown_priorities:
+        raise ValueError(
+            "PHASE_PRIORITIES contient des phases inconnues: "
+            + ", ".join(sorted(unknown_priorities))
+        )
+
+    unknown_subphases = subphase_keys - duration_keys
+    if unknown_subphases:
+        raise ValueError(
+            "SUBPHASE_RULES contient des phases inconnues: "
+            + ", ".join(sorted(unknown_subphases))
+        )
 
 
 def compute_phase_active(
@@ -109,7 +145,8 @@ def compute_dominant_phase(
             continue
         if start > today:
             continue
-        end = start + timedelta(days=phase_duration_days(phase))
+        duration_days = max(phase_duration_days(phase), 0)
+        end = start + timedelta(days=max(duration_days - 1, 0))
         if today > end:
             continue
         priority = PHASE_PRIORITIES.get(phase, 0)
@@ -126,14 +163,6 @@ def compute_dominant_phase(
             }
 
     if dominant is None:
-        if is_hivernage(today, temperature):
-            return {
-                "phase_dominante": "Hivernage",
-                "date_debut": None,
-                "date_fin": None,
-                "age_jours": 0,
-                "source": "climat",
-            }
         return {
             "phase_dominante": "Normal",
             "date_debut": None,
@@ -163,7 +192,7 @@ def compute_subphase(
     if date_debut is not None:
         age_jours = max((today - date_debut).days, 0)
     if date_debut is not None and date_fin is not None:
-        total = max((date_fin - date_debut).days, 1)
+        total = max((date_fin - date_debut).days + 1, 1)
         start_dt = datetime.combine(date_debut, datetime.min.time(), tzinfo=now.tzinfo)
         elapsed_days = max((now - start_dt).total_seconds(), 0.0) / 86400.0
         progression = round(max(0.0, min(100.0, (elapsed_days / total) * 100.0)), 1)
@@ -181,3 +210,6 @@ def compute_subphase(
         "progression": progression,
         "detail": f"{phase_dominante} / {sous_phase}",
     }
+
+
+_validate_phase_referentials()

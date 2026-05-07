@@ -1,4 +1,7 @@
 set_mode:
+  target:
+    entity:
+      integration: gazon_intelligent
   fields:
     mode:
       required: true
@@ -17,16 +20,25 @@ set_mode:
             - Hivernage
 
 set_date_action:
+  target:
+    entity:
+      integration: gazon_intelligent
   fields:
     date_action:
       required: false
       example: "2026-03-12"
       selector:
-        text:
+        text: {}
 
-reset_mode: {}
+reset_mode:
+  target:
+    entity:
+      integration: gazon_intelligent
 
 start_manual_irrigation:
+  target:
+    entity:
+      integration: gazon_intelligent
   fields:
     objectif_mm:
       required: true
@@ -39,6 +51,9 @@ start_manual_irrigation:
           unit_of_measurement: mm
 
 start_auto_irrigation:
+  target:
+    entity:
+      integration: gazon_intelligent
   fields:
     objectif_mm:
       required: false
@@ -51,16 +66,22 @@ start_auto_irrigation:
     plan_arrosage_entity:
       required: false
       selector:
-        text:
+        text: {}
     source:
       required: false
       selector:
         text: {}
 
-start_application_irrigation: {}
+start_application_irrigation:
+  target:
+    entity:
+      integration: gazon_intelligent
 
 declare_intervention:
   description: "Déclare une intervention réelle. Les réglages du produit se configurent dans \"Enregistrer un produit\" ; ici, il suffit de choisir le produit déjà enregistré, la date, la zone et une note si besoin. Si plusieurs produits existent et qu'aucun produit explicite n'est fourni, l'intégration utilise la sélection courante de l'UI ou renvoie une erreur claire."
+  target:
+    entity:
+      integration: gazon_intelligent
   fields:
     intervention:
       required: true
@@ -78,37 +99,44 @@ declare_intervention:
     date_action:
       required: false
       selector:
-        text:
+        text: {}
     produit_id:
       required: false
       selector:
-        text:
+        text: {}
     produit:
       required: false
       selector:
-        text:
+        text: {}
     zone:
       required: false
       selector:
-        text:
+        text: {}
     note:
       required: false
       selector:
-        text:
+        text: {}
+
 remove_last_application:
   description: "Supprime la dernière application enregistrée dans l'historique local."
+  target:
+    entity:
+      integration: gazon_intelligent
 
 register_product:
   description: "Ajoute ou met à jour un produit personnalisé dans la base locale. La catégorie se choisit dans une liste, le dosage peut être saisi au m², les mois d'application peuvent être précisés et des seuils de température optionnels peuvent affiner la recommandation."
+  target:
+    entity:
+      integration: gazon_intelligent
   fields:
     product_id:
       required: true
       selector:
-        text:
+        text: {}
     nom:
       required: true
       selector:
-        text:
+        text: {}
     type:
       required: true
       selector:
@@ -125,7 +153,7 @@ register_product:
       required: false
       example: "1.2 ml / m²"
       selector:
-        text:
+        text: {}
     usage_mode:
       required: false
       selector:
@@ -171,7 +199,7 @@ register_product:
     application_months:
       required: false
       selector:
-        text:
+        text: {}
     application_type:
       required: false
       selector:
@@ -182,7 +210,7 @@ register_product:
     application_requires_watering_after:
       required: false
       selector:
-        boolean:
+        boolean: {}
     application_post_watering_mm:
       required: false
       selector:
@@ -218,11 +246,11 @@ register_product:
     application_label_notes:
       required: false
       selector:
-        text:
+        text: {}
     note:
       required: false
       selector:
-        text:
+        text: {}
     temperature_min:
       required: false
       example: 8
@@ -243,25 +271,34 @@ register_product:
           unit_of_measurement: "°C"
 
 remove_product:
+  target:
+    entity:
+      integration: gazon_intelligent
   fields:
     product_id:
       required: true
       selector:
-        text:
+        text: {}
 
 declare_mowing:
+  target:
+    entity:
+      integration: gazon_intelligent
   fields:
     date_action:
       required: false
       selector:
-        text:
+        text: {}
 
 declare_watering:
+  target:
+    entity:
+      integration: gazon_intelligent
   fields:
     date_action:
       required: false
       selector:
-        text:
+        text: {}
     objectif_mm:
       required: false
       selector:

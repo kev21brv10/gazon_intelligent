@@ -6,6 +6,11 @@ import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+try:
+    from homeassistant.util import dt as dt_util
+except Exception:  # pragma: no cover - standalone fallback
+    dt_util = None
+
 from .const import (
     APPLICATION_INTERVENTIONS,
     APPLICATION_IRRIGATION_MODE_AUTO,
@@ -18,6 +23,7 @@ from .const import (
     DEFAULT_APPLICATION_IRRIGATION_MODE,
     DEFAULT_APPLICATION_POST_WATERING_MM,
     DEFAULT_AUTO_IRRIGATION_ENABLED,
+    DEFAULT_MOWER_COORDINATION_ENABLED,
     POST_APPLICATION_STATUS_ALIASES,
     POST_APPLICATION_STATUS_INDISPONIBLE,
     POST_APPLICATION_STATUS_NON_REQUIS,
@@ -28,20 +34,8 @@ from .const import (
     POST_APPLICATION_STATUSES,
     PRODUCT_USAGE_MODES,
 )
+from .phases import PHASE_DURATIONS_DAYS, SIGNIFICANT_WATERING_THRESHOLD_MM
 from .water import _watering_item_mm, compute_recent_watering_mm
-
-PHASE_DURATIONS_DAYS: dict[str, int] = {
-    "Normal": 0,
-    "Sursemis": 21,
-    "Traitement": 2,
-    "Fertilisation": 2,
-    "Biostimulant": 1,
-    "Agent Mouillant": 1,
-    "Scarification": 7,
-    "Hivernage": 999,
-}
-
-SIGNIFICANT_WATERING_THRESHOLD_MM = 2.0
 
 APPLICATION_DEFAULTS: dict[str, dict[str, Any]] = {
     "Traitement": {
@@ -123,6 +117,20 @@ def _latest_history_item(
         if isinstance(item, dict) and predicate(item):
             return item
     return None
+
+
+def _current_datetime() -> datetime:
+    if dt_util is not None:
+        now_getter = getattr(dt_util, "now", None)
+        if callable(now_getter):
+            current = now_getter()
+            if isinstance(current, datetime):
+                return current
+    return datetime.now(timezone.utc)
+
+
+def _current_date() -> date:
+    return _current_datetime().date()
 
 
 def _to_float(value: Any) -> float | None:
@@ -282,6 +290,187 @@ def _application_type_for_item(item: dict[str, Any]) -> str | None:
     if value in (None, ""):
         return None
     return str(value).strip().lower()
+
+
+def _is_application_relevant_item(item: dict[str, Any]) -> bool:
+    item_type = str(item.get("type") or "")
+    if item_type in APPLICATION_INTERVENTIONS:
+        return True
+    return any(
+        item.get(key) not in (None, "", [], {})
+        for key in (
+            "application_type",
+            "application_requires_watering_after",
+            "application_post_watering_mm",
+            "application_irrigation_block_hours",
+            "application_irrigation_delay_minutes",
+            "application_irrigation_mode",
+            "application_label_notes",
+            "produit",
+            "dose",
+            "reapplication_after_days",
+        )
+    )
+
+
+def _latest_application_item(
+    history: list[dict[str, Any]],
+) -> tuple[int | None, dict[str, Any] | None]:
+    for idx in range(len(history) - 1, -1, -1):
+        item = history[idx]
+        if _is_application_relevant_item(item):
+            return idx, item
+    return None, None
+
+
+def _application_runtime_fields(item: dict[str, Any]) -> dict[str, Any]:
+    item_type = str(item.get("type") or "").strip()
+    defaults = APPLICATION_DEFAULTS.get(item_type, {})
+    product_catalogue = item.get("produit_catalogue")
+    application_months = normalize_application_months(item.get("application_months"))
+    if not application_months and isinstance(product_catalogue, dict):
+        application_months = normalize_application_months(product_catalogue.get("application_months"))
+    declared_dt = _parse_datetime(item.get("declared_at") or item.get("recorded_at") or item.get("date"))
+    application_type = _application_type_for_item(item)
+    application_requires_watering_after = _to_bool(item.get("application_requires_watering_after"))
+    if application_requires_watering_after is None:
+        application_requires_watering_after = defaults.get("application_requires_watering_after", False)
+    application_post_watering_mm = _to_float(item.get("application_post_watering_mm"))
+    if application_post_watering_mm is None:
+        application_post_watering_mm = float(defaults.get("application_post_watering_mm", 0.0))
+    application_irrigation_block_hours = _to_float(item.get("application_irrigation_block_hours"))
+    if application_irrigation_block_hours is None:
+        application_irrigation_block_hours = float(defaults.get("application_irrigation_block_hours", 0.0))
+    application_irrigation_delay_minutes = _to_float(item.get("application_irrigation_delay_minutes"))
+    if application_irrigation_delay_minutes is None:
+        application_irrigation_delay_minutes = float(defaults.get("application_irrigation_delay_minutes", 0.0))
+    application_irrigation_mode = _normalize_application_irrigation_mode(item.get("application_irrigation_mode"))
+    if application_irrigation_mode is None:
+        application_irrigation_mode = defaults.get("application_irrigation_mode")
+    application_label_notes = item.get("application_label_notes") or defaults.get("application_label_notes")
+    application_block_until = None
+    if declared_dt is not None and application_irrigation_block_hours and application_irrigation_block_hours > 0:
+        application_block_until = (
+            declared_dt + timedelta(hours=float(application_irrigation_block_hours))
+        ).isoformat()
+    return {
+        "application_type": application_type,
+        "application_requires_watering_after": bool(application_requires_watering_after),
+        "application_post_watering_mm": float(application_post_watering_mm or 0.0),
+        "application_irrigation_block_hours": float(application_irrigation_block_hours or 0.0),
+        "application_irrigation_delay_minutes": float(application_irrigation_delay_minutes or 0.0),
+        "application_irrigation_mode": application_irrigation_mode,
+        "application_label_notes": application_label_notes,
+        "application_months": application_months or None,
+        "application_months_label": format_application_months_label(application_months),
+        "declared_dt": declared_dt,
+        "application_block_until": application_block_until,
+    }
+
+
+def _compute_application_block_state(
+    application_block_until: str | None,
+    now: datetime,
+) -> dict[str, Any]:
+    application_block_active = False
+    application_block_remaining_minutes = 0.0
+    if application_block_until is not None:
+        block_dt = _parse_datetime(application_block_until)
+        if block_dt is not None:
+            remaining = (block_dt - now).total_seconds() / 60.0
+            if remaining > 0:
+                application_block_active = True
+                application_block_remaining_minutes = round(max(0.0, remaining), 1)
+    return {
+        "application_block_active": application_block_active,
+        "application_block_remaining_minutes": application_block_remaining_minutes,
+    }
+
+
+def _compute_post_watering_state(
+    runtime_fields: dict[str, Any],
+    now: datetime,
+    water_after_application: float,
+    application_block_active: bool,
+) -> dict[str, Any]:
+    declared_dt = runtime_fields.get("declared_dt")
+    application_type = runtime_fields.get("application_type")
+    application_requires_watering_after = bool(runtime_fields.get("application_requires_watering_after"))
+    application_post_watering_mm = float(runtime_fields.get("application_post_watering_mm") or 0.0)
+    application_irrigation_delay_minutes = float(runtime_fields.get("application_irrigation_delay_minutes") or 0.0)
+    application_irrigation_mode = runtime_fields.get("application_irrigation_mode")
+
+    application_post_watering_ready_at = None
+    application_post_watering_delay_remaining_minutes = 0.0
+    if declared_dt is not None and application_irrigation_delay_minutes > 0:
+        application_post_watering_ready_at = (
+            declared_dt + timedelta(minutes=application_irrigation_delay_minutes)
+        ).isoformat()
+        ready_dt = _parse_datetime(application_post_watering_ready_at)
+        if ready_dt is not None:
+            remaining_delay = (ready_dt - now).total_seconds() / 60.0
+            if remaining_delay > 0:
+                application_post_watering_delay_remaining_minutes = round(remaining_delay, 1)
+
+    application_post_watering_remaining_mm = max(
+        0.0,
+        application_post_watering_mm - water_after_application,
+    )
+    application_post_watering_pending = bool(
+        application_type == APPLICATION_TYPE_SOL
+        and application_requires_watering_after
+        and application_post_watering_remaining_mm > 0.1
+    )
+    application_post_watering_ready = bool(
+        application_type == APPLICATION_TYPE_SOL
+        and application_requires_watering_after
+        and application_post_watering_pending
+        and not application_block_active
+        and (application_irrigation_mode in {None, "", "auto", "manuel"})
+        and application_post_watering_delay_remaining_minutes <= 0.0
+    )
+    application_post_watering_status = POST_APPLICATION_STATUS_NON_REQUIS
+    if application_block_active:
+        application_post_watering_status = POST_APPLICATION_STATUS_BLOQUE
+    elif application_requires_watering_after:
+        if application_post_watering_pending and application_post_watering_ready:
+            application_post_watering_status = POST_APPLICATION_STATUS_AUTORISE
+        elif application_post_watering_pending:
+            application_post_watering_status = POST_APPLICATION_STATUS_EN_ATTENTE
+        else:
+            application_post_watering_status = POST_APPLICATION_STATUS_TERMINE
+
+    return {
+        "application_post_watering_status": normalize_post_application_status(application_post_watering_status),
+        "application_post_watering_pending": application_post_watering_pending,
+        "application_post_watering_ready_at": application_post_watering_ready_at,
+        "application_post_watering_delay_remaining_minutes": application_post_watering_delay_remaining_minutes,
+        "application_post_watering_ready": application_post_watering_ready,
+        "application_post_watering_remaining_mm": round(application_post_watering_remaining_mm, 1),
+    }
+
+
+def _default_application_state() -> dict[str, Any]:
+    return {
+        "derniere_application": None,
+        "application_type": None,
+        "application_requires_watering_after": False,
+        "application_post_watering_mm": 0.0,
+        "application_irrigation_block_hours": 0.0,
+        "application_irrigation_delay_minutes": 0.0,
+        "application_irrigation_mode": None,
+        "application_label_notes": None,
+        "application_post_watering_status": "indisponible",
+        "declared_at": None,
+        "application_block_until": None,
+        "application_block_active": False,
+        "application_block_remaining_minutes": 0.0,
+        "application_post_watering_pending": False,
+        "application_post_watering_ready_at": None,
+        "application_post_watering_delay_remaining_minutes": 0.0,
+        "application_post_watering_ready": False,
+        "application_post_watering_remaining_mm": 0.0,
+    }
 
 
 def _split_csv_values(value: Any) -> list[str]:
@@ -532,68 +721,34 @@ def build_application_summary(item: dict[str, Any] | None) -> dict[str, Any] | N
         return None
     if item.get("type") not in PHASE_DURATIONS_DAYS:
         return None
+    runtime_fields = _application_runtime_fields(item)
     libelle = item.get("produit") or item.get("type")
     dose = item.get("dose")
     if isinstance(dose, str):
         dose = dose.strip()
-    application_type = _application_type_for_item(item)
-    application_requires_watering_after = _to_bool(item.get("application_requires_watering_after"))
-    application_post_watering_mm = _to_float(item.get("application_post_watering_mm"))
-    application_irrigation_block_hours = _to_float(item.get("application_irrigation_block_hours"))
-    application_irrigation_delay_minutes = _to_float(item.get("application_irrigation_delay_minutes"))
-    application_irrigation_mode = _normalize_application_irrigation_mode(item.get("application_irrigation_mode"))
-    defaults = APPLICATION_DEFAULTS.get(str(item.get("type") or "").strip(), {})
-    if application_type is None:
-        application_type = defaults.get("application_type")
-    if application_requires_watering_after is None:
-        application_requires_watering_after = defaults.get("application_requires_watering_after")
-    if application_post_watering_mm is None:
-        application_post_watering_mm = defaults.get("application_post_watering_mm")
-    if application_irrigation_block_hours is None:
-        application_irrigation_block_hours = defaults.get("application_irrigation_block_hours")
-    if application_irrigation_delay_minutes is None:
-        application_irrigation_delay_minutes = defaults.get("application_irrigation_delay_minutes")
-    if application_irrigation_mode is None:
-        application_irrigation_mode = defaults.get("application_irrigation_mode")
-    application_label_notes = item.get("application_label_notes")
-    if application_label_notes in (None, ""):
-        application_label_notes = defaults.get("application_label_notes")
-    product_catalogue = item.get("produit_catalogue")
-    application_months = normalize_application_months(item.get("application_months"))
-    if not application_months and isinstance(product_catalogue, dict):
-        application_months = normalize_application_months(product_catalogue.get("application_months"))
-    application_months_label = format_application_months_label(application_months)
-    declared_at = item.get("declared_at") or item.get("recorded_at")
-    declared_dt = _parse_datetime(declared_at)
-    application_block_until = None
-    if declared_dt is not None and application_irrigation_block_hours is not None:
-        if float(application_irrigation_block_hours) > 0:
-            application_block_until = (
-                declared_dt + timedelta(hours=float(application_irrigation_block_hours))
-            ).isoformat()
     summary = {
         "produit_id": item.get("produit_id"),
         "libelle": libelle,
         "type": item.get("type"),
         "date": item.get("date"),
         "date_action": item.get("date"),
-        "declared_at": declared_dt.isoformat() if declared_dt is not None else None,
+        "declared_at": runtime_fields["declared_dt"].isoformat() if runtime_fields["declared_dt"] is not None else None,
         "produit": item.get("produit"),
         "dose": dose,
         "zone": item.get("zone"),
         "note": item.get("note"),
         "reapplication_after_days": _to_int(item.get("reapplication_after_days")),
         "source": item.get("source"),
-        "application_type": application_type,
-        "application_requires_watering_after": application_requires_watering_after,
-        "application_post_watering_mm": application_post_watering_mm,
-        "application_irrigation_block_hours": application_irrigation_block_hours,
-        "application_irrigation_delay_minutes": application_irrigation_delay_minutes,
-        "application_irrigation_mode": application_irrigation_mode,
-        "application_label_notes": application_label_notes,
-        "application_months": application_months or None,
-        "application_months_label": application_months_label,
-        "application_block_until": application_block_until,
+        "application_type": runtime_fields["application_type"],
+        "application_requires_watering_after": runtime_fields["application_requires_watering_after"],
+        "application_post_watering_mm": runtime_fields["application_post_watering_mm"],
+        "application_irrigation_block_hours": runtime_fields["application_irrigation_block_hours"],
+        "application_irrigation_delay_minutes": runtime_fields["application_irrigation_delay_minutes"],
+        "application_irrigation_mode": runtime_fields["application_irrigation_mode"],
+        "application_label_notes": runtime_fields["application_label_notes"],
+        "application_months": runtime_fields["application_months"],
+        "application_months_label": runtime_fields["application_months_label"],
+        "application_block_until": runtime_fields["application_block_until"],
     }
     clean = {key: value for key, value in summary.items() if value not in (None, "", {}, [])}
     return clean or None
@@ -603,112 +758,16 @@ def compute_application_state(
     history: list[dict[str, Any]],
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    now = now or datetime.now(timezone.utc)
+    now = now or _current_datetime()
     history = [item for item in history if isinstance(item, dict)]
-    latest_index = None
-    latest_item = None
-    for idx in range(len(history) - 1, -1, -1):
-        item = history[idx]
-        item_type = str(item.get("type") or "")
-        if item_type not in APPLICATION_INTERVENTIONS and not any(
-            item.get(key) not in (None, "", [], {})
-            for key in (
-                "application_type",
-                "application_requires_watering_after",
-                "application_post_watering_mm",
-                "application_irrigation_block_hours",
-                "application_irrigation_delay_minutes",
-                "application_irrigation_mode",
-                "application_label_notes",
-                "produit",
-                "dose",
-                "reapplication_after_days",
-            )
-        ):
-            continue
-        latest_index = idx
-        latest_item = item
-        break
+    latest_index, latest_item = _latest_application_item(history)
 
     if latest_item is None:
-        return {
-            "derniere_application": None,
-            "application_type": None,
-            "application_requires_watering_after": False,
-            "application_post_watering_mm": 0.0,
-            "application_irrigation_block_hours": 0.0,
-            "application_irrigation_delay_minutes": 0.0,
-            "application_irrigation_mode": None,
-            "application_label_notes": None,
-            "application_post_watering_status": "indisponible",
-            "declared_at": None,
-            "application_block_until": None,
-            "application_block_active": False,
-            "application_block_remaining_minutes": 0.0,
-            "application_post_watering_pending": False,
-            "application_post_watering_ready_at": None,
-            "application_post_watering_delay_remaining_minutes": 0.0,
-            "application_post_watering_ready": False,
-            "application_post_watering_remaining_mm": 0.0,
-        }
+        return _default_application_state()
 
     summary = build_application_summary(latest_item)
-    application_type = _application_type_for_item(latest_item)
-    defaults = APPLICATION_DEFAULTS.get(str(latest_item.get("type") or "").strip(), {})
-    application_requires_watering_after = _to_bool(latest_item.get("application_requires_watering_after"))
-    if application_requires_watering_after is None:
-        application_requires_watering_after = defaults.get("application_requires_watering_after", False)
-    application_post_watering_mm = _to_float(latest_item.get("application_post_watering_mm"))
-    if application_post_watering_mm is None:
-        application_post_watering_mm = float(defaults.get("application_post_watering_mm", 0.0))
-    application_irrigation_block_hours = _to_float(latest_item.get("application_irrigation_block_hours"))
-    if application_irrigation_block_hours is None:
-        application_irrigation_block_hours = float(defaults.get("application_irrigation_block_hours", 0.0))
-    application_irrigation_delay_minutes = _to_float(latest_item.get("application_irrigation_delay_minutes"))
-    if application_irrigation_delay_minutes is None:
-        application_irrigation_delay_minutes = float(defaults.get("application_irrigation_delay_minutes", 0.0))
-    application_irrigation_mode = _normalize_application_irrigation_mode(latest_item.get("application_irrigation_mode"))
-    if application_irrigation_mode is None:
-        application_irrigation_mode = defaults.get("application_irrigation_mode")
-    application_label_notes = latest_item.get("application_label_notes") or defaults.get("application_label_notes")
-    declared_dt = _parse_datetime(latest_item.get("declared_at") or latest_item.get("recorded_at") or latest_item.get("date"))
-    application_block_until = None
-    if declared_dt is not None and application_irrigation_block_hours and application_irrigation_block_hours > 0:
-        application_block_until = (
-            declared_dt + timedelta(hours=float(application_irrigation_block_hours))
-        ).isoformat()
-    application_block_active = False
-    application_block_remaining_minutes = 0.0
-    if application_block_until is not None:
-        block_dt = _parse_datetime(application_block_until)
-        if block_dt is not None:
-            remaining = (block_dt - now).total_seconds() / 60.0
-            if remaining > 0:
-                application_block_active = True
-                application_block_remaining_minutes = round(max(0.0, remaining), 1)
-
-    application_post_watering_ready_at = None
-    application_post_watering_delay_remaining_minutes = 0.0
-    if declared_dt is not None and application_irrigation_delay_minutes is not None:
-        delay_minutes = max(0.0, float(application_irrigation_delay_minutes))
-        if delay_minutes > 0:
-            application_post_watering_ready_at = (
-                declared_dt + timedelta(minutes=delay_minutes)
-            ).isoformat()
-            ready_dt = _parse_datetime(application_post_watering_ready_at)
-            if ready_dt is not None:
-                remaining_delay = (ready_dt - now).total_seconds() / 60.0
-                if remaining_delay > 0:
-                    application_post_watering_delay_remaining_minutes = round(remaining_delay, 1)
-
-    application_post_watering_ready = False
-    if (
-        application_type == APPLICATION_TYPE_SOL
-        and application_requires_watering_after
-        and not application_block_active
-        and (application_irrigation_mode in {None, "", "auto", "manuel"})
-    ):
-        application_post_watering_ready = application_post_watering_delay_remaining_minutes <= 0.0
+    runtime_fields = _application_runtime_fields(latest_item)
+    block_state = _compute_application_block_state(runtime_fields["application_block_until"], now)
 
     water_after_application = 0.0
     if latest_index is not None:
@@ -716,47 +775,35 @@ def compute_application_state(
             if item.get("type") != "arrosage":
                 continue
             water_after_application += float(_watering_item_mm(item) or 0.0)
-    application_post_watering_remaining_mm = max(
-        0.0,
-        float(application_post_watering_mm or 0.0) - water_after_application,
+    post_watering_state = _compute_post_watering_state(
+        runtime_fields,
+        now=now,
+        water_after_application=water_after_application,
+        application_block_active=bool(block_state["application_block_active"]),
     )
-    application_post_watering_pending = bool(
-        application_type == APPLICATION_TYPE_SOL
-        and application_requires_watering_after
-        and application_post_watering_remaining_mm > 0.1
-    )
-    application_post_watering_status = POST_APPLICATION_STATUS_NON_REQUIS
-    if application_block_active:
-        application_post_watering_status = POST_APPLICATION_STATUS_BLOQUE
-    elif application_requires_watering_after:
-        if application_post_watering_pending and application_post_watering_ready:
-            application_post_watering_status = POST_APPLICATION_STATUS_AUTORISE
-        elif application_post_watering_pending:
-            application_post_watering_status = POST_APPLICATION_STATUS_EN_ATTENTE
-        else:
-            application_post_watering_status = POST_APPLICATION_STATUS_TERMINE
-    application_post_watering_status = normalize_post_application_status(application_post_watering_status)
 
     return {
         "derniere_application": summary,
-        "application_type": application_type,
-        "application_requires_watering_after": bool(application_requires_watering_after),
-        "application_post_watering_mm": round(float(application_post_watering_mm or 0.0), 1),
-        "application_irrigation_block_hours": round(float(application_irrigation_block_hours or 0.0), 1),
-        "application_irrigation_delay_minutes": round(float(application_irrigation_delay_minutes or 0.0), 1),
-        "application_irrigation_mode": application_irrigation_mode,
-        "application_label_notes": application_label_notes,
-        "application_post_watering_status": application_post_watering_status,
+        "application_type": runtime_fields["application_type"],
+        "application_requires_watering_after": runtime_fields["application_requires_watering_after"],
+        "application_post_watering_mm": round(runtime_fields["application_post_watering_mm"], 1),
+        "application_irrigation_block_hours": round(runtime_fields["application_irrigation_block_hours"], 1),
+        "application_irrigation_delay_minutes": round(runtime_fields["application_irrigation_delay_minutes"], 1),
+        "application_irrigation_mode": runtime_fields["application_irrigation_mode"],
+        "application_label_notes": runtime_fields["application_label_notes"],
+        "application_post_watering_status": post_watering_state["application_post_watering_status"],
         "date_action": latest_item.get("date"),
-        "declared_at": declared_dt.isoformat() if declared_dt is not None else None,
-        "application_block_until": application_block_until,
-        "application_block_active": application_block_active,
-        "application_block_remaining_minutes": application_block_remaining_minutes,
-        "application_post_watering_pending": application_post_watering_pending,
-        "application_post_watering_ready_at": application_post_watering_ready_at,
-        "application_post_watering_delay_remaining_minutes": application_post_watering_delay_remaining_minutes,
-        "application_post_watering_ready": application_post_watering_ready,
-        "application_post_watering_remaining_mm": round(application_post_watering_remaining_mm, 1),
+        "declared_at": runtime_fields["declared_dt"].isoformat() if runtime_fields["declared_dt"] is not None else None,
+        "application_block_until": runtime_fields["application_block_until"],
+        "application_block_active": block_state["application_block_active"],
+        "application_block_remaining_minutes": block_state["application_block_remaining_minutes"],
+        "application_post_watering_pending": post_watering_state["application_post_watering_pending"],
+        "application_post_watering_ready_at": post_watering_state["application_post_watering_ready_at"],
+        "application_post_watering_delay_remaining_minutes": post_watering_state[
+            "application_post_watering_delay_remaining_minutes"
+        ],
+        "application_post_watering_ready": post_watering_state["application_post_watering_ready"],
+        "application_post_watering_remaining_mm": post_watering_state["application_post_watering_remaining_mm"],
     }
 
 
@@ -764,7 +811,9 @@ def compute_next_reapplication_date(
     history: list[dict[str, Any]],
     today: date | None = None,
 ) -> str | None:
-    today = today or date.today()
+    # Best-effort rule: keep the latest dated application carrying an explicit
+    # reapplication delay, even if older interventions also define one.
+    today = today or _current_date()
     latest = _latest_history_item(
         history,
         lambda item: item.get("reapplication_after_days") is not None
@@ -848,7 +897,13 @@ def compute_memory(
     today: date | None = None,
     significant_watering_threshold_mm: float = SIGNIFICANT_WATERING_THRESHOLD_MM,
 ) -> dict[str, Any]:
-    today = today or date.today()
+    """Consolide la mémoire persistée et la reconstruit au mieux depuis l'historique.
+
+    Cette mémoire reste volontairement best-effort: elle fusionne l'historique,
+    la mémoire précédente et la décision courante pour produire un état public
+    stable sans changer le contrat observable du moteur.
+    """
+    today = today or _current_date()
     history = [item for item in history if isinstance(item, dict)]
 
     last_mowing = _latest_history_item(history, lambda item: item.get("type") == "tonte")
@@ -891,17 +946,8 @@ def compute_memory(
             "raison_decision": decision.get("raison_decision"),
         }
 
-    last_application = _latest_history_item(
-        history,
-        lambda item: item.get("type") in APPLICATION_INTERVENTIONS
-        or item.get("application_type") is not None
-        or item.get("reapplication_after_days") is not None
-        or item.get("application_irrigation_delay_minutes") is not None
-        or item.get("application_irrigation_mode") is not None
-        or item.get("produit") is not None
-        or item.get("dose") is not None,
-    )
-    application_state = compute_application_state(history, now=datetime.now(timezone.utc))
+    _, last_application = _latest_application_item(history)
+    application_state = compute_application_state(history, now=_current_datetime())
     feedback_observation = build_feedback_observation(history, previous_memory, decision, today=today)
 
     return {
@@ -938,6 +984,14 @@ def compute_memory(
             previous_memory.get("auto_irrigation_enabled", DEFAULT_AUTO_IRRIGATION_ENABLED)
             if previous_memory
             else DEFAULT_AUTO_IRRIGATION_ENABLED
+        ),
+        "mower_coordination_enabled": bool(
+            previous_memory.get(
+                "mower_coordination_enabled",
+                DEFAULT_MOWER_COORDINATION_ENABLED,
+            )
+            if previous_memory
+            else DEFAULT_MOWER_COORDINATION_ENABLED
         ),
         "feedback_observation": feedback_observation,
         "prochaine_reapplication": compute_next_reapplication_date(history, today=today),

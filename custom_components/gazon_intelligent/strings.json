@@ -1,5 +1,4 @@
 {
-  "title": "Gazon Intelligent",
   "config": {
     "step": {
       "user": {
@@ -7,40 +6,6 @@
         "description": "Renseignez ici l'identifiant de la pelouse, puis les zones, les débits et le type de sol.",
         "data": {
           "instance_slug": "Identifiant de la pelouse (obligatoire pour une nouvelle instance)",
-          "zone_1": "Zone 1",
-          "zone_2": "Zone 2",
-          "zone_3": "Zone 3",
-          "zone_4": "Zone 4",
-          "zone_5": "Zone 5",
-          "debit_zone_1": "Débit zone 1 (mm/h, 0 si non utilisée)",
-          "debit_zone_2": "Débit zone 2 (mm/h, 0 si non utilisée)",
-          "debit_zone_3": "Débit zone 3 (mm/h, 0 si non utilisée)",
-          "debit_zone_4": "Débit zone 4 (mm/h, 0 si non utilisée)",
-          "debit_zone_5": "Débit zone 5 (mm/h, 0 si non utilisée)",
-          "type_sol": "Type de sol (obligatoire)"
-        }
-      },
-      "reconfigure": {
-        "title": "Paramètres de base",
-        "description": "Mettez à jour ici les zones, les débits et le type de sol.",
-        "data": {
-          "zone_1": "Zone 1",
-          "zone_2": "Zone 2",
-          "zone_3": "Zone 3",
-          "zone_4": "Zone 4",
-          "zone_5": "Zone 5",
-          "debit_zone_1": "Débit zone 1 (mm/h, 0 si non utilisée)",
-          "debit_zone_2": "Débit zone 2 (mm/h, 0 si non utilisée)",
-          "debit_zone_3": "Débit zone 3 (mm/h, 0 si non utilisée)",
-          "debit_zone_4": "Débit zone 4 (mm/h, 0 si non utilisée)",
-          "debit_zone_5": "Débit zone 5 (mm/h, 0 si non utilisée)",
-          "type_sol": "Type de sol (obligatoire)"
-        }
-      },
-      "reconfigure": {
-        "title": "Paramètres de base",
-        "description": "Mettez à jour ici les zones, les débits et le type de sol.",
-        "data": {
           "zone_1": "Zone 1",
           "zone_2": "Zone 2",
           "zone_3": "Zone 3",
@@ -65,6 +30,13 @@
           "capteur_etp": "ETP du jour (optionnel, calcul automatique si non renseigné)",
           "capteur_humidite": "Humidité locale (optionnel, prioritaire si fournie)",
           "capteur_hauteur_gazon": "Hauteur du gazon (recommandé si disponible)",
+          "entite_tondeuse": "Robot tondeuse (optionnel)",
+          "capteur_tondeuse_erreur": "Capteur erreur tondeuse (optionnel)",
+          "capteur_tondeuse_batterie": "Capteur batterie tondeuse (optionnel)",
+          "capteur_tondeuse_pluie": "Capteur pluie tondeuse (optionnel)",
+          "capteur_tondeuse_en_charge": "Capteur tondeuse en charge (optionnel)",
+          "capteur_tondeuse_prochain_depart": "Capteur prochain départ tondeuse (optionnel)",
+          "capteur_tondeuse_hauteur_coupe": "Hauteur de coupe tondeuse (optionnel)",
           "hauteur_min_tondeuse_cm": "Hauteur minimale tondeuse (cm)",
           "hauteur_max_tondeuse_cm": "Hauteur maximale tondeuse (cm)",
           "capteur_retour_arrosage": "Retour arrosage (optionnel, calcul automatique ou estimation via l'historique des zones)",
@@ -94,6 +66,13 @@
           "capteur_etp": "ETP du jour (optionnel, calcul automatique si non renseigné)",
           "capteur_humidite": "Humidité locale (optionnel, prioritaire si fournie)",
           "capteur_hauteur_gazon": "Hauteur du gazon (recommandé si disponible)",
+          "entite_tondeuse": "Robot tondeuse (optionnel)",
+          "capteur_tondeuse_erreur": "Capteur erreur tondeuse (optionnel)",
+          "capteur_tondeuse_batterie": "Capteur batterie tondeuse (optionnel)",
+          "capteur_tondeuse_pluie": "Capteur pluie tondeuse (optionnel)",
+          "capteur_tondeuse_en_charge": "Capteur tondeuse en charge (optionnel)",
+          "capteur_tondeuse_prochain_depart": "Capteur prochain départ tondeuse (optionnel)",
+          "capteur_tondeuse_hauteur_coupe": "Hauteur de coupe tondeuse (optionnel)",
           "hauteur_min_tondeuse_cm": "Hauteur minimale tondeuse (cm)",
           "hauteur_max_tondeuse_cm": "Hauteur maximale tondeuse (cm)",
           "capteur_retour_arrosage": "Retour arrosage (optionnel, calcul automatique ou estimation via l'historique des zones)",
@@ -110,42 +89,42 @@
   "selector": {
     "gazon_mode": {
       "options": {
-        "normal": "Normal",
-        "sursemis": "Sursemis",
-        "traitement": "Traitement",
-        "fertilisation": "Fertilisation",
-        "biostimulant": "Biostimulant",
-        "agent-mouillant": "Agent Mouillant",
-        "scarification": "Scarification",
-        "hivernage": "Hivernage"
+        "Normal": "Normal",
+        "Sursemis": "Sursemis",
+        "Traitement": "Traitement",
+        "Fertilisation": "Fertilisation",
+        "Biostimulant": "Biostimulant",
+        "Agent Mouillant": "Agent Mouillant",
+        "Scarification": "Scarification",
+        "Hivernage": "Hivernage"
       }
     },
     "gazon_intervention": {
       "options": {
-        "sursemis": "Sursemis",
-        "traitement": "Traitement",
-        "fertilisation": "Fertilisation",
-        "biostimulant": "Biostimulant",
-        "agent-mouillant": "Agent Mouillant",
-        "scarification": "Scarification",
-        "hivernage": "Hivernage"
+        "Sursemis": "Sursemis",
+        "Traitement": "Traitement",
+        "Fertilisation": "Fertilisation",
+        "Biostimulant": "Biostimulant",
+        "Agent Mouillant": "Agent Mouillant",
+        "Scarification": "Scarification",
+        "Hivernage": "Hivernage"
       }
     },
     "gazon_product_category": {
       "options": {
-        "traitement": "Traitement",
-        "fertilisation": "Fertilisation",
-        "biostimulant": "Biostimulant",
-        "agent-mouillant": "Agent Mouillant",
-        "scarification": "Scarification",
-        "hivernage": "Hivernage"
+        "Traitement": "Traitement",
+        "Fertilisation": "Fertilisation",
+        "Biostimulant": "Biostimulant",
+        "Agent Mouillant": "Agent Mouillant",
+        "Scarification": "Scarification",
+        "Hivernage": "Hivernage"
       }
     },
     "gazon_phase_compatible": {
       "options": {
-        "sursemis": "Sursemis",
-        "croissance": "Croissance",
-        "entretien": "Entretien"
+        "Sursemis": "Sursemis",
+        "Croissance": "Croissance",
+        "Entretien": "Entretien"
       }
     }
   },
@@ -194,7 +173,7 @@
         },
         "plan_arrosage_entity": {
           "name": "Entité du cycle calculé (optionnelle)",
-          "description": "Entité capteur du cycle calculé à lancer manuellement."
+          "description": "Capteur du cycle calculé à lancer manuellement."
         },
         "source": {
           "name": "Source d'exécution (optionnelle)",
@@ -208,7 +187,7 @@
     },
     "declare_intervention": {
       "name": "Déclarer une intervention",
-      "description": "Déclare une intervention réelle. Les réglages du produit se configurent dans \"Enregistrer un produit\" ; ici, il suffit de choisir le produit déjà enregistré, la date d'action, la zone et une note si besoin. Si aucun produit explicite n'est fourni, l'intégration peut utiliser la sélection courante de l'UI.",
+      "description": "Déclare une intervention réelle. Les réglages du produit se configurent dans \"Enregistrer un produit\" ; ici, il suffit de choisir le produit déjà enregistré, la date, la zone et une note si besoin. Si aucun produit explicite n'est fourni, l'intégration peut utiliser la sélection courante de l'UI.",
       "fields": {
         "intervention": {
           "name": "Intervention",
@@ -216,11 +195,11 @@
         },
         "date_action": {
           "name": "Date d'action (optionnelle)",
-          "description": "Date métier au format JJ/MM/AAAA. Si vide, aujourd'hui."
+          "description": "Date au format JJ/MM/AAAA. Si vide, aujourd'hui."
         },
         "produit_id": {
           "name": "ID produit (optionnel)",
-          "description": "Identifiant d'un produit déjà enregistré dans la base locale."
+          "description": "Identifiant d'un produit enregistré dans la base locale."
         },
         "produit": {
           "name": "Produit (optionnel)",
@@ -242,7 +221,7 @@
     },
     "register_product": {
       "name": "Enregistrer un produit",
-      "description": "Ajoute ou met à jour un produit personnalisé dans la base locale. La catégorie se choisit dans une liste, le dosage peut être saisi au m² et les mois d'application peuvent être précisés. Tous les réglages du produit se définissent ici et sont réutilisés ensuite par declare_intervention.",
+      "description": "Ajoute ou met à jour un produit personnalisé dans la base locale. La catégorie se choisit dans une liste, le dosage peut être saisi au m² et les mois d'application peuvent être précisés.",
       "fields": {
         "product_id": {
           "name": "ID produit",

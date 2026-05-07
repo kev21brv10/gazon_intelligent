@@ -1,7 +1,36 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any
+
+try:
+    from homeassistant.util import dt as dt_util
+except Exception:  # pragma: no cover - standalone fallback
+    dt_util = None
+
+
+_SOIL_RESERVE_UTILE_MM: dict[str, float] = {
+    "sableux": 8.0,
+    "limoneux": 12.0,
+    "argileux": 16.0,
+}
+
+_PHASE_MAD_RATIO: dict[str, float] = {
+    "Sursemis": 0.35,
+    "Hivernage": 0.6,
+}
+
+_RAIN_HORIZON_WEIGHTS: dict[str, float] = {
+    "today": 1.0,
+    "tomorrow": 0.55,
+    "day_after_tomorrow": 0.25,
+}
+
+_BALANCE_HORIZON_WEIGHTS: dict[int, dict[str, float]] = {
+    1: {"etp": 1.0, "rain": 1.0},
+    3: {"etp": 3.0, "rain": 1.4},
+    7: {"etp": 7.0, "rain": 2.4},
+}
 
 
 def _to_float(value: Any) -> float | None:
@@ -17,8 +46,66 @@ def _round_half_up_1(value: float) -> float:
     return float(int(value * 10.0 + 0.5)) / 10.0
 
 
+def _current_date() -> date:
+    if dt_util is not None:
+        now_getter = getattr(dt_util, "now", None)
+        if callable(now_getter):
+            current = now_getter()
+            if isinstance(current, datetime):
+                return current.date()
+    return datetime.now(timezone.utc).date()
+
+
 def _bound(value: float, lower: float, upper: float) -> float:
     return max(lower, min(value, upper))
+
+
+def _zone_mm_value(zone: dict[str, Any] | None) -> float | None:
+    if not isinstance(zone, dict):
+        return None
+    amount = _to_float(zone.get("mm"))
+    if amount is None:
+        rate_mm_h = _to_float(zone.get("rate_mm_h"))
+        duration_min = _to_float(zone.get("duration_min"))
+        if rate_mm_h is not None and duration_min is not None:
+            amount = (rate_mm_h * duration_min) / 60.0
+    if amount is None:
+        amount = _to_float(zone.get("objectif_mm"))
+    if amount is None:
+        return None
+    return max(0.0, amount)
+
+
+def _zone_session_mm_values(zones: list[dict[str, Any]] | None) -> list[float]:
+    if not isinstance(zones, list):
+        return []
+    values: list[float] = []
+    for zone in zones:
+        amount = _zone_mm_value(zone)
+        if amount is None:
+            continue
+        values.append(amount)
+    return values
+
+
+def _zone_session_surface_mm(
+    zones: list[dict[str, Any]] | None,
+    *,
+    objective_mm: float | None = None,
+) -> float | None:
+    if objective_mm is not None and objective_mm > 0:
+        return _round_half_up_1(objective_mm)
+    values = _zone_session_mm_values(zones)
+    if not values:
+        return None
+    return _round_half_up_1(sum(values) / len(values))
+
+
+def _zone_session_total_mm(zones: list[dict[str, Any]] | None) -> float | None:
+    values = _zone_session_mm_values(zones)
+    if not values:
+        return None
+    return _round_half_up_1(sum(values))
 
 
 _SOIL_MODEL_BASES: dict[str, dict[str, float]] = {
@@ -100,41 +187,25 @@ def _compute_soil_profile(
 def _watering_item_mm(item: dict[str, Any] | None) -> float | None:
     if not isinstance(item, dict):
         return None
+    zones = item.get("zones")
+    if isinstance(zones, list):
+        surface_mm = _zone_session_surface_mm(zones)
+        if surface_mm is not None:
+            return surface_mm
     for key in ("total_mm", "session_total_mm", "objectif_mm", "mm"):
         amount = _to_float(item.get(key))
         if amount is not None:
             return amount
-    zones = item.get("zones")
-    if not isinstance(zones, list):
-        return None
-    total = 0.0
-    found = False
-    for zone in zones:
-        if not isinstance(zone, dict):
-            continue
-        amount = _to_float(zone.get("mm"))
-        if amount is None:
-            amount = _to_float(zone.get("objectif_mm"))
-        if amount is None:
-            rate_mm_h = _to_float(zone.get("rate_mm_h"))
-            duration_min = _to_float(zone.get("duration_min"))
-            if rate_mm_h is not None and duration_min is not None:
-                amount = (rate_mm_h * duration_min) / 60.0
-        if amount is None:
-            continue
-        total += amount
-        found = True
-    if not found:
-        return None
-    return total
+    return None
 
 
 def build_watering_session_summary(
     zones: list[dict[str, Any]],
     source: str | None = None,
+    objective_mm: float | None = None,
 ) -> dict[str, Any]:
     normalized_zones: list[dict[str, Any]] = []
-    total_mm = 0.0
+    zones_total_mm = 0.0
     for order, zone in enumerate(zones, start=1):
         if not isinstance(zone, dict):
             continue
@@ -143,11 +214,7 @@ def build_watering_session_summary(
             continue
         rate_mm_h = _to_float(zone.get("rate_mm_h"))
         duration_min = _to_float(zone.get("duration_min"))
-        mm = _to_float(zone.get("mm"))
-        if mm is None and rate_mm_h is not None and duration_min is not None:
-            mm = (rate_mm_h * duration_min) / 60.0
-        if mm is None:
-            mm = _to_float(zone.get("objectif_mm"))
+        mm = _zone_mm_value(zone)
         if mm is None:
             continue
         normalized_zone = {
@@ -165,13 +232,20 @@ def build_watering_session_summary(
             if duration_seconds is not None:
                 normalized_zone["duration_seconds"] = int(max(0.0, duration_seconds))
         normalized_zones.append(normalized_zone)
-        total_mm += mm
+        zones_total_mm += mm
 
-    total_mm = _round_half_up_1(total_mm)
+    objective_value = _zone_session_surface_mm(normalized_zones, objective_mm=objective_mm)
+    if objective_value is None:
+        objective_value = 0.0
+    zones_total_mm = _round_half_up_1(zones_total_mm)
     session: dict[str, Any] = {
-        "objectif_mm": total_mm,
-        "total_mm": total_mm,
-        "session_total_mm": total_mm,
+        "mm_scope": "global_surface",
+        "mm_interpretation": "surface_uniform",
+        "objective_mm": objective_value,
+        "objectif_mm": objective_value,
+        "total_mm": objective_value,
+        "session_total_mm": objective_value,
+        "zones_total_mm": zones_total_mm,
         "zone_count": len(normalized_zones),
         "zones": normalized_zones,
     }
@@ -185,35 +259,20 @@ def compute_recent_watering_mm(
     today: date | None = None,
     days: int = 2,
 ) -> float:
-    today = today or date.today()
+    today = today or _current_date()
     total = 0.0
-    for item in history:
-        if not isinstance(item, dict) or item.get("type") != "arrosage":
-            continue
-        raw_date = item.get("date")
-        if not raw_date:
-            continue
-        try:
-            d = date.fromisoformat(str(raw_date))
-        except ValueError:
-            continue
-        delta = (today - d).days
-        if delta < 0 or delta > days:
-            continue
+    for item in _iter_recent_watering_items(history, today=today, days=days):
         mm = _watering_item_mm(item)
-        if mm is None:
-            continue
-        total += float(mm)
+        if mm is not None:
+            total += float(mm)
     return total
 
 
-def compute_recent_watering_count(
+def _iter_recent_watering_items(
     history: list[dict[str, Any]],
-    today: date | None = None,
-    days: int = 7,
-) -> int:
-    today = today or date.today()
-    count = 0
+    today: date,
+    days: int,
+):
     for item in history:
         if not isinstance(item, dict) or item.get("type") != "arrosage":
             continue
@@ -229,8 +288,133 @@ def compute_recent_watering_count(
             continue
         if _watering_item_mm(item) is None:
             continue
-        count += 1
-    return count
+        yield item
+
+
+def compute_recent_watering_count(
+    history: list[dict[str, Any]],
+    today: date | None = None,
+    days: int = 7,
+) -> int:
+    today = today or _current_date()
+    return sum(1 for _ in _iter_recent_watering_items(history, today=today, days=days))
+
+
+def _effective_rain_mm(
+    pluie_j: float,
+    pluie_j1: float,
+    pluie_j2: float,
+    pluie_factor: float,
+) -> float:
+    return _round_half_up_1(
+        (pluie_j * pluie_factor * _RAIN_HORIZON_WEIGHTS["today"])
+        + (pluie_j1 * _RAIN_HORIZON_WEIGHTS["tomorrow"])
+        + (pluie_j2 * _RAIN_HORIZON_WEIGHTS["day_after_tomorrow"])
+    )
+
+
+def _recent_watering_windows(
+    history: list[dict[str, Any]],
+    today: date,
+    recent_watering_mm_override: float | None,
+    retour_arrosage: float | None,
+) -> dict[str, float]:
+    arrosage_recent_7j = (
+        recent_watering_mm_override
+        if recent_watering_mm_override is not None
+        else compute_recent_watering_mm(history, today=today, days=7)
+    )
+    arrosage_recent_jour = compute_recent_watering_mm(history, today=today, days=1)
+    arrosage_recent_3j = compute_recent_watering_mm(history, today=today, days=3)
+    if retour_arrosage is not None:
+        retour = float(retour_arrosage)
+        arrosage_recent_jour = max(arrosage_recent_jour, retour)
+        arrosage_recent_3j = max(arrosage_recent_3j, retour)
+        arrosage_recent_7j = max(arrosage_recent_7j, retour)
+    return {
+        "jour": arrosage_recent_jour,
+        "3j": arrosage_recent_3j,
+        "7j": arrosage_recent_7j,
+    }
+
+
+def _hydric_parameters(
+    type_sol: str,
+    advanced_context: dict[str, Any],
+    phase_dominante: str | None,
+) -> dict[str, float]:
+    reserve_utile_mm = _SOIL_RESERVE_UTILE_MM.get(type_sol, _SOIL_RESERVE_UTILE_MM["limoneux"])
+    soil_need_factor = float(advanced_context.get("soil_need_factor", advanced_context.get("soil_factor", 1.0)))
+    soil_factor = (12.0 / reserve_utile_mm) * soil_need_factor
+    soil_factor *= float(advanced_context.get("wind_factor", 1.0))
+    soil_factor *= float(advanced_context.get("dew_factor", 1.0))
+    mad_ratio = _PHASE_MAD_RATIO.get(str(phase_dominante or ""), 0.5)
+    return {
+        "reserve_utile_mm": reserve_utile_mm,
+        "soil_factor": soil_factor,
+        "mad_ratio": mad_ratio,
+    }
+
+
+def _soil_balance_priority(
+    reserve_utile_mm: float,
+    bilan_hydrique_mm: float,
+    soil_balance: dict[str, Any] | None,
+) -> dict[str, float]:
+    reserve_actuelle_source = None
+    if isinstance(soil_balance, dict):
+        reserve_actuelle_source = _to_float(soil_balance.get("reserve_mm"))
+    if reserve_actuelle_source is None:
+        reserve_actuelle_source = reserve_utile_mm + bilan_hydrique_mm
+    reserve_stock_max_mm = _to_float(soil_balance.get("reserve_max_mm")) if isinstance(soil_balance, dict) else None
+    if reserve_stock_max_mm is None:
+        reserve_stock_max_mm = max(reserve_utile_mm, reserve_utile_mm * 2.0)
+    reserve_stock_max_mm = max(reserve_utile_mm, float(reserve_stock_max_mm))
+    return {
+        "reserve_actuelle_source": float(reserve_actuelle_source),
+        "reserve_stock_max_mm": reserve_stock_max_mm,
+    }
+
+
+def _reserve_metrics(
+    reserve_utile_mm: float,
+    mad_ratio: float,
+    reserve_actuelle_source: float,
+    reserve_stock_max_mm: float,
+) -> dict[str, float]:
+    reserve_stock_mm = _bound(float(reserve_actuelle_source), 0.0, reserve_stock_max_mm)
+    reserve_actuelle_mm = _bound(reserve_stock_mm, 0.0, reserve_utile_mm)
+    depletion_allowed_mm = reserve_utile_mm * mad_ratio
+    reserve_minimale_mm = reserve_utile_mm - depletion_allowed_mm
+    depletion_mm = max(0.0, reserve_utile_mm - reserve_actuelle_mm)
+    depletion_ratio = depletion_mm / reserve_utile_mm if reserve_utile_mm > 0 else 0.0
+    reserve_surplus_mm = max(0.0, reserve_stock_mm - reserve_utile_mm)
+    reserve_fill_ratio = reserve_stock_mm / reserve_stock_max_mm if reserve_stock_max_mm > 0 else 0.0
+    reserve_available_ratio = reserve_actuelle_mm / reserve_utile_mm if reserve_utile_mm > 0 else 0.0
+    return {
+        "reserve_stock_mm": reserve_stock_mm,
+        "reserve_actuelle_mm": reserve_actuelle_mm,
+        "depletion_allowed_mm": depletion_allowed_mm,
+        "reserve_minimale_mm": reserve_minimale_mm,
+        "depletion_mm": depletion_mm,
+        "depletion_ratio": depletion_ratio,
+        "reserve_surplus_mm": reserve_surplus_mm,
+        "reserve_fill_ratio": reserve_fill_ratio,
+        "reserve_available_ratio": reserve_available_ratio,
+    }
+
+
+def _horizon_balance(
+    etp_j: float,
+    pluie_efficace: float,
+    arrosage_mm: float,
+    soil_factor: float,
+    horizon_days: int,
+) -> tuple[float, float]:
+    weights = _BALANCE_HORIZON_WEIGHTS[horizon_days]
+    deficit = max(0.0, ((etp_j * weights["etp"]) - (pluie_efficace * weights["rain"]) - arrosage_mm) * soil_factor)
+    bilan = _round_half_up_1((pluie_efficace * weights["rain"] + arrosage_mm) - (etp_j * weights["etp"]))
+    return deficit, bilan
 
 
 def compute_advanced_context(
@@ -318,7 +502,6 @@ def compute_advanced_context(
         "weather_cloud_coverage": weather_profile.get("weather_cloud_coverage"),
         "weather_dew_point": weather_profile.get("weather_dew_point"),
         "weather_uv_index": weather_profile.get("weather_uv_index"),
-        "weather_precipitation_probability": weather_precipitation_probability,
         "weather_condition": weather_profile.get("weather_condition"),
     }
 
@@ -330,6 +513,7 @@ def compute_etp(
     temperature_reference_hydrique: float | None = None,
     weather_profile: dict[str, Any] | None = None,
 ) -> float | None:
+    """Estimation simplifiée interne de l'ETP quand aucun capteur dédié n'est fourni."""
     if etp_capteur is not None:
         return etp_capteur
     weather_profile = weather_profile or {}
@@ -384,7 +568,7 @@ def compute_water_balance(
     soil_balance: dict[str, Any] | None = None,
     phase_dominante: str | None = None,
 ) -> dict[str, Any]:
-    today = today or date.today()
+    today = today or _current_date()
     advanced_context = advanced_context or {}
     weather_profile = weather_profile or {}
     etp_j = max(0.0, etp or 0.0)
@@ -392,65 +576,59 @@ def compute_water_balance(
     pluie_j1 = max(0.0, pluie_demain or 0.0)
     pluie_j2 = max(0.0, pluie_j2 or 0.0)
     pluie_source = advanced_context.get("pluie_source", "capteur_pluie_24h")
-
-    reserve_utile_mm = {
-        "sableux": 8.0,
-        "limoneux": 12.0,
-        "argileux": 16.0,
-    }.get(type_sol, 12.0)
-    soil_need_factor = float(advanced_context.get("soil_need_factor", advanced_context.get("soil_factor", 1.0)))
-    soil_factor = (12.0 / reserve_utile_mm) * soil_need_factor
-    soil_factor *= float(advanced_context.get("wind_factor", 1.0))
-    soil_factor *= float(advanced_context.get("dew_factor", 1.0))
+    hydric_params = _hydric_parameters(
+        type_sol=type_sol,
+        advanced_context=advanced_context,
+        phase_dominante=phase_dominante,
+    )
+    reserve_utile_mm = hydric_params["reserve_utile_mm"]
+    soil_factor = hydric_params["soil_factor"]
+    mad_ratio = hydric_params["mad_ratio"]
 
     pluie_factor = float(advanced_context.get("rain_factor", 0.85))
-    pluie_efficace = _round_half_up_1((pluie_j * pluie_factor) + (pluie_j1 * 0.55) + (pluie_j2 * 0.25))
-    arrosage_recent = (
-        recent_watering_mm_override
-        if recent_watering_mm_override is not None
-        else compute_recent_watering_mm(history, today=today, days=7)
+    pluie_efficace = _effective_rain_mm(pluie_j=pluie_j, pluie_j1=pluie_j1, pluie_j2=pluie_j2, pluie_factor=pluie_factor)
+    recent_watering = _recent_watering_windows(
+        history=history,
+        today=today,
+        recent_watering_mm_override=recent_watering_mm_override,
+        retour_arrosage=advanced_context.get("retour_arrosage"),
     )
-    retour_arrosage = advanced_context.get("retour_arrosage")
-    if retour_arrosage is not None:
-        arrosage_recent = max(arrosage_recent, float(retour_arrosage))
-    arrosage_recent_jour = compute_recent_watering_mm(history, today=today, days=1)
-    arrosage_recent_3j = compute_recent_watering_mm(history, today=today, days=3)
-    arrosage_recent_7j = arrosage_recent
-    if retour_arrosage is not None:
-        arrosage_recent_jour = max(arrosage_recent_jour, float(retour_arrosage))
-        arrosage_recent_3j = max(arrosage_recent_3j, float(retour_arrosage))
-        arrosage_recent_7j = max(arrosage_recent_7j, float(retour_arrosage))
+    arrosage_recent_jour = recent_watering["jour"]
+    arrosage_recent_3j = recent_watering["3j"]
+    arrosage_recent_7j = recent_watering["7j"]
 
-    deficit_jour = max(0.0, (etp_j - pluie_efficace - arrosage_recent_jour) * soil_factor)
-    deficit_3j = max(0.0, ((etp_j * 3.0) - (pluie_efficace * 1.4) - arrosage_recent_3j) * soil_factor)
-    deficit_7j = max(0.0, ((etp_j * 7.0) - (pluie_efficace * 2.4) - arrosage_recent_7j) * soil_factor)
-    bilan_hydrique_mm = _round_half_up_1((pluie_efficace + arrosage_recent_jour) - etp_j)
-    bilan_hydrique_3j = _round_half_up_1((pluie_efficace * 1.4 + arrosage_recent_3j) - (etp_j * 3.0))
-    bilan_hydrique_7j = _round_half_up_1((pluie_efficace * 2.4 + arrosage_recent_7j) - (etp_j * 7.0))
-    if phase_dominante == "Sursemis":
-        mad_ratio = 0.35
-    elif phase_dominante == "Hivernage":
-        mad_ratio = 0.6
-    else:
-        mad_ratio = 0.5
-    reserve_actuelle_source = None
-    if isinstance(soil_balance, dict):
-        reserve_actuelle_source = _to_float(soil_balance.get("reserve_mm"))
-    if reserve_actuelle_source is None:
-        reserve_actuelle_source = reserve_utile_mm + bilan_hydrique_mm
-    reserve_stock_max_mm = _to_float(soil_balance.get("reserve_max_mm")) if isinstance(soil_balance, dict) else None
-    if reserve_stock_max_mm is None:
-        reserve_stock_max_mm = max(reserve_utile_mm, reserve_utile_mm * 2.0)
-    reserve_stock_max_mm = max(reserve_utile_mm, float(reserve_stock_max_mm))
-    reserve_stock_mm = _bound(float(reserve_actuelle_source), 0.0, reserve_stock_max_mm)
-    reserve_actuelle_mm = _bound(reserve_stock_mm, 0.0, reserve_utile_mm)
-    depletion_allowed_mm = reserve_utile_mm * mad_ratio
-    reserve_minimale_mm = reserve_utile_mm - depletion_allowed_mm
-    depletion_mm = max(0.0, reserve_utile_mm - reserve_actuelle_mm)
-    depletion_ratio = depletion_mm / reserve_utile_mm if reserve_utile_mm > 0 else 0.0
-    reserve_surplus_mm = max(0.0, reserve_stock_mm - reserve_utile_mm)
-    reserve_fill_ratio = reserve_stock_mm / reserve_stock_max_mm if reserve_stock_max_mm > 0 else 0.0
-    reserve_available_ratio = reserve_actuelle_mm / reserve_utile_mm if reserve_utile_mm > 0 else 0.0
+    deficit_jour, bilan_hydrique_mm = _horizon_balance(
+        etp_j=etp_j,
+        pluie_efficace=pluie_efficace,
+        arrosage_mm=arrosage_recent_jour,
+        soil_factor=soil_factor,
+        horizon_days=1,
+    )
+    deficit_3j, bilan_hydrique_3j = _horizon_balance(
+        etp_j=etp_j,
+        pluie_efficace=pluie_efficace,
+        arrosage_mm=arrosage_recent_3j,
+        soil_factor=soil_factor,
+        horizon_days=3,
+    )
+    deficit_7j, bilan_hydrique_7j = _horizon_balance(
+        etp_j=etp_j,
+        pluie_efficace=pluie_efficace,
+        arrosage_mm=arrosage_recent_7j,
+        soil_factor=soil_factor,
+        horizon_days=7,
+    )
+    soil_balance_priority = _soil_balance_priority(
+        reserve_utile_mm=reserve_utile_mm,
+        bilan_hydrique_mm=bilan_hydrique_mm,
+        soil_balance=soil_balance,
+    )
+    reserve_metrics = _reserve_metrics(
+        reserve_utile_mm=reserve_utile_mm,
+        mad_ratio=mad_ratio,
+        reserve_actuelle_source=soil_balance_priority["reserve_actuelle_source"],
+        reserve_stock_max_mm=soil_balance_priority["reserve_stock_max_mm"],
+    )
 
     return {
         "et0_mm": _round_half_up_1(max(0.0, etp_j)),
@@ -474,17 +652,17 @@ def compute_water_balance(
         "hauteur_gazon": advanced_context.get("hauteur_gazon"),
         "retour_arrosage": advanced_context.get("retour_arrosage"),
         "reserve_utile_mm": _round_half_up_1(reserve_utile_mm),
-        "reserve_stock_mm": _round_half_up_1(reserve_stock_mm),
-        "reserve_stock_max_mm": _round_half_up_1(reserve_stock_max_mm),
-        "reserve_surplus_mm": _round_half_up_1(reserve_surplus_mm),
-        "reserve_actuelle_mm": _round_half_up_1(reserve_actuelle_mm),
-        "reserve_fill_ratio": round(_bound(reserve_fill_ratio, 0.0, 1.0), 3),
-        "reserve_available_ratio": round(_bound(reserve_available_ratio, 0.0, 1.0), 3),
+        "reserve_stock_mm": _round_half_up_1(reserve_metrics["reserve_stock_mm"]),
+        "reserve_stock_max_mm": _round_half_up_1(soil_balance_priority["reserve_stock_max_mm"]),
+        "reserve_surplus_mm": _round_half_up_1(reserve_metrics["reserve_surplus_mm"]),
+        "reserve_actuelle_mm": _round_half_up_1(reserve_metrics["reserve_actuelle_mm"]),
+        "reserve_fill_ratio": round(_bound(reserve_metrics["reserve_fill_ratio"], 0.0, 1.0), 3),
+        "reserve_available_ratio": round(_bound(reserve_metrics["reserve_available_ratio"], 0.0, 1.0), 3),
         "mad_ratio": round(_bound(mad_ratio, 0.0, 1.0), 2),
-        "depletion_allowed_mm": _round_half_up_1(depletion_allowed_mm),
-        "reserve_minimale_mm": _round_half_up_1(reserve_minimale_mm),
-        "depletion_mm": _round_half_up_1(depletion_mm),
-        "depletion_ratio": round(_bound(depletion_ratio, 0.0, 1.0), 3),
+        "depletion_allowed_mm": _round_half_up_1(reserve_metrics["depletion_allowed_mm"]),
+        "reserve_minimale_mm": _round_half_up_1(reserve_metrics["reserve_minimale_mm"]),
+        "depletion_mm": _round_half_up_1(reserve_metrics["depletion_mm"]),
+        "depletion_ratio": round(_bound(reserve_metrics["depletion_ratio"], 0.0, 1.0), 3),
         "soil_factor": _round_half_up_1(soil_factor),
         "soil_profile": advanced_context.get("soil_profile"),
         "soil_retention_factor": advanced_context.get("soil_retention_factor"),

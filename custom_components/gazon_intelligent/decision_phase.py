@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Logique pure liée à la phase et à la sous-phase."""
 
+from datetime import date
 from typing import Any
 
 from homeassistant.util import dt as dt_util
@@ -11,15 +12,52 @@ from .guidance import compute_jours_restants_for
 from .phases import compute_dominant_phase, compute_subphase
 
 
+def _safe_phase_name(value: Any) -> str:
+    text = str(value or "").strip()
+    return text or "Normal"
+
+
+def _safe_date(value: Any) -> date | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, date):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        return None
+
+
+def _safe_int(value: Any, default: int = 0, minimum: int | None = None) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    if minimum is not None:
+        parsed = max(minimum, parsed)
+    return parsed
+
+
+def _safe_progression(value: Any) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = 0.0
+    return max(0.0, min(parsed, 100.0))
+
+
 def build_phase_bundle(context: DecisionContext) -> dict[str, Any]:
     dominant = compute_dominant_phase(
         context.history,
         today=context.today,
         temperature=context.temperature,
     )
-    phase_dominante = dominant["phase_dominante"]
-    date_debut = dominant["date_debut"]
-    date_fin = dominant["date_fin"]
+    phase_dominante = _safe_phase_name(dominant.get("phase_dominante"))
+    date_debut = _safe_date(dominant.get("date_debut"))
+    date_fin = _safe_date(dominant.get("date_fin"))
     subphase = compute_subphase(
         phase_dominante=phase_dominante,
         date_debut=date_debut,
@@ -32,15 +70,22 @@ def build_phase_bundle(context: DecisionContext) -> dict[str, Any]:
         date_fin=date_fin,
         today=context.today,
     )
+    phase_age_days = _safe_int(dominant.get("age_jours"), default=0, minimum=0)
+    sous_phase_progression = _safe_progression(subphase.get("progression"))
+    sous_phase_age_days = _safe_int(subphase.get("age_jours"), default=0, minimum=0)
+    sous_phase = _safe_phase_name(subphase.get("sous_phase"))
+    sous_phase_detail = str(subphase.get("detail") or sous_phase)
+    if date_fin is not None and context.today is not None and date_fin < context.today:
+        jours_restants = 0
     return {
         "phase_dominante": phase_dominante,
-        "phase_dominante_source": dominant["source"],
-        "date_action": date_debut,
-        "date_fin": date_fin,
-        "phase_age_days": dominant["age_jours"],
-        "sous_phase": subphase["sous_phase"],
-        "sous_phase_detail": subphase["detail"],
-        "sous_phase_age_days": subphase["age_jours"],
-        "sous_phase_progression": subphase["progression"],
-        "jours_restants": jours_restants,
+        "phase_dominante_source": dominant.get("source") or "inconnu",
+        "date_action": date_debut.isoformat() if date_debut is not None else None,
+        "date_fin": date_fin.isoformat() if date_fin is not None else None,
+        "phase_age_days": phase_age_days,
+        "sous_phase": sous_phase,
+        "sous_phase_detail": sous_phase_detail,
+        "sous_phase_age_days": sous_phase_age_days,
+        "sous_phase_progression": sous_phase_progression,
+        "jours_restants": max(0, _safe_int(jours_restants, default=0, minimum=0)),
     }

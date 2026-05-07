@@ -550,7 +550,7 @@ def _evaluate_product_candidate(
             reasons.append(f"Phase compatible ({', '.join(phase_compatible[:3])})")
         else:
             score -= 12
-            reasons.append(f"Phase moins adaptée ({', '.join(phase_compatible[:3])})")
+            reasons.append(f"Phase cible ({', '.join(phase_compatible[:3])})")
     else:
         score += 2
 
@@ -850,7 +850,7 @@ def _constraints_for_candidate(
         constraints.append(
             _constraint_entry(
                 code="phase_compatibility",
-                label=f"Phase compatible ({phase_label})" if candidate.get("phase_match") else f"Phase moins adaptée ({phase_label})",
+                label=f"Phase compatible ({phase_label})" if candidate.get("phase_match") else f"Phase cible ({phase_label})",
                 value={
                     "expected": phase_compatible,
                     "current": current_phase if current_phase is not None else candidate.get("current_phase"),
@@ -1570,9 +1570,9 @@ def build_intervention_recommendation(
         why_now = f"{reason} · Période recommandée: {best['months_label']}."
     elif state == "preparation":
         phase_now = str(phase_active or "").strip() or "Non disponible"
-        phase_ideal = ", ".join(best["phase_compatible"][:3]) if best.get("phase_compatible") else ""
-        if phase_ideal:
-            why_now = f"{reason} · Phase actuelle: {phase_now}. · Phase idéale: {phase_ideal}."
+        phase_target = ", ".join(best["phase_compatible"][:3]) if best.get("phase_compatible") else ""
+        if phase_target:
+            why_now = f"{reason} · Phase actuelle: {phase_now}. · Phase cible: {phase_target}."
         else:
             why_now = f"{reason} · Phase actuelle: {phase_now}."
     constraints, missing_requirements, _ = _constraints_for_candidate(

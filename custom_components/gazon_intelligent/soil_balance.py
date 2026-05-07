@@ -1,7 +1,12 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any
+
+try:
+    from homeassistant.util import dt as dt_util
+except Exception:  # pragma: no cover - standalone fallback
+    dt_util = None
 
 SOIL_RESERVE_BASE_MM = {
     "sableux": 8.0,
@@ -122,7 +127,15 @@ def update_soil_balance(
     etp_mm: float | None = None,
     type_sol: str | None = None,
 ) -> dict[str, Any]:
-    today = today or date.today()
+    if today is None:
+        if dt_util is not None:
+            now_getter = getattr(dt_util, "now", None)
+            if callable(now_getter):
+                current = now_getter()
+                if isinstance(current, datetime):
+                    today = current.date()
+        if today is None:
+            today = datetime.now(timezone.utc).date()
     today_str = today.isoformat()
     state = normalize_soil_balance_state(previous_state)
     ledger = list(state.get("ledger") or [])
@@ -182,4 +195,3 @@ def update_soil_balance(
         "reserve_max_mm": _round_half_up_1(reserve_max_mm),
         "ledger": ledger,
     }
-

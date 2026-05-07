@@ -4,7 +4,25 @@
     "step": {
       "user": {
         "title": "Grundlegende Einstellungen",
-        "description": "Trage hier die Zonen, die Durchflüsse und den Bodentyp ein.",
+        "description": "Trage hier die Rasenkennung ein, danach die Zonen, die Durchflüsse und den Bodentyp.",
+        "data": {
+          "instance_slug": "Rasenkennung (für neue Instanzen erforderlich)",
+          "zone_1": "Zone 1",
+          "zone_2": "Zone 2",
+          "zone_3": "Zone 3",
+          "zone_4": "Zone 4",
+          "zone_5": "Zone 5",
+          "debit_zone_1": "Durchfluss Zone 1 (mm/h, 0 wenn ungenutzt)",
+          "debit_zone_2": "Durchfluss Zone 2 (mm/h, 0 wenn ungenutzt)",
+          "debit_zone_3": "Durchfluss Zone 3 (mm/h, 0 wenn ungenutzt)",
+          "debit_zone_4": "Durchfluss Zone 4 (mm/h, 0 wenn ungenutzt)",
+          "debit_zone_5": "Durchfluss Zone 5 (mm/h, 0 wenn ungenutzt)",
+          "type_sol": "Bodentyp (erforderlich)"
+        }
+      },
+      "reconfigure": {
+        "title": "Grundlegende Einstellungen",
+        "description": "Aktualisiere hier die Zonen, die Durchflüsse und den Bodentyp.",
         "data": {
           "zone_1": "Zone 1",
           "zone_2": "Zone 2",
@@ -55,6 +73,9 @@
           "capteur_rosee": "Tau / Blattnässe (optional, automatische Berechnung wenn nicht angegeben)"
         }
       }
+    },
+    "error": {
+      "invalid_instance_slug": "Ungültige Rasenkennung."
     },
     "abort": {
       "already_configured": "Gazon Intelligent ist bereits konfiguriert."

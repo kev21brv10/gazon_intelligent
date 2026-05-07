@@ -9,6 +9,7 @@ from homeassistant.util import dt as dt_util
 from .const import (
     APPLICATION_INTERVENTIONS,
     DEFAULT_AUTO_IRRIGATION_ENABLED,
+    DEFAULT_MOWER_COORDINATION_ENABLED,
     DEFAULT_MODE,
     INTERVENTIONS_ACTIONS,
 )
@@ -50,10 +51,22 @@ class GazonBrain:
             "selected_product_id": None,
             "date_derniere_mise_a_jour": None,
             "auto_irrigation_enabled": DEFAULT_AUTO_IRRIGATION_ENABLED,
+            "mower_coordination_enabled": DEFAULT_MOWER_COORDINATION_ENABLED,
         }
         self.products: dict[str, dict[str, Any]] = {}
         self.soil_balance: dict[str, Any] = {}
         self.last_result: DecisionResult | None = None
+
+    @staticmethod
+    def _coerce_date(value: Any) -> date | None:
+        if isinstance(value, date):
+            return value
+        if value in (None, ""):
+            return None
+        try:
+            return date.fromisoformat(str(value))
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _build_temperature_note(
@@ -74,29 +87,125 @@ class GazonBrain:
             return f"prévision du jour {forecast_temperature_today:.1f}°C"
         return f"température réelle {temperature:.1f}°C, prévision du jour {forecast_temperature_today:.1f}°C"
 
-    def load_state(self, data: dict[str, Any] | None) -> None:
+    @staticmethod
+    def _result_float_value(result: DecisionResult | None, key: str) -> float | None:
+        if result is None:
+            return None
+        value = getattr(result, key, None)
+        if value is None:
+            extra = getattr(result, "extra", None)
+            if isinstance(extra, dict):
+                value = extra.get(key)
+        try:
+            return float(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def _preserve_last_valid_hydric_metrics(
+        self,
+        *,
+        result: DecisionResult,
+        previous_result: DecisionResult | None,
+        etp: float | None,
+    ) -> None:
+        """Conserve ET0/ETc précédents si le refresh courant n'a pas encore de météo exploitable."""
+        if etp is not None or previous_result is None:
+            previous_et0 = None if etp is not None else self._memory_float_value("last_valid_et0_mm")
+            previous_etc = None if etp is not None else self._memory_float_value("last_valid_etc_mm")
+        else:
+            previous_et0 = self._result_float_value(previous_result, "et0_mm")
+            previous_etc = self._result_float_value(previous_result, "etc_mm")
+            if previous_et0 is None or previous_et0 <= 0:
+                previous_et0 = self._memory_float_value("last_valid_et0_mm")
+            if previous_etc is None or previous_etc <= 0:
+                previous_etc = self._memory_float_value("last_valid_etc_mm")
+
+        if etp is not None:
+            return
+
+        current_et0 = self._result_float_value(result, "et0_mm")
+        current_etc = self._result_float_value(result, "etc_mm")
+
+        if previous_et0 is not None and previous_et0 > 0 and (current_et0 is None or current_et0 <= 0):
+            result.extra["et0_mm"] = previous_et0
+            if isinstance(result.water_balance, dict):
+                result.water_balance["et0_mm"] = previous_et0
+
+        if previous_etc is not None and previous_etc > 0 and (current_etc is None or current_etc <= 0):
+            result.extra["etc_mm"] = previous_etc
+
+    def _memory_float_value(self, key: str) -> float | None:
+        try:
+            value = self.memory.get(key)
+        except AttributeError:
+            return None
+        try:
+            return float(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def _default_memory_state(self) -> dict[str, Any]:
+        return {
+            "historique_total": len(self.history),
+            "derniere_tonte": None,
+            "dernier_arrosage": None,
+            "dernier_arrosage_significatif": None,
+            "derniere_phase_active": self.mode,
+            "dernier_conseil": None,
+            "derniere_action_utilisateur": None,
+            "derniere_application": None,
+            "feedback_observation": None,
+            "prochaine_reapplication": None,
+            "catalogue_produits": len(self.products),
+            "selected_product_id": None,
+            "date_derniere_mise_a_jour": None,
+            "auto_irrigation_enabled": DEFAULT_AUTO_IRRIGATION_ENABLED,
+            "mower_coordination_enabled": DEFAULT_MOWER_COORDINATION_ENABLED,
+        }
+
+    def _normalize_loaded_memory(self, memory: Any) -> dict[str, Any]:
+        normalized = self._default_memory_state()
+        if isinstance(memory, dict):
+            normalized.update(copy.deepcopy(memory))
+        if not isinstance(normalized.get("auto_irrigation_enabled"), bool):
+            normalized["auto_irrigation_enabled"] = DEFAULT_AUTO_IRRIGATION_ENABLED
+        if not isinstance(normalized.get("mower_coordination_enabled"), bool):
+            normalized["mower_coordination_enabled"] = DEFAULT_MOWER_COORDINATION_ENABLED
+        normalized["historique_total"] = len(self.history)
+        normalized["catalogue_produits"] = len(self.products)
+        normalized["derniere_phase_active"] = normalized.get("derniere_phase_active") or self.mode
+        normalized.setdefault("selected_product_id", None)
+        normalized.setdefault("derniere_action_utilisateur", None)
+        normalized.setdefault("feedback_observation", None)
+        return normalized
+
+    def load_state(self, data: dict[str, Any] | None, *, shared_products: dict[str, dict[str, Any]] | None = None) -> None:
         state = data or {}
         mode = state.get("mode")
         if mode:
             self.mode = str(mode)
-        date_str = state.get("date_action")
-        if date_str:
-            try:
-                self.date_action = date.fromisoformat(str(date_str))
-            except ValueError:
-                self.date_action = None
+        self.date_action = self._coerce_date(state.get("date_action"))
         history = state.get("history")
         if isinstance(history, list):
-            self.history = [item for item in history if isinstance(item, dict)]
+            self.history = [copy.deepcopy(item) for item in history if isinstance(item, dict)]
         else:
             self.history = []
         products = state.get("products")
-        if isinstance(products, dict):
+        if shared_products is not None:
+            self.products = shared_products
+            if not self.products and isinstance(products, dict):
+                for key, value in products.items():
+                    if not isinstance(key, str) or not isinstance(value, dict):
+                        continue
+                    cleaned = copy.deepcopy(value)
+                    cleaned.pop("sol_compatible", None)
+                    self.products[key] = cleaned
+        elif isinstance(products, dict):
             self.products = {}
             for key, value in products.items():
                 if not isinstance(key, str) or not isinstance(value, dict):
                     continue
-                cleaned = dict(value)
+                cleaned = copy.deepcopy(value)
                 cleaned.pop("sol_compatible", None)
                 self.products[key] = cleaned
         else:
@@ -107,35 +216,7 @@ class GazonBrain:
         else:
             self.soil_balance = {}
         self.last_result = None
-        memory = state.get("memory")
-        if isinstance(memory, dict):
-            self.memory = memory
-        else:
-            self.memory = {
-                "historique_total": len(self.history),
-                "derniere_tonte": None,
-                "dernier_arrosage": None,
-                "dernier_arrosage_significatif": None,
-                "derniere_phase_active": self.mode,
-                "dernier_conseil": None,
-                "derniere_action_utilisateur": None,
-                "derniere_application": None,
-                "feedback_observation": None,
-                "prochaine_reapplication": None,
-                "catalogue_produits": len(self.products),
-                "selected_product_id": None,
-                "date_derniere_mise_a_jour": None,
-                "auto_irrigation_enabled": DEFAULT_AUTO_IRRIGATION_ENABLED,
-            }
-        self.memory.setdefault("historique_total", len(self.history))
-        self.memory.setdefault("derniere_phase_active", self.mode)
-        self.memory.setdefault("catalogue_produits", len(self.products))
-        self.memory.setdefault("selected_product_id", None)
-        self.memory.setdefault("derniere_action_utilisateur", None)
-        self.memory.setdefault("auto_irrigation_enabled", DEFAULT_AUTO_IRRIGATION_ENABLED)
-        self.memory.setdefault("feedback_observation", None)
-        self.memory["historique_total"] = len(self.history)
-        self.memory["catalogue_produits"] = len(self.products)
+        self.memory = self._normalize_loaded_memory(state.get("memory"))
         self._normalize_selected_product_id()
 
     def dump_state(self) -> dict[str, Any]:
@@ -144,11 +225,11 @@ class GazonBrain:
         self._normalize_selected_product_id()
         return {
             "mode": self.mode,
-            "date_action": self.date_action.isoformat() if self.date_action else None,
-            "history": self.history[-300:],
-            "products": self.products,
-            "soil_balance": self.soil_balance,
-            "memory": self.memory,
+            "date_action": self._coerce_date(self.date_action).isoformat() if self._coerce_date(self.date_action) else None,
+            "history": copy.deepcopy(self.history[-300:]),
+            "products": copy.deepcopy(self.products),
+            "soil_balance": copy.deepcopy(self.soil_balance),
+            "memory": copy.deepcopy(self.memory),
         }
 
     def _append_history(self, item: dict[str, Any]) -> None:
@@ -289,14 +370,22 @@ class GazonBrain:
             start = date.fromisoformat(str(raw_date))
         except ValueError:
             return False
-        end = start + timedelta(days=phase_duration_days(item_type))
+        duration_days = max(phase_duration_days(item_type), 0)
+        end = start + timedelta(days=max(duration_days - 1, 0))
         return today > end
 
     def set_mode(self, mode: str) -> None:
         if mode == "Normal":
             self.set_normal()
             return
-        self.declare_intervention(mode)
+        self.mode = mode
+        self.date_action = dt_util.now().date()
+        self._append_history(
+            {
+                "type": mode,
+                "date": self.date_action.isoformat(),
+            }
+        )
 
     def set_date_action(self, date_action: date | None = None) -> None:
         target_date = date_action or dt_util.now().date()
@@ -483,6 +572,20 @@ class GazonBrain:
         total_mm: float | None = None,
         zones: list[dict[str, Any]] | None = None,
         source: str = "service",
+        watering_cause: str | None = None,
+        mm_scope: str | None = None,
+        mm_interpretation: str | None = None,
+        watering_strategy: str | None = None,
+        objective_scope: str | None = None,
+        watering_stage: str | None = None,
+        surface_cycle_mm: float | None = None,
+        daily_cycles_target: int | None = None,
+        cycle_spacing_minutes: int | None = None,
+        surface_moisture_target: str | None = None,
+        surface_dryness_risk: str | None = None,
+        runoff_risk: str | None = None,
+        seeding_transition_ready: bool | None = None,
+        seeding_block_reason: str | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "type": "arrosage",
@@ -490,15 +593,68 @@ class GazonBrain:
             "source": source,
             "recorded_at": datetime.now(timezone.utc).isoformat(),
         }
+        if watering_cause in {"hydrique", "post_application"}:
+            payload["watering_cause"] = str(watering_cause)
+        if mm_scope not in (None, ""):
+            payload["mm_scope"] = str(mm_scope)
+        if mm_interpretation not in (None, ""):
+            payload["mm_interpretation"] = str(mm_interpretation)
+        if watering_strategy not in (None, ""):
+            payload["watering_strategy"] = str(watering_strategy)
+        if objective_scope not in (None, ""):
+            payload["objective_scope"] = str(objective_scope)
+        if watering_stage not in (None, ""):
+            payload["watering_stage"] = str(watering_stage)
+        if surface_cycle_mm is not None:
+            try:
+                payload["surface_cycle_mm"] = float(surface_cycle_mm)
+            except (TypeError, ValueError):
+                pass
+        if daily_cycles_target is not None:
+            try:
+                payload["daily_cycles_target"] = int(daily_cycles_target)
+            except (TypeError, ValueError):
+                pass
+        if cycle_spacing_minutes is not None:
+            try:
+                payload["cycle_spacing_minutes"] = int(cycle_spacing_minutes)
+            except (TypeError, ValueError):
+                pass
+        if surface_moisture_target not in (None, ""):
+            payload["surface_moisture_target"] = str(surface_moisture_target)
+        if surface_dryness_risk not in (None, ""):
+            payload["surface_dryness_risk"] = str(surface_dryness_risk)
+        if runoff_risk not in (None, ""):
+            payload["runoff_risk"] = str(runoff_risk)
+        if seeding_transition_ready is not None:
+            payload["seeding_transition_ready"] = bool(seeding_transition_ready)
+        if seeding_block_reason not in (None, ""):
+            payload["seeding_block_reason"] = str(seeding_block_reason)
+        objective_mm: float | None = None
         if objectif_mm is not None:
-            payload["objectif_mm"] = float(objectif_mm)
-        if total_mm is None and objectif_mm is not None:
-            total_mm = float(objectif_mm)
-        if total_mm is not None:
+            try:
+                objective_mm = float(objectif_mm)
+            except (TypeError, ValueError):
+                objective_mm = None
+        if objective_mm is None and zones:
+            from .water import _zone_session_surface_mm
+
+            objective_mm = _zone_session_surface_mm(zones)
+        if objective_mm is None and total_mm is not None and not zones:
+            try:
+                objective_mm = float(total_mm)
+            except (TypeError, ValueError):
+                objective_mm = None
+        if zones:
+            payload.update(build_watering_session_summary(zones, source=source, objective_mm=objective_mm))
+        if objective_mm is not None:
+            payload["objectif_mm"] = float(objective_mm)
+            payload["objective_mm"] = float(objective_mm)
+            payload["total_mm"] = float(objective_mm)
+            payload["session_total_mm"] = float(objective_mm)
+        elif total_mm is not None:
             payload["total_mm"] = float(total_mm)
             payload["session_total_mm"] = float(total_mm)
-        if zones:
-            payload.update(build_watering_session_summary(zones, source=source))
         self._append_history(payload)
         return payload
 
@@ -625,6 +781,9 @@ class GazonBrain:
         pluie_3j: float | None = None,
         pluie_probabilite_max_3j: float | None = None,
         et0_source: str | None = None,
+        sun_context: dict[str, Any] | None = None,
+        mower_context: dict[str, Any] | None = None,
+        runtime_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         weather_profile = weather_profile or {}
         etp = compute_etp(
@@ -669,10 +828,19 @@ class GazonBrain:
             weather_profile=weather_profile,
             soil_balance=self.soil_balance,
             memory=self.memory,
+            sun_context=sun_context,
             hauteur_min_tondeuse_cm=hauteur_min_tondeuse_cm,
             hauteur_max_tondeuse_cm=hauteur_max_tondeuse_cm,
+            mower_context=mower_context,
+            runtime_context=runtime_context,
         )
+        previous_result = self.last_result
         result = build_decision_result(context)
+        self._preserve_last_valid_hydric_metrics(
+            result=result,
+            previous_result=previous_result,
+            etp=etp,
+        )
         temperature_note = self._build_temperature_note(
             temperature=temperature,
             forecast_temperature_today=forecast_temperature_today,
@@ -767,7 +935,7 @@ class GazonBrain:
             }
         )
         self.mode = snapshot["phase_active"]
-        self.date_action = snapshot.get("date_action")
+        self.date_action = self._coerce_date(snapshot.get("date_action"))
         self.memory = compute_memory(
             history=self.history,
             current_phase=snapshot["phase_active"],
@@ -778,6 +946,18 @@ class GazonBrain:
         snapshot["feedback_observation"] = self.memory.get("feedback_observation")
         if self.last_result is not None:
             self.last_result.extra["feedback_observation"] = self.memory.get("feedback_observation")
+        et0_snapshot = snapshot.get("et0_mm")
+        etc_snapshot = snapshot.get("etc_mm")
+        try:
+            if et0_snapshot is not None and float(et0_snapshot) > 0:
+                self.memory["last_valid_et0_mm"] = round(float(et0_snapshot), 1)
+        except (TypeError, ValueError):
+            pass
+        try:
+            if etc_snapshot is not None and float(etc_snapshot) > 0:
+                self.memory["last_valid_etc_mm"] = round(float(etc_snapshot), 1)
+        except (TypeError, ValueError):
+            pass
         self.memory["hauteur_tonte_recommandee_cm"] = snapshot.get("hauteur_tonte_recommandee_cm")
         self.memory["hauteur_tonte_recommandee_date"] = today.isoformat()
         self.memory["catalogue_produits"] = len(self.products)

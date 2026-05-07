@@ -4,7 +4,25 @@
     "step": {
       "user": {
         "title": "Ajustes básicos",
-        "description": "Rellena aquí las zonas, los caudales y el tipo de suelo.",
+        "description": "Rellena aquí el identificador del césped, luego las zonas, los caudales y el tipo de suelo.",
+        "data": {
+          "instance_slug": "Identificador del césped (obligatorio para una nueva instancia)",
+          "zone_1": "Zona 1",
+          "zone_2": "Zona 2",
+          "zone_3": "Zona 3",
+          "zone_4": "Zona 4",
+          "zone_5": "Zona 5",
+          "debit_zone_1": "Caudal zona 1 (mm/h, 0 si no se usa)",
+          "debit_zone_2": "Caudal zona 2 (mm/h, 0 si no se usa)",
+          "debit_zone_3": "Caudal zona 3 (mm/h, 0 si no se usa)",
+          "debit_zone_4": "Caudal zona 4 (mm/h, 0 si no se usa)",
+          "debit_zone_5": "Caudal zona 5 (mm/h, 0 si no se usa)",
+          "type_sol": "Tipo de suelo (obligatorio)"
+        }
+      },
+      "reconfigure": {
+        "title": "Ajustes básicos",
+        "description": "Actualiza aquí las zonas, los caudales y el tipo de suelo.",
         "data": {
           "zone_1": "Zona 1",
           "zone_2": "Zona 2",
@@ -55,6 +73,9 @@
           "capteur_rosee": "Rocío / humedad foliar (opcional, cálculo automático si no se indica)"
         }
       }
+    },
+    "error": {
+      "invalid_instance_slug": "Identificador de césped no válido."
     },
     "abort": {
       "already_configured": "Gazon Intelligent ya está configurado."

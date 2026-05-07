@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import unittest
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 import sys
@@ -122,6 +122,8 @@ select = importlib.import_module("custom_components.gazon_intelligent.select")
 @dataclass
 class _FakeEntry:
     entry_id: str = "entry123"
+    data: dict[str, object] = field(default_factory=dict)
+    options: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass
@@ -164,6 +166,9 @@ class EntityRegistryTests(unittest.TestCase):
             sensor.GazonTypeArrosageSensor(coordinator),
             sensor.GazonPlanArrosageSensor(coordinator),
             sensor.GazonDernierArrosageDetecteSensor(coordinator),
+            sensor.GazonDernierArrosageTotalZonesSensor(coordinator),
+            sensor.GazonProchainArrosageSensor(coordinator),
+            sensor.GazonProchaineTonteSensor(coordinator),
             sensor.GazonDerniereApplicationSensor(coordinator),
             sensor.GazonDerniereActionUtilisateurSensor(coordinator),
             sensor.GazonCatalogueProduitsSensor(coordinator),
@@ -188,6 +193,7 @@ class EntityRegistryTests(unittest.TestCase):
             binary_sensor.GazonSignalIrrigationBinarySensor(coordinator),
             binary_sensor.GazonSignalInterventionBinarySensor(coordinator),
             switch.GazonAutoIrrigationSwitch(coordinator),
+            switch.GazonMowerCoordinationSwitch(coordinator),
             button.ArroserMaintenantButton(coordinator),
             button.RetourModeNormalButton(coordinator),
             button.DateActionAujourdhuiButton(coordinator),
@@ -216,6 +222,8 @@ class EntityRegistryTests(unittest.TestCase):
                 15.0,
                 8.0,
             ),
+            number.GazonMowerCuttingHeightNumber(coordinator),
+            number.GazonMowingCooldownNumber(coordinator),
         ]
         suffixes = {
             entity._attr_unique_id.split("_", 1)[1]  # noqa: SLF001
@@ -230,6 +238,23 @@ class EntityRegistryTests(unittest.TestCase):
                 for suffix in entity_ids.ACTIVE_ENTITY_SUFFIXES
             },
         )
+
+    def test_slugged_instance_prefixes_public_entity_ids(self) -> None:
+        coordinator = _FakeCoordinator(entry=_FakeEntry(data={"instance_slug": "jardin_avant"}), data={})
+        entities = [
+            sensor.GazonAssistantSensor(coordinator),
+            binary_sensor.GazonTonteAutoriseeBinarySensor(coordinator),
+            select.GazonModeSelect(coordinator),
+            number.GazonMowerCuttingHeightNumber(coordinator),
+        ]
+        expected = {
+            entity_ids.public_entity_id(entity_ids.public_entity_domain("assistant"), "assistant", "jardin_avant"),
+            entity_ids.public_entity_id(entity_ids.public_entity_domain("tonte_autorisee"), "tonte_autorisee", "jardin_avant"),
+            entity_ids.public_entity_id(entity_ids.public_entity_domain("mode"), "mode", "jardin_avant"),
+            entity_ids.public_entity_id(entity_ids.public_entity_domain("hauteur_coupe_tondeuse"), "hauteur_coupe_tondeuse", "jardin_avant"),
+        }
+
+        self.assertEqual({entity.entity_id for entity in entities}, expected)
 
     def test_optional_hydric_diagnostic_sensors_are_disabled_by_default(self) -> None:
         coordinator = _FakeCoordinator(entry=_FakeEntry(), data={})
@@ -257,7 +282,24 @@ class EntityRegistryTests(unittest.TestCase):
     def test_config_numbers_do_not_expose_decision_attributes(self) -> None:
         self.assertNotIn("extra_state_attributes", number.GazonDebitZoneNumber.__dict__)
         self.assertNotIn("extra_state_attributes", number.GazonMowerSettingNumber.__dict__)
+        self.assertNotIn("extra_state_attributes", number.GazonMowerCuttingHeightNumber.__dict__)
         self.assertEqual(number.GazonMowerSettingNumber._attr_native_step, 0.5)
+        self.assertEqual(number.GazonMowerCuttingHeightNumber._attr_native_step, 5.0)
+        self.assertEqual(number.GazonMowerCuttingHeightNumber._attr_native_unit_of_measurement, "mm")
+
+    def test_cutting_height_prefers_restored_value_over_zero_config(self) -> None:
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={})
+        coordinator._get_conf = lambda key: 0 if key == "hauteur_coupe_tondeuse_mm" else None  # type: ignore[attr-defined]
+        entity = number.GazonMowerCuttingHeightNumber(coordinator)
+        entity._restored_native_value = 45.0  # noqa: SLF001
+        self.assertEqual(entity.native_value, 45.0)
+
+    def test_cutting_height_uses_config_when_present(self) -> None:
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={})
+        coordinator._get_conf = lambda key: 55 if key == "hauteur_coupe_tondeuse_mm" else None  # type: ignore[attr-defined]
+        entity = number.GazonMowerCuttingHeightNumber(coordinator)
+        entity._restored_native_value = 45.0  # noqa: SLF001
+        self.assertEqual(entity.native_value, 55.0)
 
     def test_mode_select_remains_config_only(self) -> None:
         self.assertNotIn("extra_state_attributes", select.GazonModeSelect.__dict__)

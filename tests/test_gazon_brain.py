@@ -115,6 +115,139 @@ class GazonBrainTests(unittest.TestCase):
         self.assertEqual(brain.memory["catalogue_produits"], 1)
         self.assertNotIn("sol_compatible", brain.products["humuslight"])
 
+    def test_load_state_copies_nested_state_and_normalizes_memory(self) -> None:
+        brain = GazonBrain()
+        external_state = {
+            "history": [
+                {
+                    "type": "arrosage",
+                    "date": "2026-03-18",
+                    "zones": [{"zone": "zone_1", "mm": 1.2}],
+                }
+            ],
+            "products": {
+                "bio-1": {
+                    "id": "bio-1",
+                    "nom": "Bio Boost",
+                    "phase_compatible": ["Sursemis", "Croissance"],
+                }
+            },
+            "memory": {
+                "selected_product_id": "bio-1",
+                "auto_irrigation_enabled": "yes",
+                "feedback_observation": {"note": "initiale"},
+            },
+        }
+
+        brain.load_state(external_state)
+        external_state["history"][0]["zones"][0]["mm"] = 9.9
+        external_state["products"]["bio-1"]["phase_compatible"].append("Entretien")
+        external_state["memory"]["feedback_observation"]["note"] = "modifiee"
+
+        self.assertEqual(brain.history[0]["zones"][0]["mm"], 1.2)
+        self.assertEqual(brain.products["bio-1"]["phase_compatible"], ["Sursemis", "Croissance"])
+        self.assertEqual(brain.memory["feedback_observation"]["note"], "initiale")
+        self.assertTrue(brain.memory["auto_irrigation_enabled"] is not None)
+        self.assertEqual(brain.memory["auto_irrigation_enabled"], gazon_brain_module.DEFAULT_AUTO_IRRIGATION_ENABLED)
+
+    def test_dump_state_returns_isolated_copies(self) -> None:
+        brain = GazonBrain()
+        brain.load_state(
+            {
+                "history": [
+                    {
+                        "type": "arrosage",
+                        "date": "2026-03-18",
+                        "zones": [{"zone": "zone_1", "mm": 1.2}],
+                    }
+                ],
+                "products": {
+                    "bio-1": {
+                        "id": "bio-1",
+                        "nom": "Bio Boost",
+                        "phase_compatible": ["Sursemis"],
+                    }
+                },
+                "soil_balance": {"date": "2026-03-18", "reserve_mm": 14.6, "ledger": []},
+                "memory": {"selected_product_id": "bio-1"},
+            }
+        )
+
+        dumped = brain.dump_state()
+        dumped["history"][0]["zones"][0]["mm"] = 9.9
+        dumped["products"]["bio-1"]["phase_compatible"].append("Entretien")
+        dumped["soil_balance"]["reserve_mm"] = 1.0
+        dumped["memory"]["selected_product_id"] = None
+
+        self.assertEqual(brain.history[0]["zones"][0]["mm"], 1.2)
+        self.assertEqual(brain.products["bio-1"]["phase_compatible"], ["Sursemis"])
+        self.assertEqual(brain.soil_balance["reserve_mm"], 14.6)
+        self.assertEqual(brain.memory["selected_product_id"], "bio-1")
+
+    def test_dump_state_accepts_date_action_string_from_runtime_snapshot(self) -> None:
+        brain = GazonBrain()
+        brain.date_action = "2026-04-15"  # type: ignore[assignment]
+
+        dumped = brain.dump_state()
+
+        self.assertEqual(dumped["date_action"], "2026-04-15")
+        self.assertEqual(brain.date_action, "2026-04-15")
+
+    def test_set_normal_removes_active_phase_until_inclusive_end_then_keeps_expired_history(self) -> None:
+        brain = GazonBrain()
+        brain.history = [
+            {"type": "Traitement", "date": "2026-04-10"},
+            {"type": "arrosage", "date": "2026-04-10", "total_mm": 3.0},
+        ]
+        brain.mode = "Traitement"
+        brain.date_action = date(2026, 4, 10)
+
+        with patch.object(
+            gazon_brain_module.dt_util,
+            "now",
+            return_value=datetime(2026, 4, 11, 8, 0, tzinfo=timezone.utc),
+        ):
+            brain.set_normal()
+
+        self.assertEqual(len(brain.history), 1)
+        self.assertEqual(brain.history[0]["type"], "arrosage")
+        self.assertEqual(brain.mode, "Normal")
+        self.assertIsNone(brain.date_action)
+
+        brain.history = [
+            {"type": "Traitement", "date": "2026-04-10"},
+            {"type": "arrosage", "date": "2026-04-10", "total_mm": 3.0},
+        ]
+
+        with patch.object(
+            gazon_brain_module.dt_util,
+            "now",
+            return_value=datetime(2026, 4, 12, 8, 0, tzinfo=timezone.utc),
+        ):
+            brain.set_normal()
+
+        self.assertEqual(len(brain.history), 2)
+        self.assertEqual(brain.history[0]["type"], "Traitement")
+
+    def test_set_mode_records_phase_without_declaring_product(self) -> None:
+        brain = GazonBrain()
+        brain.register_product("bio-1", "Bio Boost", "Biostimulant")
+        brain.register_product("engrais-printemps", "Engrais Printemps", "Fertilisation")
+        brain.selected_product_id = None
+
+        with patch.object(
+            gazon_brain_module.dt_util,
+            "now",
+            return_value=datetime(2026, 4, 26, 8, 0, tzinfo=timezone.utc),
+        ):
+            brain.set_mode("Fertilisation")
+
+        self.assertEqual(brain.mode, "Fertilisation")
+        self.assertEqual(brain.date_action, date(2026, 4, 26))
+        self.assertEqual(brain.history[-1]["type"], "Fertilisation")
+        self.assertEqual(brain.history[-1]["date"], "2026-04-26")
+        self.assertIsNone(brain.selected_product_id)
+
     def test_record_watering_keeps_session_summary(self) -> None:
         brain = GazonBrain()
         payload = brain.record_watering(
@@ -127,10 +260,28 @@ class GazonBrainTests(unittest.TestCase):
             source="auto_irrigation",
         )
 
-        self.assertEqual(payload["total_mm"], 3.6)
-        self.assertEqual(payload["session_total_mm"], 3.6)
+        self.assertEqual(payload["objectif_mm"], 1.2)
+        self.assertEqual(payload["objective_mm"], 1.2)
+        self.assertEqual(payload["mm_scope"], "global_surface")
+        self.assertEqual(payload["mm_interpretation"], "surface_uniform")
+        self.assertEqual(payload["total_mm"], 1.2)
+        self.assertEqual(payload["session_total_mm"], 1.2)
+        self.assertEqual(payload["zones_total_mm"], 3.6)
         self.assertEqual(len(payload["zones"]), 3)
-        self.assertEqual(brain.history[-1]["total_mm"], 3.6)
+        self.assertEqual(brain.history[-1]["total_mm"], 1.2)
+
+    def test_record_watering_persists_watering_cause_when_canonical(self) -> None:
+        brain = GazonBrain()
+        payload = brain.record_watering(
+            date_action=date(2026, 3, 18),
+            objectif_mm=5.0,
+            total_mm=5.0,
+            source="application_technique_auto",
+            watering_cause="post_application",
+        )
+
+        self.assertEqual(payload["watering_cause"], "post_application")
+        self.assertEqual(brain.history[-1]["watering_cause"], "post_application")
 
     def test_register_product_persists_application_fields(self) -> None:
         brain = GazonBrain()
@@ -273,6 +424,112 @@ class GazonBrainTests(unittest.TestCase):
         self.assertEqual(snapshot["reserve_actuelle_mm"], 10.0)
         self.assertEqual(snapshot["reserve_utile_mm"], 12.0)
         self.assertAlmostEqual(snapshot["depletion_ratio"], 0.167, places=3)
+
+    def test_compute_snapshot_keeps_last_valid_et0_and_etc_when_weather_is_not_ready(self) -> None:
+        brain = GazonBrain()
+        brain.last_result = DecisionResult(
+            phase_dominante="Normal",
+            sous_phase="Normal",
+            action_recommandee="Surveille.",
+            action_a_eviter="Aucune.",
+            niveau_action="aucune_action",
+            fenetre_optimale="attendre",
+            risque_gazon="faible",
+            objectif_arrosage=0.0,
+            tonte_autorisee=True,
+            tonte_statut="autorisee",
+            conseil_principal="RAS",
+            extra={"et0_mm": 0.7, "etc_mm": 0.6},
+            water_balance={"et0_mm": 0.7},
+        )
+
+        with patch.object(gazon_brain_module, "update_soil_balance") as update_soil_balance:
+            update_soil_balance.return_value = {
+                "date": "2026-04-12",
+                "reserve_mm": 10.0,
+                "previous_reserve_mm": 10.0,
+                "pluie_mm": 0.0,
+                "arrosage_mm": 0.0,
+                "etp_mm": None,
+                "delta_mm": 0.0,
+                "type_sol": "limoneux",
+                "reserve_max_mm": 24.0,
+                "reserve_min_mm": 0.0,
+                "ledger": [],
+            }
+            snapshot = brain.compute_snapshot(
+                today=date(2026, 4, 12),
+                temperature=None,
+                forecast_temperature_today=None,
+                temperature_source="non disponible",
+                temperature_reference_hydrique=None,
+                pluie_24h=0.0,
+                pluie_demain=0.0,
+                humidite=None,
+                type_sol="limoneux",
+                etp_capteur=None,
+                humidite_sol=None,
+                vent=None,
+                rosee=None,
+                hauteur_gazon=None,
+                retour_arrosage=None,
+                pluie_source="non disponible",
+                pluie_demain_source="non disponible",
+                weather_profile={},
+                et0_source="fallback_temperature",
+            )
+
+        self.assertEqual(snapshot["et0_mm"], 0.7)
+        self.assertEqual(snapshot["etc_mm"], 0.6)
+        self.assertEqual(brain.last_result.extra["et0_mm"], 0.7)
+        self.assertEqual(brain.last_result.extra["etc_mm"], 0.6)
+
+    def test_compute_snapshot_keeps_persisted_et0_and_etc_when_restarting_without_last_result(self) -> None:
+        brain = GazonBrain()
+        brain.memory["last_valid_et0_mm"] = 0.7
+        brain.memory["last_valid_etc_mm"] = 0.6
+        brain.last_result = None
+
+        with patch.object(gazon_brain_module, "update_soil_balance") as update_soil_balance:
+            update_soil_balance.return_value = {
+                "date": "2026-04-12",
+                "reserve_mm": 10.0,
+                "previous_reserve_mm": 10.0,
+                "pluie_mm": 0.0,
+                "arrosage_mm": 0.0,
+                "etp_mm": None,
+                "delta_mm": 0.0,
+                "type_sol": "limoneux",
+                "reserve_max_mm": 24.0,
+                "reserve_min_mm": 0.0,
+                "ledger": [],
+            }
+            snapshot = brain.compute_snapshot(
+                today=date(2026, 4, 12),
+                temperature=None,
+                forecast_temperature_today=None,
+                temperature_source="non disponible",
+                temperature_reference_hydrique=None,
+                pluie_24h=0.0,
+                pluie_demain=0.0,
+                humidite=None,
+                type_sol="limoneux",
+                etp_capteur=None,
+                humidite_sol=None,
+                vent=None,
+                rosee=None,
+                hauteur_gazon=None,
+                retour_arrosage=None,
+                pluie_source="non disponible",
+                pluie_demain_source="non disponible",
+                weather_profile={},
+                et0_source="fallback_temperature",
+            )
+
+        self.assertEqual(snapshot["et0_mm"], 0.7)
+        self.assertEqual(snapshot["etc_mm"], 0.6)
+        self.assertEqual(brain.memory["last_valid_et0_mm"], 0.7)
+        self.assertEqual(brain.memory["last_valid_etc_mm"], 0.6)
 
     def test_declare_intervention_resolves_registered_product_by_name(self) -> None:
         brain = GazonBrain()
