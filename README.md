@@ -16,7 +16,7 @@
   <img src="https://img.shields.io/github/license/kev21brv10/gazon_intelligent" alt="License">
 </p>
 
-## Pourquoi cette intégration
+## 🌱 Pourquoi cette intégration
 
 Gazon Intelligent ne se contente pas d’allumer des zones d’arrosage ou de remonter quelques capteurs.
 
@@ -29,7 +29,7 @@ L’intégration construit une lecture métier exploitable dans Home Assistant:
 
 Elle est conçue pour rester lisible côté UI, tout en gardant assez de structure pour les automatisations, le debug et les dashboards avancés.
 
-## Ce que la version actuelle apporte
+## ✨ Ce que la version actuelle apporte
 
 - une instance par pelouse, avec support multi-gazon propre
 - une façade publique centrée sur `sensor.gazon_intelligent_assistant`
@@ -46,7 +46,7 @@ Elle est conçue pour rester lisible côté UI, tout en gardant assez de structu
 - une coordination tondeuse activable ou désactivable par pelouse
 - une carte Lovelace dédiée en complément de l’intégration
 
-## Philosophie
+## 🧠 Philosophie
 
 L’intégration sépare trois niveaux:
 
@@ -73,7 +73,7 @@ Cette séparation évite les faux signaux du type:
 - machine prête mais tonte interdite par la phase
 - arrosage bloqué sans explication lisible
 
-## Installation
+## 📦 Installation
 
 ### Via HACS
 
@@ -91,12 +91,12 @@ Cette séparation évite les faux signaux du type:
 2. Redémarre Home Assistant
 3. Ajoute l’intégration depuis **Paramètres → Appareils et services**
 
-## Compatibilité
+## ✅ Compatibilité
 
 - Home Assistant `2026.3.2+`
 - installation recommandée via HACS
 
-## Configuration
+## ⚙️ Configuration
 
 Aucune configuration YAML n’est requise.
 
@@ -143,7 +143,7 @@ La coordination tondeuse est indépendante et configurable par pelouse:
 
 Si la coordination tondeuse est désactivée, l’intégration continue de calculer la logique gazon, mais ne considère plus la machine comme pilotable.
 
-## Les entités à lire en premier
+## 📊 Les entités à lire en premier
 
 ### Assistant
 
@@ -193,7 +193,7 @@ Attributs utiles côté tonte:
 - `binary_sensor.gazon_intelligent_signal_intervention`
 - `select.gazon_intelligent_produit_d_intervention`
 
-## Comment lire la décision
+## 🔎 Comment lire la décision
 
 ### Arrosage
 
@@ -230,7 +230,7 @@ Exemple attendu:
 
 - `Phase Sursemis: tonte interdite pendant l'installation du gazon.`
 
-## Entités de réglage et d’action
+## 🎛️ Entités de réglage et d’action
 
 ### Boutons
 
@@ -256,7 +256,7 @@ Exemple attendu:
 - `number.gazon_intelligent_hauteur_coupe_tondeuse`
 - `number.gazon_intelligent_delai_reprise_tonte_apres_arrosage`
 
-## Services exposés
+## 🛠️ Services exposés
 
 ### Pilotage métier
 
@@ -282,7 +282,7 @@ Exemple attendu:
 - `gazon_intelligent.register_product`
 - `gazon_intelligent.remove_product`
 
-## Carte Lovelace optionnelle
+## 🧩 Carte Lovelace optionnelle
 
 Une carte dédiée existe pour exploiter la façade publique de l’intégration:
 
@@ -301,7 +301,7 @@ Elle organise la lecture en onglets:
 La carte ne remplace pas l’intégration.  
 Elle lit les entités publiques et les structure pour une lecture rapide dans Home Assistant.
 
-## Ce que l’intégration ne prétend pas faire
+## 🚫 Ce que l’intégration ne prétend pas faire
 
 - elle ne remplace pas ton matériel d’arrosage
 - elle ne remplace pas les sécurités natives de ta tondeuse
@@ -309,7 +309,7 @@ Elle lit les entités publiques et les structure pour une lecture rapide dans Ho
 
 Son rôle est de fournir une base métier cohérente, lisible et exploitable.
 
-## Développement
+## 🧪 Développement
 
 Le dépôt inclut:
 
@@ -326,6 +326,6 @@ La logique principale est concentrée autour de:
 - [`custom_components/gazon_intelligent/decision_mowing.py`](/Users/kevin/vs%20code/Github/Gazon%20Intelligent/custom_components/gazon_intelligent/decision_mowing.py)
 - [`custom_components/gazon_intelligent/assistant.py`](/Users/kevin/vs%20code/Github/Gazon%20Intelligent/custom_components/gazon_intelligent/assistant.py)
 
-## Licence
+## 📄 Licence
 
 Projet publié sous licence MIT. Voir [`LICENSE`](https://github.com/kev21brv10/gazon_intelligent/blob/main/LICENSE).
