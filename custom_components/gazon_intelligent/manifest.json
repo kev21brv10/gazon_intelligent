@@ -9,5 +9,5 @@
   "issue_tracker": "https://github.com/kev21brv10/gazon_intelligent/issues",
   "loggers": ["custom_components.gazon_intelligent"],
   "requirements": [],
-  "version": "0.7.0"
+  "version": "0.7.1"
 }

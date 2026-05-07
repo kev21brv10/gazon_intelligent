@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.1
+- Corrige `strings.json` pour remettre les clés de sélecteurs au format attendu par Hassfest.
+- Restaure une publication GitHub propre après l’échec de validation de `0.7.0`.
+- Aucun changement de logique métier runtime.
+
 ## 0.7.0
 - Refonte majeure du moteur tonte / arrosage et de la façade publique de l’intégration.
 - Clarifie la hiérarchie entre phase, météo, humidité, machine et action réellement possible.
