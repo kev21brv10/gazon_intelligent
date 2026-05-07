@@ -4,36 +4,74 @@
   <img src="https://raw.githubusercontent.com/kev21brv10/gazon_intelligent/main/logo.png" width="120" alt="Logo Gazon Intelligent">
 </p>
 
-![Version](https://img.shields.io/github/v/release/kev21brv10/gazon_intelligent?color=green)
-![HACS](https://img.shields.io/badge/HACS-Custom-orange)
-![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2026.3.2+-blue)
-![License](https://img.shields.io/github/license/kev21brv10/gazon_intelligent?style=flat-square)
+<p align="center">
+  <strong>Une intégration Home Assistant orientée décision métier pour le gazon.</strong><br>
+  Arrosage, tonte, phases, interventions produit et coordination optionnelle avec un robot tondeuse.
+</p>
 
-Intégration Home Assistant pour piloter la décision métier autour du gazon:
+<p align="center">
+  <img src="https://img.shields.io/github/v/release/kev21brv10/gazon_intelligent?color=2f9e44" alt="Version">
+  <img src="https://img.shields.io/badge/HACS-Custom-f57c00" alt="HACS">
+  <img src="https://img.shields.io/badge/Home%20Assistant-2026.3.2+-1e88e5" alt="Home Assistant">
+  <img src="https://img.shields.io/github/license/kev21brv10/gazon_intelligent" alt="License">
+</p>
 
-- arrosage
-- tonte
-- phases et sous-phases
-- interventions produit
-- coordination optionnelle avec une tondeuse
+## Pourquoi cette intégration
 
-Le moteur remonte une décision publique lisible, puis expose les capteurs de contexte utiles pour comprendre pourquoi.
+Gazon Intelligent ne se contente pas d’allumer des zones d’arrosage ou de remonter quelques capteurs.
 
-## Ce que fait la version actuelle
+L’intégration construit une lecture métier exploitable dans Home Assistant:
 
-- une instance par pelouse, avec support multi-gazon
+- que faut-il faire maintenant
+- pourquoi faut-il agir ou attendre
+- quand reconsidérer la tonte ou l’arrosage
+- quel contexte explique la décision
+
+Elle est conçue pour rester lisible côté UI, tout en gardant assez de structure pour les automatisations, le debug et les dashboards avancés.
+
+## Ce que la version actuelle apporte
+
+- une instance par pelouse, avec support multi-gazon propre
 - une façade publique centrée sur `sensor.gazon_intelligent_assistant`
-- séparation claire entre:
+- une projection claire de:
+  - `sensor.gazon_intelligent_prochain_arrosage`
+  - `sensor.gazon_intelligent_prochaine_tonte`
+  - `sensor.gazon_intelligent_prochaine_intervention`
+- une séparation explicite entre:
   - état du gazon
   - décision d’arrosage
   - décision de tonte
   - disponibilité machine
-- projection lisible de:
-  - `sensor.gazon_intelligent_prochain_arrosage`
-  - `sensor.gazon_intelligent_prochaine_tonte`
-  - `sensor.gazon_intelligent_prochaine_intervention`
-- coordination tondeuse activable ou désactivable par instance
-- carte Lovelace optionnelle dédiée
+  - action réellement possible
+- une coordination tondeuse activable ou désactivable par pelouse
+- une carte Lovelace dédiée en complément de l’intégration
+
+## Philosophie
+
+L’intégration sépare trois niveaux:
+
+1. **Le gazon**
+   - phase dominante
+   - sous-phase
+   - risque
+   - réserve hydrique
+
+2. **La décision métier**
+   - tonte autorisée ou non
+   - arrosage utile ou non
+   - prochaine fenêtre
+   - blocage ou attente
+
+3. **L’exécution**
+   - machine disponible ou non
+   - coordination tondeuse active ou non
+   - action réellement possible
+
+Cette séparation évite les faux signaux du type:
+
+- gazon autorisé mais machine indisponible
+- machine prête mais tonte interdite par la phase
+- arrosage bloqué sans explication lisible
 
 ## Installation
 
@@ -49,7 +87,7 @@ Le moteur remonte une décision publique lisible, puis expose les capteurs de co
 
 ### Installation manuelle
 
-1. Copie `custom_components/gazon_intelligent` dans `config/custom_components`
+1. Copie [`custom_components/gazon_intelligent`](/Users/kevin/vs%20code/Github/Gazon%20Intelligent/custom_components/gazon_intelligent) dans `config/custom_components`
 2. Redémarre Home Assistant
 3. Ajoute l’intégration depuis **Paramètres → Appareils et services**
 
@@ -60,9 +98,9 @@ Le moteur remonte une décision publique lisible, puis expose les capteurs de co
 
 ## Configuration
 
-Aucune configuration YAML obligatoire.
+Aucune configuration YAML n’est requise.
 
-### Étape 1: base par pelouse
+### 1. Une configuration par pelouse
 
 Chaque instance demande:
 
@@ -71,9 +109,9 @@ Chaque instance demande:
 - `debit_zone_1` à `debit_zone_5`
 - `type_sol`
 
-`instance_slug` sert à séparer proprement plusieurs pelouses dans Home Assistant.
+`instance_slug` permet de séparer proprement plusieurs pelouses dans Home Assistant.
 
-### Étape 2: capteurs avancés optionnels
+### 2. Météo et capteurs complémentaires
 
 Tu peux ensuite renseigner:
 
@@ -89,7 +127,7 @@ Tu peux ensuite renseigner:
 - `capteur_hauteur_gazon`
 - `capteur_retour_arrosage`
 
-### Tondeuse optionnelle
+### 3. Robot tondeuse optionnel
 
 La coordination tondeuse est indépendante et configurable par pelouse:
 
@@ -103,30 +141,23 @@ La coordination tondeuse est indépendante et configurable par pelouse:
 - `hauteur_min_tondeuse_cm`
 - `hauteur_max_tondeuse_cm`
 
-Si la coordination tondeuse est désactivée, l’intégration continue de calculer la logique gazon mais ne considère plus la machine comme pilotable.
+Si la coordination tondeuse est désactivée, l’intégration continue de calculer la logique gazon, mais ne considère plus la machine comme pilotable.
 
-## À lire en premier
+## Les entités à lire en premier
 
-### Décision centrale
+### Assistant
 
 - `sensor.gazon_intelligent_assistant`
 
-C’est la façade publique la plus utile. Elle dit ce qu’il faut faire maintenant, ou pourquoi il faut attendre.
-
-### Synthèse métier
-
-- `sensor.gazon_intelligent_conseil_principal`
-- `sensor.gazon_intelligent_action_recommandee`
-- `sensor.gazon_intelligent_action_a_eviter`
-- `sensor.gazon_intelligent_niveau_d_action`
+C’est le point d’entrée le plus utile.  
+Il résume l’action prioritaire ou la raison pour laquelle il faut attendre.
 
 ### Arrosage
 
-- `sensor.gazon_intelligent_fenetre_optimale`
 - `sensor.gazon_intelligent_prochain_arrosage`
+- `sensor.gazon_intelligent_fenetre_optimale`
 - `sensor.gazon_intelligent_plan_d_arrosage`
 - `sensor.gazon_intelligent_objectif_d_arrosage`
-- `sensor.gazon_intelligent_arrosage_en_cours`
 - `binary_sensor.gazon_intelligent_arrosage_recommande`
 - `binary_sensor.gazon_intelligent_signal_irrigation`
 - `binary_sensor.gazon_intelligent_arrosage_apres_application_autorise`
@@ -138,7 +169,7 @@ C’est la façade publique la plus utile. Elle dit ce qu’il faut faire mainte
 - `sensor.gazon_intelligent_prochaine_tonte`
 - `sensor.gazon_intelligent_hauteur_de_tonte_conseillee`
 
-Attributs importants côté tonte:
+Attributs utiles côté tonte:
 
 - `gazon_permet_tonte`
 - `machine_permet_tonte`
@@ -146,19 +177,12 @@ Attributs importants côté tonte:
 - `mowing_block_reason_code`
 - `mowing_block_reason_label`
 
-### Phase, risque et contexte
+### Phase et contexte
 
 - `sensor.gazon_intelligent_phase_dominante`
 - `sensor.gazon_intelligent_sous_phase`
 - `sensor.gazon_intelligent_risque_gazon`
 - `sensor.gazon_intelligent_type_d_arrosage`
-
-### Historique et traçabilité
-
-- `sensor.gazon_intelligent_dernier_arrosage_detecte`
-- `sensor.gazon_intelligent_dernier_arrosage_total_zones`
-- `sensor.gazon_intelligent_derniere_application`
-- `sensor.gazon_intelligent_derniere_action_utilisateur`
 
 ### Interventions produit
 
@@ -169,32 +193,44 @@ Attributs importants côté tonte:
 - `binary_sensor.gazon_intelligent_signal_intervention`
 - `select.gazon_intelligent_produit_d_intervention`
 
-## Lecture métier
+## Comment lire la décision
 
 ### Arrosage
 
-- `sensor.gazon_intelligent_prochain_arrosage` donne la prochaine lecture publique d’exécution
-- `sensor.gazon_intelligent_fenetre_optimale` garde la logique de fenêtre
-- `binary_sensor.gazon_intelligent_signal_irrigation` sert de signal synthétique pour l’UI et les automatisations
+`sensor.gazon_intelligent_prochain_arrosage` est la lecture publique la plus directe.
+
+Exemples:
+
+- `Bloqué` + `Attendre après la pluie`
+- `Non requis` + `Aucun arrosage nécessaire`
+- fenêtre utile le matin avec objectif calculé
 
 ### Tonte
 
-- `binary_sensor.gazon_intelligent_tonte_autorisee` exprime l’autorisation métier
-- `sensor.gazon_intelligent_etat_de_tonte` donne l’état public tonte
-- `sensor.gazon_intelligent_prochaine_tonte` projette la prochaine reprise lisible
+`binary_sensor.gazon_intelligent_tonte_autorisee` exprime l’autorisation métier.
 
-`tonte_autorisee` ne veut pas dire que la machine partira maintenant.  
-La décision exécutable finale dépend aussi de `machine_permet_tonte` et de `action_possible`.
+Mais l’action finale dépend aussi de la machine:
 
-### Assistant
+- gazon autorisé
+- machine prête ou non
+- coordination active ou non
 
-L’assistant ne remplace pas les capteurs spécialisés:
+`sensor.gazon_intelligent_prochaine_tonte` donne la prochaine reprise lisible.
 
-- il priorise une action
-- il simplifie la lecture
-- il n’efface pas les couches arrosage, tonte et intervention
+### Phases sensibles
 
-## Entités de configuration et d’action
+Certaines phases dominent naturellement la lecture publique:
+
+- `Sursemis`
+- `Traitement`
+- `Hivernage`
+- `Scarification`
+
+Exemple attendu:
+
+- `Phase Sursemis: tonte interdite pendant l'installation du gazon.`
+
+## Entités de réglage et d’action
 
 ### Boutons
 
@@ -222,7 +258,7 @@ L’assistant ne remplace pas les capteurs spécialisés:
 
 ## Services exposés
 
-### Configuration métier
+### Pilotage métier
 
 - `gazon_intelligent.set_mode`
 - `gazon_intelligent.reset_mode`
@@ -252,8 +288,7 @@ Une carte dédiée existe pour exploiter la façade publique de l’intégration
 
 - `lovelace-gazon-intelligent-card`
 
-La carte ne remplace pas l’intégration.  
-Elle lit les entités publiques et les organise en onglets:
+Elle organise la lecture en onglets:
 
 - synthèse
 - irrigation
@@ -263,28 +298,34 @@ Elle lit les entités publiques et les organise en onglets:
 - intervention
 - réglages
 
-## Diagnostic
+La carte ne remplace pas l’intégration.  
+Elle lit les entités publiques et les structure pour une lecture rapide dans Home Assistant.
 
-- diagnostics téléchargeables via Home Assistant
-- logs sur `custom_components.gazon_intelligent`
-- capteurs hydriques avancés disponibles pour le debug, notamment:
-  - `sensor.gazon_intelligent_et0`
-  - `sensor.gazon_intelligent_etc`
-  - `sensor.gazon_intelligent_reserve_actuelle`
-  - `sensor.gazon_intelligent_depletion_ratio`
-  - `sensor.gazon_intelligent_etat_hydrique`
-  - `sensor.gazon_intelligent_objectif_legacy`
-  - `sensor.gazon_intelligent_objectif_depletion`
+## Ce que l’intégration ne prétend pas faire
+
+- elle ne remplace pas ton matériel d’arrosage
+- elle ne remplace pas les sécurités natives de ta tondeuse
+- elle ne garantit pas seule un déclenchement automatique sans automatisations autour
+
+Son rôle est de fournir une base métier cohérente, lisible et exploitable.
 
 ## Développement
 
-Le dépôt contient:
+Le dépôt inclut:
 
-- intégration Home Assistant
+- workflow de validation GitHub Actions
+- Hassfest
+- Ruff
+- mypy
 - tests unitaires
-- validation Hassfest
-- lint Ruff
-- typage mypy
 
-Le workflow GitHub actuellement présent est un workflow de validation.  
-La publication de release reste manuelle: bump de version, merge sur `main`, tag GitHub puis release.
+La logique principale est concentrée autour de:
+
+- [`custom_components/gazon_intelligent/coordinator.py`](/Users/kevin/vs%20code/Github/Gazon%20Intelligent/custom_components/gazon_intelligent/coordinator.py)
+- [`custom_components/gazon_intelligent/decision_watering.py`](/Users/kevin/vs%20code/Github/Gazon%20Intelligent/custom_components/gazon_intelligent/decision_watering.py)
+- [`custom_components/gazon_intelligent/decision_mowing.py`](/Users/kevin/vs%20code/Github/Gazon%20Intelligent/custom_components/gazon_intelligent/decision_mowing.py)
+- [`custom_components/gazon_intelligent/assistant.py`](/Users/kevin/vs%20code/Github/Gazon%20Intelligent/custom_components/gazon_intelligent/assistant.py)
+
+## Licence
+
+Projet publié sous licence MIT. Voir [`LICENSE`](https://github.com/kev21brv10/gazon_intelligent/blob/main/LICENSE).
