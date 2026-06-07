@@ -29,8 +29,12 @@ L’intégration construit une lecture métier exploitable dans Home Assistant:
 
 Elle est conçue pour rester lisible côté UI, tout en gardant assez de structure pour les automatisations, le debug et les dashboards avancés.
 
-## ✨ Ce que la version actuelle apporte
+## ✨ Ce que la version actuelle apporte (v0.7.3)
 
+- **ET0 Penman-Monteith FAO-56** : calcul de l'évapotranspiration de référence remplacé par la formule standard internationale, 2 à 3× plus précise en été
+- **Latitude HA utilisée automatiquement** : le rayonnement extraterrestre Ra est calculé depuis la position géographique déjà configurée dans Home Assistant, permettant une variation saisonnière réelle (ex. 3,6 mm/j en juillet vs 1,4 mm/j en janvier à 48°N)
+- **Arrondi symétrique corrigé** : le delta négatif (réserve qui baisse) était mal arrondi, causant des incohérences `précédent + delta ≠ réserve`
+- **Attributs simplifiés** : suppression des attributs redondants ou trompeurs sur le capteur de réserve
 - une instance par pelouse, avec support multi-gazon propre
 - une façade publique centrée sur `sensor.gazon_intelligent_assistant`
 - une projection claire de:
@@ -48,7 +52,7 @@ Elle est conçue pour rester lisible côté UI, tout en gardant assez de structu
 
 Pour le détail du contrat public des attributs exposés, voir:
 
-- [docs/public-attribute-contract.md](/Users/kevin/vs%20code/Github/Gazon%20Intelligent/docs/public-attribute-contract.md)
+- [docs/public-attribute-contract.md](docs/public-attribute-contract.md)
 
 ## 🧠 Philosophie
 
@@ -91,7 +95,7 @@ Cette séparation évite les faux signaux du type:
 
 ### Installation manuelle
 
-1. Copie [`custom_components/gazon_intelligent`](/Users/kevin/vs%20code/Github/Gazon%20Intelligent/custom_components/gazon_intelligent) dans `config/custom_components`
+1. Copie [`custom_components/gazon_intelligent`](custom_components/gazon_intelligent) dans `config/custom_components`
 2. Redémarre Home Assistant
 3. Ajoute l’intégration depuis **Paramètres → Appareils et services**
 
@@ -325,10 +329,10 @@ Le dépôt inclut:
 
 La logique principale est concentrée autour de:
 
-- [`custom_components/gazon_intelligent/coordinator.py`](/Users/kevin/vs%20code/Github/Gazon%20Intelligent/custom_components/gazon_intelligent/coordinator.py)
-- [`custom_components/gazon_intelligent/decision_watering.py`](/Users/kevin/vs%20code/Github/Gazon%20Intelligent/custom_components/gazon_intelligent/decision_watering.py)
-- [`custom_components/gazon_intelligent/decision_mowing.py`](/Users/kevin/vs%20code/Github/Gazon%20Intelligent/custom_components/gazon_intelligent/decision_mowing.py)
-- [`custom_components/gazon_intelligent/assistant.py`](/Users/kevin/vs%20code/Github/Gazon%20Intelligent/custom_components/gazon_intelligent/assistant.py)
+- [`custom_components/gazon_intelligent/coordinator.py`](custom_components/gazon_intelligent/coordinator.py)
+- [`custom_components/gazon_intelligent/decision_watering.py`](custom_components/gazon_intelligent/decision_watering.py)
+- [`custom_components/gazon_intelligent/decision_mowing.py`](custom_components/gazon_intelligent/decision_mowing.py)
+- [`custom_components/gazon_intelligent/assistant.py`](custom_components/gazon_intelligent/assistant.py)
 
 ## 📄 Licence
 

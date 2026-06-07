@@ -481,6 +481,14 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         weather_entity_id = self._get_conf(CONF_ENTITE_METEO)
         weather_profile = self._get_weather_profile(weather_entity_id)
+        try:
+            _ha_lat = getattr(getattr(self, "hass", None), "config", None)
+            _ha_lat = getattr(_ha_lat, "latitude", None) if _ha_lat is not None else None
+            if _ha_lat is not None:
+                weather_profile["ha_latitude"] = float(_ha_lat)
+                weather_profile["ha_day_of_year"] = self._current_date().timetuple().tm_yday
+        except Exception:  # noqa: BLE001 — ne jamais bloquer le cycle sur une lat manquante
+            pass
         pluie_24h_sensor = self._get_float_state(self._get_conf(CONF_CAPTEUR_PLUIE_24H))
         pluie_demain_sensor = self._get_float_state(self._get_conf(CONF_CAPTEUR_PLUIE_DEMAIN))
         forecast_summary = await self._get_weather_forecast_summary(weather_entity_id)
@@ -505,7 +513,12 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         etp_capteur = self._validate_sensor_value(
             self._get_float_state(self._get_conf(CONF_CAPTEUR_ETP)), "etp"
         )
-        et0_source = "capteur" if etp_capteur is not None else "fallback_temperature"
+        if etp_capteur is not None:
+            et0_source = "capteur"
+        elif weather_profile.get("ha_latitude") is not None:
+            et0_source = "fallback_pm_location"
+        else:
+            et0_source = "fallback_pm"
         humidite = self._validate_sensor_value(
             self._get_float_state(self._get_conf(CONF_CAPTEUR_HUMIDITE)), "humidite"
         )

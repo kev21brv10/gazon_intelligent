@@ -35,6 +35,12 @@ def _to_float(value: Any) -> float | None:
 
 
 def _round_half_up_1(value: float) -> float:
+    # int(x * 10 + 0.5) rounds toward +inf for positives but toward zero for
+    # negatives, producing an asymmetric result (e.g. -1.2 → -1.1).
+    # We apply the same logic on the absolute value and restore the sign so that
+    # previous_reserve + delta_mm == reserve_mm holds after rounding.
+    if value < 0:
+        return -float(int(abs(value) * 10.0 + 0.5)) / 10.0
     return float(int(value * 10.0 + 0.5)) / 10.0
 
 

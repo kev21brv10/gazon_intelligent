@@ -1552,7 +1552,6 @@ class GazonReserveActuelleSensor(GazonEntityBase, SensorEntity):
             "reserve_stock_mm",
             "reserve_stock_max_mm",
             "reserve_surplus_mm",
-            "reserve_fill_ratio",
             "reserve_available_ratio",
             "reserve_minimale_mm",
             "depletion_mm",
@@ -1568,7 +1567,6 @@ class GazonReserveActuelleSensor(GazonEntityBase, SensorEntity):
             "mad_policy_candidate_ratio",
             "mad_hysteresis_state",
             "mad_threshold_mm",
-            "reserve_actuelle_source",
             "bilan_hydrique_mm",
             "bilan_hydrique_journalier_mm",
             "arrosage_recent_jour",
@@ -1580,12 +1578,8 @@ class GazonReserveActuelleSensor(GazonEntityBase, SensorEntity):
         ) or {}
         soil_balance = self._decision_value("soil_balance")
         if isinstance(soil_balance, dict):
-            attrs["soil_balance_reserve_mm"] = soil_balance.get("reserve_mm")
             attrs["soil_balance_previous_reserve_mm"] = soil_balance.get("previous_reserve_mm")
             attrs["soil_balance_delta_mm"] = soil_balance.get("delta_mm")
-            attrs.setdefault("reserve_actuelle_source", soil_balance.get("reserve_mm"))
-        if attrs.get("reserve_actuelle_source") in (None, "", [], {}):
-            attrs["reserve_actuelle_source"] = attrs.get("reserve_stock_mm")
         attrs = _add_hydric_storage_aliases(self, attrs)
         hydric_state = _hydric_state_for_objective_sensor(self, attrs)
         if hydric_state is not None:
@@ -1595,26 +1589,6 @@ class GazonReserveActuelleSensor(GazonEntityBase, SensorEntity):
         _sh = _data.get("sensor_health")
         if isinstance(_sh, dict) and _sh:
             attrs["sensor_health"] = _sh
-        # LOT E — risque fongique calculé directement ici (garanti indépendant de coordinator.data)
-        try:
-            _now = dt_util.now() if dt_util is not None else None
-            _hour = _now.hour if _now is not None else 12
-            _temp = self._decision_value("temperature")
-            _hum = self._decision_value("weather_humidity") or self._decision_value("humidite")
-            _rosee = self._decision_value("rosee")
-            _p24 = self._decision_value("pluie_24h") or self._decision_value("pluie_efficace") or 0.0
-            _pdem = self._decision_value("pluie_demain") or 0.0
-            _fr = _sensor_compute_fungal_risk(
-                temperature=_temp,
-                humidite=_hum,
-                rosee=_rosee,
-                pluie_24h=_p24,
-                pluie_demain=_pdem,
-                hour_of_day=_hour,
-            )
-            attrs.update(_fr)
-        except Exception:  # noqa: BLE001
-            pass
         # LOT B — urgence hydrique malgré blocage
         _crit = _data.get("irrigation_blocked_but_critical")
         if _crit is not None:
