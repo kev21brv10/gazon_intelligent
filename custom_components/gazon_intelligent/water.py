@@ -558,6 +558,25 @@ def compute_advanced_context(
     }
 
 
+def _ra_extraterrestrial(latitude_deg: float, day_of_year: int) -> float:
+    """Rayonnement extraterrestre Ra (MJ/m²/j) — FAO-56 équation 21.
+
+    Varie de ~12 MJ/m²/j en hiver à ~40 MJ/m²/j en été à 45°N.
+    """
+    lat = math.radians(float(latitude_deg))
+    doy = max(1, min(365, int(day_of_year)))
+    dr = 1.0 + 0.033 * math.cos(2.0 * math.pi * doy / 365.0)
+    delta = 0.409 * math.sin(2.0 * math.pi * doy / 365.0 - 1.39)
+    cos_ws = -math.tan(lat) * math.tan(delta)
+    cos_ws = max(-1.0, min(1.0, cos_ws))
+    ws = math.acos(cos_ws)
+    Ra = (24.0 * 60.0 / math.pi) * 0.0820 * dr * (
+        ws * math.sin(lat) * math.sin(delta)
+        + math.cos(lat) * math.cos(delta) * math.sin(ws)
+    )
+    return max(0.0, Ra)
+
+
 def compute_etp(
     temperature: float | None,
     pluie_24h: float | None,
@@ -624,9 +643,15 @@ def compute_etp(
         sky_clear = 0.55  # valeur médiane par défaut
 
     # Rayonnement net estimé (MJ/m²/j)
-    # Ra_ref est un proxy du rayonnement extraterrestre calibré sur la plage
-    # de température de végétation (zone tempérée, saison de croissance).
-    Ra_ref = max(2.0, 0.5 * temperature + 2.0)
+    # Si la latitude et le jour de l'année sont disponibles (injectés par le coordinator
+    # depuis hass.config.latitude), on calcule Ra exactement selon FAO-56.
+    # Sinon on utilise un proxy température valable en zone tempérée.
+    ha_latitude = weather_profile.get("ha_latitude")
+    ha_day_of_year = weather_profile.get("ha_day_of_year")
+    if ha_latitude is not None and ha_day_of_year is not None:
+        Ra_ref = _ra_extraterrestrial(float(ha_latitude), int(ha_day_of_year))
+    else:
+        Ra_ref = max(2.0, 0.5 * temperature + 2.0)
     Rns = 0.77 * sky_clear * 0.75 * Ra_ref   # rayonnement net courtes longueurs d'onde
     Rnl = 0.5 + 0.01 * temperature             # rayonnement net grandes longueurs d'onde (sortant)
     Rn = max(0.0, Rns - Rnl)
