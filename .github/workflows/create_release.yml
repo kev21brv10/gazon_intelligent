@@ -1,0 +1,37 @@
+name: Create Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag name (e.g. v0.7.2)'
+        required: true
+        default: 'v0.7.2'
+      target_sha:
+        description: 'Target commit SHA'
+        required: true
+      body:
+        description: 'Release body (markdown)'
+        required: true
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create Release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: '${{ inputs.tag }}',
+              name: '${{ inputs.tag }}',
+              body: `${{ inputs.body }}`,
+              target_commitish: '${{ inputs.target_sha }}',
+              draft: false,
+              prerelease: false,
+            });
+            console.log('Release created: ${{ inputs.tag }}');
