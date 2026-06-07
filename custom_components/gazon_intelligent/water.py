@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import date, datetime, timezone
 from typing import Any
 import logging
@@ -557,6 +558,25 @@ def compute_advanced_context(
     }
 
 
+def _ra_extraterrestrial(latitude_deg: float, day_of_year: int) -> float:
+    """Rayonnement extraterrestre Ra (MJ/m²/j) — FAO-56 équation 21.
+
+    Varie de ~12 MJ/m²/j en hiver à ~40 MJ/m²/j en été à 45°N.
+    """
+    lat = math.radians(float(latitude_deg))
+    doy = max(1, min(365, int(day_of_year)))
+    dr = 1.0 + 0.033 * math.cos(2.0 * math.pi * doy / 365.0)
+    delta = 0.409 * math.sin(2.0 * math.pi * doy / 365.0 - 1.39)
+    cos_ws = -math.tan(lat) * math.tan(delta)
+    cos_ws = max(-1.0, min(1.0, cos_ws))
+    ws = math.acos(cos_ws)
+    Ra = (24.0 * 60.0 / math.pi) * 0.0820 * dr * (
+        ws * math.sin(lat) * math.sin(delta)
+        + math.cos(lat) * math.cos(delta) * math.sin(ws)
+    )
+    return max(0.0, Ra)
+
+
 def compute_etp(
     temperature: float | None,
     pluie_24h: float | None,
@@ -564,45 +584,91 @@ def compute_etp(
     temperature_reference_hydrique: float | None = None,
     weather_profile: dict[str, Any] | None = None,
 ) -> float | None:
-    """Estimation simplifiée interne de l'ETP quand aucun capteur dédié n'est fourni."""
+    """Estimation ET0 par Penman-Monteith simplifié (FAO-56) sans capteur dédié.
+
+    Utilise la température, l'humidité, le vent et la couverture nuageuse
+    disponibles dans le profil météo HA. Nettement plus précis que la formule
+    empirique linéaire précédente, notamment en conditions estivales où
+    l'ancienne formule sous-estimait l'ET0 d'un facteur 2 à 3.
+
+    Le capteur dédié (etp_capteur) reste prioritaire s'il est configuré.
+    """
     if etp_capteur is not None:
         return etp_capteur
+
     weather_profile = weather_profile or {}
+
+    # Résolution de la température de référence
     if temperature_reference_hydrique is not None:
         temperature = temperature_reference_hydrique
     if temperature is None:
-        weather_temperature = weather_profile.get("weather_temperature")
-        weather_apparent_temperature = weather_profile.get("weather_apparent_temperature")
-        if weather_temperature is not None:
-            temperature = weather_temperature
-        elif weather_apparent_temperature is not None:
-            temperature = weather_apparent_temperature
+        temperature = weather_profile.get("weather_temperature")
+    if temperature is None:
+        temperature = weather_profile.get("weather_apparent_temperature")
     if temperature is None:
         return None
     temperature = float(temperature)
 
-    base = max(0.0, 0.06 * temperature)
-    apparent = weather_profile.get("weather_apparent_temperature")
     humidity = weather_profile.get("weather_humidity")
     wind = weather_profile.get("weather_wind_speed")
     cloud = weather_profile.get("weather_cloud_coverage")
+    uv_index = weather_profile.get("weather_uv_index")
     dew_point = weather_profile.get("weather_dew_point")
-    precip_probability = weather_profile.get("weather_precipitation_probability")
 
-    if apparent is not None and float(apparent) > temperature:
-        base += min(0.5, (float(apparent) - temperature) * 0.03)
-    if humidity is not None:
-        base *= max(0.75, 1.0 - max(0.0, float(humidity) - 50.0) / 300.0)
-    if wind is not None:
-        base += min(0.7, float(wind) * 0.02)
+    # Pression de vapeur saturante (kPa)
+    es = 0.6108 * math.exp(17.27 * temperature / (temperature + 237.3))
+
+    # Pression de vapeur réelle (kPa) — point de rosée prioritaire sur humidité relative
+    if dew_point is not None:
+        ea = 0.6108 * math.exp(17.27 * float(dew_point) / (float(dew_point) + 237.3))
+    elif humidity is not None:
+        ea = es * max(0.0, min(1.0, float(humidity) / 100.0))
+    else:
+        ea = es * 0.60  # hypothèse conservative : 60 % HR
+
+    vpd = max(0.0, es - ea)  # déficit de pression de vapeur (kPa)
+
+    # Pente de la courbe pression de vapeur saturante (kPa/°C)
+    delta = 4098.0 * es / (temperature + 237.3) ** 2
+
+    # Constante psychrométrique (kPa/°C) à pression standard
+    gamma = 0.067
+
+    # Fraction de ciel dégagé — couverture nuageuse prioritaire, sinon UV
     if cloud is not None:
-        base *= max(0.75, 1.0 - float(cloud) / 600.0)
-    if precip_probability is not None:
-        base *= max(0.7, 1.0 - float(precip_probability) / 250.0)
-    if dew_point is not None and temperature - float(dew_point) <= 2.0:
-        base *= 0.9
-    base = max(0.0, base - max(0.0, (pluie_24h or 0.0) * 0.05))
-    return round(base, 1)
+        sky_clear = max(0.2, 1.0 - float(cloud) / 100.0 * 0.80)
+    elif uv_index is not None:
+        sky_clear = max(0.2, min(1.0, float(uv_index) / 9.0))
+    else:
+        sky_clear = 0.55  # valeur médiane par défaut
+
+    # Rayonnement net estimé (MJ/m²/j)
+    # Si la latitude et le jour de l'année sont disponibles (injectés par le coordinator
+    # depuis hass.config.latitude), on calcule Ra exactement selon FAO-56.
+    # Sinon on utilise un proxy température valable en zone tempérée.
+    ha_latitude = weather_profile.get("ha_latitude")
+    ha_day_of_year = weather_profile.get("ha_day_of_year")
+    if ha_latitude is not None and ha_day_of_year is not None:
+        Ra_ref = _ra_extraterrestrial(float(ha_latitude), int(ha_day_of_year))
+    else:
+        Ra_ref = max(2.0, 0.5 * temperature + 2.0)
+    Rns = 0.77 * sky_clear * 0.75 * Ra_ref   # rayonnement net courtes longueurs d'onde
+    Rnl = 0.5 + 0.01 * temperature             # rayonnement net grandes longueurs d'onde (sortant)
+    Rn = max(0.0, Rns - Rnl)
+
+    # Vitesse du vent à 2 m (m/s) — 1.5 m/s par défaut (légère brise)
+    u2 = max(0.5, float(wind)) if wind is not None else 1.5
+
+    # Formule Penman-Monteith FAO-56 (mm/j)
+    numerator = 0.408 * delta * Rn + gamma * (900.0 / (temperature + 273.0)) * u2 * vpd
+    denominator = delta + gamma * (1.0 + 0.34 * u2)
+    et0 = max(0.0, numerator / denominator) if denominator > 0 else 0.0
+
+    # Légère réduction si pluie récente (sol frais, évaporation réduite)
+    if pluie_24h and pluie_24h > 0:
+        et0 *= max(0.85, 1.0 - float(pluie_24h) * 0.015)
+
+    return round(et0, 1)
 
 
 def compute_water_balance(
