@@ -242,6 +242,43 @@ class ConfigFlowTests(unittest.TestCase):
         self.assertEqual(defaults[config_flow_mod.CONF_ENTITE_METEO], "weather.maison")
         self.assertEqual(defaults[config_flow_mod.CONF_CAPTEUR_PLUIE_24H], "sensor.pluie_24h")
 
+    def test_advanced_schema_uses_shared_default_when_local_option_is_empty(self) -> None:
+        schema = config_flow_mod.build_advanced_schema(
+            {config_flow_mod.CONF_CAPTEUR_TEMPERATURE: None},
+            shared_defaults={config_flow_mod.CONF_CAPTEUR_TEMPERATURE: "sensor.temperature_partagee"},
+        )
+
+        defaults = {
+            key.args[0]: key.kwargs.get("default")
+            for key in schema.schema
+            if getattr(key, "kind", None) in {"required", "optional"}
+        }
+
+        self.assertEqual(
+            defaults[config_flow_mod.CONF_CAPTEUR_TEMPERATURE],
+            "sensor.temperature_partagee",
+        )
+
+    def test_shared_weather_config_can_be_cleared_with_none_or_empty_string(self) -> None:
+        fake_hass = types.SimpleNamespace(data={})
+        shared_state = config_flow_mod.get_shared_state(fake_hass)
+        assert shared_state is not None
+        shared_state.shared_config[config_flow_mod.CONF_ENTITE_METEO] = "weather.maison"
+        shared_state.shared_config[config_flow_mod.CONF_CAPTEUR_PLUIE_24H] = "sensor.pluie_24h"
+
+        asyncio.run(
+            shared_state.async_update_shared_config(
+                {
+                    config_flow_mod.CONF_ENTITE_METEO: None,
+                    config_flow_mod.CONF_CAPTEUR_PLUIE_24H: "",
+                }
+            )
+        )
+
+        self.assertNotIn(config_flow_mod.CONF_ENTITE_METEO, shared_state.shared_config)
+        self.assertNotIn(config_flow_mod.CONF_CAPTEUR_PLUIE_24H, shared_state.shared_config)
+        self.assertEqual(config_flow_mod._shared_config_defaults(fake_hass), {})
+
     def test_initial_flow_shows_sensors_second_page(self) -> None:
         flow = config_flow_mod.GazonIntelligentConfigFlow()
         base_input = {

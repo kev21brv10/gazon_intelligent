@@ -55,16 +55,18 @@ guidance = importlib.import_module("custom_components.gazon_intelligent.guidance
 
 
 class MemoryCatalogTests(unittest.TestCase):
-    def test_auto_irrigation_enabled_defaults_to_true_and_persists(self) -> None:
+    def test_auto_irrigation_enabled_defaults_to_false_and_persists_confirmation(self) -> None:
         fresh_memory = memory.compute_memory([], today=date(2026, 3, 18))
-        self.assertTrue(fresh_memory["auto_irrigation_enabled"])
+        self.assertFalse(fresh_memory["auto_irrigation_enabled"])
 
         persisted = memory.compute_memory(
             [],
             today=date(2026, 3, 18),
-            previous_memory={"auto_irrigation_enabled": False},
+            previous_memory={
+                "auto_irrigation_enabled": True,
+            },
         )
-        self.assertFalse(persisted["auto_irrigation_enabled"])
+        self.assertTrue(persisted["auto_irrigation_enabled"])
 
     def test_mower_coordination_enabled_defaults_to_false_and_persists(self) -> None:
         fresh_memory = memory.compute_memory([], today=date(2026, 3, 18))

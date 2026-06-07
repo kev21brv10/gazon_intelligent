@@ -162,11 +162,11 @@
     },
     "set_date_action": {
       "name": "Datum speichern",
-      "description": "Legt das tatsächliche Datum der Maßnahme fest (TT/MM/JJJJ). Wenn leer, wird heute verwendet.",
+      "description": "Legt das tatsächliche Datum der Aktion fest (TT/MM/JJJJ oder JJJJ-MM-TT). Wenn leer, wird heute verwendet.",
       "fields": {
         "date_action": {
           "name": "Datum",
-          "description": "Datum im Format TT/MM/JJJJ."
+          "description": "Datum im Format TT/MM/JJJJ oder JJJJ-MM-TT."
         }
       }
     },
@@ -203,12 +203,12 @@
       }
     },
     "start_application_irrigation": {
-      "name": "Water now",
-      "description": "Triggers a controlled post-application watering without directly driving the zones."
+      "name": "Jetzt wässern",
+      "description": "Löst eine kontrollierte Nachbewässerung nach einer Anwendung aus, ohne die Zonen direkt zu steuern."
     },
     "declare_intervention": {
       "name": "Maßnahme melden",
-      "description": "Erfasst eine echte Maßnahme. Die Produkteinstellungen werden in \"Produkt registrieren\" festgelegt; hier wählst du nur das bereits registrierte Produkt, das Datum, die Zone und bei Bedarf eine Notiz. Wenn mehrere Produkte existieren, ist eine exakte ID oder ein exakter Name erforderlich.",
+      "description": "Erfasst eine echte Maßnahme. Die Produkteinstellungen werden in \"Produkt registrieren\" festgelegt; hier wählst du nur das bereits registrierte Produkt, das Datum, die Zone und bei Bedarf eine Notiz. Wenn kein Produkt explizit angegeben ist, kann die Integration die aktuelle UI-Auswahl verwenden oder einen klaren Fehler zurückgeben.",
       "fields": {
         "intervention": {
           "name": "Maßnahme",
@@ -216,7 +216,7 @@
         },
         "date_action": {
           "name": "Datum der Maßnahme (optional)",
-          "description": "Datum im Format TT/MM/JJJJ. Wenn leer, wird heute verwendet."
+          "description": "Datum im Format TT/MM/JJJJ oder JJJJ-MM-TT. Wenn leer, wird heute verwendet."
         },
         "produit_id": {
           "name": "Produkt-ID (optional)",
@@ -277,32 +277,32 @@
           "description": "Liste der erlaubten Monate. Beispiel: 3,4,5,9,10 oder März bis Mai + September bis Oktober."
         },
         "application_type": {
-          "name": "Application type (optional)",
-          "description": "soil or foliar."
+          "name": "Anwendungstyp (optional)",
+          "description": "Boden oder Blatt."
         },
         "application_requires_watering_after": {
-          "name": "Watering after application required (optional)",
-          "description": "Indicates whether a technical watering should follow."
+          "name": "Bewässerung nach Anwendung erforderlich (optional)",
+          "description": "Gibt an, ob anschließend eine technische Bewässerung folgen soll."
         },
         "application_post_watering_mm": {
-          "name": "Post-application watering (mm, optional)",
-          "description": "Technical amount of water to apply after the application."
+          "name": "Nachbewässerung (mm, optional)",
+          "description": "Technische Wassermenge, die nach der Anwendung ausgebracht werden soll."
         },
         "application_irrigation_block_hours": {
-          "name": "Watering block (h, optional)",
-          "description": "Automatic block duration after application."
+          "name": "Bewässerungssperre (h, optional)",
+          "description": "Automatische Sperrdauer nach der Anwendung."
         },
         "application_irrigation_delay_minutes": {
-          "name": "Delay before watering (min, optional)",
-          "description": "Waiting time before authorizing post-application watering."
+          "name": "Wartezeit vor Bewässerung (min, optional)",
+          "description": "Wartezeit, bevor die Nachbewässerung freigegeben wird."
         },
         "application_irrigation_mode": {
-          "name": "Post-application watering mode (optional)",
-          "description": "auto, manual or suggestion."
+          "name": "Modus der Nachbewässerung (optional)",
+          "description": "auto, manuell oder Vorschlag."
         },
         "application_label_notes": {
-          "name": "Label notes (optional)",
-          "description": "Informational notes related to the product label."
+          "name": "Etikett-Hinweise (optional)",
+          "description": "Hinweise zum Produktetikett."
         },
         "note": {
           "name": "Notiz (optional)",
@@ -322,11 +322,15 @@
     },
     "declare_mowing": {
       "name": "Mähen melden",
-      "description": "Erfasst einen Mähvorgang in der Historie.",
+      "description": "Erfasst einen Mähvorgang in der Historie des ausgewählten Rasens. Wähle die Mähfreigabe-Entität des betreffenden Rasens.",
       "fields": {
+        "entity_id": {
+          "name": "Mäh-Entität",
+          "description": "Wähle die binary_sensor.*_tonte_autorisee-Entität des betreffenden Rasens. Beispiel Hauptfläche: binary_sensor.gazon_intelligent_tonte_autorisee. Beispiel Potager: binary_sensor.gazon_intelligent_gazon_potager_tonte_autorisee."
+        },
         "date_action": {
           "name": "Mähdatum (optional)",
-          "description": "Datum im Format TT/MM/JJJJ. Wenn leer, wird heute verwendet."
+          "description": "Datum im Format TT/MM/JJJJ oder JJJJ-MM-TT. Wenn leer, wird heute verwendet."
         }
       }
     },
@@ -336,7 +340,7 @@
       "fields": {
         "date_action": {
           "name": "Bewässerungsdatum (optional)",
-          "description": "Datum im Format TT/MM/JJJJ. Wenn leer, wird heute verwendet."
+          "description": "Datum im Format TT/MM/JJJJ oder JJJJ-MM-TT. Wenn leer, wird heute verwendet."
         },
         "objectif_mm": {
           "name": "Ausgebrachte Menge (optional)",

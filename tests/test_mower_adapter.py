@@ -54,7 +54,7 @@ class MowerAdapterTests(unittest.TestCase):
         )
 
         self.assertEqual(payload["tondeuse_statut"], "au_repos")
-        self.assertEqual(payload["tondeuse_statut_libelle"], "Au repos")
+        self.assertEqual(payload["tondeuse_statut_libelle"], "À la station")
         self.assertTrue(payload["tondeuse_prete"])
         self.assertEqual(payload["tondeuse_batterie"], 44)
         self.assertEqual(payload["tondeuse_hauteur_coupe_mm"], 40)
@@ -96,7 +96,28 @@ class MowerAdapterTests(unittest.TestCase):
         )
         self.assertEqual(payload["tondeuse_statut"], "erreur")
         self.assertEqual(payload["tondeuse_erreur"], "wire_missing")
+        self.assertEqual(payload["tondeuse_erreur_libelle"], "Fil périmétrique manquant")
         self.assertFalse(payload["tondeuse_prete"])
+
+    def test_build_mower_context_keeps_landroid_activity_labels(self) -> None:
+        payload = build_mower_context(
+            entity_id="lawn_mower.robot",
+            entity_name="Robot",
+            raw_state="zoning",
+            available=True,
+        )
+
+        self.assertEqual(payload["tondeuse_statut"], "inconnu")
+        self.assertEqual(payload["tondeuse_statut_libelle"], "Changement de zone")
+
+        payload = build_mower_context(
+            entity_id="lawn_mower.robot",
+            entity_name="Robot",
+            raw_state="searching_zone",
+            available=True,
+        )
+
+        self.assertEqual(payload["tondeuse_statut_libelle"], "Recherche de zone")
 
     def test_derive_related_entity_id_uses_mower_prefix(self) -> None:
         self.assertEqual(

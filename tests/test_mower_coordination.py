@@ -80,6 +80,35 @@ class MowerCoordinationTests(unittest.TestCase):
         self.assertEqual(payload["mower_reason_code"], "mower_mowing")
         self.assertEqual(payload["mower_reason_label"], "Tondeuse en cours de tonte.")
 
+    def test_zoning_and_rain_delay_are_exposed_with_specific_labels(self) -> None:
+        payload = build_mower_coordination_context(
+            {
+                "tondeuse_source_entity": "lawn_mower.robot",
+                "tondeuse_connectee": True,
+                "tondeuse_etat_brut": "zoning",
+                "tondeuse_statut": "inconnu",
+            },
+            enabled=True,
+        )
+
+        self.assertEqual(payload["mower_operation_state"], "zoning")
+        self.assertEqual(payload["mower_operation_label"], "Changement de zone")
+        self.assertEqual(payload["mower_reason_code"], "mower_zoning")
+
+        payload = build_mower_coordination_context(
+            {
+                "tondeuse_source_entity": "lawn_mower.robot",
+                "tondeuse_connectee": True,
+                "tondeuse_etat_brut": "rain_delayed",
+                "tondeuse_statut": "pluie",
+            },
+            enabled=True,
+        )
+
+        self.assertEqual(payload["mower_operation_state"], "rain_delayed")
+        self.assertEqual(payload["mower_operation_label"], "Pause pluie")
+        self.assertEqual(payload["mower_reason_code"], "mower_rain_delayed")
+
     def test_edgecut_keeps_specific_status_label(self) -> None:
         payload = build_mower_context(
             entity_id="lawn_mower.robot",

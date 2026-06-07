@@ -11,6 +11,11 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.typing import ConfigType
 
 try:
+    from homeassistant.helpers import config_validation as cv
+except ImportError:  # pragma: no cover - compatibility with test stubs / older envs
+    cv = None
+
+try:
     from homeassistant.helpers.service import async_extract_config_entry_ids, async_extract_entity_ids
 except ImportError:  # pragma: no cover - compatibility with older HA versions
     async_extract_config_entry_ids = None
@@ -36,8 +41,20 @@ _LOGGER = logging.getLogger(__name__)
 PLATFORMS = ("select", "number", "sensor", "binary_sensor", "switch", "button")
 _ERR_NO_INSTANCE = "Aucune instance de Gazon Intelligent n'est configurée."
 _ERR_AMBIGUOUS_INSTANCE = "Plusieurs instances de Gazon Intelligent existent. Fournissez une cible explicite."
-_ERR_INVALID_DATE = "La date doit être au format JJ/MM/AAAA."
-_SERVICE_TARGET_FIELD = {vol.Optional("entity_id"): vol.Coerce(str)}
+_ERR_INVALID_DATE = "La date doit être au format JJ/MM/AAAA ou YYYY-MM-DD."
+def _target_selector_value() -> vol.Any:
+    return vol.Any(
+        None,
+        vol.Coerce(str),
+        [vol.Coerce(str)],
+    )
+
+
+_SERVICE_TARGET_FIELD = {
+    vol.Optional("entity_id"): _target_selector_value(),
+    vol.Optional("device_id"): _target_selector_value(),
+    vol.Optional("area_id"): _target_selector_value(),
+}
 
 SERVICE_SET_MODE = "set_mode"
 SERVICE_SET_DATE_ACTION = "set_date_action"
@@ -51,6 +68,14 @@ SERVICE_DECLARE_MOWING = "declare_mowing"
 SERVICE_DECLARE_WATERING = "declare_watering"
 SERVICE_REGISTER_PRODUCT = "register_product"
 SERVICE_REMOVE_PRODUCT = "remove_product"
+
+if cv is None:
+    CONFIG_SCHEMA = vol.Schema({})
+else:
+    try:
+        CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+    except TypeError:  # pragma: no cover - compatibility with older helper signature
+        CONFIG_SCHEMA = cv.config_entry_only_config_schema(vol.Schema({DOMAIN: dict}))
 
 
 def _ensure_domain_data(hass: HomeAssistant) -> dict[str, GazonIntelligentCoordinator]:

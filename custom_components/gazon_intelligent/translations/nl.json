@@ -162,11 +162,11 @@
     },
     "set_date_action": {
       "name": "Datum vastleggen",
-      "description": "Stelt de werkelijke datum van de actie in (DD/MM/JJJJ). Als leeg, wordt vandaag gebruikt.",
+      "description": "Stelt de werkelijke datum van de actie in (DD/MM/JJJJ of JJJJ-MM-DD). Als leeg, wordt vandaag gebruikt.",
       "fields": {
         "date_action": {
           "name": "Datum",
-          "description": "Datum in DD/MM/JJJJ-formaat."
+          "description": "Datum in DD/MM/JJJJ- of JJJJ-MM-DD-formaat."
         }
       }
     },
@@ -203,12 +203,12 @@
       }
     },
     "start_application_irrigation": {
-      "name": "Water now",
-      "description": "Triggers a controlled post-application watering without directly driving the zones."
+      "name": "Nu irrigeren",
+      "description": "Start een gecontroleerde nabevloeiing na toepassing zonder de zones direct aan te sturen."
     },
     "declare_intervention": {
       "name": "Actie melden",
-      "description": "Legt een echte actie vast. De productinstellingen worden vastgelegd in \"Product registreren\"; hier kies je alleen het al geregistreerde product, de datum, de zone en eventueel een opmerking. Als er meerdere producten zijn, is een exact ID of exacte naam verplicht.",
+      "description": "Legt een echte actie vast. De productinstellingen worden vastgelegd in \"Product registreren\"; hier kies je alleen het al geregistreerde product, de datum, de zone en eventueel een opmerking. Als geen expliciet product is opgegeven, kan de integratie de huidige UI-selectie gebruiken of een duidelijke fout teruggeven.",
       "fields": {
         "intervention": {
           "name": "Actie",
@@ -216,7 +216,7 @@
         },
         "date_action": {
           "name": "Actiedatum (optioneel)",
-          "description": "Datum in DD/MM/JJJJ-formaat. Als leeg, wordt vandaag gebruikt."
+          "description": "Datum in DD/MM/JJJJ- of JJJJ-MM-DD-formaat. Als leeg, wordt vandaag gebruikt."
         },
         "produit_id": {
           "name": "Product-ID (optioneel)",
@@ -277,32 +277,32 @@
           "description": "Geef de toegestane maanden op. Voorbeeld: 3,4,5,9,10 of maart tot mei + september tot oktober."
         },
         "application_type": {
-          "name": "Application type (optional)",
-          "description": "soil or foliar."
+          "name": "Type toepassing (optioneel)",
+          "description": "bodem of blad."
         },
         "application_requires_watering_after": {
-          "name": "Watering after application required (optional)",
-          "description": "Indicates whether a technical watering should follow."
+          "name": "Bewatering na toepassing vereist (optioneel)",
+          "description": "Geeft aan of er een technische nabevloeiing moet volgen."
         },
         "application_post_watering_mm": {
-          "name": "Post-application watering (mm, optional)",
-          "description": "Technical amount of water to apply after the application."
+          "name": "Nabewatering (mm, optioneel)",
+          "description": "Technische hoeveelheid water die na de toepassing moet worden gegeven."
         },
         "application_irrigation_block_hours": {
-          "name": "Watering block (h, optional)",
-          "description": "Automatic block duration after application."
+          "name": "Blokkering bewatering (u, optioneel)",
+          "description": "Automatische blokkeringsduur na de toepassing."
         },
         "application_irrigation_delay_minutes": {
-          "name": "Delay before watering (min, optional)",
-          "description": "Waiting time before authorizing post-application watering."
+          "name": "Wachttijd voor bewatering (min, optioneel)",
+          "description": "Wachttijd voordat nabewatering wordt toegestaan."
         },
         "application_irrigation_mode": {
-          "name": "Post-application watering mode (optional)",
-          "description": "auto, manual or suggestion."
+          "name": "Nabewateringsmodus (optioneel)",
+          "description": "auto, handmatig of suggestie."
         },
         "application_label_notes": {
-          "name": "Label notes (optional)",
-          "description": "Informational notes related to the product label."
+          "name": "Etiketnotities (optioneel)",
+          "description": "Informatieve notities over het productetiket."
         },
         "note": {
           "name": "Opmerking (optioneel)",
@@ -322,11 +322,15 @@
     },
     "declare_mowing": {
       "name": "Maaien melden",
-      "description": "Slaat een maaibeurt op in de geschiedenis.",
+      "description": "Slaat een maaibeurt op in de geschiedenis van het doelgazon. Kies de maaimachtiging-entiteit van het betreffende gazon.",
       "fields": {
+        "entity_id": {
+          "name": "Maaientiteit",
+          "description": "Kies de binary_sensor.*_tonte_autorisee-entiteit van het betreffende gazon. Voorbeeld hoofdgazon: binary_sensor.gazon_intelligent_tonte_autorisee. Voorbeeld potager: binary_sensor.gazon_intelligent_gazon_potager_tonte_autorisee."
+        },
         "date_action": {
           "name": "Maaidatum (optioneel)",
-          "description": "Datum in DD/MM/JJJJ-formaat. Als leeg, wordt vandaag gebruikt."
+          "description": "Datum in DD/MM/JJJJ- of JJJJ-MM-DD-formaat. Als leeg, wordt vandaag gebruikt."
         }
       }
     },
@@ -336,7 +340,7 @@
       "fields": {
         "date_action": {
           "name": "Irrigatiedatum (optioneel)",
-          "description": "Datum in DD/MM/JJJJ-formaat. Als leeg, wordt vandaag gebruikt."
+          "description": "Datum in DD/MM/JJJJ- of JJJJ-MM-DD-formaat. Als leeg, wordt vandaag gebruikt."
         },
         "objectif_mm": {
           "name": "Toegepaste hoeveelheid (optioneel)",

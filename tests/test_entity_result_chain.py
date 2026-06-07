@@ -96,6 +96,7 @@ decision_models = __import__("custom_components.gazon_intelligent.decision_model
 sensor = __import__("custom_components.gazon_intelligent.sensor", fromlist=["GazonPhaseActiveSensor"])
 binary_sensor = __import__("custom_components.gazon_intelligent.binary_sensor", fromlist=["GazonTonteAutoriseeBinarySensor"])
 select = __import__("custom_components.gazon_intelligent.select", fromlist=["GazonModeSelect"])
+from custom_components.gazon_intelligent.const import PLUIE_SOURCE_NON_DISPONIBLE
 
 
 @dataclass
@@ -179,6 +180,56 @@ def _local_text(iso_value: str) -> str:
 
 
 class DecisionResultChainTests(unittest.TestCase):
+    def test_public_mowing_facade_smooths_tonte_entities_and_assistant(self) -> None:
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={
+                "_public_mowing_facade": {
+                    "tonte_autorisee": False,
+                    "tonte_statut": "a_surveiller",
+                    "mowing_blocked": True,
+                    "next_mowing_date": "2026-05-10",
+                    "next_mowing_display": "10/05/2026",
+                    "raison_blocage_tonte": "Dernière tonte récente.",
+                    "raison_blocage_code": "mowing_spacing",
+                    "assistant": {
+                        "action": "none",
+                        "moment": "attendre",
+                        "status": "blocked_due_to_conditions",
+                        "reason": "Dernière tonte récente.",
+                    },
+                },
+                "tonte_autorisee": True,
+                "tonte_statut": "autorisee",
+                "mowing_blocked": False,
+                "next_mowing_date": "2026-05-09",
+                "next_mowing_display": "09/05/2026",
+                "assistant": {
+                    "action": "tonte",
+                    "moment": "maintenant",
+                    "status": "action_required",
+                    "reason": "Tonte possible maintenant.",
+                },
+                "tondeuse_prete": True,
+                "mower_coordination_enabled": True,
+                "mower_coordination_ready": True,
+            },
+            result=None,
+            history=[],
+            memory={},
+        )
+
+        tonte_binary = binary_sensor.GazonTonteAutoriseeBinarySensor(coordinator)
+        prochaine_tonte = sensor.GazonProchaineTonteSensor(coordinator)
+        assistant_sensor = sensor.GazonAssistantSensor(coordinator)
+        niveau_action_sensor = sensor.GazonNiveauActionSensor(coordinator)
+
+        self.assertFalse(tonte_binary.is_on)
+        self.assertEqual(tonte_binary.extra_state_attributes["tonte_statut"], "a_surveiller")
+        self.assertEqual(prochaine_tonte.native_value, "10/05/2026")
+        self.assertEqual(assistant_sensor.native_value, "attente_conditions")
+        self.assertEqual(niveau_action_sensor.native_value, "aucune_action")
+
     def test_sensor_setup_entry_tolerates_missing_hass_domain_data(self) -> None:
         hass = types.SimpleNamespace(data={})
         added_entities: list[object] = []
@@ -845,6 +896,8 @@ class DecisionResultChainTests(unittest.TestCase):
         coordinator.data["application_post_watering_status"] = "non_requis"
         coordinator.data["arrosage_recommande"] = True
         coordinator.data["type_arrosage"] = "auto"
+        coordinator.data["fenetre_optimale"] = "maintenant"
+        coordinator.data["block_reason"] = None
         self.assertTrue(irrigation_signal.is_on)
         irrigation_attrs = irrigation_signal.extra_state_attributes
         self.assertIsNotNone(irrigation_attrs)
@@ -946,6 +999,35 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertFalse(attrs["action_executable"])
         self.assertEqual(attrs["action_label"], "Attendre")
         self.assertEqual(attrs["summary"], "Arrosage post-produit en attente")
+
+    def test_signal_irrigation_waits_when_hydric_need_is_for_tomorrow_morning(self) -> None:
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={
+                "application_post_watering_status": "non_requis",
+                "arrosage_recommande": True,
+                "type_arrosage": "manuel_frequent",
+                "objectif_mm": 2.5,
+                "fenetre_optimale": "demain_matin",
+                "watering_cause": "hydrique",
+            },
+            result=None,
+            history=[],
+            memory={},
+        )
+
+        irrigation_signal = binary_sensor.GazonSignalIrrigationBinarySensor(coordinator)
+
+        self.assertFalse(irrigation_signal.is_on)
+        attrs = irrigation_signal.extra_state_attributes
+        self.assertIsNotNone(attrs)
+        assert attrs is not None
+        self.assertEqual(attrs["trigger_kind"], "waiting")
+        self.assertEqual(attrs["reason_kind"], "hydric_need")
+        self.assertEqual(attrs["execution_state"], "waiting")
+        self.assertFalse(attrs["action_executable"])
+        self.assertEqual(attrs["action_label"], "Attendre")
+        self.assertEqual(attrs["summary"], "Irrigation en attente")
 
     def test_public_action_recommandee_aligns_with_single_pass_plan(self) -> None:
         coordinator = _FakeCoordinator(
@@ -1366,6 +1448,20 @@ class DecisionResultChainTests(unittest.TestCase):
                 "reserve_minimale_mm": 6.0,
                 "depletion_mm": 0.0,
                 "depletion_ratio": 0.0,
+                "reserve_actuelle_source": 21.6,
+                "bilan_hydrique_mm": 21.6,
+                "bilan_hydrique_journalier_mm": -1.8,
+                "arrosage_recent_jour": 0.0,
+                "arrosage_recent_3j": 0.0,
+                "arrosage_recent_7j": 0.0,
+                "pluie_efficace": 0.0,
+                "retour_arrosage": 0.0,
+                "et0_mm": 1.3,
+                "soil_balance": {
+                    "reserve_mm": 21.6,
+                    "previous_reserve_mm": 23.4,
+                    "delta_mm": -1.8,
+                },
                 "hydric_state": "plein",
             },
             result=None,
@@ -1395,6 +1491,12 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(reserve_sensor.extra_state_attributes["reserve_utile_actuelle_mm"], 12.0)
         self.assertEqual(reserve_sensor.extra_state_attributes["reserve_totale_sol_mm"], 21.6)
         self.assertEqual(reserve_sensor.extra_state_attributes["surplus_hydrique_mm"], 9.6)
+        self.assertEqual(reserve_sensor.extra_state_attributes["reserve_actuelle_source"], 21.6)
+        self.assertEqual(reserve_sensor.extra_state_attributes["bilan_hydrique_mm"], 21.6)
+        self.assertEqual(reserve_sensor.extra_state_attributes["bilan_hydrique_journalier_mm"], -1.8)
+        self.assertEqual(reserve_sensor.extra_state_attributes["soil_balance_reserve_mm"], 21.6)
+        self.assertEqual(reserve_sensor.extra_state_attributes["soil_balance_previous_reserve_mm"], 23.4)
+        self.assertEqual(reserve_sensor.extra_state_attributes["soil_balance_delta_mm"], -1.8)
         self.assertEqual(depletion_ratio_sensor.native_value, 0.0)
         self.assertEqual(depletion_ratio_sensor.extra_state_attributes["depletion_ratio_raw"], 0.0)
         self.assertEqual(depletion_ratio_sensor.extra_state_attributes["hydric_state"], "plein")
@@ -2056,11 +2158,159 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertNotIn("niveau_action", tonte_sensor.extra_state_attributes)
         self.assertNotIn("fenetre_optimale", tonte_sensor.extra_state_attributes)
 
+    def test_next_mowing_summary_for_night_block_is_stable_around_midnight(self) -> None:
+        result = _make_result()
+        result.tonte_autorisee = False
+        result.tonte_statut = "interdite"
+        result.extra["raison_blocage_tonte"] = "Nuit: attendre le lever du soleil."
+        result.extra["raison_blocage_code"] = "mowing_night"
+        result.extra["next_mowing_date"] = "2026-04-07"
+        result.extra["next_mowing_display"] = "07/04/2026"
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={},
+            result=result,
+            history=[],
+        )
+
+        next_mowing_sensor = sensor.GazonProchaineTonteSensor(coordinator)
+
+        self.assertEqual(
+            next_mowing_sensor.extra_state_attributes["summary"],
+            "Tonte possible au lever du jour",
+        )
+
+    def test_machine_unavailable_fallbacks_stay_precise_when_robot_is_mowing(self) -> None:
+        result = _make_result()
+        result.tonte_autorisee = True
+        result.tonte_statut = "autorisee"
+        result.extra["raison_blocage_code"] = "machine_unavailable"
+        result.extra["mowing_block_reason_code"] = "machine_unavailable"
+        result.extra["mowing_window_reason"] = "Robot indisponible: attendre qu'elle soit prête."
+        result.extra["mowing_block_reason_label"] = "Robot indisponible: attendre qu'elle soit prête."
+        result.extra["raison_blocage_tonte"] = "Robot indisponible: attendre qu'elle soit prête."
+        result.extra["tondeuse_statut"] = "tonte_en_cours"
+        result.extra["tondeuse_statut_libelle"] = "Tonte en cours"
+        result.extra["mower_operation_state"] = "tonte"
+        result.extra["mower_reason_code"] = "mower_mowing"
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={},
+            result=result,
+            history=[],
+        )
+
+        tonte_sensor = binary_sensor.GazonTonteAutoriseeBinarySensor(coordinator)
+        next_mowing_sensor = sensor.GazonProchaineTonteSensor(coordinator)
+
+        self.assertEqual(
+            tonte_sensor.extra_state_attributes["mowing_window_reason"],
+            "Robot déjà en tonte: attendre la fin du cycle en cours.",
+        )
+        self.assertEqual(
+            tonte_sensor.extra_state_attributes["mowing_block_reason_label"],
+            "Robot déjà en tonte: attendre la fin du cycle en cours.",
+        )
+        self.assertEqual(
+            tonte_sensor.extra_state_attributes["raison_blocage_tonte"],
+            "Robot déjà en tonte: attendre la fin du cycle en cours.",
+        )
+        self.assertEqual(
+            next_mowing_sensor.extra_state_attributes["machine_unavailable_label"],
+            "Robot déjà en tonte: attendre la fin du cycle en cours.",
+        )
+
+    def test_next_mowing_sensor_prefers_smoothed_public_facade_when_present(self) -> None:
+        result = _make_result()
+        result.tonte_autorisee = True
+        result.tonte_statut = "autorisee"
+        result.extra["action_possible"] = True
+        result.extra["next_mowing_date"] = "2026-04-07"
+        result.extra["next_mowing_display"] = "07/04/2026"
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={
+                "tonte_statut": "a_surveiller",
+                "action_possible": False,
+                "next_mowing_date": "2026-04-10",
+                "next_mowing_display": "10/04/2026",
+                "raison_blocage_code": "mowing_spacing",
+                "raison_blocage_tonte": "Dernière tonte récente.",
+            },
+            result=result,
+            history=[],
+        )
+
+        next_mowing_sensor = sensor.GazonProchaineTonteSensor(coordinator)
+
+        self.assertEqual(next_mowing_sensor.native_value, "10/04/2026")
+        self.assertEqual(
+            next_mowing_sensor.extra_state_attributes["summary"],
+            "Tonte à reconsidérer le 10/04/2026",
+        )
+
+    def test_next_mowing_sensor_exposes_block_reason_from_mowing_code_fallback(self) -> None:
+        result = _make_result()
+        result.tonte_autorisee = True
+        result.tonte_statut = "autorisee"
+        result.extra.pop("raison_blocage_code", None)
+        result.extra["mowing_block_reason_code"] = "machine_unavailable"
+        result.extra["mowing_block_reason_label"] = "Robot indisponible: attendre qu'elle soit prête."
+        result.extra["mowing_window_reason"] = "Robot indisponible: attendre qu'elle soit prête."
+        result.extra["tondeuse_statut"] = "tonte_en_cours"
+        result.extra["tondeuse_statut_libelle"] = "Tonte en cours"
+        result.extra["mower_operation_state"] = "tonte"
+        result.extra["mower_reason_code"] = "mower_mowing"
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={},
+            result=result,
+            history=[],
+        )
+
+        next_mowing_sensor = sensor.GazonProchaineTonteSensor(coordinator)
+        attrs = next_mowing_sensor.extra_state_attributes
+
+        self.assertEqual(attrs["block_reason"], "machine_unavailable")
+        self.assertEqual(
+            attrs["machine_unavailable_label"],
+            "Robot déjà en tonte: attendre la fin du cycle en cours.",
+        )
+
+    def test_tonte_state_sensor_prefers_smoothed_public_facade_when_present(self) -> None:
+        result = _make_result()
+        result.tonte_statut = "autorisee"
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={"tonte_statut": "a_surveiller"},
+            result=result,
+            history=[],
+        )
+
+        tonte_state_sensor = sensor.GazonTonteEtatSensor(coordinator)
+
+        self.assertEqual(tonte_state_sensor.native_value, "a_surveiller")
+
+    def test_niveau_action_sensor_prefers_smoothed_public_facade_when_present(self) -> None:
+        result = _make_result()
+        result.niveau_action = "a_faire"
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={"niveau_action": "surveiller"},
+            result=result,
+            history=[],
+        )
+
+        niveau_sensor = sensor.GazonNiveauActionSensor(coordinator)
+
+        self.assertEqual(niveau_sensor.native_value, "surveiller")
+
     def test_tonte_sensor_exposes_generic_mower_context_when_present(self) -> None:
         result = _make_result()
         result.extra["tondeuse_statut"] = "au_repos"
         result.extra["tondeuse_statut_libelle"] = "Au repos"
         result.extra["tondeuse_prete"] = True
+        result.extra["mower_operation_state"] = "dockee"
         result.extra["mower_coordination_enabled"] = True
         result.extra["mower_presence_state"] = "dockee"
         result.extra["tondeuse_batterie"] = 44
@@ -2085,6 +2335,28 @@ class DecisionResultChainTests(unittest.TestCase):
             tonte_binary_sensor.extra_state_attributes["tondeuse_prochain_depart_display"],
             "16/04/2026 à 13:00",
         )
+        self.assertEqual(tonte_state_sensor.extra_state_attributes["mower_activity_code"], "dockee")
+
+    def test_tonte_entities_expose_public_mower_aliases(self) -> None:
+        result = _make_result()
+        result.extra["tondeuse_erreur"] = "battery_low"
+        result.extra["mower_operation_state"] = "tonte"
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={},
+            result=result,
+            history=[],
+        )
+
+        tonte_state_sensor = sensor.GazonTonteEtatSensor(coordinator)
+        tonte_binary_sensor = binary_sensor.GazonTonteAutoriseeBinarySensor(coordinator)
+
+        self.assertEqual(tonte_state_sensor.extra_state_attributes["tondeuse_erreur_code"], "battery_low")
+        self.assertEqual(tonte_state_sensor.extra_state_attributes["mower_error"], "battery_low")
+        self.assertEqual(tonte_state_sensor.extra_state_attributes["mower_activity_code"], "tonte")
+        self.assertEqual(tonte_binary_sensor.extra_state_attributes["tondeuse_erreur_code"], "battery_low")
+        self.assertEqual(tonte_binary_sensor.extra_state_attributes["mower_error"], "battery_low")
+        self.assertEqual(tonte_binary_sensor.extra_state_attributes["mower_activity_code"], "tonte")
 
     def test_tonte_entities_expose_explicit_clarity_flags(self) -> None:
         result = _make_result()
@@ -2133,6 +2405,36 @@ class DecisionResultChainTests(unittest.TestCase):
             signal_sensor.extra_state_attributes["watering_block_reason_label"],
             "Arrosage bloqué: tondeuse en cours de tonte.",
         )
+
+    def test_irrigation_binary_sensor_prefers_block_over_inconsistent_execution_flag(self) -> None:
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={
+                "objectif_mm": 4.0,
+                "irrigation_need_mm": 4.0,
+                "arrosage_recommande": True,
+                "arrosage_auto_autorise": True,
+                "irrigation_agronomic_recommendation": True,
+                "irrigation_blocked": True,
+                "irrigation_execution_allowed": True,
+                "type_arrosage": "auto",
+                "block_reason": "pluie_active",
+            },
+            result=None,
+            history=[],
+            memory={},
+        )
+
+        irrigation_sensor = binary_sensor.GazonArrosageRecommandeBinarySensor(coordinator)
+
+        self.assertFalse(irrigation_sensor.is_on)
+        attrs = irrigation_sensor.extra_state_attributes
+        self.assertIsNotNone(attrs)
+        assert attrs is not None
+        self.assertEqual(attrs["besoin_hydrique_mm"], 4.0)
+        self.assertTrue(attrs["recommendation_agronomique"])
+        self.assertTrue(attrs["blocage_actif"])
+        self.assertFalse(attrs["execution_autorisee"])
 
     def test_entities_read_decision_result_before_legacy_snapshot(self) -> None:
         coordinator = _FakeCoordinator(
@@ -2386,7 +2688,7 @@ class DecisionResultChainTests(unittest.TestCase):
 
         phase_sensor = sensor.GazonPhaseActiveSensor(coordinator)
 
-        self.assertEqual(phase_sensor.extra_state_attributes["pluie_demain_source"], "non disponible")
+        self.assertEqual(phase_sensor.extra_state_attributes["pluie_demain_source"], PLUIE_SOURCE_NON_DISPONIBLE)
 
 
 if __name__ == "__main__":

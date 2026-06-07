@@ -32,7 +32,12 @@ from .scores import classify_stress_level
 from .water import compute_advanced_context, compute_etp, compute_water_balance
 
 _LOGGER = logging.getLogger(__name__)
-USE_DEPLETION_LOGIC = False
+# La logique de dépletion (calcul objectif par épuisement de réserve utile) est
+# implémentée mais non activée : les tests de terrain ont montré une surestimation
+# de l'objectif sur sol limoneux en phase Sursemis. À réactiver quand le modèle
+# de réserve utile sera calibré par type de sol.
+# Voir : mm_cible_depletion et objective_from_depletion_mm dans build_water_bundle.
+# USE_DEPLETION_LOGIC = False  # Laisser commenté jusqu'à calibration complète
 
 _MOWER_WATERING_BLOCK_LABELS = {
     "mower_mowing": "Arrosage bloqué: tondeuse en cours de tonte.",
@@ -45,22 +50,31 @@ _MOWER_WATERING_BLOCK_LABELS = {
 }
 
 
-def compute_kc_gazon(phase_dominante: str, sous_phase: str | None = None) -> float:
+def compute_kc_gazon(phase_dominante: str, sous_phase: str | None = None, days_since_mowing: int | None = None) -> float:
     phase = str(phase_dominante or "").strip()
     sous_phase = str(sous_phase or "").strip()
     if phase == "Normal":
-        return 0.8
-    if phase == "Sursemis":
+        kc = 0.8
+    elif phase == "Sursemis":
         if sous_phase == "Germination":
-            return 1.0
-        return 0.95
-    if phase == "Hivernage":
-        return 0.55
-    if phase == "Scarification":
-        return 0.85
-    if phase in {"Traitement", "Fertilisation", "Biostimulant", "Agent Mouillant"}:
-        return 0.8
-    return 0.75
+            kc = 1.0
+        else:
+            kc = 0.95
+    elif phase == "Hivernage":
+        kc = 0.55
+    elif phase == "Scarification":
+        kc = 0.85
+    elif phase in {"Traitement", "Fertilisation", "Biostimulant", "Agent Mouillant"}:
+        kc = 0.8
+    else:
+        kc = 0.75
+    # Ajustement post-tonte : restauration feuillage = besoin hydrique accru
+    if days_since_mowing is not None and phase not in {"Hivernage", "Traitement"}:
+        if days_since_mowing <= 7:
+            kc = round(min(kc * 1.15, 1.1), 2)
+        elif days_since_mowing <= 14:
+            kc = round(min(kc * 1.05, 1.05), 2)
+    return kc
 
 
 def build_water_bundle(
@@ -99,7 +113,18 @@ def build_water_bundle(
         soil_balance=context.soil_balance,
         phase_dominante=phase_bundle["phase_dominante"],
     )
-    kc_gazon = compute_kc_gazon(phase_bundle["phase_dominante"], phase_bundle["sous_phase"])
+    # Calcule jours depuis dernière tonte depuis mémoire ou historique
+    days_since_mowing = None
+    memory = getattr(context, 'memory', {}) or {}
+    derniere_tonte = memory.get("derniere_tonte") if isinstance(memory, dict) else None
+    if derniere_tonte:
+        try:
+            from datetime import date as _date
+            tonte_date = _date.fromisoformat(str(derniere_tonte)[:10])
+            days_since_mowing = (context.today - tonte_date).days
+        except (ValueError, TypeError):
+            pass
+    kc_gazon = compute_kc_gazon(phase_bundle["phase_dominante"], phase_bundle["sous_phase"], days_since_mowing)
     et0_mm = float(water_balance.get("et0_mm") or etp or 0.0)
     etc_mm = round(max(0.0, et0_mm * kc_gazon), 1)
     reserve_utile_mm = float(water_balance.get("reserve_utile_mm") or 0.0)
@@ -161,7 +186,7 @@ def build_water_bundle(
         "et0_source": context.et0_source,
         "kc_gazon": round(min(max(kc_gazon, 0.4), 1.1), 2),
         "etc_mm": etc_mm,
-        "use_depletion_logic": USE_DEPLETION_LOGIC,
+        "use_depletion_logic": False,  # voir commentaire USE_DEPLETION_LOGIC en haut du fichier
         "mm_cible_depletion": mm_cible_depletion,
         "objective_from_depletion_mm": mm_cible_depletion,
         "advanced_context": advanced_context,
@@ -582,6 +607,31 @@ def _mower_watering_block_reason(mower_context: dict[str, Any]) -> str | None:
     return None
 
 
+def _apply_irrigation_execution_contract(payload: dict[str, Any]) -> dict[str, Any]:
+    """Enrichit le payload avec des flags d'urgence hydrique même en cas de blocage."""
+    irrigation_blocked = bool(
+        payload.get("watering_blocked_by_mower")
+        or str(payload.get("type_arrosage") or "") == "bloque"
+        or not bool(payload.get("irrigation_execution_allowed", True))
+    )
+    bilan_mm = 0.0
+    water_balance = payload.get("water_balance")
+    if isinstance(water_balance, dict):
+        bilan_mm = float(water_balance.get("bilan_hydrique_mm") or 0.0)
+    if bilan_mm == 0.0:
+        bilan_mm = float(payload.get("bilan_hydrique_mm") or 0.0)
+    CRITICAL_DEFICIT_MM = -2.5
+    critical = irrigation_blocked and bilan_mm <= CRITICAL_DEFICIT_MM
+    block_reason = payload.get("block_reason") or payload.get("watering_block_reason_code") or "inconnu"
+    payload["irrigation_blocked_but_critical"] = critical
+    payload["critical_deficit_mm"] = round(bilan_mm, 1) if critical else None
+    payload["critical_irrigation_reason"] = (
+        f"Déficit critique {bilan_mm:.1f} mm malgré blocage ({block_reason})"
+        if critical else None
+    )
+    return payload
+
+
 def _payload_has_watering_intent(payload: dict[str, Any]) -> bool:
     objectif_mm = float(payload.get("objectif_mm") or 0.0)
     type_arrosage = str(payload.get("type_arrosage") or "").strip().lower()
@@ -656,6 +706,7 @@ def _bundle_with(base_bundle: dict[str, Any], **updates: Any) -> dict[str, Any]:
         payload.get("arrosage_conseille"),
     )
     payload.pop("_mower_coordination_context", None)
+    payload = _apply_irrigation_execution_contract(payload)
     return payload
 
 

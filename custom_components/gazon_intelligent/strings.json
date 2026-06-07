@@ -47,7 +47,8 @@
       }
     },
     "error": {
-      "invalid_instance_slug": "Identifiant de pelouse invalide."
+      "invalid_instance_slug": "Identifiant de pelouse invalide.",
+      "entity_not_found": "Entité introuvable dans Home Assistant."
     },
     "abort": {
       "already_configured": "Gazon Intelligent est déjà configuré."
@@ -141,11 +142,11 @@
     },
     "set_date_action": {
       "name": "Noter la date",
-      "description": "Indique la date réelle de l'intervention (JJ/MM/AAAA). Si vide, prend la date du jour.",
+      "description": "Indique la date réelle de l'action (JJ/MM/AAAA ou YYYY-MM-DD). Si vide, prend la date du jour.",
       "fields": {
         "date_action": {
           "name": "Date",
-          "description": "Date au format JJ/MM/AAAA."
+          "description": "Date au format JJ/MM/AAAA ou YYYY-MM-DD."
         }
       }
     },
@@ -187,7 +188,7 @@
     },
     "declare_intervention": {
       "name": "Déclarer une intervention",
-      "description": "Déclare une intervention réelle. Les réglages du produit se configurent dans \"Enregistrer un produit\" ; ici, il suffit de choisir le produit déjà enregistré, la date, la zone et une note si besoin. Si aucun produit explicite n'est fourni, l'intégration peut utiliser la sélection courante de l'UI.",
+      "description": "Déclare une intervention réelle. Les réglages du produit se configurent dans \"Enregistrer un produit\" ; ici, il suffit de choisir le produit déjà enregistré, la date, la zone et une note si besoin. Si aucun produit explicite n'est fourni, l'intégration peut utiliser la sélection courante de l'UI ou renvoyer une erreur claire.",
       "fields": {
         "intervention": {
           "name": "Intervention",
@@ -195,7 +196,7 @@
         },
         "date_action": {
           "name": "Date d'action (optionnelle)",
-          "description": "Date au format JJ/MM/AAAA. Si vide, aujourd'hui."
+          "description": "Date au format JJ/MM/AAAA ou YYYY-MM-DD. Si vide, aujourd'hui."
         },
         "produit_id": {
           "name": "ID produit (optionnel)",
@@ -301,11 +302,15 @@
     },
     "declare_mowing": {
       "name": "Déclarer une tonte",
-      "description": "Enregistre une tonte dans l'historique.",
+      "description": "Enregistre une tonte dans l'historique du gazon ciblé. Choisir l'entité de tonte autorisée du gazon concerné.",
       "fields": {
+        "entity_id": {
+          "name": "Entité de tonte",
+          "description": "Choisir l'entité binary_sensor.*_tonte_autorisee du gazon concerné. Exemple principal: binary_sensor.gazon_intelligent_tonte_autorisee. Exemple potager: binary_sensor.gazon_intelligent_gazon_potager_tonte_autorisee."
+        },
         "date_action": {
           "name": "Date de tonte (optionnelle)",
-          "description": "Date au format JJ/MM/AAAA. Si vide, aujourd'hui."
+          "description": "Date au format JJ/MM/AAAA ou YYYY-MM-DD. Si vide, aujourd'hui."
         }
       }
     },
@@ -315,7 +320,7 @@
       "fields": {
         "date_action": {
           "name": "Date d'arrosage (optionnelle)",
-          "description": "Date au format JJ/MM/AAAA. Si vide, aujourd'hui."
+          "description": "Date au format JJ/MM/AAAA ou YYYY-MM-DD. Si vide, aujourd'hui."
         },
         "objectif_mm": {
           "name": "Quantité appliquée (optionnelle)",

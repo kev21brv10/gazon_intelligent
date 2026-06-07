@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
-from .const import DOMAIN
+from .const import DEFAULT_TYPE_SOL, DOMAIN
+from .shared_state import resolve_effective_config
 
 _CONFIG_HISTORY_KEYS: tuple[str, ...] = (
     "zone_1",
@@ -87,6 +89,18 @@ _SNAPSHOT_KEYS: tuple[str, ...] = (
     "phase_context",
     "advanced_context",
     "assistant",
+    # LOT A — santé capteurs
+    "sensor_health",
+    # LOT B — urgence hydrique malgré blocage
+    "irrigation_blocked_but_critical",
+    "critical_deficit_mm",
+    "critical_irrigation_reason",
+    # LOT E — risque fongique
+    "fungal_risk_level",
+    "fungal_risk_score",
+    "fungal_risk_reasons",
+    "fungal_risk_evening_block",
+    "fungal_risk_reduce_watering",
 )
 
 _MEMORY_KEYS: tuple[str, ...] = (
@@ -165,8 +179,8 @@ _DIAGNOSTICS_REDACT_KEYS: set[str] = {
 }
 
 
-def _compact_dict(data: dict[str, Any] | None, keys: tuple[str, ...] | None = None) -> dict[str, Any]:
-    if not isinstance(data, dict):
+def _compact_dict(data: Mapping[str, Any] | None, keys: tuple[str, ...] | None = None) -> dict[str, Any]:
+    if not isinstance(data, Mapping):
         return {}
     if keys is None:
         return {key: value for key, value in data.items() if value is not None}
@@ -223,6 +237,40 @@ def _build_snapshot_summary(snapshot: dict[str, Any]) -> dict[str, Any]:
     return _compact_dict(snapshot, _SNAPSHOT_KEYS)
 
 
+def _value_for_diagnostics(key: str, value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    return {key: value}
+
+
+def _default_for_config_key(key: str) -> Any:
+    if key == "type_sol":
+        return DEFAULT_TYPE_SOL
+    return None
+
+
+def _build_effective_config_summary(entry: ConfigEntry, coordinator: Any) -> dict[str, Any]:
+    shared_state = getattr(coordinator, "shared_state", None) if coordinator is not None else None
+    summary: dict[str, Any] = {}
+    for key in _CONFIG_HISTORY_KEYS:
+        resolved = resolve_effective_config(
+            entry,
+            key,
+            shared_state=shared_state,
+            default=_default_for_config_key(key),
+        )
+        summary[f"config_{key}"] = {
+            "key": key,
+            "source": resolved.get("source"),
+            "local": _value_for_diagnostics(key, resolved.get("local_value")),
+            "shared": _value_for_diagnostics(key, resolved.get("shared_value")),
+            "entry_data": _value_for_diagnostics(key, resolved.get("entry_data_value")),
+            "default": _value_for_diagnostics(key, resolved.get("default_value")),
+            "effective": _value_for_diagnostics(key, resolved.get("effective_value")),
+        }
+    return summary
+
+
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -238,6 +286,7 @@ async def async_get_config_entry_diagnostics(
             "version": getattr(entry, "version", None),
             "data": _compact_dict(getattr(entry, "data", {})),
             "options": _compact_dict(getattr(entry, "options", {})),
+            "effective_config": _build_effective_config_summary(entry, coordinator),
         },
         "runtime": _build_runtime_summary(coordinator, snapshot) if coordinator is not None else {},
         "decision": _build_snapshot_summary(snapshot),

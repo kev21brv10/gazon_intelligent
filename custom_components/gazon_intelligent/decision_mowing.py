@@ -14,6 +14,7 @@ from .decision_models import DecisionContext
 from .guidance import compute_tonte_statut, is_active_rain_weather
 from .memory import compute_application_state
 from .scores import classify_stress_level
+from .water import _watering_item_matches_zones
 
 _MOWER_STEP_CM = 0.5
 _MOWING_BLOCK_PRIORITIES = {
@@ -135,6 +136,26 @@ def _seasonal_mowing_frequency(month: int) -> tuple[float, str]:
     return _MOWING_FREQUENCY_BY_MONTH.get(month, (3.0, "2 à 4 / semaine"))
 
 
+def _phase_adjusted_mowing_frequency(
+    phase_bundle: dict[str, Any],
+    month: int,
+) -> tuple[float, str]:
+    phase_dominante = str(phase_bundle.get("phase_dominante") or "")
+    sous_phase = str(phase_bundle.get("sous_phase") or "")
+    if phase_dominante != "Sursemis":
+        return _seasonal_mowing_frequency(month)
+    if sous_phase in {"Germination", "Enracinement"}:
+        return 0.0, "0 / semaine"
+    if sous_phase == "Reprise":
+        return 1.0, "1 / semaine"
+    if sous_phase == "Stabilisation":
+        return 2.0, "2 / semaine"
+    return 1.0, "1 / semaine"
+
+
+_SURSEMIS_MOWING_BLOCKED_SUBPHASES = {"Germination", "Enracinement"}
+
+
 def _mowing_window_label(state: str) -> str:
     return _MOWING_WINDOW_LABELS.get(str(state or "").strip().lower(), "À éviter")
 
@@ -220,16 +241,29 @@ def _parse_history_timestamp(item: dict[str, Any], today: date) -> datetime:
     return datetime.combine(parsed_date, time(6, 0), tzinfo=timezone.utc)
 
 
+def _configured_zone_ids(context: DecisionContext) -> tuple[str, ...]:
+    config = context.config if isinstance(context.config, dict) else {}
+    raw_zone_ids = config.get("configured_zone_ids")
+    if not isinstance(raw_zone_ids, (list, tuple, set)):
+        return ()
+    return tuple(
+        str(zone_id).strip()
+        for zone_id in raw_zone_ids
+        if str(zone_id).strip()
+    )
+
+
 def _latest_watering_timestamp(context: DecisionContext) -> datetime:
     """Retourne l'horodatage du dernier arrosage détecté ou la date du jour."""
+    allowed_zone_ids = _configured_zone_ids(context)
     runtime_context = context.runtime_context if isinstance(context.runtime_context, dict) else {}
     last_execution = runtime_context.get("last_irrigation_execution")
-    if isinstance(last_execution, dict):
+    if isinstance(last_execution, dict) and _watering_item_matches_zones(last_execution, allowed_zone_ids):
         parsed = _parse_history_timestamp(last_execution, context.today)
         if parsed:
             return parsed
     for item in reversed(context.history):
-        if item.get("type") != "arrosage":
+        if item.get("type") != "arrosage" or not _watering_item_matches_zones(item, allowed_zone_ids):
             continue
         return _parse_history_timestamp(item, context.today)
     return datetime.combine(context.today, time(6, 0), tzinfo=timezone.utc)
@@ -264,10 +298,17 @@ def _mowing_cooldown_state(context: DecisionContext) -> tuple[bool, int]:
 
 
 def _has_recent_watering_history(context: DecisionContext) -> bool:
+    allowed_zone_ids = _configured_zone_ids(context)
     runtime_context = context.runtime_context if isinstance(context.runtime_context, dict) else {}
-    if isinstance(runtime_context.get("last_irrigation_execution"), dict):
+    last_execution = runtime_context.get("last_irrigation_execution")
+    if isinstance(last_execution, dict) and _watering_item_matches_zones(last_execution, allowed_zone_ids):
         return True
-    return any(isinstance(item, dict) and item.get("type") == "arrosage" for item in context.history)
+    return any(
+        isinstance(item, dict)
+        and item.get("type") == "arrosage"
+        and _watering_item_matches_zones(item, allowed_zone_ids)
+        for item in context.history
+    )
 
 
 def _watering_related_mowing_block(
@@ -378,17 +419,27 @@ def _machine_unavailable_detail(
     mower_is_charging = bool(mower_context.get("tondeuse_en_charge"))
 
     if not mower_is_connected:
-        return "offline", "Robot hors ligne: attendre qu'il redevienne joignable."
+        return "offline", "Robot hors ligne: attendre qu'elle redevienne joignable."
     if mower_is_charging:
-        return "charging", "Robot en charge: attendre qu'il soit prêt."
+        return "charging", "Robot en charge: attendre qu'elle soit prête."
     if mower_is_mowing or mower_reason_code == "mower_mowing":
         return "mowing", "Robot déjà en tonte: attendre la fin du cycle en cours."
     if mower_is_returning or mower_reason_code == "mower_returning":
-        return "returning", "Robot en retour station: attendre qu'il soit prêt."
+        return "returning", "Robot en retour station: attendre qu'elle soit prête."
+    if mower_reason_code == "mower_starting":
+        return "starting", "Robot en démarrage: attendre qu'elle soit prête."
+    if mower_reason_code == "mower_zoning":
+        return "zoning", "Robot en changement de zone: attendre qu'elle soit prête."
+    if mower_reason_code == "mower_searching_zone":
+        return "searching_zone", "Robot en recherche de zone: attendre qu'elle soit prête."
+    if mower_reason_code == "mower_escaped_digital_fence":
+        return "escaped_digital_fence", "Robot hors périmètre: intervention requise."
+    if mower_reason_code == "mower_rain_delayed":
+        return "rain_delayed", "Robot en pause pluie: attendre qu'elle soit prête."
     if mower_reason_code == "mower_unreliable":
         return "unreliable", "Robot instable: vérifie sa disponibilité avant de reprendre."
     if not mower_is_ready:
-        return "not_ready", "Robot indisponible: attendre qu'il soit prêt."
+        return "not_ready", "Robot indisponible: attendre qu'elle soit prête."
     return None
 
 
@@ -406,7 +457,7 @@ def _resolve_mowing_block(
         machine_detail = _machine_unavailable_detail(mower_context)
         if machine_detail is not None:
             detail_code, detail_label = machine_detail
-            return True, "machine_unavailable", "Robot indisponible: attendre qu'il soit prêt.", detail_code, detail_label
+            return True, "machine_unavailable", "Robot indisponible: attendre qu'elle soit prête.", detail_code, detail_label
 
     temperature = float(context.temperature or 0.0)
     if temperature < 8 or temperature > 30:
@@ -620,7 +671,14 @@ def _last_mowing_date(context: DecisionContext) -> date | None:
 def _mowing_spacing_min_days(
     phase_bundle: dict[str, Any],
 ) -> int:
-    """Politique métier actuelle: tondre un jour sur deux."""
+    """Espacement minimal entre deux tontes selon la phase métier."""
+    phase_dominante = str(phase_bundle.get("phase_dominante") or "")
+    sous_phase = str(phase_bundle.get("sous_phase") or "")
+    if phase_dominante == "Sursemis":
+        if sous_phase == "Reprise":
+            return 6
+        if sous_phase == "Stabilisation":
+            return 3
     return 2
 
 
@@ -640,18 +698,32 @@ def _project_next_mowing_date(
     reason_hint: str | None = None
 
     if reason_code in {"phase_sursemis", "phase_traitement", "phase_hivernage"}:
-        phase_end = phase_bundle.get("date_fin")
-        if phase_end:
+        phase_dominante = str(phase_bundle.get("phase_dominante") or "")
+        sous_phase = str(phase_bundle.get("sous_phase") or "")
+        phase_start = phase_bundle.get("date_action")
+        if phase_dominante == "Sursemis" and sous_phase in {"Germination", "Enracinement"} and phase_start:
             try:
-                phase_end_dt = datetime.combine(
-                    date.fromisoformat(str(phase_end)),
-                    time(6, 0),
-                    tzinfo=timezone.utc,
+                reprise_start_date = date.fromisoformat(str(phase_start)) + timedelta(days=25)
+                return (
+                    reprise_start_date.isoformat(),
+                    reprise_start_date.strftime("%d/%m/%Y"),
+                    f"sous_phase={sous_phase.lower()}",
                 )
-                anchor = phase_end_dt
-                reason_hint = f"phase={phase_bundle['phase_dominante']}"
             except ValueError:
                 anchor = None
+        else:
+            phase_end = phase_bundle.get("date_fin")
+            if phase_end:
+                try:
+                    phase_end_dt = datetime.combine(
+                        date.fromisoformat(str(phase_end)),
+                        time(6, 0),
+                        tzinfo=timezone.utc,
+                    )
+                    anchor = phase_end_dt
+                    reason_hint = f"phase={phase_bundle['phase_dominante']}"
+                except ValueError:
+                    anchor = None
     elif reason_code == "mowing_night":
         projected_date = context.today
         if context.hour_of_day is not None and context.hour_of_day >= 22:
@@ -682,6 +754,8 @@ def _project_next_mowing_date(
         anchor = _latest_watering_timestamp(context)
     elif reason_code == "rosee_persistante":
         anchor = _default_projection_anchor(context)
+    elif reason_code == "wet_grass":
+        anchor = _default_projection_anchor(context)
     elif reason_code == "stress_thermique":
         anchor = _default_projection_anchor(context) + timedelta(hours=24)
     elif reason_code in {"hauteur_trop_faible", "regle_tiers", "regle_tiers_impossible"}:
@@ -698,6 +772,17 @@ def _project_next_mowing_date(
     if projected.hour >= 18:
         projected += timedelta(days=1)
         projected = projected.replace(hour=6, minute=0, second=0, microsecond=0)
+
+    # `wet_grass` means "wait for the grass to dry", not "weather is bad for several days".
+    # Keep the public projection short and let future refreshes re-evaluate if humidity persists.
+    if reason_code == "wet_grass":
+        projected_date = projected.date()
+        if projected_date < context.today:
+            projected_date = context.today
+        max_short_projection = context.today + timedelta(days=1)
+        if projected_date > max_short_projection:
+            projected_date = max_short_projection
+        return projected_date.isoformat(), projected_date.strftime("%d/%m/%Y"), None
 
     forecast_offset_days, forecast_reasons = _mowing_projection_forecast_offset_days(context, phase_bundle)
     if forecast_offset_days > 0:
@@ -724,6 +809,12 @@ def _post_sursemis_bonus(age_days: int | None) -> float:
     if age_days <= 28:
         return 0.3
     if age_days <= 35:
+        return 0.1
+    if age_days <= 45:
+        return 0.3
+    if age_days <= 52:
+        return 0.2
+    if age_days <= 59:
         return 0.1
     return 0.0
 
@@ -834,7 +925,12 @@ def _select_mowing_block_reason(
     spacing_days = _mowing_spacing_min_days(phase_bundle)
 
     if phase_dominante == "Sursemis":
-        return "Phase Sursemis: tonte interdite pendant l'installation du gazon.", "phase_sursemis", False
+        if phase_bundle["sous_phase"] in _SURSEMIS_MOWING_BLOCKED_SUBPHASES:
+            return (
+                f"Sursemis / {phase_bundle['sous_phase']}: tonte interdite pendant l'installation du gazon.",
+                "phase_sursemis",
+                False,
+            )
     if phase_dominante in {"Traitement", "Hivernage"}:
         return f"Phase {phase_dominante}: mieux vaut différer la tonte.", f"phase_{phase_dominante.lower()}", False
 
@@ -878,12 +974,18 @@ def _select_mowing_block_reason(
                 )
             )
 
-    if phase_dominante in {"Sursemis", "Traitement", "Hivernage"}:
+    if phase_dominante in {"Traitement", "Hivernage"} or (
+        phase_dominante == "Sursemis" and phase_bundle.get("sous_phase") in _SURSEMIS_MOWING_BLOCKED_SUBPHASES
+    ):
         candidates.append(
             (
                 _MOWING_BLOCK_PRIORITIES["phase"],
                 f"phase_{phase_dominante.lower()}",
-                f"Phase {phase_dominante}: mieux vaut différer la tonte.",
+                (
+                    f"Sursemis / {phase_bundle['sous_phase']}: tonte interdite pendant l'installation du gazon."
+                    if phase_dominante == "Sursemis"
+                    else f"Phase {phase_dominante}: mieux vaut différer la tonte."
+                ),
                 False,
             )
         )
@@ -1149,9 +1251,17 @@ def build_mowing_bundle(
         temperature=context.temperature,
         etp=water_bundle["etp"],
     )
-    baseline_tonte_ok = score_tonte < 55 and score_stress < 70
+    phase_dominante = str(phase_bundle.get("phase_dominante") or "")
+    sous_phase = str(phase_bundle.get("sous_phase") or "")
+    if phase_dominante == "Sursemis" and sous_phase in {"Reprise", "Stabilisation"}:
+        baseline_tonte_ok = score_tonte < 65 and score_stress < 75
+    else:
+        baseline_tonte_ok = score_tonte < 55 and score_stress < 70
 
-    mowing_frequency_target_per_week, mowing_frequency_label = _seasonal_mowing_frequency(context.today.month)
+    mowing_frequency_target_per_week, mowing_frequency_label = _phase_adjusted_mowing_frequency(
+        phase_bundle,
+        context.today.month,
+    )
     height_recommendation = _recommended_mowing_height(context, phase_bundle, water_bundle, risk_bundle)
     target_height = float(height_recommendation["hauteur_tonte_recommandee_cm"] or 0.0)
     current_height = water_bundle["advanced_context"].get("hauteur_gazon")

@@ -158,8 +158,12 @@ def update_soil_balance(
         if previous_reserve is None:
             previous_reserve = base_reserve_mm(type_sol or state.get("type_sol"))
 
-    pluie = max(0.0, _to_float(pluie_mm) or 0.0)
-    arrosage = max(0.0, _to_float(arrosage_mm) or 0.0)
+    pluie_raw = max(0.0, _to_float(pluie_mm) or 0.0)
+    arrosage_raw = max(0.0, _to_float(arrosage_mm) or 0.0)
+    pluie_suspect = pluie_raw > 100.0
+    arrosage_suspect = arrosage_raw > 50.0
+    pluie = min(pluie_raw, 30.0) if pluie_suspect else pluie_raw
+    arrosage = min(arrosage_raw, 25.0) if arrosage_suspect else arrosage_raw
     etp = max(0.0, _to_float(etp_mm) or 0.0)
     delta = pluie + arrosage - etp
     reserve_mm = min(max(previous_reserve + delta, reserve_min_mm), reserve_max_mm)
@@ -174,6 +178,10 @@ def update_soil_balance(
         "reserve_mm": _round_half_up_1(reserve_mm),
         "type_sol": type_sol or state.get("type_sol"),
     }
+    if pluie_suspect:
+        entry["pluie_suspect"] = True
+    if arrosage_suspect:
+        entry["arrosage_suspect"] = True
     entry = {key: value for key, value in entry.items() if value not in (None, "", {}, [])}
 
     if ledger and ledger[-1].get("date") == today_str:

@@ -53,6 +53,25 @@ _SUFFIX_VALUE_PRECISIONS: tuple[tuple[str, int], ...] = (
 )
 
 
+_PUBLIC_MOWING_FACADE_KEYS: tuple[str, ...] = (
+    "tonte_autorisee",
+    "tonte_statut",
+    "niveau_action",
+    "action_possible",
+    "mowing_blocked",
+    "next_mowing_date",
+    "next_mowing_display",
+    "raison_blocage_tonte",
+    "raison_blocage_code",
+    "mowing_block_reason_code",
+    "mowing_block_reason_label",
+    "mowing_window_reason",
+    "mowing_machine_unavailable_detail",
+    "mowing_machine_unavailable_label",
+    "assistant",
+)
+
+
 def _round_precision_for_key(key: str | None) -> int | None:
     if not key:
         return None
@@ -173,6 +192,19 @@ class GazonEntityBase(CoordinatorEntity):
 
     def _snapshot_data(self) -> dict[str, object]:
         return _coordinator_snapshot(self.coordinator)
+
+    def _public_mowing_facade(self) -> dict[str, object]:
+        snapshot = self._snapshot_data()
+        facade = snapshot.get("_public_mowing_facade")
+        if isinstance(facade, dict) and facade:
+            return facade
+        return {}
+
+    def _public_mowing_value(self, key: str, default=None):
+        facade = self._public_mowing_facade()
+        if key in facade and facade.get(key) is not None:
+            return _normalized_public_value(facade.get(key), key, default)
+        return default
 
     def _decision_value(self, key: str, default=None):
         result = self.decision_result

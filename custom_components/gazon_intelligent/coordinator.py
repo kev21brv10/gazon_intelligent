@@ -4,6 +4,7 @@ from datetime import date, timedelta
 from datetime import datetime, timezone
 import asyncio
 import logging
+from collections.abc import Mapping
 from typing import Any
 from uuid import uuid4
 
@@ -58,14 +59,17 @@ from .const import (
     WATERING_STAGE_NORMAL,
     WATERING_STRATEGY_ADULT_DEEP,
     WATERING_STRATEGY_SEMIS_FREQUENT,
+    PLUIE_SOURCE_INDISPONIBLE,
+    PLUIE_SOURCE_NON_DISPONIBLE,
 )
 from .decision_models import DecisionResult
 from .gazon_brain import GazonBrain
+from .decision_risk import compute_fungal_risk as _compute_fungal_risk
 from .memory import compute_application_state
 from .mower_adapter import build_mower_context, derive_related_entity_id
 from .mower_coordination import build_mower_coordination_context
 from .entity_ids import public_entity_id, resolve_entry_instance_slug
-from .shared_state import get_shared_state
+from .shared_state import get_shared_state, resolve_effective_config
 from .const import SHARED_WEATHER_CONFIG_KEYS
 from .water import compute_recent_watering_mm, _zone_session_surface_mm, _zone_session_total_mm
 from .weather_adapter import WeatherAdapter
@@ -73,6 +77,18 @@ from .watering_plan import WateringPlan, build_watering_plan, normalize_existing
 from .watering_policy import resolve_semis_stage_program
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _clean_empty_attrs(attrs: dict[str, Any]) -> dict[str, Any] | None:
+    """Retire les valeurs vides (None, '', {}, []) d'un dict d'attributs.
+
+    Helper commun utilisé par get_used_entities_attributes et partout où
+    on nettoie des attributs avant de les exposer à Home Assistant.
+    Identique à _clean_public_attrs dans sensor.py — source unique de vérité.
+    """
+    clean = {key: value for key, value in attrs.items() if value not in (None, "", {}, [])}
+    return clean or None
+
 
 AUTO_IRRIGATION_AUTO_SOURCES = {
     "auto_irrigation",
@@ -182,6 +198,18 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "feedback_observation",
     "assistant",
     "intervention_recommendation",
+    # LOT A — santé capteurs
+    "sensor_health",
+    # LOT B — urgence hydrique malgré blocage
+    "irrigation_blocked_but_critical",
+    "critical_deficit_mm",
+    "critical_irrigation_reason",
+    # LOT E — risque fongique
+    "fungal_risk_level",
+    "fungal_risk_score",
+    "fungal_risk_reasons",
+    "fungal_risk_evening_block",
+    "fungal_risk_reduce_watering",
 )
 
 
@@ -460,18 +488,27 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         forecast_pluie_3j = forecast_summary.get("forecast_pluie_3j")
         forecast_probabilite_max_3j = forecast_summary.get("forecast_probabilite_max_3j")
         sun_context = self._get_sun_context()
+        pluie_24h_sensor = self._validate_sensor_value(pluie_24h_sensor, "pluie")
+        pluie_demain_sensor = self._validate_sensor_value(pluie_demain_sensor, "pluie")
         pluie_24h, pluie_24h_source, pluie_demain, pluie_demain_source = self._resolve_precipitation_inputs(
             pluie_24h_sensor=pluie_24h_sensor,
             pluie_demain_sensor=pluie_demain_sensor,
             forecast_summary=forecast_summary,
         )
-        temperature, temperature_source, temperature_reference_hydrique = self._resolve_temperature_inputs(
+        raw_temperature, temperature_source, temperature_reference_hydrique = self._resolve_temperature_inputs(
             weather_profile=weather_profile,
             forecast_summary=forecast_summary,
         )
-        etp_capteur = self._get_float_state(self._get_conf(CONF_CAPTEUR_ETP))
+        temperature = self._validate_sensor_value(raw_temperature, "temperature")
+        if temperature is None and raw_temperature is not None:
+            temperature_source = "non disponible"
+        etp_capteur = self._validate_sensor_value(
+            self._get_float_state(self._get_conf(CONF_CAPTEUR_ETP)), "etp"
+        )
         et0_source = "capteur" if etp_capteur is not None else "fallback_temperature"
-        humidite = self._get_float_state(self._get_conf(CONF_CAPTEUR_HUMIDITE))
+        humidite = self._validate_sensor_value(
+            self._get_float_state(self._get_conf(CONF_CAPTEUR_HUMIDITE)), "humidite"
+        )
         if humidite is None:
             humidite = weather_profile.get("weather_humidity")
         humidite_sol = self._get_float_state(self._get_conf(CONF_CAPTEUR_HUMIDITE_SOL))
@@ -531,6 +568,23 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             runtime_context=runtime_context,
         )
         snapshot.update(runtime_context)
+        # LOT A — santé capteurs (calculé ici pour garantir la présence dans coordinator.data)
+        snapshot["sensor_health"] = {
+            "temperature_valid": temperature is not None,
+            "pluie_valid": pluie_24h is not None or pluie_24h_sensor is None,
+            "etp_valid": etp_capteur is not None or self._get_conf(CONF_CAPTEUR_ETP) is None,
+            "humidity_valid": humidite is not None or self._get_conf(CONF_CAPTEUR_HUMIDITE) is None,
+        }
+        # LOT E — risque fongique (calculé ici pour garantir la présence dans coordinator.data)
+        _fungal = _compute_fungal_risk(
+            temperature=temperature,
+            humidite=humidite,
+            rosee=rosee,
+            pluie_24h=pluie_24h,
+            pluie_demain=pluie_demain,
+            hour_of_day=current_dt.hour,
+        )
+        snapshot.update(_fungal)
         if runtime_context.get("active_irrigation_session") is None:
             await self._finalize_pending_irrigation_user_action(
                 execution=runtime_context.get("last_irrigation_execution"),
@@ -682,6 +736,41 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     @soil_balance.setter
     def soil_balance(self, value: dict[str, Any]) -> None:
         self.brain.soil_balance = value
+
+    def _validate_sensor_value(self, value: float | None, sensor_type: str) -> float | None:
+        """Valide une valeur capteur et rejette les aberrations."""
+        if value is None:
+            return None
+        if sensor_type == "temperature":
+            if value < -20 or value > 55:
+                _LOGGER.warning("Valeur température aberrante rejetée: %s°C", value)
+                return None
+        elif sensor_type == "pluie":
+            if value < 0 or value > 150:
+                _LOGGER.warning("Valeur pluie aberrante rejetée: %s mm", value)
+                return None
+        elif sensor_type == "etp":
+            if value < 0 or value > 15:
+                _LOGGER.warning("Valeur ETP aberrante rejetée: %s mm", value)
+                return None
+        elif sensor_type == "humidite":
+            if value < 0 or value > 100:
+                _LOGGER.warning("Valeur humidité aberrante rejetée: %s%%", value)
+                return None
+        return value
+
+    def _check_sensor_stuck(self, key: str, value: float | None) -> bool:
+        """Détecte un capteur figé (3 dernières valeurs identiques et non-None)."""
+        if not hasattr(self, "_sensor_history"):
+            self._sensor_history: dict[str, list] = {}
+        history = self._sensor_history.setdefault(key, [])
+        if value is not None:
+            history.append(value)
+        if len(history) > 5:
+            history.pop(0)
+        if len(history) >= 3 and all(v == history[-1] for v in history[-3:]) and history[-1] is not None:
+            return True
+        return False
 
     def _get_float_state(self, entity_id: str | None) -> float | None:
         """Retourne l'état float d'une entité Home Assistant."""
@@ -942,6 +1031,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _build_runtime_context(self) -> dict[str, Any]:
         semis_progress = self._semis_cycle_progress()
         return {
+            "mad_dynamic_enabled": True,
             "active_irrigation_session": self._get_active_irrigation_session(),
             "last_irrigation_execution": self._runtime_state.get("last_irrigation_execution"),
             "mowing_cooldown_after_watering_minutes": self.mowing_cooldown_after_watering_minutes,
@@ -1492,8 +1582,10 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
 
     def _clear_watering_session(self) -> None:
-        self._cancel_watering_session_finalize()
-        self._watering_session = None
+        try:
+            self._cancel_watering_session_finalize()
+        finally:
+            self._watering_session = None
 
     def _cancel_watering_session_finalize(self) -> None:
         if self._unsub_watering_session_finalize:
@@ -1634,7 +1726,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         plan_state = self.hass.states.get(plan_arrosage_entity_id)
         if plan_state is None:
             return None
-        attributes = plan_state.attributes if isinstance(plan_state.attributes, dict) else {}
+        attributes = plan_state.attributes if isinstance(plan_state.attributes, Mapping) else {}
         plan = normalize_existing_plan(attributes)
         if plan is None:
             return None
@@ -1773,19 +1865,37 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _serialized_runtime_state(self) -> dict[str, Any]:
         self._ensure_irrigation_runtime_bootstrap()
+        # Build lightweight persisted session
+        active_session = self._runtime_state.get("active_irrigation_session")
+        persisted_watering_session = None
+        if isinstance(active_session, dict):
+            zones_raw = active_session.get("zones")
+            zone_ids: list[str] = []
+            if isinstance(zones_raw, dict):
+                zone_ids = list(zones_raw.keys())
+            elif isinstance(zones_raw, list):
+                zone_ids = [z.get("entity_id") or z.get("zone") or "" for z in zones_raw if isinstance(z, dict)]
+            persisted_watering_session = {
+                "started_at": self._serialize_runtime_value(active_session.get("started_at")),
+                "zones": zone_ids,
+                "source": active_session.get("source"),
+            }
+        last_execution = self._runtime_state.get("last_irrigation_execution")
+        last_watering_completed_at = None
+        if isinstance(last_execution, dict):
+            last_watering_completed_at = last_execution.get("ended_at") or last_execution.get("completed_at")
         return {
-            "active_irrigation_session": self._serialize_runtime_value(
-                self._runtime_state.get("active_irrigation_session")
-            ),
-            "last_irrigation_execution": self._serialize_runtime_value(
-                self._runtime_state.get("last_irrigation_execution")
-            ),
+            "active_irrigation_session": self._serialize_runtime_value(active_session),
+            "last_irrigation_execution": self._serialize_runtime_value(last_execution),
             "last_auto_irrigation_reason": self._serialize_runtime_value(
                 self._runtime_state.get("last_auto_irrigation_reason")
             ),
             "auto_irrigation_safety_lock": bool(
                 self._runtime_state.get("auto_irrigation_safety_lock")
             ),
+            "persisted_watering_session": persisted_watering_session,
+            "last_irrigation_execution_persisted": self._serialize_runtime_value(last_execution),
+            "last_watering_completed_at": self._serialize_runtime_value(last_watering_completed_at),
         }
 
     def _serialize_runtime_value(self, value: Any) -> Any:
@@ -1814,7 +1924,18 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         active_session = self._deserialize_active_irrigation_session(
             runtime.get("active_irrigation_session")
         )
-        last_execution = runtime.get("last_irrigation_execution")
+        # Restore persisted watering session if recent (< 4h)
+        if active_session is None:
+            persisted = runtime.get("persisted_watering_session")
+            if isinstance(persisted, dict):
+                started_at = self._parse_datetime_value(persisted.get("started_at"))
+                if started_at is not None:
+                    age_hours = (self._current_utc_datetime() - started_at).total_seconds() / 3600.0
+                    if age_hours <= 4.0:
+                        active_session = {"started_at": started_at, "source": persisted.get("source"), "zones": persisted.get("zones", [])}
+                    else:
+                        _LOGGER.warning("Session persistée ignorée: trop ancienne (%.1fh)", age_hours)
+        last_execution = runtime.get("last_irrigation_execution") or runtime.get("last_irrigation_execution_persisted")
         if isinstance(last_execution, dict):
             last_execution = self._serialize_runtime_value(last_execution)
         else:
@@ -1966,7 +2087,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             hass = getattr(self, "hass", None)
             states = getattr(hass, "states", None)
             plan_state = states.get(plan_arrosage_entity_id) if states is not None else None
-            attrs = plan_state.attributes if plan_state is not None and isinstance(plan_state.attributes, dict) else {}
+            attrs = plan_state.attributes if plan_state is not None and isinstance(plan_state.attributes, Mapping) else {}
             normalized = normalize_existing_plan(attrs)
             if normalized is not None:
                 return normalized
@@ -1982,8 +2103,8 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         zones_cfg = [(entity_id, rate_mm_min * 60.0) for entity_id, rate_mm_min in self._iter_zones_with_rate()]
         if not zones_cfg:
             return None
-        passages = self.data.get("watering_passages") if isinstance(self.data, dict) else 1
-        pause_minutes = self.data.get("watering_pause_minutes") if isinstance(self.data, dict) else 0
+        passages = self.data.get("watering_passages") if isinstance(self.data, Mapping) else 1
+        pause_minutes = self.data.get("watering_pause_minutes") if isinstance(self.data, Mapping) else 0
         try:
             passages = max(1, int(passages or 1))
         except (TypeError, ValueError):
@@ -2087,8 +2208,13 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _should_launch_auto_irrigation(self, snapshot: dict[str, Any]) -> tuple[bool, str]:
         if self._auto_irrigation_safety_lock_active():
             return False, "safety_lock"
+        if not self._runtime_state.get("auto_irrigation_bootstrap_complete"):
+            return False, "startup_guard"
         if not self.auto_irrigation_enabled:
             return False, "auto_irrigation_disabled"
+        memory = getattr(self, "memory", {}) or {}
+        if isinstance(memory, dict) and memory.get("auto_irrigation_user_confirmed") is False:
+            return False, "user_confirmation_required"
 
         objectif_mm = float(snapshot.get("objectif_mm") or 0.0)
         if objectif_mm <= 0:
@@ -2096,7 +2222,19 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not bool(snapshot.get("arrosage_recommande")):
             return False, "not_recommended"
 
+        # Blocages explicites : type_arrosage bloqué, irrigation_blocked, tondeuse
         type_arrosage = str(snapshot.get("type_arrosage") or "").strip().lower()
+        if (
+            type_arrosage == "bloque"
+            or bool(snapshot.get("irrigation_blocked"))
+            or bool(snapshot.get("watering_blocked_by_mower"))
+            or snapshot.get("block_reason") is not None
+        ):
+            return False, "irrigation_blocked"
+        if not bool(snapshot.get("arrosage_auto_autorise")):
+            return False, "auto_not_allowed"
+        if not bool(snapshot.get("irrigation_execution_allowed", True)):
+            return False, "execution_not_allowed"
         post_status = str(snapshot.get("application_post_watering_status") or "").strip().lower()
         post_application_auto_ready = (
             type_arrosage == "application_technique_auto"
@@ -3497,12 +3635,15 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 raise HomeAssistantError("L'arrosage automatique est verrouillé après une erreur critique.")
             if source in AUTO_IRRIGATION_AUTO_SOURCES and not self.auto_irrigation_enabled:
                 raise HomeAssistantError("L'arrosage automatique est désactivé.")
+            memory = getattr(self, "memory", {}) or {}
+            if source in AUTO_IRRIGATION_AUTO_SOURCES and isinstance(memory, dict) and memory.get("auto_irrigation_user_confirmed") is False:
+                raise HomeAssistantError("L'arrosage automatique n'a pas été activé explicitement par l'utilisateur.")
             if self._watering_session_active():
                 raise HomeAssistantError("Un arrosage est déjà en cours.")
-            if self._auto_irrigation_task and not self._auto_irrigation_task.done():
+            if getattr(self, "_auto_irrigation_task", None) and not self._auto_irrigation_task.done():
                 raise HomeAssistantError("Un arrosage automatique est déjà en cours.")
             if (
-                self._auto_irrigation_scheduler_task
+                getattr(self, "_auto_irrigation_scheduler_task", None)
                 and not self._auto_irrigation_scheduler_task.done()
                 and source not in AUTO_IRRIGATION_AUTO_SOURCES
             ):
@@ -3607,13 +3748,19 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._auto_irrigation_task = None
 
     def _get_conf(self, key: str) -> Any:
-        """Récupère la valeur de configuration (options > data)."""
-        shared_state = getattr(self, "shared_state", None)
-        if shared_state is not None and key in SHARED_WEATHER_CONFIG_KEYS:
-            shared_value = shared_state.get_conf(key)
-            if shared_value not in (None, "", [], {}):
-                return shared_value
-        return self.entry.options.get(key, self.entry.data.get(key))
+        """Récupère la valeur effective (options > partagé > data > défaut)."""
+        default = DEFAULT_TYPE_SOL if key == CONF_TYPE_SOL else None
+        try:
+            entry = self.hass.config_entries.async_get_entry(self.entry.entry_id) or self.entry
+        except AttributeError:
+            entry = self.entry
+        resolved = resolve_effective_config(
+            entry,
+            key,
+            shared_state=getattr(self, "shared_state", None),
+            default=default,
+        )
+        return resolved.get("effective_value")
 
     async def async_update_config(self, updates: dict[str, Any]) -> None:
         """Met à jour les options de config en gardant la valeur courante comme base."""
@@ -3652,8 +3799,8 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         pluie_demain_source = None
         if self.data:
             pluie_demain_source = self.data.get("pluie_demain_source")
-            if pluie_demain_source == "indisponible":
-                pluie_demain_source = "non disponible"
+            if pluie_demain_source == PLUIE_SOURCE_INDISPONIBLE:
+                pluie_demain_source = PLUIE_SOURCE_NON_DISPONIBLE
         phase_dominante_source = None
         if self.data:
             phase_dominante_source = self.data.get("phase_dominante_source")
@@ -3664,10 +3811,10 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "pluie_demain_source": pluie_demain_source,
             "phase_dominante_source": phase_dominante_source,
         }
-        clean = {key: value for key, value in attrs.items() if value not in (None, "", {}, [])}
+        clean = _clean_empty_attrs(attrs) or {}
         configuration = clean.get("configuration")
         if isinstance(configuration, dict):
-            configuration = {k: v for k, v in configuration.items() if v not in (None, "", {}, [])}
+            configuration = _clean_empty_attrs(configuration)
             if configuration:
                 clean["configuration"] = configuration
             else:
@@ -3680,10 +3827,8 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if shared_state is not None:
             await shared_state.async_load()
         data = await self._store.async_load() or {}
-        try:
-            self.brain.load_state(data, shared_products=shared_state.products if shared_state is not None else None)
-        except TypeError:
-            self.brain.load_state(data)
+        shared_products = shared_state.products if shared_state is not None else None
+        self.brain.load_state(data, shared_products=shared_products)
         if shared_state is not None and not shared_state.shared_config:
             await shared_state.async_bootstrap_from_entry(self.entry)
         if shared_state is not None:

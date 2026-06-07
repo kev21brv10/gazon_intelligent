@@ -1,4 +1,5 @@
 set_mode:
+  description: "Choisit un mode (Sursemis, Traitement, etc.) et met à jour les calculs du gazon ciblé."
   target:
     entity:
       integration: gazon_intelligent
@@ -20,22 +21,25 @@ set_mode:
             - Hivernage
 
 set_date_action:
+  description: "Indique la date réelle de l'action pour le gazon ciblé. Formats acceptés: JJ/MM/AAAA ou YYYY-MM-DD. Si vide, la date du jour est utilisée."
   target:
     entity:
       integration: gazon_intelligent
   fields:
     date_action:
       required: false
-      example: "2026-03-12"
+      example: "15/05/2026"
       selector:
         text: {}
 
 reset_mode:
+  description: "Réinitialise le gazon ciblé en mode Normal."
   target:
     entity:
       integration: gazon_intelligent
 
 start_manual_irrigation:
+  description: "Déclenche un arrosage manuel et indique l'eau à apporter en mm sur le gazon ciblé."
   target:
     entity:
       integration: gazon_intelligent
@@ -51,6 +55,7 @@ start_manual_irrigation:
           unit_of_measurement: mm
 
 start_auto_irrigation:
+  description: "Lance chaque zone à la suite avec le débit configuré. Si l'eau à apporter est vide, l'intégration utilise la valeur calculée automatiquement."
   target:
     entity:
       integration: gazon_intelligent
@@ -73,12 +78,13 @@ start_auto_irrigation:
         text: {}
 
 start_application_irrigation:
+  description: "Déclenche un arrosage contrôlé post-application sans piloter les zones directement."
   target:
     entity:
       integration: gazon_intelligent
 
 declare_intervention:
-  description: "Déclare une intervention réelle. Les réglages du produit se configurent dans \"Enregistrer un produit\" ; ici, il suffit de choisir le produit déjà enregistré, la date, la zone et une note si besoin. Si plusieurs produits existent et qu'aucun produit explicite n'est fourni, l'intégration utilise la sélection courante de l'UI ou renvoie une erreur claire."
+  description: "Déclare une intervention réelle. Les réglages du produit se configurent dans \"Enregistrer un produit\" ; ici, il suffit de choisir le produit déjà enregistré, la date, la zone et une note si besoin. Si plusieurs produits existent et qu'aucun produit explicite n'est fourni, l'intégration peut utiliser la sélection courante de l'UI ou renvoyer une erreur claire."
   target:
     entity:
       integration: gazon_intelligent
@@ -98,6 +104,7 @@ declare_intervention:
             - Hivernage
     date_action:
       required: false
+      example: "15/05/2026"
       selector:
         text: {}
     produit_id:
@@ -271,6 +278,7 @@ register_product:
           unit_of_measurement: "°C"
 
 remove_product:
+  description: "Retire un produit de la base locale."
   target:
     entity:
       integration: gazon_intelligent
@@ -281,22 +289,29 @@ remove_product:
         text: {}
 
 declare_mowing:
-  target:
-    entity:
-      integration: gazon_intelligent
+  description: "Enregistre une tonte dans l'historique du gazon ciblé. Choisir l'entité de tonte autorisée du gazon concerné."
   fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          integration: gazon_intelligent
+          domain: binary_sensor
     date_action:
       required: false
+      example: "15/05/2026"
       selector:
         text: {}
 
 declare_watering:
+  description: "Enregistre un arrosage dans l'historique du gazon ciblé."
   target:
     entity:
       integration: gazon_intelligent
   fields:
     date_action:
       required: false
+      example: "15/05/2026"
       selector:
         text: {}
     objectif_mm:
