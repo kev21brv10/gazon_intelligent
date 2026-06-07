@@ -87,7 +87,11 @@ _MOWING_BUNDLE_CORE_KEYS = (
     "mowing_block_reason_label",
     "mowing_cooldown_remaining_minutes",
     "mowing_post_application_active",
+    "mowing_is_overdue",
+    "mowing_overdue_days",
+    "mowing_overdue_factor",
 )
+_OVERDUE_SOFT_OVERRIDE_CODES = {"conditions_defavorables", "stress_thermique"}
 
 
 def _mowing_height_settings(context: DecisionContext) -> tuple[float, float, float]:
@@ -666,6 +670,28 @@ def _last_mowing_date(context: DecisionContext) -> date | None:
         if latest is None or mowing_date > latest:
             latest = mowing_date
     return latest
+
+
+def _mowing_overdue_state(
+    context: DecisionContext,
+    phase_bundle: dict[str, Any],
+) -> tuple[bool, float, int]:
+    """Retourne (is_overdue, overdue_factor, days_since_last_mowing).
+
+    is_overdue est vrai si le délai depuis la dernière tonte dépasse 1,5× l'intervalle
+    cible calculé depuis la fréquence saisonnière/phase.
+    Retourne (False, 0.0, 0) si la fréquence cible est nulle ou pas de tonte connue.
+    """
+    frequency, _ = _phase_adjusted_mowing_frequency(phase_bundle, context.today.month)
+    if frequency <= 0:
+        return False, 0.0, 0
+    last_mowing = _last_mowing_date(context)
+    if last_mowing is None:
+        return False, 0.0, 0
+    interval_days = 7.0 / frequency
+    days_since = max((context.today - last_mowing).days, 0)
+    overdue_factor = days_since / interval_days
+    return overdue_factor >= 1.5, round(overdue_factor, 2), days_since
 
 
 def _mowing_spacing_min_days(
@@ -1396,7 +1422,14 @@ def build_mowing_bundle(
         "watering_cooldown",
     }
     soil_wet_is_permssive = reason_code == "soil_wet" and _has_recent_watering_history(context)
-    tonte_ok = baseline_tonte_ok and not mowing_window_blocked_by_schedule and (
+
+    mowing_is_overdue, overdue_factor, overdue_days = _mowing_overdue_state(context, phase_bundle)
+    overdue_relaxed_baseline = False
+    if mowing_is_overdue and reason_code in _OVERDUE_SOFT_OVERRIDE_CODES:
+        extended_threshold = 65 if overdue_factor < 2.0 else 70
+        overdue_relaxed_baseline = score_tonte < extended_threshold and score_stress < 70
+
+    tonte_ok = (baseline_tonte_ok or overdue_relaxed_baseline) and not mowing_window_blocked_by_schedule and (
         reason_code not in agronomic_block_codes or soil_wet_is_permssive
     )
     if reason is None:
@@ -1410,8 +1443,22 @@ def build_mowing_bundle(
         reason_code,
     )
 
-    if not tonte_ok and next_mowing_display:
-        reason = f"{reason} Prochaine tonte estimée le {next_mowing_display}."
+    if mowing_is_overdue and mowing_frequency_target_per_week > 0:
+        interval_days_display = round(7.0 / mowing_frequency_target_per_week, 1)
+        overdue_prefix = (
+            f"Retard de tonte: {overdue_days} j depuis la dernière"
+            f" (intervalle cible: {interval_days_display:.1f} j). "
+        )
+        if tonte_ok:
+            reason = overdue_prefix + "Tonte recommandée."
+        else:
+            base = reason or ""
+            if next_mowing_display:
+                base = f"{base} Prochaine tonte estimée le {next_mowing_display}."
+            reason = overdue_prefix + base.lstrip()
+    else:
+        if not tonte_ok and next_mowing_display:
+            reason = f"{reason} Prochaine tonte estimée le {next_mowing_display}."
 
     tonte_statut = _compute_mowing_status(
         phase_bundle=phase_bundle,
@@ -1454,6 +1501,9 @@ def build_mowing_bundle(
     bundle["mowing_machine_unavailable_label"] = mowing_machine_unavailable_label
     bundle["mowing_cooldown_remaining_minutes"] = cooldown_remaining_minutes
     bundle["mowing_post_application_active"] = post_application_active
+    bundle["mowing_is_overdue"] = mowing_is_overdue
+    bundle["mowing_overdue_days"] = overdue_days
+    bundle["mowing_overdue_factor"] = overdue_factor
     mower_context = context.mower_context if isinstance(context.mower_context, dict) else {}
     if mower_context:
         bundle.update(
