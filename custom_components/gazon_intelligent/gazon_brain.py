@@ -27,6 +27,7 @@ from .memory import (
 from .phases import phase_duration_days
 from .soil_balance import normalize_soil_balance_state, update_soil_balance
 from .water import compute_etp, compute_recent_watering_mm, build_watering_session_summary
+from .decision_risk import compute_fungal_risk
 
 
 class GazonBrain:
@@ -961,6 +962,15 @@ class GazonBrain:
         self.memory["hauteur_tonte_recommandee_cm"] = snapshot.get("hauteur_tonte_recommandee_cm")
         self.memory["hauteur_tonte_recommandee_date"] = today.isoformat()
         self.memory["catalogue_produits"] = len(self.products)
+        fungal_risk = compute_fungal_risk(
+            temperature=temperature,
+            humidite=humidite,
+            rosee=rosee,
+            pluie_24h=pluie_24h,
+            pluie_demain=pluie_demain,
+            hour_of_day=hour_of_day if hour_of_day is not None else 12,
+        )
+        snapshot.update(fungal_risk)
         snapshot["assistant"] = build_assistant_decision(snapshot)
         snapshot["intervention_recommendation"] = build_intervention_recommendation(
             today=today,

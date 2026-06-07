@@ -15,7 +15,7 @@ from homeassistant.util import dt as dt_util
 
 PHASE_DURATIONS_DAYS: dict[str, int] = {
     "Normal": 0,
-    "Sursemis": 21,
+    "Sursemis": 45,
     "Traitement": 2,
     "Fertilisation": 2,
     "Biostimulant": 1,
@@ -37,9 +37,10 @@ PHASE_PRIORITIES: dict[str, int] = {
 
 SUBPHASE_RULES: dict[str, list[tuple[int, str]]] = {
     "Sursemis": [
-        (7, "Germination"),
-        (14, "Enracinement"),
-        (999, "Reprise"),
+        (10, "Germination"),
+        (24, "Enracinement"),
+        (34, "Reprise"),
+        (999, "Stabilisation"),
     ],
     "Traitement": [
         (1, "Application"),
@@ -191,18 +192,33 @@ def compute_subphase(
     progression = 0.0
     if date_debut is not None:
         age_jours = max((today - date_debut).days, 0)
-    if date_debut is not None and date_fin is not None:
-        total = max((date_fin - date_debut).days + 1, 1)
-        start_dt = datetime.combine(date_debut, datetime.min.time(), tzinfo=now.tzinfo)
-        elapsed_days = max((now - start_dt).total_seconds(), 0.0) / 86400.0
-        progression = round(max(0.0, min(100.0, (elapsed_days / total) * 100.0)), 1)
 
     rules = SUBPHASE_RULES.get(phase_dominante, [(999, phase_dominante)])
     sous_phase = rules[-1][1]
+    subphase_start_day = 0
+    subphase_end_day = rules[-1][0]
+    previous_limit = -1
     for limit, label in rules:
         if age_jours <= limit:
             sous_phase = label
+            subphase_start_day = previous_limit + 1
+            subphase_end_day = limit
             break
+        previous_limit = limit
+
+    if date_debut is not None:
+        subphase_start_date = date_debut + timedelta(days=subphase_start_day)
+        subphase_duration_days = max((subphase_end_day - subphase_start_day) + 1, 1)
+        start_dt = datetime.combine(
+            subphase_start_date,
+            datetime.min.time(),
+            tzinfo=now.tzinfo,
+        )
+        elapsed_days = max((now - start_dt).total_seconds(), 0.0) / 86400.0
+        progression = round(
+            max(0.0, min(100.0, (elapsed_days / subphase_duration_days) * 100.0)),
+            1,
+        )
 
     return {
         "sous_phase": sous_phase,

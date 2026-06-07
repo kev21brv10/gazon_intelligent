@@ -50,6 +50,24 @@ def _safe_progression(value: Any) -> float:
 
 
 def build_phase_bundle(context: DecisionContext) -> dict[str, Any]:
+    memory = context.memory if isinstance(context.memory, dict) else {}
+    phase_override = memory.get("phase_override") if isinstance(memory, dict) else None
+    if isinstance(phase_override, dict):
+        override_phase = _safe_phase_name(phase_override.get("phase"))
+        if override_phase == "Normal":
+            return {
+                "phase_dominante": "Normal",
+                "phase_dominante_source": "manual_override",
+                "date_action": None,
+                "date_fin": None,
+                "phase_age_days": 0,
+                "sous_phase": "Normal",
+                "sous_phase_detail": "Normal / Normal",
+                "sous_phase_age_days": 0,
+                "sous_phase_progression": 0.0,
+                "jours_restants": 0,
+            }
+
     dominant = compute_dominant_phase(
         context.history,
         today=context.today,

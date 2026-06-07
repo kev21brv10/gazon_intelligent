@@ -150,6 +150,14 @@ class _FakeStates:
 
 
 @dataclass
+class _FakeSharedState:
+    shared_config: dict[str, object] = field(default_factory=dict)
+
+    def get_conf(self, key: str) -> object | None:
+        return self.shared_config.get(key)
+
+
+@dataclass
 class _FakeHass:
     states: _FakeStates
 
@@ -188,7 +196,13 @@ def _build_coordinator() -> object:
             "zone_5": None,
         }
         )
-    coord.brain = types.SimpleNamespace(memory={}, last_result=None)
+    coord.brain = types.SimpleNamespace(
+        memory={
+            "auto_irrigation_enabled": True,
+            "auto_irrigation_user_confirmed": True,
+        },
+        last_result=None,
+    )
     coord._watering_session = None
     coord._unsub_watering_session_finalize = None
     coord._zone_tracking_suspended = 0
@@ -197,6 +211,7 @@ def _build_coordinator() -> object:
         "last_irrigation_execution": None,
         "last_auto_irrigation_reason": None,
         "auto_irrigation_safety_lock": False,
+        "auto_irrigation_bootstrap_complete": True,
     }
     return coord
 
@@ -230,7 +245,10 @@ def _build_runtime_ready_coordinator(
     coord.brain.history = []
     coord.brain.mode = "Normal"
     coord.brain.date_action = None
-    coord.memory = {"auto_irrigation_enabled": True}
+    coord.memory = {
+        "auto_irrigation_enabled": True,
+        "auto_irrigation_user_confirmed": True,
+    }
     coord.data = {
         "objectif_mm": float((plan_attrs or {}).get("objective_mm") or 1.5),
         "watering_passages": int((plan_attrs or {}).get("passages") or 1),
@@ -275,6 +293,58 @@ def _build_runtime_ready_coordinator(
 
 
 class WateringSessionMonitoringTests(unittest.TestCase):
+    def test_get_conf_prefers_local_option_over_shared_state(self) -> None:
+        coordinator = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coordinator.entry = _FakeEntry(
+            data={"capteur_temperature": "sensor.temp_data"},
+            options={"capteur_temperature": "sensor.temp_locale"},
+        )
+        coordinator.shared_state = _FakeSharedState(
+            {"capteur_temperature": "sensor.temp_partagee"}
+        )
+
+        value = coordinator_mod.GazonIntelligentCoordinator._get_conf(
+            coordinator,
+            "capteur_temperature",
+        )
+
+        self.assertEqual(value, "sensor.temp_locale")
+
+    def test_get_conf_uses_shared_state_as_fallback_before_entry_data(self) -> None:
+        coordinator = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coordinator.entry = _FakeEntry(
+            data={"entite_meteo": "weather.data"},
+            options={},
+        )
+        coordinator.shared_state = _FakeSharedState({"entite_meteo": "weather.partagee"})
+
+        value = coordinator_mod.GazonIntelligentCoordinator._get_conf(
+            coordinator,
+            "entite_meteo",
+        )
+
+        self.assertEqual(value, "weather.partagee")
+
+    def test_get_conf_falls_back_to_entry_data_then_default(self) -> None:
+        coordinator = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coordinator.entry = _FakeEntry(
+            data={"capteur_temperature": "sensor.temp_data"},
+            options={},
+        )
+        coordinator.shared_state = _FakeSharedState({})
+
+        self.assertEqual(
+            coordinator_mod.GazonIntelligentCoordinator._get_conf(
+                coordinator,
+                "capteur_temperature",
+            ),
+            "sensor.temp_data",
+        )
+        self.assertEqual(
+            coordinator_mod.GazonIntelligentCoordinator._get_conf(coordinator, "type_sol"),
+            "limoneux",
+        )
+
     def test_short_impulse_session_is_cleared_on_finalize(self) -> None:
         coordinator = _build_coordinator()
         start = datetime(2026, 3, 18, 6, 0, tzinfo=timezone.utc)
@@ -601,6 +671,7 @@ class WateringSessionMonitoringTests(unittest.TestCase):
             {
                 "objectif_mm": 0.5,
                 "arrosage_recommande": True,
+                "arrosage_auto_autorise": True,
                 "fenetre_optimale": "ce_matin",
                 "watering_target_date": coordinator._current_date().isoformat(),
                 "watering_window_start_minute": 0,
@@ -613,6 +684,43 @@ class WateringSessionMonitoringTests(unittest.TestCase):
 
         self.assertFalse(should_launch)
         self.assertEqual(reason, "watering_in_progress")
+
+    def test_auto_irrigation_is_blocked_before_bootstrap_completes(self) -> None:
+        coordinator = _build_coordinator()
+        coordinator._runtime_state["auto_irrigation_bootstrap_complete"] = False
+
+        should_launch, reason = coordinator._should_launch_auto_irrigation(
+            {
+                "objectif_mm": 1.0,
+                "arrosage_recommande": True,
+                "arrosage_auto_autorise": True,
+                "fenetre_optimale": "maintenant",
+                "watering_target_date": coordinator._current_date().isoformat(),
+            }
+        )
+
+        self.assertFalse(should_launch)
+        self.assertEqual(reason, "startup_guard")
+
+    def test_auto_irrigation_requires_explicit_user_confirmation(self) -> None:
+        coordinator = _build_coordinator()
+        coordinator.memory = {
+            "auto_irrigation_enabled": True,
+            "auto_irrigation_user_confirmed": False,
+        }
+
+        should_launch, reason = coordinator._should_launch_auto_irrigation(
+            {
+                "objectif_mm": 1.0,
+                "arrosage_recommande": True,
+                "arrosage_auto_autorise": True,
+                "fenetre_optimale": "maintenant",
+                "watering_target_date": coordinator._current_date().isoformat(),
+            }
+        )
+
+        self.assertFalse(should_launch)
+        self.assertEqual(reason, "user_confirmation_required")
 
     def test_post_application_auto_ready_bypasses_standard_window_checks(self) -> None:
         coordinator = _build_coordinator()
@@ -688,7 +796,36 @@ class WateringSessionMonitoringTests(unittest.TestCase):
         )
 
         self.assertFalse(should_launch)
-        self.assertEqual(reason, "outside_window")
+        self.assertEqual(reason, "auto_not_allowed")
+
+    def test_auto_irrigation_never_launches_when_snapshot_is_blocked(self) -> None:
+        coordinator = _build_coordinator()
+
+        for updates, expected_reason in (
+            ({"type_arrosage": "bloque"}, "irrigation_blocked"),
+            ({"irrigation_blocked": True}, "irrigation_blocked"),
+            ({"watering_blocked_by_mower": True}, "irrigation_blocked"),
+            ({"block_reason": "pluie_prevue_suffisante"}, "irrigation_blocked"),
+            ({"arrosage_auto_autorise": False}, "auto_not_allowed"),
+            ({"irrigation_execution_allowed": False}, "execution_not_allowed"),
+        ):
+            snapshot = {
+                "objectif_mm": 1.2,
+                "arrosage_recommande": True,
+                "arrosage_auto_autorise": True,
+                "irrigation_execution_allowed": True,
+                "fenetre_optimale": "maintenant",
+                "type_arrosage": "auto",
+                "watering_target_date": coordinator._current_date().isoformat(),
+                "watering_window_start_minute": 0,
+                "watering_window_end_minute": 1440,
+            }
+            snapshot.update(updates)
+
+            should_launch, reason = coordinator._should_launch_auto_irrigation(snapshot)
+
+            self.assertFalse(should_launch)
+            self.assertEqual(reason, expected_reason)
 
     def test_post_application_auto_ready_is_rejected_while_session_is_active(self) -> None:
         coordinator = _build_coordinator()
@@ -755,7 +892,10 @@ class WateringSessionMonitoringTests(unittest.TestCase):
 
     def test_auto_irrigation_is_blocked_when_global_switch_is_off(self) -> None:
         coordinator = _build_coordinator()
-        coordinator.memory = {"auto_irrigation_enabled": False}
+        coordinator.memory = {
+            "auto_irrigation_enabled": False,
+            "auto_irrigation_user_confirmed": True,
+        }
         coordinator._auto_irrigation_task = None
         coordinator.hass = _FakeHass(states=_FakeStates({}))
 
@@ -767,6 +907,25 @@ class WateringSessionMonitoringTests(unittest.TestCase):
                     source="auto_irrigation",
                 )
             )
+
+    def test_auto_irrigation_start_requires_explicit_user_confirmation(self) -> None:
+        coordinator = _build_coordinator()
+        coordinator.memory = {
+            "auto_irrigation_enabled": True,
+            "auto_irrigation_user_confirmed": False,
+        }
+        coordinator._auto_irrigation_task = None
+        coordinator.hass = _FakeHass(states=_FakeStates({}))
+
+        with self.assertRaises(coordinator_mod.HomeAssistantError) as err:
+            asyncio.run(
+                coordinator_mod.GazonIntelligentCoordinator.async_start_auto_irrigation(
+                    coordinator,
+                    1.0,
+                    source="auto_irrigation",
+                )
+            )
+        self.assertIn("explicitement", str(err.exception))
 
     def test_manual_irrigation_service_launches_real_sequence(self) -> None:
         class _ManualIrrigationCoordinator:
@@ -1202,6 +1361,7 @@ class WateringSessionMonitoringTests(unittest.TestCase):
             "objectif_mm": 1.5,
             "objective_mm": 1.5,
             "arrosage_recommande": True,
+            "arrosage_auto_autorise": True,
             "type_arrosage": "manuel_frequent",
             "fenetre_optimale": "matin",
             "watering_window_start_minute": 0,
@@ -1680,7 +1840,7 @@ class WateringSessionMonitoringTests(unittest.TestCase):
         coordinator = _build_coordinator()
         load_calls: list[dict[str, object]] = []
         coordinator.brain = types.SimpleNamespace(
-            load_state=lambda payload: load_calls.append(dict(payload)),
+            load_state=lambda payload, *, shared_products=None: load_calls.append(dict(payload)),
             dump_state=lambda: {},
             memory={},
             last_result=None,
@@ -1724,7 +1884,7 @@ class WateringSessionMonitoringTests(unittest.TestCase):
         coordinator = _build_coordinator()
         started_at = datetime(2026, 3, 18, 6, 0, tzinfo=timezone.utc)
         coordinator.brain = types.SimpleNamespace(
-            load_state=lambda payload: None,
+            load_state=lambda payload, *, shared_products=None: None,
             dump_state=lambda: {"mode": "Normal"},
             memory={},
             last_result=None,

@@ -11,6 +11,8 @@ Ce module ne modifie pas le moteur existant. Il fournit :
 from dataclasses import dataclass, field
 from typing import Any
 
+from .decision_models import DoseInputs, DosePolicyPayload
+
 MODE_NORMAL = "normal"
 MODE_SURSEMIS = "sursemis"
 MODE_FERTILISATION = "fertilisation"
@@ -51,6 +53,14 @@ MODE_ALIASES: dict[str, str] = {
     "traitement": MODE_TRAITEMENT,
     "hivernage": MODE_HIVERNAGE,
 }
+
+DOSE_BAND_BASELINE = "baseline"
+DOSE_BAND_SPRING = "spring"
+DOSE_BAND_SUMMER = "summer"
+DOSE_BAND_HEATWAVE = "heatwave"
+DOSE_BAND_AUTUMN = "autumn"
+DOSE_BAND_SURSEMIS = "sursemis"
+DOSE_BAND_HIVERNAGE = "hivernage"
 
 APPLICATION_TYPE_ALIASES: dict[str, str] = {
     "sol": "racinaire",
@@ -129,6 +139,16 @@ class SemisStageProgram:
     surface_moisture_target: str
     surface_dryness_risk: str
     runoff_risk: str
+
+
+@dataclass(frozen=True)
+class DosePolicyBand:
+    band: str
+    target_mm: float
+    min_mm: float
+    max_mm: float
+    reason: str
+    season_label: str
 
 
 @dataclass(frozen=True)
@@ -372,6 +392,73 @@ SEMIS_STAGE_PROGRAMS: dict[str, SemisStageProgram] = {
     ),
 }
 
+DOSE_POLICY_BANDS: dict[str, DosePolicyBand] = {
+    DOSE_BAND_BASELINE: DosePolicyBand(
+        band=DOSE_BAND_BASELINE,
+        target_mm=0.0,
+        min_mm=0.0,
+        max_mm=0.0,
+        reason="Dose adaptative inactive: objectif existant conservé.",
+        season_label="legacy",
+    ),
+    DOSE_BAND_SPRING: DosePolicyBand(
+        band=DOSE_BAND_SPRING,
+        target_mm=6.0,
+        min_mm=5.0,
+        max_mm=6.5,
+        reason="Printemps ou conditions modérées: dose plus profonde mais encore économique.",
+        season_label="spring",
+    ),
+    DOSE_BAND_SUMMER: DosePolicyBand(
+        band=DOSE_BAND_SUMMER,
+        target_mm=8.0,
+        min_mm=7.0,
+        max_mm=8.5,
+        reason="Été chaud: dose renforcée pour un mouillage plus utile.",
+        season_label="summer",
+    ),
+    DOSE_BAND_HEATWAVE: DosePolicyBand(
+        band=DOSE_BAND_HEATWAVE,
+        target_mm=10.0,
+        min_mm=9.0,
+        max_mm=10.5,
+        reason="Canicule ou stress thermique: cycle plus profond pour limiter le stress hydrique.",
+        season_label="heatwave",
+    ),
+    DOSE_BAND_AUTUMN: DosePolicyBand(
+        band=DOSE_BAND_AUTUMN,
+        target_mm=5.5,
+        min_mm=5.0,
+        max_mm=6.0,
+        reason="Automne: dose plus légère, suffisante pour garder la réserve utile cohérente.",
+        season_label="autumn",
+    ),
+    DOSE_BAND_SURSEMIS: DosePolicyBand(
+        band=DOSE_BAND_SURSEMIS,
+        target_mm=2.5,
+        min_mm=2.0,
+        max_mm=4.0,
+        reason="Sursemis: micro-cycles plus doux et plus fréquents.",
+        season_label="sursemis",
+    ),
+    DOSE_BAND_HIVERNAGE: DosePolicyBand(
+        band=DOSE_BAND_HIVERNAGE,
+        target_mm=0.0,
+        min_mm=0.0,
+        max_mm=0.0,
+        reason="Hivernage: pas de dose cible active.",
+        season_label="winter",
+    ),
+}
+
+_DOSE_HEATWAVE_TEMPERATURE_C = 34.0
+_DOSE_HEATWAVE_ET0_MM = 4.5
+_DOSE_SUMMER_TEMPERATURE_C = 28.0
+_DOSE_SUMMER_ET0_MM = 3.0
+_DOSE_AUTUMN_MONTHS = {9, 10, 11}
+_DOSE_SPRING_MONTHS = {3, 4, 5}
+_DOSE_WINTER_MONTHS = {12, 1, 2}
+
 
 def resolve_semis_stage_program(
     sous_phase: str | None,
@@ -390,6 +477,102 @@ def resolve_semis_stage_program(
     else:
         stage = "enracinement" if transition_ready else "levee"
     return stage, SEMIS_STAGE_PROGRAMS[stage]
+
+
+def _dose_to_float(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_dose_band(value: str | None) -> str:
+    text = str(value or "").strip().casefold()
+    if text in DOSE_POLICY_BANDS:
+        return text
+    return DOSE_BAND_BASELINE
+
+
+def _dose_candidate_band(dose_inputs: DoseInputs) -> DosePolicyBand:
+    phase = str(dose_inputs.get("phase_dominante") or "").strip()
+    sous_phase = str(dose_inputs.get("sous_phase") or "").strip()
+    temperature = _dose_to_float(dose_inputs.get("temperature"))
+    et0_mm = _dose_to_float(dose_inputs.get("et0_mm"))
+    heat_stress_level = str(dose_inputs.get("heat_stress_level") or "").strip().casefold()
+    heat_stress_phase = str(dose_inputs.get("heat_stress_phase") or "").strip().casefold()
+    month = dose_inputs.get("month")
+
+    if phase == "Sursemis" or sous_phase in {"Germination", "Enracinement", "Reprise"} and phase == "Sursemis":
+        return DOSE_POLICY_BANDS[DOSE_BAND_SURSEMIS]
+
+    if phase == "Hivernage" or month in _DOSE_WINTER_MONTHS:
+        return DOSE_POLICY_BANDS[DOSE_BAND_HIVERNAGE]
+
+    if (
+        heat_stress_level in {"canicule", "extreme"}
+        or heat_stress_phase in {"canicule", "extreme"}
+        or (temperature is not None and temperature >= _DOSE_HEATWAVE_TEMPERATURE_C)
+        or (et0_mm is not None and et0_mm >= _DOSE_HEATWAVE_ET0_MM)
+    ):
+        return DOSE_POLICY_BANDS[DOSE_BAND_HEATWAVE]
+
+    if (
+        heat_stress_level in {"vigilance", "fort"}
+        or (temperature is not None and temperature >= _DOSE_SUMMER_TEMPERATURE_C)
+        or (et0_mm is not None and et0_mm >= _DOSE_SUMMER_ET0_MM)
+    ):
+        return DOSE_POLICY_BANDS[DOSE_BAND_SUMMER]
+
+    if month in _DOSE_AUTUMN_MONTHS:
+        return DOSE_POLICY_BANDS[DOSE_BAND_AUTUMN]
+
+    if month in _DOSE_SPRING_MONTHS:
+        return DOSE_POLICY_BANDS[DOSE_BAND_SPRING]
+
+    return DOSE_POLICY_BANDS[DOSE_BAND_SPRING]
+
+
+def resolve_dose_policy(
+    dose_inputs: DoseInputs | None = None,
+    *,
+    previous_state: dict[str, Any] | None = None,
+    dynamic_enabled: bool = False,
+) -> DosePolicyPayload:
+    """Résout une politique de dose sans toucher au calcul objectif.
+
+    La politique calcule un band candidat lisible, mais tant que
+    ``dynamic_enabled`` reste faux, le moteur conserve la dose legacy
+    existante.
+    """
+
+    normalized_inputs: DoseInputs = dose_inputs if isinstance(dose_inputs, dict) else {}
+    candidate_band = _dose_candidate_band(normalized_inputs)
+    baseline_band = DOSE_POLICY_BANDS[DOSE_BAND_BASELINE]
+    legacy_objective_mm = _dose_to_float(normalized_inputs.get("legacy_objective_mm")) or 0.0
+    enabled = bool(dynamic_enabled)
+    has_legacy_objective = legacy_objective_mm > 0.0
+    active_band = candidate_band if enabled and has_legacy_objective else baseline_band
+    active_mm = candidate_band.target_mm if enabled and has_legacy_objective else legacy_objective_mm
+    payload: DosePolicyPayload = {
+        "enabled": enabled,
+        "source": "dynamic" if enabled else "legacy",
+        "dose_band": active_band.band,
+        "dose_reason": active_band.reason if enabled and has_legacy_objective else baseline_band.reason,
+        "dose_mm_base": round(max(0.0, legacy_objective_mm), 1),
+        "dose_mm_effective": round(max(0.0, active_mm), 1),
+        "dose_mm_target": round(candidate_band.target_mm, 1),
+        "dose_mm_min": round(candidate_band.min_mm, 1),
+        "dose_mm_max": round(candidate_band.max_mm, 1),
+        "dose_inputs": normalized_inputs,
+        "candidate_band": candidate_band.band,
+        "candidate_mm": round(candidate_band.target_mm, 1),
+        "candidate_reason": candidate_band.reason,
+    }
+    if previous_state is not None:
+        payload["source"] = "dynamic" if enabled else "legacy"
+    return payload
 
 
 def _validate_policy_registry() -> None:
@@ -601,6 +784,16 @@ __all__ = [
     "WateringRange",
     "get_watering_policy",
     "list_watering_policies",
+    "resolve_dose_policy",
     "resolve_semis_stage_program",
     "resolve_watering_policy",
+    "DosePolicyBand",
+    "DOSE_BAND_AUTUMN",
+    "DOSE_BAND_BASELINE",
+    "DOSE_BAND_HEATWAVE",
+    "DOSE_BAND_HIVERNAGE",
+    "DOSE_BAND_SPRING",
+    "DOSE_BAND_SUMMER",
+    "DOSE_BAND_SURSEMIS",
+    "DOSE_POLICY_BANDS",
 ]

@@ -69,6 +69,16 @@ gazon_brain_module = _load_module(
     "gazon_brain.py",
 )
 GazonBrain = gazon_brain_module.GazonBrain
+decision_risk_module = _load_module(
+    "custom_components.gazon_intelligent.decision_risk",
+    "decision_risk.py",
+)
+decision_watering_module = _load_module(
+    "custom_components.gazon_intelligent.decision_watering",
+    "decision_watering.py",
+)
+compute_fungal_risk = decision_risk_module.compute_fungal_risk
+compute_kc_gazon = decision_watering_module.compute_kc_gazon
 
 
 class GazonBrainTests(unittest.TestCase):
@@ -938,3 +948,48 @@ class GazonBrainTests(unittest.TestCase):
             brain.last_result.extra["temperature_note"],
             "température réelle 20.0°C, prévision du jour 18.2°C",
         )
+
+
+class FungalRiskTests(unittest.TestCase):
+    def test_fungal_risk_high_conditions(self) -> None:
+        result = compute_fungal_risk(
+            temperature=18.0,
+            humidite=90.0,
+            rosee=1.0,
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            hour_of_day=7,
+        )
+        self.assertEqual(result["fungal_risk_level"], "high")
+        self.assertTrue(result["fungal_risk_evening_block"])
+        self.assertTrue(result["fungal_risk_reduce_watering"])
+
+    def test_fungal_risk_no_conditions(self) -> None:
+        result = compute_fungal_risk(
+            temperature=30.0,
+            humidite=50.0,
+            rosee=0.0,
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            hour_of_day=14,
+        )
+        self.assertEqual(result["fungal_risk_level"], "none")
+        self.assertFalse(result["fungal_risk_evening_block"])
+        self.assertFalse(result["fungal_risk_reduce_watering"])
+
+
+class KcPostMowingTests(unittest.TestCase):
+    def test_kc_post_mowing_j3(self) -> None:
+        kc_base = compute_kc_gazon("Normal")
+        kc_post = compute_kc_gazon("Normal", days_since_mowing=3)
+        self.assertGreater(kc_post, kc_base)
+
+    def test_kc_post_mowing_j10(self) -> None:
+        kc_base = compute_kc_gazon("Normal")
+        kc_post = compute_kc_gazon("Normal", days_since_mowing=10)
+        self.assertGreater(kc_post, kc_base)
+
+    def test_kc_post_mowing_j20(self) -> None:
+        kc_base = compute_kc_gazon("Normal")
+        kc_post = compute_kc_gazon("Normal", days_since_mowing=20)
+        self.assertEqual(kc_post, kc_base)

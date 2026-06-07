@@ -162,11 +162,11 @@
     },
     "set_date_action": {
       "name": "Record date",
-      "description": "Sets the real date of the intervention (DD/MM/YYYY). If empty, today is used.",
+      "description": "Sets the real date of the action (DD/MM/YYYY or YYYY-MM-DD). If empty, today is used.",
       "fields": {
         "date_action": {
           "name": "Date",
-          "description": "Date in DD/MM/YYYY format."
+          "description": "Date in DD/MM/YYYY or YYYY-MM-DD format."
         }
       }
     },
@@ -208,7 +208,7 @@
     },
     "declare_intervention": {
       "name": "Declare an intervention",
-      "description": "Logs a real intervention. Product settings live in \"Register a product\"; here you only choose the already registered product, the action date, the zone, and an optional note. If several products exist, an exact ID or name is required.",
+      "description": "Logs a real intervention. Product settings live in \"Register a product\"; here you only choose the already registered product, the action date, the zone, and an optional note. If no explicit product is provided, the integration can use the current UI selection or return a clear error.",
       "fields": {
         "intervention": {
           "name": "Intervention",
@@ -216,7 +216,7 @@
         },
         "date_action": {
           "name": "Action date (optional)",
-          "description": "Business date in DD/MM/YYYY format. If empty, today is used."
+          "description": "Business date in DD/MM/YYYY or YYYY-MM-DD format. If empty, today is used."
         },
         "produit_id": {
           "name": "Product ID (optional)",
@@ -322,11 +322,15 @@
     },
     "declare_mowing": {
       "name": "Declare mowing",
-      "description": "Logs a mowing event in the history.",
+      "description": "Logs a mowing event in the history of the targeted lawn. Choose the lawn's mowing authorization entity.",
       "fields": {
+        "entity_id": {
+          "name": "Mowing entity",
+          "description": "Choose the lawn binary_sensor.*_tonte_autorisee entity. Main lawn example: binary_sensor.gazon_intelligent_tonte_autorisee. Potager example: binary_sensor.gazon_intelligent_gazon_potager_tonte_autorisee."
+        },
         "date_action": {
           "name": "Mowing date (optional)",
-          "description": "Date in DD/MM/YYYY format. If empty, today is used."
+          "description": "Date in DD/MM/YYYY or YYYY-MM-DD format. If empty, today is used."
         }
       }
     },
@@ -336,7 +340,7 @@
       "fields": {
         "date_action": {
           "name": "Watering date (optional)",
-          "description": "Date in DD/MM/YYYY format. If empty, today is used."
+          "description": "Date in DD/MM/YYYY or YYYY-MM-DD format. If empty, today is used."
         },
         "objectif_mm": {
           "name": "Applied amount (optional)",

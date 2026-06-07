@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Iterable
 
@@ -310,8 +311,8 @@ def build_watering_plan(
     )
 
 
-def normalize_existing_plan(plan_state_attrs: dict[str, Any] | None) -> WateringPlan | None:
-    if not isinstance(plan_state_attrs, dict):
+def normalize_existing_plan(plan_state_attrs: Mapping[str, Any] | None) -> WateringPlan | None:
+    if not isinstance(plan_state_attrs, Mapping):
         return None
     zones = plan_state_attrs.get("zones")
     if not isinstance(zones, list):

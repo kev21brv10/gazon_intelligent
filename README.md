@@ -46,6 +46,10 @@ Elle est conçue pour rester lisible côté UI, tout en gardant assez de structu
 - une coordination tondeuse activable ou désactivable par pelouse
 - une carte Lovelace dédiée en complément de l’intégration
 
+Pour le détail du contrat public des attributs exposés, voir:
+
+- [docs/public-attribute-contract.md](/Users/kevin/vs%20code/Github/Gazon%20Intelligent/docs/public-attribute-contract.md)
+
 ## 🧠 Philosophie
 
 L’intégration sépare trois niveaux:

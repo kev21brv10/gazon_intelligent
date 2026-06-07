@@ -95,3 +95,17 @@ class SoilBalanceTests(unittest.TestCase):
         self.assertEqual(state["reserve_mm"], 13.2)
         self.assertEqual(state["ledger"][0]["reserve_mm"], 12.0)
         self.assertEqual(state["ledger"][0]["delta_mm"], 1.5)
+
+    def test_soil_balance_clamps_aberrant_rain(self) -> None:
+        state = soil_balance.update_soil_balance(
+            {},
+            pluie_mm=120.0,
+            arrosage_mm=0.0,
+            etp_mm=2.0,
+        )
+        # La pluie aberrante (> 100mm) doit être clampée à 30mm
+        self.assertTrue(state["ledger"][-1].get("pluie_suspect"))
+        # La réserve doit être <= max raisonnable (pas de recharge à 120mm)
+        self.assertLessEqual(state["reserve_mm"], state["reserve_max_mm"])
+        # Vérifier que pluie utilisée est 30mm (clampée)
+        self.assertEqual(state["ledger"][-1]["pluie_mm"], 30.0)

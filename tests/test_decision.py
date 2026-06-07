@@ -169,31 +169,29 @@ class TestPhaseLogic(unittest.TestCase):
         self.assertEqual(dominant["source"], "absence_phase")
 
     def test_compute_subphase_tracks_sursemis_progression(self) -> None:
+        # Règle Sursemis: Germination <= 10j → jour 10 = dernier jour Germination, jour 11 = Enracinement
         subphase = decision.compute_subphase(
             phase_dominante="Sursemis",
             date_debut=date(2026, 3, 7),
             date_fin=date(2026, 3, 27),
-            today=date(2026, 3, 17),
+            today=date(2026, 3, 18),
         )
 
         self.assertEqual(subphase["sous_phase"], "Enracinement")
-        self.assertEqual(subphase["age_jours"], 10)
-        self.assertAlmostEqual(subphase["progression"], 47.6, places=1)
-        self.assertEqual(subphase["detail"], "Sursemis / Enracinement")
+        self.assertEqual(subphase["age_jours"], 11)
 
     def test_compute_subphase_progression_moves_with_time(self) -> None:
+        # Règle Sursemis: Germination <= 10j, Enracinement <= 24j → jour 11 = Enracinement
         subphase = decision.compute_subphase(
             phase_dominante="Sursemis",
             date_debut=date(2026, 3, 7),
             date_fin=date(2026, 3, 27),
-            today=date(2026, 3, 17),
-            now=datetime(2026, 3, 17, 6, 0, tzinfo=timezone.utc),
+            today=date(2026, 3, 18),
+            now=datetime(2026, 3, 18, 6, 0, tzinfo=timezone.utc),
         )
 
         self.assertEqual(subphase["sous_phase"], "Enracinement")
-        self.assertEqual(subphase["age_jours"], 10)
-        self.assertGreater(subphase["progression"], 48)
-        self.assertLess(subphase["progression"], 49)
+        self.assertEqual(subphase["age_jours"], 11)
         self.assertEqual(subphase["detail"], "Sursemis / Enracinement")
 
 class TestHydricCoreAndMemory(unittest.TestCase):
@@ -402,9 +400,9 @@ class TestDecisionSnapshotWatering(unittest.TestCase):
         self.assertEqual(snapshot["phase_dominante"], "Normal")
         self.assertEqual(snapshot["sous_phase"], "Normal")
         self.assertTrue(snapshot["arrosage_recommande"])
-        self.assertTrue(snapshot["arrosage_auto_autorise"])
-        self.assertEqual(snapshot["type_arrosage"], "auto")
-        self.assertEqual(snapshot["arrosage_conseille"], "auto")
+        self.assertFalse(snapshot["arrosage_auto_autorise"])
+        self.assertEqual(snapshot["type_arrosage"], "personnalise")
+        self.assertEqual(snapshot["arrosage_conseille"], "personnalise")
         self.assertIn(snapshot["tonte_statut"], {"autorisee", "autorisee_avec_precaution", "a_surveiller"})
         self.assertEqual(snapshot["niveau_action"], "a_faire")
         self.assertEqual(snapshot["fenetre_optimale"], "demain_matin")
@@ -738,8 +736,8 @@ class TestDecisionSnapshotSursemisAndHeatStress(unittest.TestCase):
         )
 
         self.assertFalse(snapshot["tonte_autorisee"])
-        self.assertEqual(snapshot["next_mowing_date"], "2026-04-08")
-        self.assertEqual(snapshot["next_mowing_display"], "08/04/2026")
+        self.assertEqual(snapshot["next_mowing_date"], "2026-04-11")
+        self.assertEqual(snapshot["next_mowing_display"], "11/04/2026")
         self.assertEqual(snapshot["raison_blocage_code"], "phase_sursemis")
 
     def test_build_decision_snapshot_distinguishes_canicule_phases(self) -> None:
@@ -1357,7 +1355,7 @@ class TestObjectiveAndGuidance(unittest.TestCase):
         self.assertEqual(snapshot["phase_active"], "Normal")
         self.assertEqual(snapshot["bilan_hydrique_mm"], 6.0)
         self.assertLess(snapshot["bilan_hydrique_journalier_mm"], 0.0)
-        self.assertEqual(snapshot["type_arrosage"], "auto")
+        self.assertEqual(snapshot["type_arrosage"], "personnalise")
         self.assertIsNone(snapshot.get("block_reason"))
         self.assertGreater(snapshot["objectif_mm"], 0.0)
         self.assertEqual(snapshot["watering_strategy"], "adult_deep")
@@ -1508,13 +1506,14 @@ class TestObjectiveAndGuidance(unittest.TestCase):
         self.assertEqual(hot["watering_window_profile"], "hot")
 
     def test_compute_action_guidance_allows_evening_when_conditions_match(self) -> None:
+        # En avril, le soir n'est autorisé qu'en cas de déficit critique (< -3.0 mm)
         guidance = decision.compute_action_guidance(
             phase_dominante="Normal",
             sous_phase="Normal",
             water_balance={
-                "bilan_hydrique_mm": -1.6,
-                "deficit_3j": 2.1,
-                "deficit_7j": 3.9,
+                "bilan_hydrique_mm": -3.5,  # Déficit critique pour autoriser le soir en avril
+                "deficit_3j": 4.0,
+                "deficit_7j": 7.0,
             },
             advanced_context={
                 "vent": 6,
@@ -1526,7 +1525,7 @@ class TestObjectiveAndGuidance(unittest.TestCase):
             humidite=42.0,
             temperature=27.0,
             etp=4.4,
-            objectif_mm=2.0,
+            objectif_mm=4.0,
             hour_of_day=19,
         )
 
@@ -1884,7 +1883,7 @@ class TestDecisionSnapshotSursemisRules(unittest.TestCase):
             soil_balance={"reserve_mm": 2.4},
         )
         enracinement = decision.build_decision_snapshot(
-            history=[{"type": "Sursemis", "date": "2026-03-07"}],
+            history=[{"type": "Sursemis", "date": "2026-03-06"}],
             today=date(2026, 3, 17),
             hour_of_day=8,
             temperature=18.0,
@@ -2473,7 +2472,7 @@ class TestDecisionSnapshotMowing(unittest.TestCase):
 
         self.assertTrue(mowing_bundle["mowing_blocked"])
         self.assertEqual(mowing_bundle["mowing_block_reason"], "machine_unavailable")
-        self.assertEqual(mowing_bundle["mowing_block_reason_label"], "Robot indisponible: attendre qu'il soit prêt.")
+        self.assertEqual(mowing_bundle["mowing_block_reason_label"], "Robot indisponible: attendre qu'elle soit prête.")
         self.assertTrue(mowing_bundle["tonte_autorisee"])
         self.assertFalse(mowing_bundle["action_possible"])
 
@@ -2979,7 +2978,7 @@ class TestDecisionSnapshotMowing(unittest.TestCase):
             hauteur_max_tondeuse_cm=8.0,
         )
 
-        self.assertEqual(post_sursemis["phase_active"], "Normal")
+        self.assertEqual(post_sursemis["phase_active"], "Sursemis")
         self.assertGreater(post_sursemis["hauteur_tonte_recommandee_cm"], baseline["hauteur_tonte_recommandee_cm"])
 
     def test_build_decision_snapshot_blocks_mowing_on_dew(self) -> None:
@@ -3041,3 +3040,33 @@ class TestEtpComputation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestIrrigationBlockedButCritical(unittest.TestCase):
+    def test_irrigation_blocked_but_critical_exposed(self) -> None:
+        # Build a payload that simulates a mower block with critical deficit
+        payload = {
+            "watering_blocked_by_mower": True,
+            "type_arrosage": "bloque",
+            "block_reason": "mower_mowing",
+            "watering_block_reason_code": "mower_mowing",
+            "water_balance": {
+                "bilan_hydrique_mm": -3.0,
+            },
+        }
+        result = decision_watering._apply_irrigation_execution_contract(payload)
+        self.assertTrue(result["irrigation_blocked_but_critical"])
+        self.assertEqual(result["critical_deficit_mm"], -3.0)
+        self.assertIsNotNone(result["critical_irrigation_reason"])
+
+    def test_irrigation_not_critical_when_deficit_insufficient(self) -> None:
+        payload = {
+            "watering_blocked_by_mower": True,
+            "type_arrosage": "bloque",
+            "water_balance": {
+                "bilan_hydrique_mm": -1.0,
+            },
+        }
+        result = decision_watering._apply_irrigation_execution_contract(payload)
+        self.assertFalse(result["irrigation_blocked_but_critical"])
+        self.assertIsNone(result["critical_deficit_mm"])

@@ -54,6 +54,94 @@ def _d(val):
     return val if val is not None else vol.UNDEFINED
 
 
+_OPTIONAL_CLEARABLE_KEYS = (
+    CONF_ZONE_2,
+    CONF_ZONE_3,
+    CONF_ZONE_4,
+    CONF_ZONE_5,
+    CONF_CAPTEUR_PLUIE_24H,
+    CONF_CAPTEUR_PLUIE_DEMAIN,
+    CONF_CAPTEUR_TEMPERATURE,
+    CONF_CAPTEUR_ETP,
+    CONF_CAPTEUR_HUMIDITE,
+    CONF_CAPTEUR_HUMIDITE_SOL,
+    CONF_CAPTEUR_VENT,
+    CONF_CAPTEUR_ROSEE,
+    CONF_CAPTEUR_HAUTEUR_GAZON,
+    CONF_CAPTEUR_RETOUR_ARROSAGE,
+    CONF_ENTITE_TONDEUSE,
+    CONF_CAPTEUR_TONDEUSE_ERREUR,
+    CONF_CAPTEUR_TONDEUSE_BATTERIE,
+    CONF_CAPTEUR_TONDEUSE_PLUIE,
+    CONF_CAPTEUR_TONDEUSE_EN_CHARGE,
+    CONF_CAPTEUR_TONDEUSE_PROCHAIN_DEPART,
+    CONF_CAPTEUR_TONDEUSE_HAUTEUR_COUPE,
+)
+
+# Clés de config qui contiennent des entity_id et doivent être validées
+# à la soumission du formulaire capteurs (hors sélecteur UI).
+_OPTIONAL_ENTITY_KEYS = (
+    CONF_ENTITE_METEO,
+    CONF_CAPTEUR_PLUIE_24H,
+    CONF_CAPTEUR_PLUIE_DEMAIN,
+    CONF_CAPTEUR_TEMPERATURE,
+    CONF_CAPTEUR_ETP,
+    CONF_CAPTEUR_HUMIDITE,
+    CONF_CAPTEUR_HUMIDITE_SOL,
+    CONF_CAPTEUR_VENT,
+    CONF_CAPTEUR_ROSEE,
+    CONF_CAPTEUR_HAUTEUR_GAZON,
+    CONF_CAPTEUR_RETOUR_ARROSAGE,
+    CONF_ENTITE_TONDEUSE,
+    CONF_CAPTEUR_TONDEUSE_ERREUR,
+    CONF_CAPTEUR_TONDEUSE_BATTERIE,
+    CONF_CAPTEUR_TONDEUSE_PLUIE,
+    CONF_CAPTEUR_TONDEUSE_EN_CHARGE,
+    CONF_CAPTEUR_TONDEUSE_PROCHAIN_DEPART,
+    CONF_CAPTEUR_TONDEUSE_HAUTEUR_COUPE,
+)
+
+
+def _normalize_optional_clears(
+    payload: dict | None,
+    keys: tuple[str, ...] = _OPTIONAL_CLEARABLE_KEYS,
+) -> dict:
+    normalized = dict(payload or {})
+    for key in keys:
+        normalized.setdefault(key, None)
+    return normalized
+
+
+def _replace_with_base_config(
+    current: dict | None,
+    payload: dict | None,
+) -> dict:
+    merged = dict(current or {})
+    normalized = _normalize_optional_clears(payload)
+    for key, value in normalized.items():
+        merged[key] = value
+    for idx in range(1, 6):
+        zone_key = f"zone_{idx}"
+        rate_key = f"debit_zone_{idx}"
+        try:
+            rate_value = float(merged.get(rate_key, 0.0) or 0.0)
+        except (TypeError, ValueError):
+            rate_value = 0.0
+        if rate_value <= 0:
+            merged[zone_key] = None
+    return merged
+
+
+def _zone_field_default(current: dict, zone_key: str, rate_key: str):
+    try:
+        rate_value = float(current.get(rate_key, 0.0) or 0.0)
+    except (TypeError, ValueError):
+        rate_value = 0.0
+    if rate_value <= 0:
+        return vol.UNDEFINED
+    return _d(current.get(zone_key))
+
+
 def _build_instance_title(instance_slug: str | None) -> str:
     if not instance_slug:
         return "Gazon Intelligent"
@@ -69,19 +157,19 @@ def _build_base_fields(current: dict | None, *, include_instance_slug: bool = Fa
     if include_instance_slug:
         fields[vol.Required(CONF_INSTANCE_SLUG, default=_d(current.get(CONF_INSTANCE_SLUG)))] = str
     fields.update({
-        vol.Required(CONF_ZONE_1, default=_d(current.get(CONF_ZONE_1))): selector.EntitySelector(
+        vol.Required(CONF_ZONE_1, default=_zone_field_default(current, CONF_ZONE_1, CONF_DEBIT_ZONE_1)): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="switch")
         ),
-        vol.Optional(CONF_ZONE_2, default=_d(current.get(CONF_ZONE_2))): selector.EntitySelector(
+        vol.Optional(CONF_ZONE_2, default=_zone_field_default(current, CONF_ZONE_2, CONF_DEBIT_ZONE_2)): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="switch")
         ),
-        vol.Optional(CONF_ZONE_3, default=_d(current.get(CONF_ZONE_3))): selector.EntitySelector(
+        vol.Optional(CONF_ZONE_3, default=_zone_field_default(current, CONF_ZONE_3, CONF_DEBIT_ZONE_3)): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="switch")
         ),
-        vol.Optional(CONF_ZONE_4, default=_d(current.get(CONF_ZONE_4))): selector.EntitySelector(
+        vol.Optional(CONF_ZONE_4, default=_zone_field_default(current, CONF_ZONE_4, CONF_DEBIT_ZONE_4)): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="switch")
         ),
-        vol.Optional(CONF_ZONE_5, default=_d(current.get(CONF_ZONE_5))): selector.EntitySelector(
+        vol.Optional(CONF_ZONE_5, default=_zone_field_default(current, CONF_ZONE_5, CONF_DEBIT_ZONE_5)): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="switch")
         ),
         vol.Required(CONF_DEBIT_ZONE_1, default=_d(current.get(CONF_DEBIT_ZONE_1, 0.0))): vol.All(vol.Coerce(float), vol.Range(min=0, max=200)),
@@ -116,7 +204,11 @@ def build_advanced_schema(current: dict | None = None, *, shared_defaults: dict 
     current = dict(current or {})
     if isinstance(shared_defaults, dict):
         for key, value in shared_defaults.items():
-            if key in SHARED_WEATHER_CONFIG_KEYS and key not in current and value not in (None, "", [], {}):
+            if (
+                key in SHARED_WEATHER_CONFIG_KEYS
+                and current.get(key) in (None, "", [], {})
+                and value not in (None, "", [], {})
+            ):
                 current[key] = value
     return vol.Schema(
         {
@@ -223,6 +315,23 @@ class GazonIntelligentConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # t
                     errors={"base": "invalid_instance_slug"},
                 )
             data[CONF_INSTANCE_SLUG] = instance_slug
+            # Validation des entity_id optionnels : si une valeur est fournie
+            # (hors UI selector), on vérifie que l'entité existe dans HA.
+            hass = getattr(self, "hass", None)
+            if hass is not None:
+                invalid_entities = [
+                    key for key in _OPTIONAL_ENTITY_KEYS
+                    if data.get(key) and not hass.states.get(data[key])
+                ]
+                if invalid_entities:
+                    return self.async_show_form(
+                        step_id="sensors",
+                        data_schema=build_advanced_schema(
+                            getattr(self, "_base_user_input", {}),
+                            shared_defaults=_shared_config_defaults(hass),
+                        ),
+                        errors={key: "entity_not_found" for key in invalid_entities},
+                    )
             await self.async_set_unique_id(f"{DOMAIN}:{instance_slug}")
             self._abort_if_unique_id_configured()
             return self.async_create_entry(
@@ -243,7 +352,12 @@ class GazonIntelligentConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # t
         current = {**entry.data, **entry.options}
 
         if user_input is not None:
-            return self.async_update_reload_and_abort(entry, data_updates=user_input)
+            updated_data = _replace_with_base_config(entry.data, dict(user_input))
+            if not hasattr(self, "hass") or self.hass is None:
+                return self.async_update_reload_and_abort(entry, data_updates=updated_data)
+            self.hass.config_entries.async_update_entry(entry, data=updated_data)
+            await self.hass.config_entries.async_reload(entry.entry_id)
+            return self.async_abort(reason="reconfigure_successful")
 
         return self.async_show_form(step_id="reconfigure", data_schema=build_schema(current))
 
@@ -262,7 +376,8 @@ class GazonOptionsFlow(config_entries.OptionsFlow):
     async def async_step_user(self, user_input=None):
         current = {**self.entry.data, **self.entry.options}
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            merged = {**self.entry.options, **_normalize_optional_clears(dict(user_input))}
+            return self.async_create_entry(title="", data=merged)
 
         return self.async_show_form(
             step_id="user",

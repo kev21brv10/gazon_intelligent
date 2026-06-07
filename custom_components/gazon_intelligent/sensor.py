@@ -8,7 +8,7 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.util import dt as dt_util
 
 from .assistant import build_assistant_decision
-from .const import APPLICATION_INTERVENTIONS, DOMAIN
+from .const import APPLICATION_INTERVENTIONS, DOMAIN, PLUIE_SOURCE_INDISPONIBLE, PLUIE_SOURCE_NON_DISPONIBLE
 from .decision_models import TYPE_ARROSAGE_DISPLAY_LABELS
 from .entity_base import GazonEntityBase
 from .entity_ids import public_entity_id, resolve_entry_instance_slug
@@ -16,6 +16,7 @@ from .intervention_recommendation import build_intervention_recommendation, publ
 from .memory import build_application_summary, compute_application_state, normalize_post_application_status
 from .watering_plan import build_watering_plan
 from .water import _zone_session_surface_mm, _zone_session_total_mm
+from .decision_risk import compute_fungal_risk as _sensor_compute_fungal_risk
 
 RECOMMENDATION_RUNTIME_PROBE = "constraints_probe_20260404_01"
 _APPLICATION_SUMMARY_PUBLIC_KEYS = (
@@ -167,6 +168,34 @@ def _assistant_action_fallback(payload: dict[str, object] | None) -> str | None:
     return None
 
 
+def _public_mowing_facade(entity: GazonEntityBase) -> dict[str, object]:
+    facade = entity._public_mowing_facade()
+    if facade:
+        return facade
+    snapshot = _coordinator_snapshot(entity.coordinator)
+    return {
+        key: snapshot.get(key)
+        for key in (
+            "tonte_autorisee",
+            "tonte_statut",
+            "niveau_action",
+            "action_possible",
+            "mowing_blocked",
+            "next_mowing_date",
+            "next_mowing_display",
+            "raison_blocage_tonte",
+            "raison_blocage_code",
+            "mowing_block_reason_code",
+            "mowing_block_reason_label",
+            "mowing_window_reason",
+            "mowing_machine_unavailable_detail",
+            "mowing_machine_unavailable_label",
+            "assistant",
+        )
+        if snapshot.get(key) is not None
+    }
+
+
 def _is_generic_noop_action_label(value: object | None) -> bool:
     text = str(value or "").strip().casefold()
     return text in _GENERIC_NOOP_ACTION_LABELS
@@ -295,7 +324,10 @@ def _irrigation_blocked_due_to_conditions_summary(entity: GazonEntityBase) -> st
 
 
 def _assistant_payload_for_public(entity: GazonEntityBase) -> dict[str, object] | None:
-    assistant_payload = entity._decision_value("assistant")
+    facade = _public_mowing_facade(entity)
+    assistant_payload = facade.get("assistant")
+    if not isinstance(assistant_payload, dict) or not assistant_payload:
+        assistant_payload = entity._decision_value("assistant")
     snapshot = _coordinator_snapshot(entity.coordinator)
     if not isinstance(assistant_payload, dict) and snapshot:
         assistant_payload = build_assistant_decision(snapshot)
@@ -460,7 +492,7 @@ def _normalize_recommendation_constraints_payload(payload: dict[str, object]) ->
 
 
 def _mowing_visibility_flags(entity: GazonEntityBase) -> dict[str, bool]:
-    gazon_permet_tonte = bool(entity._decision_value("tonte_autorisee", False))
+    gazon_permet_tonte = bool(entity._public_mowing_value("tonte_autorisee", entity._decision_value("tonte_autorisee", False)))
     mower_coordination_enabled = entity._decision_value("mower_coordination_enabled", True)
     mower_coordination_ready = entity._decision_value("mower_coordination_ready", True)
     machine_permet_tonte = (
@@ -468,7 +500,7 @@ def _mowing_visibility_flags(entity: GazonEntityBase) -> dict[str, bool]:
         and mower_coordination_enabled is not False
         and mower_coordination_ready is not False
     )
-    mowing_blocked = bool(entity._decision_value("mowing_blocked", False))
+    mowing_blocked = bool(entity._public_mowing_value("mowing_blocked", entity._decision_value("mowing_blocked", False)))
     return {
         "gazon_permet_tonte": gazon_permet_tonte,
         "machine_permet_tonte": machine_permet_tonte,
@@ -602,7 +634,12 @@ def _niveau_action_hydrique(entity: GazonEntityBase) -> str:
 
 
 def _normalized_public_niveau_action(entity: GazonEntityBase) -> str:
-    niveau_action = str(entity._decision_value("niveau_action") or "").strip().lower()
+    facade = _public_mowing_facade(entity)
+    niveau_action = str(
+        facade.get("niveau_action")
+        or entity._decision_value("niveau_action")
+        or ""
+    ).strip().lower()
     if niveau_action not in {"aucune_action", "surveiller", "a_faire", "critique"}:
         niveau_action = "aucune_action"
 
@@ -728,6 +765,10 @@ def _objective_display_balance(attrs: dict[str, object]) -> float | None:
 
 
 def _add_hydric_storage_aliases(entity: GazonEntityBase, attrs: dict[str, object]) -> dict[str, object]:
+    # Legacy/public aliases intentionally kept for existing Lovelace cards,
+    # templates, exports and user dashboards. The dedicated hydric entities
+    # remain the canonical home for these values, but we preserve the older
+    # attribute names until a compatibility migration is planned explicitly.
     aliases = {
         "reserve_utile_max_mm": attrs.get("reserve_utile_mm", entity._decision_value("reserve_utile_mm")),
         "reserve_utile_actuelle_mm": attrs.get(
@@ -806,6 +847,11 @@ def _block_reason_display_label(value: object) -> str | None:
         "bloque": "Bloqué",
         "mower_mowing": "Tondeuse en cours de tonte",
         "mower_returning": "Tondeuse en retour station",
+        "mower_starting": "Tondeuse en démarrage",
+        "mower_zoning": "Tondeuse en changement de zone",
+        "mower_searching_zone": "Tondeuse en recherche de zone",
+        "mower_rain_delayed": "Pause pluie active",
+        "mower_escaped_digital_fence": "Tondeuse sortie du périmètre",
         "mower_not_stowed": "Tondeuse non rangée",
         "mower_unreliable": "Coordination tondeuse indisponible",
         "post_application_active": "Post-produit actif",
@@ -813,6 +859,38 @@ def _block_reason_display_label(value: object) -> str | None:
         "watering_cooldown": "Cooldown tonte après arrosage",
     }
     return labels.get(normalized, normalized.replace("_", " "))
+
+
+def _fallback_machine_unavailable_label_from_attrs(attrs: dict[str, object]) -> str | None:
+    operation_state = str(attrs.get("mower_operation_state") or attrs.get("tondeuse_statut") or "").strip().lower()
+    operation_label = str(attrs.get("mower_operation_label") or attrs.get("tondeuse_statut_libelle") or "").strip()
+    reason_code = str(attrs.get("mower_reason_code") or "").strip().lower()
+    if operation_state in {"mowing", "tonte", "tonte_en_cours", "edgecut"} or reason_code == "mower_mowing":
+        return "Robot déjà en tonte: attendre la fin du cycle en cours."
+    if operation_state in {"returning", "going_home", "homing", "retour_station"} or reason_code == "mower_returning":
+        return "Robot en retour station: attendre qu'elle soit prête."
+    if operation_state in {"charging", "en_charge"}:
+        return "Robot en charge: attendre qu'elle soit prête."
+    if reason_code == "mower_starting":
+        return "Robot en démarrage: attendre qu'elle soit prête."
+    if reason_code == "mower_zoning":
+        return "Robot en changement de zone: attendre qu'elle soit prête."
+    if reason_code == "mower_searching_zone":
+        return "Robot en recherche de zone: attendre qu'elle soit prête."
+    if operation_label:
+        return f"Robot {operation_label[0].lower()}{operation_label[1:]}."
+    return None
+
+
+def _apply_public_mower_aliases(attrs: dict[str, object]) -> dict[str, object]:
+    tondeuse_erreur = attrs.get("tondeuse_erreur")
+    if tondeuse_erreur not in (None, "", [], {}):
+        attrs.setdefault("tondeuse_erreur_code", tondeuse_erreur)
+        attrs.setdefault("mower_error", tondeuse_erreur)
+    mower_operation_state = attrs.get("mower_operation_state")
+    if mower_operation_state not in (None, "", [], {}):
+        attrs.setdefault("mower_activity_code", mower_operation_state)
+    return attrs
 
 
 def _minute_range_display(start_minute: object, end_minute: object) -> str | None:
@@ -1060,8 +1138,8 @@ class GazonPhaseActiveSensor(GazonEntityBase, SensorEntity):
                     attrs["type_sol"] = type_sol
                 pluie_demain_source = extra.get("pluie_demain_source")
                 if pluie_demain_source is not None:
-                    if pluie_demain_source == "indisponible":
-                        pluie_demain_source = "non disponible"
+                    if pluie_demain_source == PLUIE_SOURCE_INDISPONIBLE:
+                        pluie_demain_source = PLUIE_SOURCE_NON_DISPONIBLE
                     attrs["pluie_demain_source"] = pluie_demain_source
         if attrs:
             return attrs
@@ -1141,6 +1219,7 @@ class GazonSousPhaseSensor(GazonEntityBase, SensorEntity):
         possible_values = self._possible_values_attr("sous_phase")
         if possible_values:
             attrs.update(possible_values)
+        attrs = _apply_public_mower_aliases(attrs)
         return attrs or None
 
 
@@ -1190,6 +1269,17 @@ class GazonObjectifMmSensor(GazonEntityBase, SensorEntity):
             "depletion_mm",
             "depletion_allowed_mm",
             "mad_ratio",
+            "mad_ratio_base",
+            "mad_ratio_effective",
+            "mad_band",
+            "mad_reason",
+            "mad_policy_enabled",
+            "mad_policy_source",
+            "mad_policy_inputs",
+            "mad_policy_candidate_band",
+            "mad_policy_candidate_ratio",
+            "mad_hysteresis_state",
+            "mad_threshold_mm",
             "soil_moisture_override_state",
             "soil_moisture_confidence_adjustment",
             "et0_mm",
@@ -1467,11 +1557,74 @@ class GazonReserveActuelleSensor(GazonEntityBase, SensorEntity):
             "reserve_minimale_mm",
             "depletion_mm",
             "depletion_ratio",
+            "mad_ratio_base",
+            "mad_ratio_effective",
+            "mad_band",
+            "mad_reason",
+            "mad_policy_enabled",
+            "mad_policy_source",
+            "mad_policy_inputs",
+            "mad_policy_candidate_band",
+            "mad_policy_candidate_ratio",
+            "mad_hysteresis_state",
+            "mad_threshold_mm",
+            "reserve_actuelle_source",
+            "bilan_hydrique_mm",
+            "bilan_hydrique_journalier_mm",
+            "arrosage_recent_jour",
+            "arrosage_recent_3j",
+            "arrosage_recent_7j",
+            "pluie_efficace",
+            "retour_arrosage",
+            "et0_mm",
         ) or {}
+        soil_balance = self._decision_value("soil_balance")
+        if isinstance(soil_balance, dict):
+            attrs["soil_balance_reserve_mm"] = soil_balance.get("reserve_mm")
+            attrs["soil_balance_previous_reserve_mm"] = soil_balance.get("previous_reserve_mm")
+            attrs["soil_balance_delta_mm"] = soil_balance.get("delta_mm")
+            attrs.setdefault("reserve_actuelle_source", soil_balance.get("reserve_mm"))
+        if attrs.get("reserve_actuelle_source") in (None, "", [], {}):
+            attrs["reserve_actuelle_source"] = attrs.get("reserve_stock_mm")
         attrs = _add_hydric_storage_aliases(self, attrs)
         hydric_state = _hydric_state_for_objective_sensor(self, attrs)
         if hydric_state is not None:
             attrs["hydric_state"] = hydric_state
+        # LOT A — santé capteurs (lecture directe coordinator.data)
+        _data = getattr(self.coordinator, "data", None) or {}
+        _sh = _data.get("sensor_health")
+        if isinstance(_sh, dict) and _sh:
+            attrs["sensor_health"] = _sh
+        # LOT E — risque fongique calculé directement ici (garanti indépendant de coordinator.data)
+        try:
+            _now = dt_util.now() if dt_util is not None else None
+            _hour = _now.hour if _now is not None else 12
+            _temp = self._decision_value("temperature")
+            _hum = self._decision_value("weather_humidity") or self._decision_value("humidite")
+            _rosee = self._decision_value("rosee")
+            _p24 = self._decision_value("pluie_24h") or self._decision_value("pluie_efficace") or 0.0
+            _pdem = self._decision_value("pluie_demain") or 0.0
+            _fr = _sensor_compute_fungal_risk(
+                temperature=_temp,
+                humidite=_hum,
+                rosee=_rosee,
+                pluie_24h=_p24,
+                pluie_demain=_pdem,
+                hour_of_day=_hour,
+            )
+            attrs.update(_fr)
+        except Exception:  # noqa: BLE001
+            pass
+        # LOT B — urgence hydrique malgré blocage
+        _crit = _data.get("irrigation_blocked_but_critical")
+        if _crit is not None:
+            attrs["irrigation_blocked_but_critical"] = bool(_crit)
+        _cmm = _data.get("critical_deficit_mm")
+        if _cmm is not None:
+            attrs["critical_deficit_mm"] = _cmm
+        _cr = _data.get("critical_irrigation_reason")
+        if _cr is not None:
+            attrs["critical_irrigation_reason"] = _cr
         return attrs or None
 
 
@@ -1537,6 +1690,17 @@ class GazonEtatHydriqueSensor(GazonEntityBase, SensorEntity):
             "reserve_minimale_mm",
             "depletion_mm",
             "depletion_ratio",
+            "mad_ratio_base",
+            "mad_ratio_effective",
+            "mad_band",
+            "mad_reason",
+            "mad_policy_enabled",
+            "mad_policy_source",
+            "mad_policy_inputs",
+            "mad_policy_candidate_band",
+            "mad_policy_candidate_ratio",
+            "mad_hysteresis_state",
+            "mad_threshold_mm",
         ) or {}
         attrs = _add_hydric_storage_aliases(self, attrs)
         hydric_state = _hydric_state_for_objective_sensor(self, attrs)
@@ -1603,7 +1767,19 @@ class GazonTypeArrosageSensor(GazonEntityBase, SensorEntity):
             possible_values = [value for value in possible_values if value != "Réglage personnalisé"]
         if not possible_values:
             return None
-        return {"possible_values": possible_values}
+        attrs = {"possible_values": possible_values}
+        # LOT B — urgence hydrique malgré blocage (lecture directe coordinator.data)
+        data = getattr(self.coordinator, "data", None) or {}
+        critical = data.get("irrigation_blocked_but_critical")
+        if critical is not None:
+            attrs["irrigation_blocked_but_critical"] = bool(critical)
+        critical_mm = data.get("critical_deficit_mm")
+        if critical_mm is not None:
+            attrs["critical_deficit_mm"] = critical_mm
+        critical_reason = data.get("critical_irrigation_reason")
+        if critical_reason is not None:
+            attrs["critical_irrigation_reason"] = critical_reason
+        return attrs
 
 
 class GazonDernierArrosageDetecteSensor(GazonEntityBase, SensorEntity):
@@ -1618,14 +1794,38 @@ class GazonDernierArrosageDetecteSensor(GazonEntityBase, SensorEntity):
         super().__init__(coordinator)
         self._set_entity_identity("sensor", "dernier_arrosage_detecte")
 
+    def _configured_zone_ids(self) -> set[str]:
+        iterator = getattr(self.coordinator, "_iter_zones_with_rate", None)
+        if not callable(iterator):
+            return set()
+        return {
+            str(entity_id).strip()
+            for entity_id, _rate in iterator()
+            if str(entity_id).strip()
+        }
+
     def _latest_zone_session(self) -> dict[str, object] | None:
         history = getattr(self.coordinator, "history", None)
         if not isinstance(history, list):
             return None
+        allowed_zone_ids = self._configured_zone_ids()
         for item in reversed(history):
             if not isinstance(item, dict):
                 continue
-            if item.get("type") == "arrosage" and item.get("source") == "zone_session":
+            if item.get("type") != "arrosage" or item.get("source") != "zone_session":
+                continue
+            zones = item.get("zones")
+            if not allowed_zone_ids:
+                return item
+            if not isinstance(zones, list):
+                continue
+            item_zone_ids = {
+                str(zone.get("entity_id") or zone.get("zone") or "").strip()
+                for zone in zones
+                if isinstance(zone, dict)
+            }
+            item_zone_ids.discard("")
+            if item_zone_ids & allowed_zone_ids:
                 return item
         return None
 
@@ -2539,7 +2739,7 @@ class GazonProchaineTonteSensor(GazonEntityBase, SensorEntity):
         self._set_entity_identity("sensor", "prochaine_tonte")
 
     def _mowing_attrs(self) -> dict[str, object]:
-        return self._attrs_from_result(
+        keys = (
             "next_mowing_date",
             "next_mowing_display",
             "mowing_window_reason",
@@ -2553,7 +2753,26 @@ class GazonProchaineTonteSensor(GazonEntityBase, SensorEntity):
             "mowing_resume_requires_full_battery",
             "tondeuse_prochain_depart",
             "tondeuse_prochain_depart_display",
-        ) or {}
+            "tondeuse_statut",
+            "tondeuse_statut_libelle",
+            "mowing_machine_unavailable_detail",
+            "mowing_machine_unavailable_label",
+            "mowing_block_reason_code",
+            "mowing_block_reason_label",
+            "mower_operation_state",
+            "mower_operation_label",
+            "mower_reason_code",
+            "mower_reason_label",
+        )
+        attrs = self._attrs_from_data(*keys) or {}
+        facade = _public_mowing_facade(self)
+        for key in keys:
+            if facade.get(key) is not None:
+                attrs[key] = facade.get(key)
+        missing = tuple(key for key in keys if key not in attrs)
+        if missing:
+            attrs.update(self._attrs_from_result(*missing) or {})
+        return attrs or {}
 
     @property
     def native_value(self):
@@ -2582,9 +2801,19 @@ class GazonProchaineTonteSensor(GazonEntityBase, SensorEntity):
         block_reason = str(
             attrs.get("raison_blocage_code") or attrs.get("mowing_block_reason_code") or ""
         ).strip()
+        machine_label = str(attrs.get("mowing_machine_unavailable_label") or "").strip()
+        if block_reason == "machine_unavailable" and not machine_label:
+            machine_label = _fallback_machine_unavailable_label_from_attrs(
+                {
+                    **(_coordinator_snapshot(self.coordinator) or {}),
+                    **attrs,
+                }
+            ) or ""
         block_reason_label = str(
             attrs.get("mowing_block_reason_label") or attrs.get("raison_blocage_tonte") or ""
         ).strip()
+        if block_reason == "machine_unavailable" and machine_label:
+            block_reason_label = machine_label
         reason = str(
             block_reason_label or attrs.get("raison_blocage_tonte") or attrs.get("mowing_window_reason") or ""
         ).strip()
@@ -2595,7 +2824,7 @@ class GazonProchaineTonteSensor(GazonEntityBase, SensorEntity):
         )
         if not action_possible and next_display:
             if block_reason == "mowing_night":
-                summary = "Tonte possible demain matin"
+                summary = "Tonte possible au lever du jour"
             elif block_reason in {"wet_grass", "rosee_persistante", "soil_wet"}:
                 summary = "Tonte possible après ressuyage"
             elif block_reason in {"recent_watering", "watering_cooldown", "watering_in_progress"}:
@@ -2603,7 +2832,6 @@ class GazonProchaineTonteSensor(GazonEntityBase, SensorEntity):
             elif block_reason in {"pluie_en_cours", "pluie_annoncee", "pluie_proche", "rain", "rain_detected"}:
                 summary = "Tonte possible après l'épisode pluvieux"
             elif block_reason == "machine_unavailable":
-                machine_label = str(attrs.get("mowing_machine_unavailable_label") or "").strip()
                 summary = machine_label or "Tonte possible dès que le robot est prêt"
             elif block_reason == "mowing_spacing":
                 summary = f"Tonte à reconsidérer le {next_display}"
@@ -2617,9 +2845,9 @@ class GazonProchaineTonteSensor(GazonEntityBase, SensorEntity):
             "target_datetime_display": mower_departure_display or _human_datetime_text(mower_departure),
             "action_possible": action_possible,
             "tonte_statut": attrs.get("tonte_statut"),
-            "block_reason": attrs.get("raison_blocage_code"),
+            "block_reason": block_reason or None,
             "machine_unavailable_detail": attrs.get("mowing_machine_unavailable_detail"),
-            "machine_unavailable_label": attrs.get("mowing_machine_unavailable_label"),
+            "machine_unavailable_label": machine_label or None,
             "daily_session_limit": attrs.get("mowing_daily_session_limit"),
             "daily_session_policy": attrs.get("mowing_daily_session_policy"),
             "resume_requires_full_battery": attrs.get("mowing_resume_requires_full_battery"),
@@ -2928,6 +3156,9 @@ class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):
 
     @property
     def native_value(self):
+        facade = _public_mowing_facade(self)
+        if facade.get("tonte_statut") not in (None, "", [], {}):
+            return facade.get("tonte_statut")
         return self._decision_value("tonte_statut")
 
     @staticmethod
@@ -2994,6 +3225,7 @@ class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):
         possible_values = self._possible_values_attr("tonte_statut")
         if possible_values:
             attrs.update(possible_values)
+        attrs = _apply_public_mower_aliases(attrs)
         return attrs or None
 
 
@@ -3007,7 +3239,10 @@ class GazonAssistantSensor(GazonEntityBase, SensorEntity):
         self._set_entity_identity("sensor", "assistant")
 
     def _assistant_payload(self) -> dict[str, object]:
-        assistant = self._decision_value("assistant")
+        facade = _public_mowing_facade(self)
+        assistant = facade.get("assistant")
+        if not isinstance(assistant, dict) or not assistant:
+            assistant = self._decision_value("assistant")
         if isinstance(assistant, dict) and assistant:
             return assistant
 
@@ -3514,6 +3749,11 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
             "soil_drainage_factor",
             "soil_infiltration_factor",
             "soil_need_factor",
+            "dose_enabled",
+            "dose_band",
+            "dose_reason",
+            "target_cycle_mm",
+            "objective_mm_source",
             "feedback_observation",
             "application_post_watering_status",
             "auto_irrigation_enabled",
@@ -3575,6 +3815,11 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
             "soil_drainage_factor",
             "soil_infiltration_factor",
             "soil_need_factor",
+            "dose_enabled",
+            "dose_band",
+            "dose_reason",
+            "target_cycle_mm",
+            "objective_mm_source",
             "feedback_observation",
             "application_post_watering_status",
             "forecast_pluie_j2",
@@ -3787,3 +4032,28 @@ class GazonRisqueGazonSensor(GazonEntityBase, SensorEntity):
     @property
     def native_value(self):
         return self._decision_value("risque_gazon")
+
+    @property
+    def extra_state_attributes(self):
+        # Lecture directe depuis coordinator.data pour les champs post-snapshot
+        # (fungal_risk et sensor_health sont injectés après result.to_snapshot()
+        #  et ne sont pas dans result.extra — _decision_value ne les trouve pas fiablement)
+        data = getattr(self.coordinator, "data", None) or {}
+        attrs: dict = {}
+        # LOT E — risque fongique
+        fungal_level = data.get("fungal_risk_level")
+        if fungal_level is not None:
+            attrs["fungal_risk_level"] = fungal_level
+        fungal_score = data.get("fungal_risk_score")
+        if fungal_score is not None:
+            attrs["fungal_risk_score"] = fungal_score
+        fungal_reasons = data.get("fungal_risk_reasons")
+        if fungal_reasons is not None:
+            attrs["fungal_risk_reasons"] = fungal_reasons
+        attrs["fungal_risk_evening_block"] = bool(data.get("fungal_risk_evening_block") or False)
+        attrs["fungal_risk_reduce_watering"] = bool(data.get("fungal_risk_reduce_watering") or False)
+        # LOT A — santé capteurs
+        sensor_health = data.get("sensor_health")
+        if isinstance(sensor_health, dict):
+            attrs["sensor_health"] = sensor_health
+        return attrs or None

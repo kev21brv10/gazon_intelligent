@@ -162,11 +162,11 @@
     },
     "set_date_action": {
       "name": "Registrar fecha",
-      "description": "Indica la fecha real de la intervención (DD/MM/AAAA). Si está vacío, se usa hoy.",
+      "description": "Indica la fecha real de la acción (DD/MM/AAAA o AAAA-MM-DD). Si está vacío, se usa hoy.",
       "fields": {
         "date_action": {
           "name": "Fecha",
-          "description": "Fecha en formato DD/MM/AAAA."
+          "description": "Fecha en formato DD/MM/AAAA o AAAA-MM-DD."
         }
       }
     },
@@ -203,12 +203,12 @@
       }
     },
     "start_application_irrigation": {
-      "name": "Water now",
-      "description": "Triggers a controlled post-application watering without directly driving the zones."
+      "name": "Regar ahora",
+      "description": "Lanza un riego controlado postaplicación sin accionar directamente las zonas."
     },
     "declare_intervention": {
       "name": "Declarar una intervención",
-      "description": "Registra una intervención real. Los ajustes del producto se definen en \"Registrar un producto\"; aquí solo eliges el producto ya registrado, la fecha, la zona y una nota opcional. Si existen varios productos, se requiere un ID o un nombre exacto.",
+      "description": "Registra una intervención real. Los ajustes del producto se definen en \"Registrar un producto\"; aquí solo eliges el producto ya registrado, la fecha, la zona y una nota opcional. Si no se proporciona un producto explícito, la integración puede usar la selección actual de la UI o devolver un error claro.",
       "fields": {
         "intervention": {
           "name": "Intervención",
@@ -216,7 +216,7 @@
         },
         "date_action": {
           "name": "Fecha de acción (opcional)",
-          "description": "Fecha en formato DD/MM/AAAA. Si está vacío, se usa hoy."
+          "description": "Fecha en formato DD/MM/AAAA o AAAA-MM-DD. Si está vacío, se usa hoy."
         },
         "produit_id": {
           "name": "ID de producto (opcional)",
@@ -277,32 +277,32 @@
           "description": "Lista los meses permitidos. Ejemplo: 3,4,5,9,10 o marzo a mayo + septiembre a octubre."
         },
         "application_type": {
-          "name": "Application type (optional)",
-          "description": "soil or foliar."
+          "name": "Tipo de aplicación (opcional)",
+          "description": "suelo o foliar."
         },
         "application_requires_watering_after": {
-          "name": "Watering after application required (optional)",
-          "description": "Indicates whether a technical watering should follow."
+          "name": "Riego posterior requerido (opcional)",
+          "description": "Indica si debe seguir un riego técnico."
         },
         "application_post_watering_mm": {
-          "name": "Post-application watering (mm, optional)",
-          "description": "Technical amount of water to apply after the application."
+          "name": "Riego posterior (mm, opcional)",
+          "description": "Cantidad técnica de agua a aplicar tras la intervención."
         },
         "application_irrigation_block_hours": {
-          "name": "Watering block (h, optional)",
-          "description": "Automatic block duration after application."
+          "name": "Bloqueo de riego (h, opcional)",
+          "description": "Duración del bloqueo automático tras la intervención."
         },
         "application_irrigation_delay_minutes": {
-          "name": "Delay before watering (min, optional)",
-          "description": "Waiting time before authorizing post-application watering."
+          "name": "Espera antes de regar (min, opcional)",
+          "description": "Tiempo de espera antes de autorizar el riego posterior."
         },
         "application_irrigation_mode": {
-          "name": "Post-application watering mode (optional)",
-          "description": "auto, manual or suggestion."
+          "name": "Modo de riego posterior (opcional)",
+          "description": "auto, manual o sugerencia."
         },
         "application_label_notes": {
-          "name": "Label notes (optional)",
-          "description": "Informational notes related to the product label."
+          "name": "Notas de etiqueta (opcional)",
+          "description": "Notas informativas relacionadas con la etiqueta del producto."
         },
         "note": {
           "name": "Nota (opcional)",
@@ -322,11 +322,15 @@
     },
     "declare_mowing": {
       "name": "Declarar corte",
-      "description": "Registra un corte de césped en el historial.",
+      "description": "Registra un corte en el historial del césped objetivo. Elige la entidad de autorización de corte del césped correspondiente.",
       "fields": {
+        "entity_id": {
+          "name": "Entidad de corte",
+          "description": "Elige la entidad binary_sensor.*_tonte_autorisee del césped correspondiente. Ejemplo principal: binary_sensor.gazon_intelligent_tonte_autorisee. Ejemplo potager: binary_sensor.gazon_intelligent_gazon_potager_tonte_autorisee."
+        },
         "date_action": {
           "name": "Fecha de corte (opcional)",
-          "description": "Fecha en formato DD/MM/AAAA. Si está vacío, se usa hoy."
+          "description": "Fecha en formato DD/MM/AAAA o AAAA-MM-DD. Si está vacío, se usa hoy."
         }
       }
     },
@@ -336,7 +340,7 @@
       "fields": {
         "date_action": {
           "name": "Fecha de riego (opcional)",
-          "description": "Fecha en formato DD/MM/AAAA. Si está vacío, se usa hoy."
+          "description": "Fecha en formato DD/MM/AAAA o AAAA-MM-DD. Si está vacío, se usa hoy."
         },
         "objectif_mm": {
           "name": "Cantidad aplicada (opcional)",

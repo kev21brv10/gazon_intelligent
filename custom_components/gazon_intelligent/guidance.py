@@ -238,7 +238,9 @@ def _compute_transition_sursemis_pret(
         and pluie_probabilite_24h < 65.0
         and temperature >= 8.0
     )
-    return age_ok and progression_ok and tonte_ok and height_ok and weather_ok, tonte_count
+    # Température doit être suffisante pour enracinement actif
+    temp_ok = temperature >= 12.0  # En dessous, enracinement trop lent même si jours écoulés
+    return age_ok and progression_ok and tonte_ok and height_ok and weather_ok and temp_ok, tonte_count
 
 
 def _select_sursemis_policy(
@@ -361,6 +363,13 @@ def _sursemis_micro_apport_decision(
         if allowed
         else "pluie récente ou prévue, stratégie semis_frequent reportée."
     )
+    # Guard germination basse température
+    WATERING_STAGE_GERMINATION_KEY = "Germination"
+    WATERING_STAGE_LEVEE_KEY = "Levée"
+    if sous_phase in {WATERING_STAGE_GERMINATION_KEY, WATERING_STAGE_LEVEE_KEY} and temperature <= 8.0:
+        allowed = False
+        block_reason = "temperature_trop_basse_germination"
+        reason = "Germination bloquée: température trop basse pour la levée."
     if not allowed:
         block_reason = "pluie_prevue_suffisante"
         if temperature <= temperature_min:
@@ -654,17 +663,21 @@ def _rain_signals(
     pluie_3j: float,
     pluie_probabilite_max_3j: float,
 ) -> tuple[bool, bool]:
+    # Confiance J+1 = 70%, J+2 = 45%, J+3 = 30%
+    pluie_demain_effective = pluie_demain * 0.70
+    pluie_j2_effective = pluie_j2 * 0.45
+    pluie_3j_effective = pluie_3j * 0.30
     pluie_compensatrice = (
-        pluie_demain >= max(2.0, objective_reference_mm * 0.8)
-        or pluie_j2 >= max(2.0, objective_reference_mm * 0.8)
-        or pluie_3j >= max(4.0, objective_reference_mm * 1.2)
+        pluie_demain_effective >= max(2.0, objective_reference_mm * 0.8)
+        or pluie_j2_effective >= max(2.0, objective_reference_mm * 0.8)
+        or pluie_3j_effective >= max(4.0, objective_reference_mm * 1.2)
         or pluie_probabilite_max_3j >= 80.0
     )
     pluie_proche = (
         pluie_24h >= 4.0
-        or pluie_demain >= 4.0
-        or pluie_j2 >= 4.0
-        or pluie_3j >= 6.0
+        or pluie_demain_effective >= 4.0
+        or pluie_j2_effective >= 4.0
+        or pluie_3j_effective >= 6.0
         or pluie_probabilite_max_3j >= 80.0
     )
     return pluie_compensatrice, pluie_proche
@@ -781,13 +794,25 @@ def _evening_window_allowed(
     water_balance: dict[str, float],
     objectif_mm: float,
     heat_stress_level: str = "normal",
+    fungal_risk_level: str | None = None,
 ) -> bool:
+    # Bloquer fenêtre soir avril-septembre sauf déficit critique
+    today = _current_date()
+    month = today.month
+    if month in {4, 5, 6, 7, 8, 9}:
+        CRITICAL_THRESHOLD = -3.0
+        bilan = _reference_hydric_balance_mm(water_balance)
+        if bilan > CRITICAL_THRESHOLD:
+            return False  # Pas de soir en saison de végétation sauf urgence
     temperature = temperature if temperature is not None else 0.0
     humidite = humidite if humidite is not None else 0.0
     bilan_hydrique_mm = _reference_hydric_balance_mm(water_balance)
     arrosage_recent = water_balance.get("arrosage_recent", 0.0)
     deficit_3j = water_balance.get("deficit_3j", 0.0)
 
+    # Blocage supplémentaire si risque fongique élevé
+    if fungal_risk_level in {"moderate", "high"}:
+        return False
     if heat_stress_level == "extreme":
         return False
     if temperature < 24:

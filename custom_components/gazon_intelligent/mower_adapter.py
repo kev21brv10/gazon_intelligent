@@ -77,11 +77,70 @@ _STATUS_LABELS: dict[str, str] = {
     "inconnu": "Inconnu",
 }
 
+_RAW_STATE_LABELS: dict[str, str] = {
+    "mowing": "Tonte en cours",
+    "edgecut": "Coupe des bordures",
+    "starting": "Démarrage",
+    "returning": "Retour station",
+    "going_home": "Retour station",
+    "paused": "En pause",
+    "docked": "À la station",
+    "idle": "Au repos",
+    "charging": "En charge",
+    "zoning": "Changement de zone",
+    "searching_zone": "Recherche de zone",
+    "escaped_digital_fence": "Sortie du périmètre",
+    "rain_delayed": "Pause pluie",
+    "rain_delay": "Pause pluie",
+    "error": "En erreur",
+    "unavailable": "Indisponible",
+    "unknown": "Inconnu",
+}
+
+_ERROR_LABELS: dict[str, str] = {
+    "no_error": "Aucune erreur",
+    "trapped": "Tondeuse coincée",
+    "lifted": "Tondeuse soulevée",
+    "wire_missing": "Fil périmétrique manquant",
+    "outside_wire": "Tondeuse hors périmètre",
+    "rain_delay": "Pause pluie active",
+    "close_door_to_mow": "Fermer le capot pour tondre",
+    "close_door_to_go_home": "Fermer le capot pour retour station",
+    "blade_motor_blocked": "Moteur de lame bloqué",
+    "wheel_motor_blocked": "Moteur de roue bloqué",
+    "trapped_timeout": "Tondeuse coincée trop longtemps",
+    "upside_down": "Tondeuse retournée",
+    "battery_low": "Batterie faible",
+    "reverse_wire": "Fil périmétrique inversé",
+    "charge_error": "Erreur de charge",
+    "timeout_finding_home": "Temps dépassé pour trouver la base",
+    "locked": "Tondeuse verrouillée",
+    "battery_temperature_error": "Température batterie anormale",
+    "battery_trunk_open_timeout": "Capot batterie ouvert trop longtemps",
+    "wire_sync": "Erreur de synchronisation du fil",
+    "charging_station_docking_error": "Erreur d'arrimage à la station",
+    "hbi_error": "Erreur HBI",
+    "ota_error": "Erreur de mise à jour",
+    "map_error": "Erreur de cartographie",
+    "excessive_slope": "Pente excessive",
+    "unreachable_zone": "Zone inatteignable",
+    "unreachable_charging_station": "Station inatteignable",
+    "insufficient_sensor_data": "Données capteurs insuffisantes",
+    "training_start_disallowed": "Démarrage de l'apprentissage interdit",
+    "camera_error": "Erreur caméra",
+    "mapping_exploration_required": "Exploration de cartographie requise",
+    "mapping_exploration_failed": "Échec de l'exploration cartographique",
+    "rfid_reader_error": "Erreur lecteur RFID",
+    "headlight_error": "Erreur de phare",
+    "missing_charging_station": "Station de charge introuvable",
+    "blade_height_adjustment_blocked": "Réglage de hauteur de lame bloqué",
+}
+
 
 def _status_label(status: str, raw_state: Any) -> str | None:
     lowered = str(raw_state or "").strip().lower()
-    if status == "tonte_en_cours" and lowered == "edgecut":
-        return "Coupe des bordures"
+    if lowered in _RAW_STATE_LABELS:
+        return _RAW_STATE_LABELS[lowered]
     return _human_label(status)
 
 
@@ -103,6 +162,8 @@ def _normalize_error_code(raw_error: Any) -> str | None:
 def _human_label(value: str | None) -> str | None:
     if not value:
         return None
+    if value in _ERROR_LABELS:
+        return _ERROR_LABELS[value]
     if value in _STATUS_LABELS:
         return _STATUS_LABELS[value]
     return value.replace("_", " ").strip().capitalize()

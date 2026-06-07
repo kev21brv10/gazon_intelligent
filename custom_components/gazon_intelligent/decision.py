@@ -169,6 +169,8 @@ def _build_legacy_runtime_bundles(
         "advanced_context": advanced_context,
         "water_balance": water_balance,
         "objectif_mm": objectif_mm,
+        "target_cycle_mm": objectif_mm,
+        "objective_mm_source": "legacy",
     }
     risk_bundle = {
         "scores": {
@@ -227,6 +229,7 @@ def _build_decision_extra(
     )
     advanced_context = water_bundle.get("advanced_context") or {}
     water_balance = water_bundle.get("water_balance") or {}
+    dose_policy = water_bundle.get("dose_policy") or {}
     mower_context = {
         key: value
         for key, value in mowing_bundle.items()
@@ -280,11 +283,39 @@ def _build_decision_extra(
         "reserve_fill_ratio": water_balance.get("reserve_fill_ratio"),
         "reserve_available_ratio": water_balance.get("reserve_available_ratio"),
         "mad_ratio": water_balance.get("mad_ratio"),
+        "mad_ratio_base": water_balance.get("mad_ratio_base"),
+        "mad_ratio_effective": water_balance.get("mad_ratio_effective"),
+        "mad_band": water_balance.get("mad_band"),
+        "mad_reason": water_balance.get("mad_reason"),
+        "mad_policy_enabled": water_balance.get("mad_policy_enabled"),
+        "mad_policy_source": water_balance.get("mad_policy_source"),
+        "mad_policy_inputs": water_balance.get("mad_policy_inputs"),
+        "mad_policy_candidate_band": water_balance.get("mad_policy_candidate_band"),
+        "mad_policy_candidate_ratio": water_balance.get("mad_policy_candidate_ratio"),
+        "mad_hysteresis_state": water_balance.get("mad_hysteresis_state"),
+        "mad_threshold_mm": water_balance.get("mad_threshold_mm"),
+        "dose_policy": dose_policy or None,
+        "dose_enabled": water_bundle.get("dose_enabled"),
+        "dose_policy_enabled": dose_policy.get("enabled") if isinstance(dose_policy, dict) else None,
+        "dose_policy_source": dose_policy.get("source") if isinstance(dose_policy, dict) else None,
+        "dose_band": dose_policy.get("dose_band") if isinstance(dose_policy, dict) else None,
+        "dose_reason": dose_policy.get("dose_reason") if isinstance(dose_policy, dict) else None,
+        "dose_mm_base": dose_policy.get("dose_mm_base") if isinstance(dose_policy, dict) else None,
+        "dose_mm_effective": dose_policy.get("dose_mm_effective") if isinstance(dose_policy, dict) else None,
+        "dose_mm_target": dose_policy.get("dose_mm_target") if isinstance(dose_policy, dict) else None,
+        "dose_mm_min": dose_policy.get("dose_mm_min") if isinstance(dose_policy, dict) else None,
+        "dose_mm_max": dose_policy.get("dose_mm_max") if isinstance(dose_policy, dict) else None,
+        "dose_candidate_band": dose_policy.get("candidate_band") if isinstance(dose_policy, dict) else None,
+        "dose_candidate_mm": dose_policy.get("candidate_mm") if isinstance(dose_policy, dict) else None,
+        "dose_candidate_reason": dose_policy.get("candidate_reason") if isinstance(dose_policy, dict) else None,
+        "dose_policy_inputs": dose_policy.get("dose_inputs") if isinstance(dose_policy, dict) else None,
         "depletion_allowed_mm": water_balance.get("depletion_allowed_mm"),
         "reserve_minimale_mm": water_balance.get("reserve_minimale_mm"),
         "depletion_mm": water_balance.get("depletion_mm"),
         "depletion_ratio": water_balance.get("depletion_ratio"),
         "objectif_mm": watering_bundle.get("objectif_mm"),
+        "target_cycle_mm": water_bundle.get("target_cycle_mm"),
+        "objective_mm_source": water_bundle.get("objective_mm_source"),
         "objectif_mm_brut": water_bundle.get("objectif_mm_brut"),
         "objectif_mm_executable": watering_bundle.get("objectif_mm"),
         "deficit_brut_mm": watering_bundle.get("deficit_brut_mm"),
@@ -319,6 +350,7 @@ def _build_decision_extra(
         "surface_sec": watering_bundle.get("surface_sec"),
         "use_depletion_logic": water_bundle.get("use_depletion_logic"),
         "mm_cible_depletion": water_bundle.get("mm_cible_depletion"),
+        "mad_policy": water_bundle.get("mad_policy"),
         "sursemis_micro_apport_allowed": watering_bundle.get("sursemis_micro_apport_allowed"),
         "sursemis_block_reason": watering_bundle.get("sursemis_block_reason"),
         "sursemis_reason": watering_bundle.get("sursemis_reason"),
@@ -336,6 +368,8 @@ def _build_decision_extra(
         "mowing_window_state": mowing_bundle.get("mowing_window_state"),
         "mowing_window_label": mowing_bundle.get("mowing_window_label"),
         "mowing_window_reason": mowing_bundle.get("mowing_window_reason"),
+        "mowing_daily_session_limit": mowing_bundle.get("mowing_daily_session_limit"),
+        "mowing_daily_session_policy": mowing_bundle.get("mowing_daily_session_policy"),
         "derniere_application": watering_bundle.get("derniere_application"),
         "application_type": watering_bundle.get("application_type"),
         "application_requires_watering_after": watering_bundle.get("application_requires_watering_after"),
@@ -396,6 +430,14 @@ def _build_decision_extra(
         "watering_cause": watering_bundle.get("watering_cause"),
         "type_arrosage": watering_bundle.get("type_arrosage"),
         "arrosage_conseille": watering_bundle.get("arrosage_conseille"),
+        "irrigation_need_mm": watering_bundle.get("irrigation_need_mm"),
+        "irrigation_agronomic_recommendation": watering_bundle.get("irrigation_agronomic_recommendation"),
+        "irrigation_blocked": watering_bundle.get("irrigation_blocked"),
+        "irrigation_execution_allowed": watering_bundle.get("irrigation_execution_allowed"),
+        # LOT B — urgence hydrique malgré blocage
+        "irrigation_blocked_but_critical": watering_bundle.get("irrigation_blocked_but_critical"),
+        "critical_deficit_mm": watering_bundle.get("critical_deficit_mm"),
+        "critical_irrigation_reason": watering_bundle.get("critical_irrigation_reason"),
         "raison_decision": watering_bundle.get("raison_decision"),
         "conseil_principal": watering_bundle.get("conseil_principal"),
         "action_recommandee": watering_bundle.get("action_recommandee"),

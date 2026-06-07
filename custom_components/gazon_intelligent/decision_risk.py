@@ -3,6 +3,7 @@ from __future__ import annotations
 """Logique pure de risque et de fenêtre optimale."""
 
 from typing import Any
+import logging
 
 from .decision_models import DecisionContext
 from .guidance import _reference_hydric_balance_mm, compute_action_guidance, compute_next_reevaluation
@@ -158,3 +159,83 @@ def _decision_urgence(
     if niveau_action in {"a_faire", "surveiller"} or bilan_hydrique_mm <= -0.5:
         return _normalize_urgence("moyenne")
     return _normalize_urgence("faible")
+
+
+def compute_fungal_risk(
+    *,
+    temperature: float | None,
+    humidite: float | None,
+    rosee: float | None,
+    pluie_24h: float | None,
+    pluie_demain: float | None,
+    hour_of_day: int = 12,
+) -> dict[str, Any]:
+    """Évalue le risque fongique simplifié (oïdium, rouille, septoriose).
+
+    Conditions favorables aux maladies :
+    - Température 12-24°C (optimum 15-22°C)
+    - Humidité air >= 85%
+    - Rosée présente ou pluie récente
+    - Période nocturne ou tôt le matin
+    """
+    t = float(temperature or 0.0)
+    h = float(humidite or 0.0)
+    r = float(rosee or 0.0)
+    p24 = float(pluie_24h or 0.0)
+    p_demain = float(pluie_demain or 0.0)
+
+    score = 0
+    reasons = []
+
+    # Température favorable
+    if 12.0 <= t <= 24.0:
+        score += 2
+        reasons.append(f"température favorable ({t:.0f}°C)")
+    elif 10.0 <= t < 12.0 or 24.0 < t <= 26.0:
+        score += 1
+
+    # Humidité élevée
+    if h >= 90.0:
+        score += 3
+        reasons.append(f"humidité très élevée ({h:.0f}%)")
+    elif h >= 85.0:
+        score += 2
+        reasons.append(f"humidité élevée ({h:.0f}%)")
+    elif h >= 75.0:
+        score += 1
+
+    # Rosée ou pluie récente
+    if r > 0.5:
+        score += 2
+        reasons.append("rosée présente")
+    elif r > 0:
+        score += 1
+    if p24 >= 2.0:
+        score += 1
+        reasons.append(f"pluie récente ({p24:.0f} mm)")
+
+    # Période à risque (nuit/matin)
+    if hour_of_day <= 8 or hour_of_day >= 20:
+        score += 1
+        reasons.append("période nocturne ou matinale")
+
+    # Pluie demain = humectation prolongée attendue
+    if p_demain >= 3.0:
+        score += 1
+
+    if score >= 7:
+        level = "high"
+    elif score >= 4:
+        level = "moderate"
+    elif score >= 2:
+        level = "low"
+    else:
+        level = "none"
+
+    return {
+        "fungal_risk_level": level,
+        "fungal_risk_score": score,
+        "fungal_risk_reasons": reasons,
+        "fungal_risk_evening_block": level in {"moderate", "high"},
+        "fungal_risk_reduce_watering": level == "high",
+    }

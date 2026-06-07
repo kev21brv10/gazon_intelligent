@@ -98,6 +98,15 @@ class _FakeCoordinator:
     auto_irrigation_enabled: bool = True
     mode: str = "Sursemis"
     date_action: object | None = None
+    shared_state: object | None = None
+
+
+@dataclass
+class _FakeSharedState:
+    shared_config: dict[str, object] = field(default_factory=dict)
+
+    def get_conf(self, key: str) -> object | None:
+        return self.shared_config.get(key)
 
 
 class DiagnosticsTests(unittest.TestCase):
@@ -167,6 +176,40 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertEqual(payload["decision"]["assistant"]["action"], "aucune_action")
         self.assertEqual(payload["history_tail"][0]["summary"], "Dernier arrosage 0.5 mm")
         self.assertEqual(payload["history_tail"][0]["note"], "**REDACTED**")
+
+    def test_config_entry_diagnostics_exposes_effective_config_sources(self) -> None:
+        entry = _FakeEntry(
+            data={
+                "entite_meteo": "weather.data",
+                "capteur_temperature": "sensor.temp_data",
+                "type_sol": "argileux",
+            },
+            options={"capteur_temperature": "sensor.temp_locale"},
+        )
+        coordinator = _FakeCoordinator(
+            entry=entry,
+            shared_state=_FakeSharedState(
+                {
+                    "entite_meteo": "weather.partagee",
+                    "capteur_temperature": "sensor.temp_partagee",
+                }
+            ),
+        )
+        hass = types.SimpleNamespace(data={DOMAIN: {entry.entry_id: coordinator}})
+
+        payload = asyncio.run(diagnostics.async_get_config_entry_diagnostics(hass, entry))
+        effective = payload["config_entry"]["effective_config"]
+
+        self.assertEqual(effective["config_capteur_temperature"]["key"], "capteur_temperature")
+        self.assertEqual(effective["config_capteur_temperature"]["source"], "options")
+        self.assertEqual(effective["config_capteur_temperature"]["local"]["capteur_temperature"], "**REDACTED**")
+        self.assertEqual(effective["config_capteur_temperature"]["shared"]["capteur_temperature"], "**REDACTED**")
+        self.assertEqual(effective["config_capteur_temperature"]["entry_data"]["capteur_temperature"], "**REDACTED**")
+        self.assertEqual(effective["config_capteur_temperature"]["effective"]["capteur_temperature"], "**REDACTED**")
+        self.assertEqual(effective["config_entite_meteo"]["source"], "shared_state")
+        self.assertEqual(effective["config_entite_meteo"]["effective"]["entite_meteo"], "**REDACTED**")
+        self.assertEqual(effective["config_type_sol"]["source"], "entry_data")
+        self.assertEqual(effective["config_type_sol"]["effective"]["type_sol"], "argileux")
 
     def test_config_entry_diagnostics_falls_back_to_last_result(self) -> None:
         entry = _FakeEntry()

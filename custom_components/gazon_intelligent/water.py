@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 from typing import Any
+import logging
+
+_LOGGER = logging.getLogger(__name__)
 
 try:
     from homeassistant.util import dt as dt_util
@@ -106,6 +109,46 @@ def _zone_session_total_mm(zones: list[dict[str, Any]] | None) -> float | None:
     if not values:
         return None
     return _round_half_up_1(sum(values))
+
+
+def _normalize_allowed_zone_ids(allowed_zone_ids: Any) -> set[str]:
+    if not isinstance(allowed_zone_ids, (list, tuple, set)):
+        return set()
+    normalized: set[str] = set()
+    for raw in allowed_zone_ids:
+        text = str(raw or "").strip()
+        if text:
+            normalized.add(text)
+    return normalized
+
+
+def _zone_ids_for_item(item: dict[str, Any] | None) -> set[str]:
+    if not isinstance(item, dict):
+        return set()
+    zones = item.get("zones")
+    if not isinstance(zones, list):
+        return set()
+    zone_ids: set[str] = set()
+    for zone in zones:
+        if not isinstance(zone, dict):
+            continue
+        zone_id = str(zone.get("entity_id") or zone.get("zone") or "").strip()
+        if zone_id:
+            zone_ids.add(zone_id)
+    return zone_ids
+
+
+def _watering_item_matches_zones(
+    item: dict[str, Any] | None,
+    allowed_zone_ids: Any = None,
+) -> bool:
+    allowed = _normalize_allowed_zone_ids(allowed_zone_ids)
+    if not allowed:
+        return True
+    zone_ids = _zone_ids_for_item(item)
+    if not zone_ids:
+        return False
+    return bool(zone_ids & allowed)
 
 
 _SOIL_MODEL_BASES: dict[str, dict[str, float]] = {
@@ -258,10 +301,11 @@ def compute_recent_watering_mm(
     history: list[dict[str, Any]],
     today: date | None = None,
     days: int = 2,
+    allowed_zone_ids: Any = None,
 ) -> float:
     today = today or _current_date()
     total = 0.0
-    for item in _iter_recent_watering_items(history, today=today, days=days):
+    for item in _iter_recent_watering_items(history, today=today, days=days, allowed_zone_ids=allowed_zone_ids):
         mm = _watering_item_mm(item)
         if mm is not None:
             total += float(mm)
@@ -272,9 +316,12 @@ def _iter_recent_watering_items(
     history: list[dict[str, Any]],
     today: date,
     days: int,
+    allowed_zone_ids: Any = None,
 ):
     for item in history:
         if not isinstance(item, dict) or item.get("type") != "arrosage":
+            continue
+        if not _watering_item_matches_zones(item, allowed_zone_ids):
             continue
         raw_date = item.get("date")
         if not raw_date:
@@ -295,9 +342,10 @@ def compute_recent_watering_count(
     history: list[dict[str, Any]],
     today: date | None = None,
     days: int = 7,
+    allowed_zone_ids: Any = None,
 ) -> int:
     today = today or _current_date()
-    return sum(1 for _ in _iter_recent_watering_items(history, today=today, days=days))
+    return sum(1 for _ in _iter_recent_watering_items(history, today=today, days=days, allowed_zone_ids=allowed_zone_ids))
 
 
 def _effective_rain_mm(
@@ -331,6 +379,9 @@ def _recent_watering_windows(
         arrosage_recent_jour = max(arrosage_recent_jour, retour)
         arrosage_recent_3j = max(arrosage_recent_3j, retour)
         arrosage_recent_7j = max(arrosage_recent_7j, retour)
+    if arrosage_recent_7j > 100:
+        _LOGGER.warning("arrosage_recent_7j aberrant (%.1f mm), valeur clampée à 100 mm", arrosage_recent_7j)
+        arrosage_recent_7j = 100.0
     return {
         "jour": arrosage_recent_jour,
         "3j": arrosage_recent_3j,

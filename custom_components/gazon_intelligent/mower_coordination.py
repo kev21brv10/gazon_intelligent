@@ -10,6 +10,11 @@ _IDLE_RAW_STATES = {"idle", "standby"}
 _MOWING_RAW_STATES = {"mowing", "edgecut", "cutting", "in_operation", "working"}
 _RETURNING_RAW_STATES = {"returning", "going_home", "homing"}
 _PAUSED_RAW_STATES = {"paused", "pause", "stopped"}
+_STARTING_RAW_STATES = {"starting"}
+_ZONING_RAW_STATES = {"zoning"}
+_SEARCHING_ZONE_RAW_STATES = {"searching_zone"}
+_ESCAPED_RAW_STATES = {"escaped_digital_fence"}
+_RAIN_DELAYED_RAW_STATES = {"rain_delayed", "rain_delay"}
 
 _OPERATION_LABELS = {
     "tonte": "Tonte en cours",
@@ -17,6 +22,11 @@ _OPERATION_LABELS = {
     "idle": "Au repos",
     "charging": "En charge",
     "paused": "En pause",
+    "starting": "Démarrage",
+    "zoning": "Changement de zone",
+    "searching_zone": "Recherche de zone",
+    "escaped_digital_fence": "Sortie du périmètre",
+    "rain_delayed": "Pause pluie",
     "error": "Erreur tondeuse",
     "unknown": "Coordination tondeuse indisponible",
 }
@@ -44,7 +54,7 @@ def _normalized_raw_state(context: dict[str, Any]) -> str:
 
 
 def _operation_label(operation_state: str, raw_state: str) -> str:
-    if operation_state == "tonte" and raw_state == "edgecut":
+    if raw_state == "edgecut":
         return "Coupe des bordures"
     return _OPERATION_LABELS.get(operation_state, operation_state)
 
@@ -59,10 +69,20 @@ def _operation_state(context: dict[str, Any]) -> str:
         return "unknown"
     if charging or raw_state == "charging" or status == "en_charge":
         return "charging"
+    if raw_state in _STARTING_RAW_STATES:
+        return "starting"
     if raw_state in _MOWING_RAW_STATES or status == "tonte_en_cours":
         return "tonte"
     if raw_state in _RETURNING_RAW_STATES or status == "retour_station":
         return "transit"
+    if raw_state in _ZONING_RAW_STATES:
+        return "zoning"
+    if raw_state in _SEARCHING_ZONE_RAW_STATES:
+        return "searching_zone"
+    if raw_state in _ESCAPED_RAW_STATES:
+        return "escaped_digital_fence"
+    if raw_state in _RAIN_DELAYED_RAW_STATES:
+        return "rain_delayed"
     if raw_state in _PAUSED_RAW_STATES or status == "pause":
         return "paused"
     if status in {"erreur", "pluie"}:
@@ -85,7 +105,7 @@ def _presence_state(context: dict[str, Any], operation_state: str) -> str:
         return "dockee"
     if operation_state == "transit":
         return "retour"
-    if operation_state in {"tonte", "paused"}:
+    if operation_state in {"tonte", "paused", "starting", "zoning", "searching_zone", "escaped_digital_fence", "rain_delayed"}:
         return "dehors"
     return "inconnue"
 
@@ -107,6 +127,21 @@ def _reliability(context: dict[str, Any], enabled: bool, operation_state: str, p
 
     if operation_state == "error":
         return False, "error", _text(context.get("tondeuse_raison")) or "État tondeuse incohérent ou en erreur."
+
+    if operation_state == "starting":
+        return True, "mower_starting", "Tondeuse en démarrage."
+
+    if operation_state == "zoning":
+        return True, "mower_zoning", "Tondeuse en changement de zone."
+
+    if operation_state == "searching_zone":
+        return True, "mower_searching_zone", "Tondeuse en recherche de zone."
+
+    if operation_state == "escaped_digital_fence":
+        return False, "mower_escaped_digital_fence", "Tondeuse sortie du périmètre."
+
+    if operation_state == "rain_delayed":
+        return False, "mower_rain_delayed", "Pause pluie active."
 
     if presence_state == "inconnue":
         return False, "unreliable", "Position réelle de la tondeuse inconnue."
