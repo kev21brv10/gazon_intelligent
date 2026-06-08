@@ -91,15 +91,20 @@ def build_phase_bundle(context: DecisionContext) -> dict[str, Any]:
     sous_phase_age = _safe_int(subphase.get("age_jours"), default=0, minimum=0)
     sous_phase_progression = _safe_progression(subphase.get("progression"))
 
+    raw_source = dominant.get("source")
+    phase_source = raw_source if isinstance(raw_source, str) and raw_source else "inconnu"
+    raw_detail = subphase.get("detail")
+    sous_phase_detail = raw_detail if isinstance(raw_detail, str) and raw_detail else phase_dominante
+
     return {
         "phase_dominante": phase_dominante,
-        "phase_dominante_source": dominant.get("source", "absence_phase"),
+        "phase_dominante_source": phase_source,
         "date_action": date_debut.isoformat() if date_debut else None,
         "date_fin": date_fin.isoformat() if date_fin else None,
         "phase_age_days": phase_age_days,
-        "sous_phase": subphase.get("sous_phase", phase_dominante),
-        "sous_phase_detail": subphase.get("detail", f"{phase_dominante} / {phase_dominante}"),
+        "sous_phase": subphase.get("sous_phase") or phase_dominante,
+        "sous_phase_detail": sous_phase_detail,
         "sous_phase_age_days": sous_phase_age,
         "sous_phase_progression": sous_phase_progression,
-        "jours_restants": jours_restants,
+        "jours_restants": max(0, jours_restants),
     }
