@@ -259,8 +259,8 @@ class TestHydricCoreAndMemory(unittest.TestCase):
             },
         )
 
-        self.assertEqual(snapshot["bilan_hydrique_mm"], 14.0)
-        self.assertAlmostEqual(snapshot["bilan_hydrique_journalier_mm"], -2.9, places=1)
+        self.assertEqual(snapshot["reserve_hydrique_sol_mm"], 14.0)
+        self.assertAlmostEqual(snapshot["bilan_hydrique_mm"], -2.9, places=1)
         self.assertEqual(snapshot["bilan_hydrique_precedent_mm"], 11.0)
         self.assertEqual(snapshot["type_sol"], "limoneux")
         self.assertEqual(snapshot["soil_balance"]["reserve_mm"], 14.0)
@@ -1353,8 +1353,8 @@ class TestObjectiveAndGuidance(unittest.TestCase):
         )
 
         self.assertEqual(snapshot["phase_active"], "Normal")
-        self.assertEqual(snapshot["bilan_hydrique_mm"], 6.0)
-        self.assertLess(snapshot["bilan_hydrique_journalier_mm"], 0.0)
+        self.assertEqual(snapshot["reserve_hydrique_sol_mm"], 6.0)
+        self.assertLess(snapshot["bilan_hydrique_mm"], 0.0)
         self.assertEqual(snapshot["type_arrosage"], "personnalise")
         self.assertIsNone(snapshot.get("block_reason"))
         self.assertGreater(snapshot["objectif_mm"], 0.0)
@@ -1391,8 +1391,8 @@ class TestObjectiveAndGuidance(unittest.TestCase):
         self.assertEqual(snapshot["objectif_mm"], 0.0)
         self.assertEqual(snapshot["type_arrosage"], "aucune_action")
         self.assertEqual(snapshot["arrosage_conseille"], "aucune_action")
-        self.assertLess(snapshot["bilan_hydrique_journalier_mm"], 0.0)
-        self.assertGreater(snapshot["bilan_hydrique_mm"], 0.0)
+        self.assertLess(snapshot["bilan_hydrique_mm"], 0.0)
+        self.assertGreater(snapshot["reserve_hydrique_sol_mm"], 0.0)
         self.assertEqual(snapshot["urgence"], "moyenne")
 
     def test_compute_objectif_mm_blocks_when_three_day_rain_horizon_is_significant(self) -> None:
