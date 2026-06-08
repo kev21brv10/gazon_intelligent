@@ -1445,12 +1445,16 @@ def build_mowing_bundle(
         mowing_block_reason_code = reason_code
         mowing_block_reason_label = reason
 
-    if mowing_window_blocked_by_schedule and reason_code is None:
-        reason_code = "mowing_window_blocked"
-        reason = mowing_window_reason or "Fenêtre de tonte bloquée."
-        if mowing_block_reason_code is None:
-            mowing_block_reason_code = reason_code
-            mowing_block_reason_label = reason
+    if mowing_window_blocked_by_schedule:
+        window_msg = mowing_window_reason or "Fenêtre de tonte bloquée."
+        if reason_code is None:
+            reason_code = "mowing_window_blocked"
+            reason = window_msg
+            if mowing_block_reason_code is None:
+                mowing_block_reason_code = reason_code
+                mowing_block_reason_label = reason
+        else:
+            reason = f"{reason} Fenêtre horaire: {window_msg}"
 
     agronomic_block_codes = {
         "mowing_night",
@@ -1484,7 +1488,10 @@ def build_mowing_bundle(
         reason_code not in agronomic_block_codes or soil_wet_is_permssive or overdue_relaxed_baseline
     )
     if reason is None:
-        reason = "Fenêtre tonte acceptable."
+        if mowing_window_state == "discouraged" and mowing_window_reason:
+            reason = f"Tonte possible. Créneau déconseillé: {mowing_window_reason}"
+        else:
+            reason = "Fenêtre tonte acceptable."
 
     next_mowing_date, next_mowing_display, next_mowing_reason_hint = _project_next_mowing_date(
         context,

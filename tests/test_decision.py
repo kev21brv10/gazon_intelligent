@@ -3314,3 +3314,60 @@ class TestEstimatedGrassHeight(unittest.TestCase):
     def test_key_always_present_in_bundle(self):
         bundle = self._make_bundle(history=[], today=date(2026, 6, 7))
         self.assertIn("gazon_hauteur_estimee_cm", bundle)
+
+
+class TestMowingWindowReason(unittest.TestCase):
+    """Tests pour la clarté des messages de blocage de fenêtre de tonte."""
+
+    def _make_bundle(self, hour_of_day, history=None, temperature=20, vent=0, humidite=55):
+        context = decision.DecisionContext.from_legacy_args(
+            history=history or [{"type": "tonte", "date": "2026-06-05"}],
+            today=date(2026, 6, 7),
+            hour_of_day=hour_of_day,
+            temperature=temperature,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=humidite,
+            type_sol="limoneux",
+            etp_capteur=3.0,
+            vent=vent,
+        )
+        phase_bundle = decision_phase.build_phase_bundle(context)
+        water_bundle = decision_watering.build_water_bundle(context, phase_bundle)
+        risk_bundle = decision_risk.build_risk_bundle(context, phase_bundle, water_bundle)
+        return decision_mowing.build_mowing_bundle(context, phase_bundle, water_bundle, risk_bundle)
+
+    def test_window_only_block_shows_clear_reason(self):
+        # 3h du matin, bonnes conditions → raison = fenêtre bloquée uniquement
+        bundle = self._make_bundle(hour_of_day=3)
+        self.assertFalse(bundle["tonte_autorisee"])
+        reason = bundle["tonte_reason"]
+        # Le message doit mentionner pourquoi la fenêtre est bloquée
+        self.assertTrue(
+            "nuit" in reason.lower() or "soleil" in reason.lower() or "tôt" in reason.lower(),
+            f"Message attendu sur blocage nocturne, reçu: {reason}",
+        )
+
+    def test_window_block_added_to_agronomic_reason(self):
+        # 3h du matin + vent fort (> 40) → deux raisons : fenêtre ET vent
+        bundle = self._make_bundle(hour_of_day=3, vent=45)
+        self.assertFalse(bundle["tonte_autorisee"])
+        reason = bundle["tonte_reason"]
+        # La raison principale est agronomique mais la fenêtre doit être mentionnée
+        self.assertIn("Fenêtre horaire", reason, f"Fenêtre horaire absente du message: {reason}")
+
+    def test_discouraged_window_mentioned_when_tonte_ok(self):
+        # 18h, vent à 25 km/h (discouraged) + bonnes conditions → tonte ok mais créneau déconseillé
+        bundle = self._make_bundle(hour_of_day=18, vent=25)
+        if bundle["tonte_autorisee"]:
+            reason = bundle["tonte_reason"]
+            self.assertIn(
+                "déconseillé", reason.lower(),
+                f"Créneau déconseillé non mentionné: {reason}",
+            )
+
+    def test_ideal_window_no_spurious_discouraged_message(self):
+        # 11h, bonnes conditions → pas de message "déconseillé"
+        bundle = self._make_bundle(hour_of_day=11)
+        if bundle["tonte_autorisee"]:
+            self.assertNotIn("déconseillé", bundle["tonte_reason"].lower())
