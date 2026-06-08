@@ -3190,3 +3190,32 @@ class TestMowingOverdue(unittest.TestCase):
         )
         self.assertFalse(bundle["mowing_is_overdue"])
         self.assertEqual(bundle["mowing_overdue_days"], 0)
+
+    def test_overdue_soft_override_activates_for_borderline_conditions_defavorables(self):
+        # score_tonte=65 (conditions_defavorables) + overdue factor >> 2.0 → soft override actif
+        # pluie_24h=6, pluie_demain=5, pluie_j2=2, humidite=80 → score_tonte=65, score_stress~16
+        # Sans override (pas de retard): tonte bloquée par conditions_defavorables
+        # Avec override (retard 37 j, factor~26×): tonte autorisée
+        context = decision.DecisionContext.from_legacy_args(
+            history=[{"type": "tonte", "date": "2026-05-01"}],  # 37 jours → factor >> 2
+            today=date(2026, 6, 7),
+            hour_of_day=11,
+            temperature=22,
+            pluie_24h=6,
+            pluie_demain=5,
+            pluie_j2=2,
+            pluie_3j=0,
+            pluie_probabilite_max_3j=0,
+            humidite=80,
+            type_sol="limoneux",
+            etp_capteur=3.0,
+        )
+        phase_bundle = decision_phase.build_phase_bundle(context)
+        water_bundle = decision_watering.build_water_bundle(context, phase_bundle)
+        risk_bundle = decision_risk.build_risk_bundle(context, phase_bundle, water_bundle)
+        bundle = decision_mowing.build_mowing_bundle(context, phase_bundle, water_bundle, risk_bundle)
+
+        self.assertTrue(bundle["mowing_is_overdue"])
+        self.assertGreaterEqual(bundle["mowing_overdue_factor"], 2.0)
+        # Le soft override doit avoir levé le blocage conditions_defavorables
+        self.assertTrue(bundle["tonte_autorisee"], "Le soft override overdue doit lever conditions_defavorables borderline")

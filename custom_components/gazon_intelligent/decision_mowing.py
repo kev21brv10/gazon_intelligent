@@ -1430,7 +1430,7 @@ def build_mowing_bundle(
         overdue_relaxed_baseline = score_tonte < extended_threshold and score_stress < 70
 
     tonte_ok = (baseline_tonte_ok or overdue_relaxed_baseline) and not mowing_window_blocked_by_schedule and (
-        reason_code not in agronomic_block_codes or soil_wet_is_permssive
+        reason_code not in agronomic_block_codes or soil_wet_is_permssive or overdue_relaxed_baseline
     )
     if reason is None:
         reason = "Fenêtre tonte acceptable."
