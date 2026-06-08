@@ -1,6 +1,14 @@
 # Changelog
 
-## 0.7.1
+## 0.8.0
+- Ajoute la détection de retard de tonte (`mowing_is_overdue`, `mowing_overdue_days`, `mowing_overdue_factor`) avec un soft override sur les conditions borderline (`conditions_defavorables`, `stress_thermique`) pour ne pas bloquer indéfiniment une tonte urgente.
+- Ajoute l'estimation de la hauteur du gazon sans capteur physique (`sensor.gazon_intelligent_hauteur_gazon_estimee`) calculée depuis la date et hauteur de dernière coupe et le taux de croissance mensuel.
+- Remplace les littéraux hardcodés dans la fenêtre de tonte par les constantes de seuil existantes.
+- Clarifie les messages de blocage de fenêtre horaire : le motif agronomique est conservé et la raison horaire lui est annexée, plutôt que remplacée.
+- Ajoute la coordination arrosage/tonte : bloque la tonte si l'arrosage est imminent (< 30 min), la décourage si prévu dans < 2 h.
+- Remplace le délai de ressuyage post-arrosage fixe (24 h) par un calcul dynamique selon le type de sol : 1 h (sableux), 2 h (limoneux), 4 h (argileux), avec ajustements humidité, pluie et température. Le message indique le temps restant précis.
+
+## 0.7.3
 - Corrige `strings.json` pour remettre les clés de sélecteurs au format attendu par Hassfest.
 - Restaure une publication GitHub propre après l’échec de validation de `0.7.0`.
 - Aucun changement de logique métier runtime.
