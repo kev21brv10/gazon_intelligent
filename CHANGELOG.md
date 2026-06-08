@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.4
+- Corrige `sensor.gazon_intelligent_hauteur_gazon_estimee` qui restait "Inconnu" après `declare_mowing` quand la tondeuse est hors ligne et que `number.gazon_intelligent_hauteur_coupe_tondeuse` n'avait jamais été configuré : la valeur par défaut de l'entité passe de `None` à `50 mm`, ce qui garantit un calcul d'estimation fonctionnel dès l'installation sans configuration supplémentaire.
+
 ## 0.8.3
 - Améliore l'estimation de la hauteur du gazon (`sensor.gazon_intelligent_hauteur_gazon_estimee`) : `declare_mowing` stocke désormais la hauteur de coupe effective au moment de la tonte (`hauteur_coupe_mm`) dans l'historique. `_estimated_grass_height_cm` préfère cette valeur sur la hauteur courante de la tondeuse, ce qui rend l'estimation fiable même si la tondeuse est hors ligne ou si la hauteur de coupe a changé depuis la dernière tonte.
 - Le coordinateur capture automatiquement `tondeuse_hauteur_coupe_mm` au moment de `declare_mowing` si aucune hauteur n'est fournie explicitement.
@@ -27,11 +30,11 @@
 
 ## 0.7.3
 - Corrige `strings.json` pour remettre les clés de sélecteurs au format attendu par Hassfest.
-- Restaure une publication GitHub propre après l’échec de validation de `0.7.0`.
+- Restaure une publication GitHub propre après l'échec de validation de `0.7.0`.
 - Aucun changement de logique métier runtime.
 
 ## 0.7.0
-- Refonte majeure du moteur tonte / arrosage et de la façade publique de l’intégration.
+- Refonte majeure du moteur tonte / arrosage et de la façade publique de l'intégration.
 - Clarifie la hiérarchie entre phase, météo, humidité, machine et action réellement possible.
 - Renforce le support multi-pelouse avec `instance_slug`, une meilleure isolation par gazon et des entités publiques plus stables.
 - Ajoute une couche de coordination tondeuse structurée avec états machine normalisés et meilleure distinction entre gazon, machine et exécution.
@@ -42,7 +45,7 @@
 ## 0.6.1
 - Corrections de publication sans changement du moteur métier.
 - Correction du workflow Hassfest.
-- Correction d’erreurs mypy dans la couche de structure.
+- Correction d'erreurs mypy dans la couche de structure.
 - Aucun changement de logique runtime publique.
 
 ## 0.5.0
@@ -112,7 +115,7 @@
 
 ## 0.3.17
 - Corrige le crash au premier chargement du `config_flow` quand `current` vaut `None`.
-- Sécurise le rendu initial du formulaire de configuration pour éviter l’erreur `500` sur une première installation.
+- Sécurise le rendu initial du formulaire de configuration pour éviter l'erreur `500` sur une première installation.
 - Ajoute une couverture de test dédiée pour le premier affichage du flux de configuration.
 
 ## 0.3.16
@@ -172,10 +175,10 @@
 - Capteur arrosage simplifié : valeurs `auto` ou `personnalise` uniquement.
 
 ## 0.3.6
-- Remplace le binaire spécial par un capteur texte \"Arrosage conseillé\" (auto / personnalise / interdit).
+- Remplace le binaire spécial par un capteur texte "Arrosage conseillé" (auto / personnalise / interdit).
 
 ## 0.3.5
-- Binaire \"Arrosage modes spéciaux\" pour Sursemis, Fertilisation, Biostimulant, Agent Mouillant, Scarification.
+- Binaire "Arrosage modes spéciaux" pour Sursemis, Fertilisation, Biostimulant, Agent Mouillant, Scarification.
 
 ## 0.3.4
 - Tonte autorisée uniquement en Normal; arrosage interdit en Traitement/Hivernage.
