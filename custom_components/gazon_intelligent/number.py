@@ -147,7 +147,7 @@ class GazonMowerCuttingHeightNumber(RestoreEntity, GazonEntityBase, NumberEntity
     def __init__(self, coordinator) -> None:
         super().__init__(coordinator)
         self._config_key = CONF_HAUTEUR_COUPE_TONDEUSE_MM
-        self._default_value: float | None = None
+        self._default_value: float | None = 50.0
         self._restored_native_value: float | None = None
         self._attr_name = "Hauteur de coupe tondeuse"
         self._set_entity_identity("number", "hauteur_coupe_tondeuse")
