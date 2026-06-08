@@ -548,47 +548,39 @@ def _estimate_mowing_ressuyage_hours(
     """Estime le délai de ressuyage nécessaire avant une tonte sûre."""
     soil_profile = str(water_bundle.get("soil_profile") or context.type_sol or "").strip().lower()
     if soil_profile == "sableux":
-        hours = 8.0
+        hours = 1.0
     elif soil_profile == "argileux":
-        hours = 18.0
+        hours = 4.0
     else:
-        hours = 12.0
+        hours = 2.0
 
     humidite = float(context.humidite or 0.0)
     temperature = float(context.temperature or 0.0)
     pluie_24h = float(context.pluie_24h or 0.0)
     pluie_demain = float(context.pluie_demain or 0.0)
-    pluie_3j = float(context.pluie_3j or 0.0)
-    etp = float(water_bundle.get("etp") or 0.0)
     rosee = water_bundle["advanced_context"].get("rosee")
     arrosage_recent_jour = float(water_bundle["water_balance"].get("arrosage_recent_jour") or 0.0)
-    arrosage_recent_3j = float(water_bundle["water_balance"].get("arrosage_recent_3j") or 0.0)
 
-    if humidite >= 90 or (rosee is not None and float(rosee) > 0):
-        hours += 6.0
-    elif humidite >= 80:
-        hours += 4.0
+    if humidite >= 85 or (rosee is not None and float(rosee) > 0):
+        hours += 2.0
     elif humidite >= 70:
-        hours += 2.0
-
-    if pluie_24h >= 2.0 or arrosage_recent_jour > 0.5:
-        hours += 4.0
-    if pluie_demain >= 2.0:
-        hours += 2.0
-    if pluie_3j >= 4.0 or arrosage_recent_3j > 2.0:
-        hours += 2.0
-
-    if temperature >= 30 and humidite <= 60 and etp >= 4.0:
-        hours -= 3.0
-    elif temperature >= 26 and humidite <= 55:
-        hours -= 1.5
-
-    if phase_bundle["phase_dominante"] == "Sursemis":
-        hours += 2.0
-    elif phase_bundle["phase_dominante"] in {"Traitement", "Hivernage"}:
         hours += 1.0
 
-    return max(6.0, min(hours, 48.0))
+    if pluie_24h >= 5.0 or arrosage_recent_jour > 2.0:
+        hours += 2.0
+    elif pluie_24h >= 2.0 or arrosage_recent_jour > 0.5:
+        hours += 1.0
+
+    if pluie_demain >= 2.0:
+        hours += 0.5
+
+    if temperature >= 28 and humidite <= 55:
+        hours -= 0.5
+
+    if phase_bundle["phase_dominante"] == "Sursemis":
+        hours += 1.0
+
+    return max(0.5, min(hours, 10.0))
 
 
 def _mowing_projection_forecast_offset_days(
