@@ -52,3 +52,1538 @@ intervention = importlib.import_module("custom_components.gazon_intelligent.inte
 decision_models = importlib.import_module("custom_components.gazon_intelligent.decision_models")
 phases = importlib.import_module("custom_components.gazon_intelligent.phases")
 guidance = importlib.import_module("custom_components.gazon_intelligent.guidance")
+
+
+class MemoryCatalogTests(unittest.TestCase):
+    def test_auto_irrigation_enabled_defaults_to_false_and_persists_confirmation(self) -> None:
+        fresh_memory = memory.compute_memory([], today=date(2026, 3, 18))
+        self.assertFalse(fresh_memory["auto_irrigation_enabled"])
+
+        persisted = memory.compute_memory(
+            [],
+            today=date(2026, 3, 18),
+            previous_memory={
+                "auto_irrigation_enabled": True,
+            },
+        )
+        self.assertTrue(persisted["auto_irrigation_enabled"])
+
+    def test_mower_coordination_enabled_defaults_to_false_and_persists(self) -> None:
+        fresh_memory = memory.compute_memory([], today=date(2026, 3, 18))
+        self.assertFalse(fresh_memory["mower_coordination_enabled"])
+
+        persisted = memory.compute_memory(
+            [],
+            today=date(2026, 3, 18),
+            previous_memory={"mower_coordination_enabled": True},
+        )
+        self.assertTrue(persisted["mower_coordination_enabled"])
+
+    def test_normalize_product_record_keeps_simple_catalog_fields(self) -> None:
+        record = memory.normalize_product_record(
+            "Engrais Printemps",
+            {
+                "nom": "Engrais printemps",
+                "type": "Fertilisation",
+                "dose_conseillee": "12.5",
+                "usage_mode": "Entretien",
+                "max_applications_per_year": "6",
+                "reapplication_after_days": "21",
+                "delai_avant_tonte_jours": "2",
+                "phase_compatible": ["Sursemis", "Croissance", "Entretien"],
+                "application_months": "3,4,5,9,10",
+                "application_type": "sol",
+                "application_requires_watering_after": "true",
+                "application_post_watering_mm": "1.5",
+                "application_irrigation_block_hours": "0",
+                "application_irrigation_delay_minutes": "15",
+                "application_irrigation_mode": "manuel",
+                "application_label_notes": "Appliquer au matin",
+                "temperature_min": "8",
+                "temperature_max": "28",
+                "note": "Appliquer au matin",
+            },
+        )
+
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertEqual(record["id"], "engrais_printemps")
+        self.assertEqual(record["nom"], "Engrais printemps")
+        self.assertEqual(record["type"], "Fertilisation")
+        self.assertEqual(record["dose_conseillee"], "12.5")
+        self.assertEqual(record["usage_mode"], "entretien")
+        self.assertEqual(record["max_applications_per_year"], 6)
+        self.assertEqual(record["reapplication_after_days"], 21)
+        self.assertEqual(record["delai_avant_tonte_jours"], 2)
+        self.assertEqual(record["phase_compatible"], ["Sursemis", "Croissance", "Entretien"])
+        self.assertEqual(record["application_months"], [3, 4, 5, 9, 10])
+        self.assertEqual(record["application_months_label"], "Mars à Mai, Septembre à Octobre")
+        self.assertEqual(record["application_type"], "sol")
+        self.assertTrue(record["application_requires_watering_after"])
+        self.assertEqual(record["application_post_watering_mm"], 1.5)
+        self.assertEqual(record["application_irrigation_block_hours"], 0.0)
+        self.assertEqual(record["application_irrigation_delay_minutes"], 15.0)
+        self.assertEqual(record["application_irrigation_mode"], "manuel")
+        self.assertEqual(record["application_label_notes"], "Appliquer au matin")
+        self.assertEqual(record["temperature_min"], 8.0)
+        self.assertEqual(record["temperature_max"], 28.0)
+
+    def test_application_months_helpers_normalize_and_format_ranges(self) -> None:
+        months = memory.normalize_application_months("mars à mai + septembre à octobre")
+        self.assertEqual(months, [3, 4, 5, 9, 10])
+        self.assertEqual(memory.format_application_months_label(months), "Mars à Mai, Septembre à Octobre")
+
+    def test_build_application_summary_includes_product_id(self) -> None:
+        summary = memory.build_application_summary(
+            {
+                "type": "Fertilisation",
+                "date": "2026-03-18",
+                "produit_id": "engrais_printemps",
+                "produit": "Engrais printemps",
+                "dose": "12.5",
+                "zone": "zone_1",
+                "note": "Test",
+                "reapplication_after_days": 21,
+                "source": "service",
+                "application_type": "sol",
+                "application_requires_watering_after": True,
+                "application_post_watering_mm": 1.0,
+                "application_irrigation_block_hours": 0.0,
+                "application_irrigation_delay_minutes": 30.0,
+                "application_irrigation_mode": "auto",
+                "application_label_notes": "Notes produit",
+                "produit_catalogue": {
+                    "id": "engrais_printemps",
+                    "nom": "Engrais printemps",
+                    "application_months": [3, 4, 5, 9, 10],
+                },
+                "declared_at": "2026-03-18T08:00:00+00:00",
+            }
+        )
+
+        self.assertIsNotNone(summary)
+        assert summary is not None
+        self.assertEqual(summary["produit_id"], "engrais_printemps")
+        self.assertEqual(summary["libelle"], "Engrais printemps")
+        self.assertEqual(summary["reapplication_after_days"], 21)
+        self.assertEqual(summary["application_type"], "sol")
+        self.assertTrue(summary["application_requires_watering_after"])
+        self.assertEqual(summary["application_post_watering_mm"], 1.0)
+        self.assertEqual(summary["application_irrigation_block_hours"], 0.0)
+        self.assertEqual(summary["application_irrigation_delay_minutes"], 30.0)
+        self.assertEqual(summary["application_irrigation_mode"], "auto")
+        self.assertEqual(summary["application_label_notes"], "Notes produit")
+        self.assertEqual(summary["application_months"], [3, 4, 5, 9, 10])
+        self.assertEqual(summary["application_months_label"], "Mars à Mai, Septembre à Octobre")
+        self.assertEqual(summary["date_action"], "2026-03-18")
+        self.assertEqual(summary["declared_at"], "2026-03-18T08:00:00+00:00")
+
+    def test_compute_application_state_tracks_block_and_pending_water(self) -> None:
+        state = memory.compute_application_state(
+            [
+                {
+                    "type": "Traitement",
+                    "date": "2026-03-18",
+                    "declared_at": "2026-03-18T08:00:00+00:00",
+                    "produit": "Fongicide X",
+                    "application_type": "foliaire",
+                    "application_requires_watering_after": False,
+                    "application_post_watering_mm": 0.0,
+                    "application_irrigation_block_hours": 24.0,
+                    "application_irrigation_delay_minutes": 0.0,
+                    "application_irrigation_mode": "suggestion",
+                    "application_label_notes": "Attendre 24 h",
+                },
+                {
+                    "type": "arrosage",
+                    "date": "2026-03-18",
+                    "objectif_mm": 0.5,
+                    "source": "manual",
+                },
+            ],
+            now=memory.datetime(2026, 3, 18, 9, 0, tzinfo=memory.timezone.utc),
+        )
+
+        self.assertEqual(state["application_type"], "foliaire")
+        self.assertFalse(state["application_requires_watering_after"])
+        self.assertEqual(state["application_post_watering_status"], "bloque")
+        self.assertEqual(state["application_irrigation_block_hours"], 24.0)
+        self.assertEqual(state["application_irrigation_delay_minutes"], 0.0)
+        self.assertEqual(state["application_irrigation_mode"], "suggestion")
+        self.assertTrue(state["application_block_active"])
+        self.assertGreater(state["application_block_remaining_minutes"], 0.0)
+        self.assertFalse(state["application_post_watering_pending"])
+        self.assertFalse(state["application_post_watering_ready"])
+        self.assertEqual(state["application_post_watering_remaining_mm"], 0.0)
+
+    def test_compute_application_state_tracks_delay_and_ready(self) -> None:
+        state = memory.compute_application_state(
+            [
+                {
+                    "type": "Fertilisation",
+                    "date": "2026-03-18",
+                    "declared_at": "2026-03-18T08:00:00+00:00",
+                    "produit": "Engrais printemps",
+                    "application_type": "sol",
+                    "application_requires_watering_after": True,
+                    "application_post_watering_mm": 1.0,
+                    "application_irrigation_block_hours": 0.0,
+                    "application_irrigation_delay_minutes": 90.0,
+                    "application_irrigation_mode": "manuel",
+                }
+            ],
+            now=memory.datetime(2026, 3, 18, 8, 45, tzinfo=memory.timezone.utc),
+        )
+
+        self.assertEqual(state["application_post_watering_status"], "en_attente")
+        self.assertEqual(state["application_irrigation_delay_minutes"], 90.0)
+        self.assertEqual(state["application_irrigation_mode"], "manuel")
+        self.assertFalse(state["application_post_watering_ready"])
+        self.assertGreater(state["application_post_watering_delay_remaining_minutes"], 0.0)
+
+        ready_state = memory.compute_application_state(
+            [
+                {
+                    "type": "Fertilisation",
+                    "date": "2026-03-18",
+                    "declared_at": "2026-03-18T08:00:00+00:00",
+                    "produit": "Engrais printemps",
+                    "application_type": "sol",
+                    "application_requires_watering_after": True,
+                    "application_post_watering_mm": 1.0,
+                    "application_irrigation_block_hours": 0.0,
+                    "application_irrigation_delay_minutes": 30.0,
+                    "application_irrigation_mode": "auto",
+                }
+            ],
+            now=memory.datetime(2026, 3, 18, 8, 45, tzinfo=memory.timezone.utc),
+        )
+
+        self.assertEqual(ready_state["application_post_watering_status"], "autorise")
+        self.assertTrue(ready_state["application_post_watering_ready"])
+        self.assertEqual(ready_state["application_post_watering_delay_remaining_minutes"], 0.0)
+
+    def test_compute_application_state_marks_completed_post_watering(self) -> None:
+        state = memory.compute_application_state(
+            [
+                {
+                    "type": "Fertilisation",
+                    "date": "2026-03-18",
+                    "declared_at": "2026-03-18T08:00:00+00:00",
+                    "produit": "Engrais printemps",
+                    "application_type": "sol",
+                    "application_requires_watering_after": True,
+                    "application_post_watering_mm": 1.0,
+                    "application_irrigation_block_hours": 0.0,
+                    "application_irrigation_delay_minutes": 30.0,
+                    "application_irrigation_mode": "auto",
+                },
+                {
+                    "type": "arrosage",
+                    "date": "2026-03-18",
+                    "objectif_mm": 1.2,
+                    "source": "manual",
+                },
+            ],
+            now=memory.datetime(2026, 3, 18, 9, 0, tzinfo=memory.timezone.utc),
+        )
+
+        self.assertEqual(state["application_post_watering_status"], "termine")
+        self.assertFalse(state["application_post_watering_pending"])
+        self.assertFalse(state["application_post_watering_ready"])
+        self.assertEqual(state["application_post_watering_remaining_mm"], 0.0)
+
+    def test_compute_application_state_marks_non_required_post_watering(self) -> None:
+        state = memory.compute_application_state(
+            [
+                {
+                    "type": "Biostimulant",
+                    "date": "2026-03-12",
+                    "declared_at": "2026-04-01T21:24:28.946171+00:00",
+                    "produit": "Humuslight",
+                    "application_type": "sol",
+                    "application_requires_watering_after": False,
+                    "application_post_watering_mm": 0.0,
+                    "application_irrigation_block_hours": 0.0,
+                    "application_irrigation_delay_minutes": 0.0,
+                    "application_irrigation_mode": "suggestion",
+                }
+            ],
+            now=memory.datetime(2026, 4, 2, 9, 0, tzinfo=memory.timezone.utc),
+        )
+
+        self.assertEqual(state["application_post_watering_status"], "non_requis")
+        self.assertFalse(state["application_block_active"])
+        self.assertFalse(state["application_post_watering_pending"])
+        self.assertFalse(state["application_post_watering_ready"])
+
+    def test_normalize_post_application_status_accepts_legacy_non_autorise(self) -> None:
+        self.assertEqual(memory.normalize_post_application_status("non_autorise"), "termine")
+
+    def test_compute_next_reapplication_date_prefers_latest_item(self) -> None:
+        next_date = memory.compute_next_reapplication_date(
+            [
+                {"type": "Fertilisation", "date": "2026-03-01", "reapplication_after_days": 21},
+                {"type": "Biostimulant", "date": "2026-03-10", "reapplication_after_days": 25},
+            ],
+            today=date(2026, 3, 18),
+        )
+
+        self.assertEqual(next_date, "2026-04-04")
+
+    def test_compute_memory_builds_feedback_observation_without_name_error(self) -> None:
+        history = [
+            {
+                "type": "arrosage",
+                "date": "2026-03-18",
+                "objectif_mm": 1.2,
+                "source": "auto",
+            }
+        ]
+
+        memory_state = memory.compute_memory(
+            history,
+            today=date(2026, 3, 19),
+            previous_memory={
+                "dernier_conseil": {
+                    "date": "2026-03-18",
+                    "objectif_mm": 1.2,
+                },
+                "date_derniere_mise_a_jour": "2026-03-18",
+            },
+            decision={
+                "deficit_mm_ajuste": 0.8,
+                "deficit_brut_mm": 1.0,
+                "objectif_mm": 0.8,
+                "type_arrosage": "auto",
+                "risque_gazon": "modere",
+                "heat_stress_level": "normal",
+                "mm_final": 0.8,
+            },
+        )
+
+        self.assertIsNotNone(memory_state["feedback_observation"])
+        assert memory_state["feedback_observation"] is not None
+        self.assertEqual(memory_state["feedback_observation"]["window"], "24h")
+        self.assertEqual(memory_state["feedback_observation"]["recommended_mm"], 1.2)
+        self.assertEqual(memory_state["feedback_observation"]["observed_mm"], 1.2)
+        self.assertEqual(memory_state["feedback_observation"]["delta_mm"], 0.0)
+        self.assertEqual(memory_state["feedback_observation"]["source"], "observation_only")
+
+    def test_compute_application_state_tolerates_dirty_history_and_invalid_dates(self) -> None:
+        state = memory.compute_application_state(
+            [
+                "invalid",
+                None,
+                {
+                    "date": "2026-03-18",
+                    "declared_at": "not-a-date",
+                    "application_type": "sol",
+                    "application_requires_watering_after": True,
+                    "application_post_watering_mm": 1.0,
+                    "application_irrigation_delay_minutes": 30.0,
+                    "application_irrigation_mode": "auto",
+                },
+            ],
+            now=memory.datetime(2026, 3, 18, 8, 45, tzinfo=memory.timezone.utc),
+        )
+
+        self.assertIsNone(state["derniere_application"])
+        self.assertEqual(state["application_type"], "sol")
+        self.assertTrue(state["application_requires_watering_after"])
+        self.assertFalse(state["application_block_active"])
+        self.assertEqual(state["application_post_watering_status"], "autorise")
+        self.assertTrue(state["application_post_watering_pending"])
+        self.assertTrue(state["application_post_watering_ready"])
+        self.assertEqual(state["application_post_watering_remaining_mm"], 1.0)
+
+    def test_compute_application_state_keeps_block_priority_over_post_watering(self) -> None:
+        state = memory.compute_application_state(
+            [
+                {
+                    "date": "2026-03-18",
+                    "declared_at": "2026-03-18T08:00:00+00:00",
+                    "application_type": "sol",
+                    "application_requires_watering_after": True,
+                    "application_post_watering_mm": 1.0,
+                    "application_irrigation_block_hours": 2.0,
+                    "application_irrigation_delay_minutes": 30.0,
+                    "application_irrigation_mode": "auto",
+                }
+            ],
+            now=memory.datetime(2026, 3, 18, 8, 15, tzinfo=memory.timezone.utc),
+        )
+
+        self.assertTrue(state["application_block_active"])
+        self.assertEqual(state["application_post_watering_status"], "bloque")
+        self.assertTrue(state["application_post_watering_pending"])
+        self.assertFalse(state["application_post_watering_ready"])
+        self.assertGreater(state["application_block_remaining_minutes"], 0.0)
+
+    def test_compute_application_state_transitions_block_then_delay_then_authorized(self) -> None:
+        history = [
+            {
+                "date": "2026-03-18",
+                "declared_at": "2026-03-18T08:00:00+00:00",
+                "application_type": "sol",
+                "application_requires_watering_after": True,
+                "application_post_watering_mm": 2.0,
+                "application_irrigation_block_hours": 2.0,
+                "application_irrigation_delay_minutes": 30.0,
+                "application_irrigation_mode": "auto",
+            }
+        ]
+
+        blocked = memory.compute_application_state(
+            history,
+            now=memory.datetime(2026, 3, 18, 8, 20, tzinfo=memory.timezone.utc),
+        )
+        self.assertEqual(blocked["application_post_watering_status"], "bloque")
+        self.assertTrue(blocked["application_block_active"])
+
+        still_blocked_after_delay = memory.compute_application_state(
+            history,
+            now=memory.datetime(2026, 3, 18, 8, 45, tzinfo=memory.timezone.utc),
+        )
+        self.assertEqual(still_blocked_after_delay["application_post_watering_status"], "bloque")
+        self.assertTrue(still_blocked_after_delay["application_block_active"])
+        self.assertFalse(still_blocked_after_delay["application_post_watering_ready"])
+
+        ready_after_block = memory.compute_application_state(
+            history,
+            now=memory.datetime(2026, 3, 18, 10, 5, tzinfo=memory.timezone.utc),
+        )
+        self.assertEqual(ready_after_block["application_post_watering_status"], "autorise")
+        self.assertFalse(ready_after_block["application_block_active"])
+        self.assertTrue(ready_after_block["application_post_watering_ready"])
+
+    def test_compute_next_reapplication_date_ignores_invalid_latest_date(self) -> None:
+        next_date = memory.compute_next_reapplication_date(
+            [
+                {"type": "Fertilisation", "date": "2026-03-01", "reapplication_after_days": 21},
+                {"type": "Biostimulant", "date": "invalid", "reapplication_after_days": 25},
+            ],
+            today=date(2026, 3, 18),
+        )
+
+        self.assertIsNone(next_date)
+
+    def test_compute_memory_ignores_partial_feedback_with_invalid_advice_date(self) -> None:
+        memory_state = memory.compute_memory(
+            [],
+            today=date(2026, 3, 19),
+            previous_memory={
+                "dernier_conseil": {
+                    "date": "invalid",
+                    "objectif_mm": 1.2,
+                },
+                "date_derniere_mise_a_jour": "2026-03-18",
+            },
+            decision={
+                "objectif_mm": 0.8,
+            },
+        )
+
+        self.assertIsNone(memory_state["feedback_observation"])
+
+    def test_build_intervention_recommendation_prefers_in_season_due_product(self) -> None:
+        recommendation = intervention.build_intervention_recommendation(
+            today=date(2026, 4, 10),
+            phase_active="Sursemis",
+            phase_source="historique_actif",
+            sous_phase="Reprise",
+            selected_product_id=None,
+            selected_product_name=None,
+            temperature=20.0,
+            forecast_temperature_today=19.0,
+            temperature_source="capteur",
+            products={
+                "humuslight": {
+                    "id": "humuslight",
+                    "nom": "Humuslight",
+                    "type": "Biostimulant",
+                    "usage_mode": "preventif",
+                    "max_applications_per_year": 2,
+                    "reapplication_after_days": 25,
+                    "phase_compatible": ["Sursemis", "Croissance", "Entretien"],
+                    "application_months": [3, 4, 5, 9, 10],
+                    "temperature_min": 8,
+                    "temperature_max": 28,
+                }
+            },
+            history=[
+                {
+                    "type": "Biostimulant",
+                    "date": "2026-03-12",
+                    "produit_id": "humuslight",
+                    "produit": "Humuslight",
+                    "reapplication_after_days": 25,
+                    "produit_catalogue": {
+                        "id": "humuslight",
+                        "nom": "Humuslight",
+                    },
+                }
+            ],
+            application_state={},
+        )
+
+        self.assertEqual(recommendation["schema_version"], 3)
+        self.assertEqual(recommendation["status"], "recommended")
+        self.assertIsInstance(recommendation["score"], int)
+        self.assertGreaterEqual(recommendation["score"], 0)
+        self.assertLessEqual(recommendation["score"], 100)
+        self.assertEqual(recommendation["product"]["id"], "humuslight")
+        self.assertEqual(recommendation["product"]["months_label"], "Mars à Mai, Septembre à Octobre")
+        self.assertTrue(recommendation["product"]["phase_match"])
+        self.assertTrue(recommendation["product"]["month_match"])
+        self.assertTrue(recommendation["product"]["due"])
+        self.assertTrue(any(item.get("code") == "temperature_range" and item.get("met") for item in recommendation["constraints"]))
+        self.assertFalse(recommendation["ready_to_declare"])
+        self.assertEqual(recommendation["selection"]["id"], None)
+        self.assertTrue(all(isinstance(item, dict) for item in recommendation["constraints"]))
+        self.assertTrue(all(isinstance(item, dict) for item in recommendation["missing_requirements"]))
+        self.assertEqual(recommendation["context"]["current_phase_source"], "historique_actif")
+        self.assertFalse(recommendation["context"]["current_phase_is_default_normal"])
+        self.assertEqual(
+            next(item for item in recommendation["constraints"] if item.get("code") == "phase_compatibility")["value"]["current"],
+            "Sursemis",
+        )
+        self.assertEqual(
+            next(item for item in recommendation["constraints"] if item.get("code") == "application_months")["value"]["current_month"],
+            4,
+        )
+
+    def test_build_intervention_recommendation_keeps_low_score_candidate_in_preparation(self) -> None:
+        recommendation = intervention.build_intervention_recommendation(
+            today=date(2026, 4, 10),
+            phase_active="Sursemis",
+            phase_source="historique_actif",
+            sous_phase="Reprise",
+            selected_product_id=None,
+            selected_product_name=None,
+            products={
+                "simple": {
+                    "id": "simple",
+                    "nom": "Simple",
+                    "type": "Biostimulant",
+                    "usage_mode": "preventif",
+                    "phase_compatible": ["Sursemis"],
+                    "application_months": [4],
+                }
+            },
+            history=[],
+            application_state={},
+            temperature=20.0,
+            forecast_temperature_today=20.0,
+            temperature_source="capteur",
+        )
+
+        self.assertEqual(recommendation["status"], "preparation")
+        self.assertEqual(recommendation["recommended_action"], "select_product")
+        self.assertLess(recommendation["score"], 71)
+
+    def test_build_intervention_recommendation_marks_default_normal_source(self) -> None:
+        recommendation = intervention.build_intervention_recommendation(
+            today=date(2026, 4, 10),
+            phase_active="Normal",
+            phase_source="absence_phase",
+            sous_phase="Normal",
+            selected_product_id=None,
+            selected_product_name=None,
+            products={
+                "simple": {
+                    "id": "simple",
+                    "nom": "Simple",
+                    "type": "Biostimulant",
+                    "usage_mode": "preventif",
+                    "phase_compatible": ["Normal"],
+                    "application_months": [4],
+                }
+            },
+            history=[],
+            application_state={},
+            temperature=20.0,
+            forecast_temperature_today=20.0,
+            temperature_source="capteur",
+        )
+
+        self.assertEqual(recommendation["context"]["current_phase"], "Normal")
+        self.assertEqual(recommendation["context"]["current_phase_source"], "absence_phase")
+        self.assertTrue(recommendation["context"]["current_phase_is_default_normal"])
+
+    def test_build_intervention_recommendation_uses_explicit_block_reason_for_preventive_wetting_agent(self) -> None:
+        recommendation = intervention.build_intervention_recommendation(
+            today=date(2026, 4, 10),
+            phase_active="Normal",
+            phase_source="absence_phase",
+            sous_phase="Normal",
+            selected_product_id=None,
+            selected_product_name=None,
+            products={
+                "mouillant_preventif": {
+                    "id": "mouillant_preventif",
+                    "nom": "Mouillant préventif",
+                    "type": "Agent Mouillant",
+                    "usage_mode": "preventif",
+                    "phase_compatible": ["Normal"],
+                    "application_months": [4],
+                }
+            },
+            history=[],
+            application_state={
+                "application_block_active": True,
+                "application_block_reason": "sol déjà humide",
+            },
+            temperature=20.0,
+            forecast_temperature_today=20.0,
+            temperature_source="capteur",
+        )
+
+        self.assertEqual(recommendation["status"], "blocked")
+        self.assertIn("Agent mouillant préventif", recommendation["reason"])
+        self.assertIn("sol déjà humide", recommendation["reason"])
+
+    def test_build_intervention_recommendation_softens_preparation_summary_for_weak_opportunity(self) -> None:
+        recommendation = intervention.build_intervention_recommendation(
+            today=date(2026, 4, 10),
+            phase_active="Normal",
+            phase_source="absence_phase",
+            sous_phase="Normal",
+            selected_product_id=None,
+            selected_product_name=None,
+            products={
+                "humuslight": {
+                    "id": "humuslight",
+                    "nom": "Humuslight",
+                    "type": "Biostimulant",
+                    "usage_mode": "entretien",
+                    "phase_compatible": ["Sursemis", "Croissance", "Entretien"],
+                    "application_months": [3, 4, 5, 6, 7, 8, 9, 10],
+                    "reapplication_after_days": 25,
+                    "temperature_min": 8,
+                    "temperature_max": 25,
+                }
+            },
+            history=[
+                {
+                    "type": "Biostimulant",
+                    "produit_id": "humuslight",
+                    "produit": "Humuslight",
+                    "date": "2026-03-12",
+                    "date_action": "2026-03-12",
+                    "reapplication_after_days": 25,
+                }
+            ],
+            application_state={
+                "type_arrosage": "aucune_action",
+                "application_block_active": False,
+                "application_post_watering_pending": False,
+                "application_post_watering_status": "non_requis",
+                "bilan_hydrique_mm": 21.7,
+            },
+            temperature=13.9,
+            forecast_temperature_today=24.9,
+            temperature_source="capteur",
+        )
+
+        self.assertEqual(recommendation["status"], "preparation")
+        self.assertEqual(recommendation["context"]["opportunity_level"], "weak")
+        self.assertEqual(recommendation["ui"]["summary"], "À envisager : Humuslight")
+
+    def test_build_intervention_recommendation_penalizes_fertilisation_more_than_biostimulant_in_normal_phase(self) -> None:
+        fertilisation = intervention.build_intervention_recommendation(
+            today=date(2026, 4, 10),
+            phase_active="Normal",
+            phase_source="absence_phase",
+            sous_phase="Normal",
+            selected_product_id=None,
+            selected_product_name=None,
+            products={
+                "engrais": {
+                    "id": "engrais",
+                    "nom": "Engrais test",
+                    "type": "Fertilisation",
+                    "usage_mode": "entretien",
+                    "max_applications_per_year": 2,
+                    "reapplication_after_days": 25,
+                    "phase_compatible": ["Normal"],
+                    "application_months": [4],
+                    "temperature_min": 8,
+                    "temperature_max": 28,
+                }
+            },
+            history=[
+                {
+                    "type": "Fertilisation",
+                    "date": "2026-03-12",
+                    "produit_id": "engrais",
+                    "produit": "Engrais test",
+                    "reapplication_after_days": 25,
+                    "produit_catalogue": {
+                        "id": "engrais",
+                        "nom": "Engrais test",
+                    },
+                }
+            ],
+            application_state={},
+            temperature=20.0,
+            forecast_temperature_today=20.0,
+            temperature_source="capteur",
+        )
+
+        biostimulant = intervention.build_intervention_recommendation(
+            today=date(2026, 4, 10),
+            phase_active="Normal",
+            phase_source="absence_phase",
+            sous_phase="Normal",
+            selected_product_id=None,
+            selected_product_name=None,
+            products={
+                "stim": {
+                    "id": "stim",
+                    "nom": "Stim test",
+                    "type": "Biostimulant",
+                    "usage_mode": "entretien",
+                    "max_applications_per_year": 2,
+                    "reapplication_after_days": 25,
+                    "phase_compatible": ["Normal"],
+                    "application_months": [4],
+                    "temperature_min": 8,
+                    "temperature_max": 28,
+                }
+            },
+            history=[
+                {
+                    "type": "Biostimulant",
+                    "date": "2026-03-12",
+                    "produit_id": "stim",
+                    "produit": "Stim test",
+                    "reapplication_after_days": 25,
+                    "produit_catalogue": {
+                        "id": "stim",
+                        "nom": "Stim test",
+                    },
+                }
+            ],
+            application_state={},
+            temperature=20.0,
+            forecast_temperature_today=20.0,
+            temperature_source="capteur",
+        )
+
+        self.assertLess(fertilisation["score"], biostimulant["score"])
+        self.assertEqual(fertilisation["status"], "recommended")
+        self.assertEqual(biostimulant["status"], "recommended")
+
+    def test_build_intervention_recommendation_gives_mouillant_curatif_more_priority_than_preventif_on_clear_opportunity(self) -> None:
+        preventif = intervention.build_intervention_recommendation(
+            today=date(2026, 4, 10),
+            phase_active="Sursemis",
+            phase_source="historique_actif",
+            sous_phase="Reprise",
+            selected_product_id=None,
+            selected_product_name=None,
+            products={
+                "mouillant_preventif": {
+                    "id": "mouillant_preventif",
+                    "nom": "Mouillant préventif",
+                    "type": "Agent Mouillant",
+                    "usage_mode": "preventif",
+                    "max_applications_per_year": 6,
+                    "reapplication_after_days": 21,
+                    "phase_compatible": ["Sursemis", "Croissance", "Entretien"],
+                    "application_months": [4, 5, 6, 7, 8, 9],
+                    "temperature_min": 10,
+                    "temperature_max": 30,
+                }
+            },
+            history=[],
+            application_state={
+                "bilan_hydrique_mm": -1.2,
+                "hydric_balance_level": "déficit",
+            },
+            temperature=20.0,
+            forecast_temperature_today=20.0,
+            temperature_source="capteur",
+        )
+
+        curatif = intervention.build_intervention_recommendation(
+            today=date(2026, 4, 10),
+            phase_active="Sursemis",
+            phase_source="historique_actif",
+            sous_phase="Reprise",
+            selected_product_id=None,
+            selected_product_name=None,
+            products={
+                "mouillant_curatif": {
+                    "id": "mouillant_curatif",
+                    "nom": "Mouillant curatif",
+                    "type": "Agent Mouillant",
+                    "usage_mode": "curatif",
+                    "max_applications_per_year": 6,
+                    "reapplication_after_days": 21,
+                    "phase_compatible": ["Sursemis", "Croissance", "Entretien"],
+                    "application_months": [4, 5, 6, 7, 8, 9],
+                    "temperature_min": 10,
+                    "temperature_max": 30,
+                }
+            },
+            history=[],
+            application_state={
+                "bilan_hydrique_mm": -1.2,
+                "hydric_balance_level": "déficit",
+            },
+            temperature=20.0,
+            forecast_temperature_today=20.0,
+            temperature_source="capteur",
+        )
+
+        self.assertLess(preventif["score"], curatif["score"])
+        self.assertIn(preventif["status"], {"preparation", "recommended"})
+        self.assertIn(curatif["status"], {"preparation", "recommended"})
+
+    def test_build_intervention_recommendation_blocks_when_temperature_is_far_out_of_range(self) -> None:
+        recommendation = intervention.build_intervention_recommendation(
+            today=date(2026, 4, 10),
+            phase_active="Sursemis",
+            phase_source="historique_actif",
+            sous_phase="Reprise",
+            selected_product_id=None,
+            selected_product_name=None,
+            temperature=35.0,
+            forecast_temperature_today=35.0,
+            temperature_source="capteur",
+            products={
+                "humuslight": {
+                    "id": "humuslight",
+                    "nom": "Humuslight",
+                    "type": "Biostimulant",
+                    "usage_mode": "preventif",
+                    "max_applications_per_year": 2,
+                    "reapplication_after_days": 25,
+                    "phase_compatible": ["Sursemis", "Croissance", "Entretien"],
+                    "application_months": [3, 4, 5, 9, 10],
+                    "temperature_min": 8,
+                    "temperature_max": 28,
+                }
+            },
+            history=[
+                {
+                    "type": "Biostimulant",
+                    "date": "2026-03-12",
+                    "produit_id": "humuslight",
+                    "produit": "Humuslight",
+                    "reapplication_after_days": 25,
+                    "produit_catalogue": {
+                        "id": "humuslight",
+                        "nom": "Humuslight",
+                    },
+                }
+            ],
+            application_state={},
+        )
+
+        self.assertEqual(recommendation["status"], "blocked")
+        self.assertEqual(recommendation["recommended_action"], "wait")
+        self.assertTrue(
+            any(item.get("code") == "temperature_range" and item.get("blocking") for item in recommendation["constraints"])
+        )
+        self.assertTrue(
+            any(item.get("code") == "temperature_out_of_range" for item in recommendation["missing_requirements"])
+        )
+
+    def test_build_intervention_recommendation_blocks_when_annual_limit_is_reached(self) -> None:
+        recommendation = intervention.build_intervention_recommendation(
+            today=date(2026, 4, 10),
+            phase_active="Sursemis",
+            phase_source="historique_actif",
+            sous_phase="Reprise",
+            selected_product_id=None,
+            selected_product_name=None,
+            products={
+                "humuslight": {
+                    "id": "humuslight",
+                    "nom": "Humuslight",
+                    "type": "Biostimulant",
+                    "usage_mode": "preventif",
+                    "max_applications_per_year": 1,
+                    "reapplication_after_days": 25,
+                    "phase_compatible": ["Sursemis", "Croissance", "Entretien"],
+                    "application_months": [3, 4, 5, 9, 10],
+                }
+            },
+            history=[
+                {
+                    "type": "Biostimulant",
+                    "date": "2026-03-12",
+                    "produit_id": "humuslight",
+                    "produit": "Humuslight",
+                    "reapplication_after_days": 25,
+                    "produit_catalogue": {
+                        "id": "humuslight",
+                        "nom": "Humuslight",
+                    },
+                }
+            ],
+            application_state={},
+        )
+
+        self.assertEqual(recommendation["status"], "blocked")
+        self.assertEqual(recommendation["recommended_action"], "wait")
+        self.assertTrue(
+            any(item.get("code") == "annual_applications_limit" for item in recommendation["constraints"])
+        )
+
+    def test_build_intervention_recommendation_blocks_when_post_application_context_is_not_ready(self) -> None:
+        recommendation = intervention.build_intervention_recommendation(
+            today=date(2026, 4, 10),
+            phase_active="Sursemis",
+            phase_source="historique_actif",
+            sous_phase="Reprise",
+            selected_product_id=None,
+            selected_product_name=None,
+            products={
+                "humuslight": {
+                    "id": "humuslight",
+                    "nom": "Humuslight",
+                    "type": "Biostimulant",
+                    "usage_mode": "preventif",
+                    "max_applications_per_year": 2,
+                    "reapplication_after_days": 25,
+                    "phase_compatible": ["Sursemis", "Croissance", "Entretien"],
+                    "application_months": [3, 4, 5, 9, 10],
+                    "temperature_min": 8,
+                    "temperature_max": 28,
+                }
+            },
+            history=[
+                {
+                    "type": "Biostimulant",
+                    "date": "2026-03-12",
+                    "produit_id": "humuslight",
+                    "produit": "Humuslight",
+                    "reapplication_after_days": 25,
+                    "produit_catalogue": {
+                        "id": "humuslight",
+                        "nom": "Humuslight",
+                    },
+                }
+            ],
+            application_state={
+                "application_post_watering_status": "en_attente",
+            },
+        )
+
+        self.assertEqual(recommendation["status"], "blocked")
+        self.assertEqual(recommendation["recommended_action"], "wait")
+        self.assertTrue(
+            any(
+                "post-application" in str(item.get("hint") or "").lower() or "post-application" in str(item.get("label") or "").lower()
+                for item in recommendation["missing_requirements"]
+            )
+        )
+
+    def test_build_intervention_recommendation_does_not_block_only_because_watering_profile_is_blocked(self) -> None:
+        recommendation = intervention.build_intervention_recommendation(
+            today=date(2026, 4, 4),
+            phase_active="Normal",
+            phase_source="absence_phase",
+            sous_phase="Normal",
+            selected_product_id=None,
+            selected_product_name=None,
+            products={
+                "h2pro_trismart": {
+                    "id": "h2pro_trismart",
+                    "nom": "H2Pro TriSmart",
+                    "type": "Agent Mouillant",
+                    "usage_mode": "preventif",
+                    "max_applications_per_year": 6,
+                    "reapplication_after_days": 28,
+                    "phase_compatible": ["Croissance", "Entretien"],
+                    "application_months": [4, 5, 6, 7, 8, 9],
+                    "temperature_min": 10,
+                    "temperature_max": 30,
+                }
+            },
+            history=[],
+            application_state={
+                "type_arrosage": "bloque",
+                "application_block_active": False,
+                "application_post_watering_pending": False,
+                "application_post_watering_status": "non_requis",
+                "bilan_hydrique_mm": 15.7,
+            },
+            temperature=17.3,
+            forecast_temperature_today=17.3,
+            temperature_source="weather",
+        )
+
+        self.assertEqual(recommendation["status"], "preparation")
+        self.assertEqual(recommendation["recommended_action"], "select_product")
+        self.assertFalse(
+            any(item.get("code") == "post_application_block" for item in recommendation["constraints"])
+        )
+        self.assertIn("Contexte hydrique excédentaire", recommendation["reasons"])
+
+    def test_default_decision_time_comes_from_home_assistant_clock(self) -> None:
+        fixed_now = datetime(2026, 4, 4, 14, 15, tzinfo=timezone(timedelta(hours=2)))
+        with patch.object(decision_models.dt_util, "now", return_value=fixed_now), patch.object(
+            phases.dt_util,
+            "now",
+            return_value=fixed_now,
+        ):
+            context = decision_models.DecisionContext.from_legacy_args(history=[])
+            dominant = phases.compute_dominant_phase([], today=None)
+            subphase = phases.compute_subphase("Normal", None, None, today=None, now=None)
+
+        self.assertEqual(context.today, date(2026, 4, 4))
+        self.assertEqual(dominant["phase_dominante"], "Normal")
+        self.assertEqual(dominant["source"], "absence_phase")
+        self.assertEqual(subphase["sous_phase"], "Normal")
+
+    def test_normal_watering_profile_uses_daily_balance_instead_of_soil_reserve_for_blocking(self) -> None:
+        profile = guidance.compute_watering_profile(
+            phase_dominante="Normal",
+            sous_phase="Normal",
+            water_balance={
+                "bilan_hydrique_mm": -1.0,
+                "reserve_hydrique_sol_mm": 15.6,
+                "deficit_jour": 1.0,
+                "deficit_3j": 3.4,
+                "deficit_7j": 8.0,
+                "arrosage_recent_7j": 0.5,
+                "arrosage_recent": 0.5,
+            },
+            today=date(2026, 4, 4),
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            pluie_j2=0.0,
+            pluie_3j=0.0,
+            pluie_probabilite_max_3j=0.0,
+            humidite=60.0,
+            temperature=19.1,
+            etp=1.1,
+            type_sol="limoneux",
+            weather_profile={},
+            history=[],
+        )
+
+        self.assertIsNone(profile.get("block_reason"))
+        self.assertEqual(profile["type_arrosage"], "aucune_action")
+        self.assertFalse(profile["arrosage_recommande"])
+
+    def test_normal_profile_uses_policy_max_as_fractionation_cap(self) -> None:
+        profile = guidance.compute_watering_profile(
+            phase_dominante="Normal",
+            sous_phase="Normal",
+            water_balance={
+                "bilan_hydrique_mm": -20.0,
+                "bilan_hydrique_journalier_mm": -4.0,
+                "deficit_jour": 8.0,
+                "deficit_3j": 16.0,
+                "deficit_7j": 30.0,
+                "arrosage_recent_7j": 0.0,
+                "arrosage_recent": 0.0,
+            },
+            today=date(2026, 7, 10),
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            pluie_j2=0.0,
+            pluie_3j=0.0,
+            pluie_probabilite_max_3j=0.0,
+            humidite=35.0,
+            temperature=31.0,
+            etp=4.5,
+            type_sol="limoneux",
+            weather_profile={},
+            history=[],
+        )
+
+        self.assertIsNone(profile.get("block_reason"))
+        self.assertGreater(profile["mm_final_recommande"], 15.0)
+        self.assertTrue(profile["arrosage_recommande"])
+        self.assertGreaterEqual(profile["watering_passages"], 2)
+        self.assertLessEqual(profile["fractionnement"]["max_mm_per_passage"], 15.0)
+
+    def test_biostimulant_profile_uses_policy_range_and_light_support_floor(self) -> None:
+        profile = guidance.compute_watering_profile(
+            phase_dominante="Biostimulant",
+            sous_phase="Réponse",
+            water_balance={
+                "bilan_hydrique_mm": -1.0,
+                "reserve_hydrique_sol_mm": 18.0,
+                "deficit_jour": 0.0,
+                "deficit_3j": 0.0,
+                "deficit_7j": 0.0,
+                "arrosage_recent_7j": 0.0,
+                "arrosage_recent": 0.0,
+            },
+            today=date(2026, 4, 8),
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            pluie_j2=0.0,
+            pluie_3j=0.0,
+            pluie_probabilite_max_3j=0.0,
+            humidite=60.0,
+            temperature=18.3,
+            etp=1.1,
+            type_sol="limoneux",
+            weather_profile={},
+            history=[],
+        )
+
+        self.assertIsNone(profile.get("block_reason"))
+        self.assertEqual(profile["mm_final_recommande"], 3.0)
+        self.assertEqual(profile["mm_requested"], 3.0)
+        self.assertEqual(profile["watering_passages"], 1)
+        self.assertTrue(profile["arrosage_recommande"])
+
+    def test_biostimulant_profile_blocks_when_rain_compensates_support(self) -> None:
+        profile = guidance.compute_watering_profile(
+            phase_dominante="Biostimulant",
+            sous_phase="Réponse",
+            water_balance={
+                "bilan_hydrique_mm": -1.0,
+                "reserve_hydrique_sol_mm": 18.0,
+                "deficit_jour": 0.0,
+                "deficit_3j": 0.0,
+                "deficit_7j": 0.0,
+                "arrosage_recent_7j": 0.0,
+                "arrosage_recent": 0.0,
+            },
+            today=date(2026, 4, 8),
+            pluie_24h=0.0,
+            pluie_demain=3.0,
+            pluie_j2=0.0,
+            pluie_3j=0.0,
+            pluie_probabilite_max_3j=0.0,
+            humidite=60.0,
+            temperature=18.3,
+            etp=1.1,
+            type_sol="limoneux",
+            weather_profile={},
+            history=[],
+        )
+
+        self.assertEqual(profile["block_reason"], "pluie_prevue_suffisante")
+        self.assertEqual(profile["mm_final_recommande"], 0.0)
+        self.assertFalse(profile["arrosage_recommande"])
+
+    def test_fertilisation_profile_uses_policy_range_and_single_pass(self) -> None:
+        profile = guidance.compute_watering_profile(
+            phase_dominante="Fertilisation",
+            sous_phase="Application",
+            water_balance={
+                "bilan_hydrique_mm": -1.0,
+                "reserve_hydrique_sol_mm": 18.0,
+                "deficit_jour": 0.0,
+                "deficit_3j": 0.0,
+                "deficit_7j": 0.0,
+                "arrosage_recent_7j": 0.0,
+                "arrosage_recent": 0.0,
+            },
+            today=date(2026, 4, 8),
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            pluie_j2=0.0,
+            pluie_3j=0.0,
+            pluie_probabilite_max_3j=0.0,
+            humidite=60.0,
+            temperature=18.3,
+            etp=1.1,
+            type_sol="limoneux",
+            weather_profile={},
+            history=[],
+        )
+
+        self.assertIsNone(profile.get("block_reason"))
+        self.assertEqual(profile["mm_final_recommande"], 5.0)
+        self.assertEqual(profile["mm_requested"], 5.0)
+        self.assertEqual(profile["watering_passages"], 1)
+        self.assertEqual(profile["watering_pause_minutes"], 0)
+        self.assertTrue(profile["arrosage_recommande"])
+
+    def test_fertilisation_profile_blocks_when_rain_is_expected(self) -> None:
+        profile = guidance.compute_watering_profile(
+            phase_dominante="Fertilisation",
+            sous_phase="Application",
+            water_balance={
+                "bilan_hydrique_mm": -1.0,
+                "reserve_hydrique_sol_mm": 18.0,
+                "deficit_jour": 0.0,
+                "deficit_3j": 0.0,
+                "deficit_7j": 0.0,
+                "arrosage_recent_7j": 0.0,
+                "arrosage_recent": 0.0,
+            },
+            today=date(2026, 4, 8),
+            pluie_24h=0.0,
+            pluie_demain=4.0,
+            pluie_j2=0.0,
+            pluie_3j=0.0,
+            pluie_probabilite_max_3j=0.0,
+            humidite=60.0,
+            temperature=18.3,
+            etp=1.1,
+            type_sol="limoneux",
+            weather_profile={},
+            history=[],
+        )
+
+        self.assertEqual(profile["block_reason"], "pluie_prevue_suffisante")
+        self.assertEqual(profile["mm_final_recommande"], 0.0)
+        self.assertFalse(profile["arrosage_recommande"])
+
+    def test_traitement_profile_requires_known_application_type(self) -> None:
+        profile = guidance.compute_watering_profile(
+            phase_dominante="Traitement",
+            sous_phase="Application",
+            water_balance={
+                "bilan_hydrique_mm": -1.0,
+                "reserve_hydrique_sol_mm": 18.0,
+                "deficit_jour": 0.0,
+                "deficit_3j": 0.0,
+                "deficit_7j": 0.0,
+                "arrosage_recent_7j": 0.0,
+                "arrosage_recent": 0.0,
+            },
+            today=date(2026, 4, 8),
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            pluie_j2=0.0,
+            pluie_3j=0.0,
+            pluie_probabilite_max_3j=0.0,
+            humidite=60.0,
+            temperature=18.3,
+            etp=1.1,
+            type_sol="limoneux",
+            weather_profile={},
+            history=[],
+        )
+
+        self.assertEqual(profile["block_reason"], "application_type_required")
+        self.assertEqual(profile["type_arrosage"], "bloque")
+        self.assertEqual(profile["mm_final_recommande"], 0.0)
+        self.assertFalse(profile["arrosage_recommande"])
+
+    def test_traitement_profile_blocks_foliaire_application(self) -> None:
+        profile = guidance.compute_watering_profile(
+            phase_dominante="Traitement",
+            sous_phase="Application",
+            water_balance={
+                "bilan_hydrique_mm": -1.0,
+                "reserve_hydrique_sol_mm": 18.0,
+                "deficit_jour": 0.0,
+                "deficit_3j": 0.0,
+                "deficit_7j": 0.0,
+                "arrosage_recent_7j": 0.0,
+                "arrosage_recent": 0.0,
+            },
+            today=date(2026, 4, 8),
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            pluie_j2=0.0,
+            pluie_3j=0.0,
+            pluie_probabilite_max_3j=0.0,
+            humidite=60.0,
+            temperature=18.3,
+            etp=1.1,
+            type_sol="limoneux",
+            weather_profile={},
+            history=[],
+            application_type="foliaire",
+        )
+
+        self.assertEqual(profile["block_reason"], "application_foliaire")
+        self.assertEqual(profile["type_arrosage"], "bloque")
+        self.assertEqual(profile["mm_final_recommande"], 0.0)
+        self.assertFalse(profile["arrosage_recommande"])
+
+    def test_traitement_profile_uses_sol_application_support_range(self) -> None:
+        profile = guidance.compute_watering_profile(
+            phase_dominante="Traitement",
+            sous_phase="Application",
+            water_balance={
+                "bilan_hydrique_mm": -1.0,
+                "reserve_hydrique_sol_mm": 18.0,
+                "deficit_jour": 0.0,
+                "deficit_3j": 0.0,
+                "deficit_7j": 0.0,
+                "arrosage_recent_7j": 0.0,
+                "arrosage_recent": 0.0,
+            },
+            today=date(2026, 4, 8),
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            pluie_j2=0.0,
+            pluie_3j=0.0,
+            pluie_probabilite_max_3j=0.0,
+            humidite=60.0,
+            temperature=18.3,
+            etp=1.1,
+            type_sol="limoneux",
+            weather_profile={},
+            history=[],
+            application_type="sol",
+        )
+
+        self.assertIsNone(profile.get("block_reason"))
+        self.assertEqual(profile["mm_final_recommande"], 3.0)
+        self.assertEqual(profile["type_arrosage"], "auto")
+        self.assertTrue(profile["arrosage_recommande"])
+
+    def test_hivernage_profile_stays_blocked_by_default_via_policy(self) -> None:
+        profile = guidance.compute_watering_profile(
+            phase_dominante="Hivernage",
+            sous_phase="Repos",
+            water_balance={
+                "bilan_hydrique_mm": -20.0,
+                "bilan_hydrique_journalier_mm": -3.0,
+                "deficit_jour": 3.0,
+                "deficit_3j": 8.0,
+                "deficit_7j": 18.0,
+                "arrosage_recent_7j": 0.0,
+                "arrosage_recent": 0.0,
+            },
+            today=date(2026, 1, 8),
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            pluie_j2=0.0,
+            pluie_3j=0.0,
+            pluie_probabilite_max_3j=0.0,
+            humidite=35.0,
+            temperature=8.0,
+            etp=0.5,
+            type_sol="limoneux",
+            weather_profile={},
+            history=[],
+        )
+
+        self.assertEqual(profile["block_reason"], "mode_bloque")
+        self.assertEqual(profile["type_arrosage"], "bloque")
+        self.assertEqual(profile["mm_final_recommande"], 0.0)
+        self.assertFalse(profile["arrosage_recommande"])
+
+    def test_watering_profile_exposes_stable_core_keys_across_policy_backed_modes(self) -> None:
+        expected_keys = {
+            "deficit_brut_mm",
+            "deficit_mm_brut",
+            "deficit_mm_ajuste",
+            "mm_cible",
+            "mm_final_recommande",
+            "mm_final",
+            "mm_requested",
+            "mm_applied",
+            "mm_detected",
+            "type_arrosage",
+            "arrosage_recommande",
+            "arrosage_auto_autorise",
+            "arrosage_conseille",
+            "watering_passages",
+            "watering_pause_minutes",
+            "fractionnement",
+            "niveau_confiance",
+            "confidence_score",
+            "confidence_reasons",
+            "raison_decision_base",
+            "block_reason",
+            "fenetre_optimale",
+            "niveau_action",
+            "risque_gazon",
+            "heat_stress_level",
+            "heat_stress_phase",
+            "watering_window_start_minute",
+            "watering_window_end_minute",
+            "watering_window_optimal_start_minute",
+            "watering_window_optimal_end_minute",
+            "watering_window_acceptable_end_minute",
+            "watering_evening_start_minute",
+            "watering_evening_end_minute",
+            "watering_window_profile",
+            "watering_evening_allowed",
+            "recent_watering_count_7j",
+            "recent_watering_mm_7j",
+            "weekly_guardrail_mm_min",
+            "weekly_guardrail_mm_max",
+            "weekly_guardrail_reason",
+            "season_label",
+            "season_phase",
+            "month_profile",
+            "watering_bias",
+            "mowing_bias",
+            "intervention_bias",
+            "risk_bias",
+            "cooldown_24h_hours",
+        }
+        base_kwargs = {
+            "water_balance": {
+                "bilan_hydrique_mm": -1.0,
+                "bilan_hydrique_journalier_mm": -1.0,
+                "deficit_jour": 1.0,
+                "deficit_3j": 2.0,
+                "deficit_7j": 4.0,
+                "arrosage_recent_7j": 0.0,
+                "arrosage_recent_jour": 0.0,
+                "arrosage_recent": 0.0,
+            },
+            "today": date(2026, 4, 8),
+            "pluie_24h": 0.0,
+            "pluie_demain": 0.0,
+            "pluie_j2": 0.0,
+            "pluie_3j": 0.0,
+            "pluie_probabilite_max_3j": 0.0,
+            "humidite": 60.0,
+            "temperature": 18.3,
+            "etp": 1.1,
+            "type_sol": "limoneux",
+            "weather_profile": {},
+            "history": [],
+        }
+        variants = [
+            {"phase_dominante": "Normal", "sous_phase": "Normal"},
+            {"phase_dominante": "Sursemis", "sous_phase": "Enracinement"},
+            {"phase_dominante": "Traitement", "sous_phase": "Application", "application_type": "sol"},
+            {"phase_dominante": "Fertilisation", "sous_phase": "Application"},
+        ]
+
+        for variant in variants:
+            profile = guidance.compute_watering_profile(**base_kwargs, **variant)
+            self.assertTrue(expected_keys.issubset(profile.keys()))
+
+    def test_sursemis_profile_exposes_policy_strategy_metadata(self) -> None:
+        profile = guidance.compute_watering_profile(
+            phase_dominante="Sursemis",
+            sous_phase="Enracinement",
+            water_balance={
+                "bilan_hydrique_mm": 0.5,
+                "bilan_hydrique_journalier_mm": 0.5,
+                "deficit_jour": 0.0,
+                "deficit_3j": 0.0,
+                "deficit_7j": 0.0,
+                "arrosage_recent_7j": 0.0,
+                "arrosage_recent_jour": 0.0,
+                "arrosage_recent": 0.0,
+            },
+            today=date(2026, 4, 8),
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            pluie_j2=0.0,
+            pluie_3j=0.0,
+            pluie_probabilite_max_3j=0.0,
+            humidite=60.0,
+            temperature=18.3,
+            etp=1.1,
+            type_sol="limoneux",
+            weather_profile={},
+            history=[],
+            sous_phase_age_days=5,
+            sous_phase_progression=40.0,
+        )
+
+        self.assertEqual(profile["sursemis_policy_mode"], "sursemis")
+        self.assertEqual(profile["sursemis_override_behavior"], "replace_all")
+        self.assertEqual(profile["sursemis_execution_preferred"], "fractionated")
+        self.assertEqual(profile["sursemis_daily_min_mm_per_cycle"], 2.0)
+        self.assertEqual(profile["sursemis_daily_max_mm_per_cycle"], 4.0)
+        self.assertEqual(profile["sursemis_daily_min_cycles"], 2)
+        self.assertEqual(profile["sursemis_daily_max_cycles"], 3)
+        self.assertEqual(profile["watering_strategy"], "semis_frequent")
+        self.assertEqual(profile["objective_scope"], "surface_cycle")
+        self.assertEqual(profile["watering_stage"], "enracinement")
+        self.assertEqual(profile["surface_cycle_mm"], 3.0)
+        self.assertEqual(profile["daily_cycles_target"], 1)
+        self.assertEqual(profile["cycle_spacing_minutes"], 270)
+
+    def test_agent_mouillant_profile_uses_policy_range(self) -> None:
+        profile = guidance.compute_watering_profile(
+            phase_dominante="Agent Mouillant",
+            sous_phase="Application",
+            water_balance={
+                "bilan_hydrique_mm": -1.0,
+                "reserve_hydrique_sol_mm": 18.0,
+                "deficit_jour": 0.0,
+                "deficit_3j": 0.0,
+                "deficit_7j": 0.0,
+                "arrosage_recent_7j": 0.0,
+                "arrosage_recent": 0.0,
+            },
+            today=date(2026, 4, 8),
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            pluie_j2=0.0,
+            pluie_3j=0.0,
+            pluie_probabilite_max_3j=0.0,
+            humidite=60.0,
+            temperature=18.3,
+            etp=1.1,
+            type_sol="limoneux",
+            weather_profile={},
+            history=[],
+        )
+
+        self.assertIsNone(profile.get("block_reason"))
+        self.assertEqual(profile["mm_final_recommande"], 5.0)
+        self.assertEqual(profile["mm_requested"], 5.0)
+        self.assertTrue(profile["arrosage_recommande"])
+
+    def test_scarification_profile_uses_policy_range_when_conditions_are_met(self) -> None:
+        profile = guidance.compute_watering_profile(
+            phase_dominante="Scarification",
+            sous_phase="Réponse",
+            water_balance={
+                "bilan_hydrique_mm": 1.0,
+                "bilan_hydrique_journalier_mm": -1.0,
+                "deficit_jour": 0.0,
+                "deficit_3j": 0.0,
+                "deficit_7j": 0.0,
+                "arrosage_recent_7j": 0.0,
+                "arrosage_recent": 0.0,
+            },
+            today=date(2026, 4, 8),
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            pluie_j2=0.0,
+            pluie_3j=0.0,
+            pluie_probabilite_max_3j=0.0,
+            humidite=60.0,
+            temperature=18.3,
+            etp=1.1,
+            type_sol="limoneux",
+            weather_profile={},
+            history=[],
+        )
+
+        self.assertIsNone(profile.get("block_reason"))
+        self.assertEqual(profile["mm_final_recommande"], 5.0)
+        self.assertTrue(profile["arrosage_recommande"])
+
+    def test_scarification_profile_blocks_when_temperature_is_too_low(self) -> None:
+        profile = guidance.compute_watering_profile(
+            phase_dominante="Scarification",
+            sous_phase="Réponse",
+            water_balance={
+                "bilan_hydrique_mm": 1.0,
+                "bilan_hydrique_journalier_mm": -1.0,
+                "deficit_jour": 0.0,
+                "deficit_3j": 0.0,
+                "deficit_7j": 0.0,
+                "arrosage_recent_7j": 0.0,
+                "arrosage_recent": 0.0,
+            },
+            today=date(2026, 4, 8),
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            pluie_j2=0.0,
+            pluie_3j=0.0,
+            pluie_probabilite_max_3j=0.0,
+            humidite=60.0,
+            temperature=8.0,
+            etp=1.1,
+            type_sol="limoneux",
+            weather_profile={},
+            history=[],
+        )
+
+        self.assertEqual(profile["block_reason"], "temperature_trop_basse")
+        self.assertEqual(profile["mm_final_recommande"], 0.0)
+        self.assertFalse(profile["arrosage_recommande"])
