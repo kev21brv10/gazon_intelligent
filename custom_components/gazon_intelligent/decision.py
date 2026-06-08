@@ -404,6 +404,10 @@ def _build_decision_extra(
         "mowing_block_reason": mowing_bundle.get("mowing_block_reason"),
         "mowing_cooldown_remaining_minutes": mowing_bundle.get("mowing_cooldown_remaining_minutes"),
         "mowing_post_application_active": mowing_bundle.get("mowing_post_application_active"),
+        "mowing_is_overdue": mowing_bundle.get("mowing_is_overdue"),
+        "mowing_overdue_days": mowing_bundle.get("mowing_overdue_days"),
+        "mowing_overdue_factor": mowing_bundle.get("mowing_overdue_factor"),
+        "gazon_hauteur_estimee_cm": mowing_bundle.get("gazon_hauteur_estimee_cm"),
         "mowing_cooldown_after_watering_minutes": context.runtime_context.get(
             "mowing_cooldown_after_watering_minutes"
         )
