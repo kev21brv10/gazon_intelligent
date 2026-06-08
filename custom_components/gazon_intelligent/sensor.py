@@ -1042,6 +1042,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
             GazonAssistantSensor(coordinator),
             GazonTonteEtatSensor(coordinator),
             GazonHauteurTonteSensor(coordinator),
+            GazonHauteurEstimeeSensor(coordinator),
             GazonConseilPrincipalSensor(coordinator),
             GazonActionRecommandeeSensor(coordinator),
             GazonActionAEviterSensor(coordinator),
@@ -1189,6 +1190,34 @@ class GazonHauteurTonteSensor(GazonEntityBase, SensorEntity):
             "mowing_block_reason_label",
             "mowing_block_reason",
             "mowing_cooldown_remaining_minutes",
+            "mowing_watering_coordination",
+            "mowing_watering_coordination_msg",
+        )
+        return attrs or None
+
+
+class GazonHauteurEstimeeSensor(GazonEntityBase, SensorEntity):
+    _attr_name = "Hauteur de gazon estimée"
+    _attr_has_entity_name = True
+    _attr_native_unit_of_measurement = "cm"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:grass"
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._set_entity_identity("sensor", "hauteur_gazon_estimee")
+
+    @property
+    def native_value(self):
+        return self._decision_value("gazon_hauteur_estimee_cm")
+
+    @property
+    def extra_state_attributes(self):
+        attrs = self._attrs_from_result(
+            "tondeuse_hauteur_coupe_mm",
+            "mowing_overdue_days",
+            "mowing_overdue_factor",
+            "mowing_is_overdue",
         )
         return attrs or None
 
