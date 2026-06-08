@@ -71,7 +71,6 @@ def build_phase_bundle(context: DecisionContext) -> dict[str, Any]:
     dominant = compute_dominant_phase(
         context.history,
         today=context.today,
-        temperature=context.temperature,
     )
     phase_dominante = _safe_phase_name(dominant.get("phase_dominante"))
     date_debut = _safe_date(dominant.get("date_debut"))
@@ -89,21 +88,18 @@ def build_phase_bundle(context: DecisionContext) -> dict[str, Any]:
         today=context.today,
     )
     phase_age_days = _safe_int(dominant.get("age_jours"), default=0, minimum=0)
+    sous_phase_age = _safe_int(subphase.get("age_jours"), default=0, minimum=0)
     sous_phase_progression = _safe_progression(subphase.get("progression"))
-    sous_phase_age_days = _safe_int(subphase.get("age_jours"), default=0, minimum=0)
-    sous_phase = _safe_phase_name(subphase.get("sous_phase"))
-    sous_phase_detail = str(subphase.get("detail") or sous_phase)
-    if date_fin is not None and context.today is not None and date_fin < context.today:
-        jours_restants = 0
+
     return {
         "phase_dominante": phase_dominante,
-        "phase_dominante_source": dominant.get("source") or "inconnu",
-        "date_action": date_debut.isoformat() if date_debut is not None else None,
-        "date_fin": date_fin.isoformat() if date_fin is not None else None,
+        "phase_dominante_source": dominant.get("source", "absence_phase"),
+        "date_action": date_debut.isoformat() if date_debut else None,
+        "date_fin": date_fin.isoformat() if date_fin else None,
         "phase_age_days": phase_age_days,
-        "sous_phase": sous_phase,
-        "sous_phase_detail": sous_phase_detail,
-        "sous_phase_age_days": sous_phase_age_days,
+        "sous_phase": subphase.get("sous_phase", phase_dominante),
+        "sous_phase_detail": subphase.get("detail", f"{phase_dominante} / {phase_dominante}"),
+        "sous_phase_age_days": sous_phase_age,
         "sous_phase_progression": sous_phase_progression,
-        "jours_restants": max(0, _safe_int(jours_restants, default=0, minimum=0)),
+        "jours_restants": jours_restants,
     }
