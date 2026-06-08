@@ -356,7 +356,16 @@ def _async_register_services(hass: HomeAssistant) -> None:
         hass,
         SERVICE_DECLARE_MOWING,
         _handle_declare_mowing,
-        schema=vol.Schema({**_SERVICE_TARGET_FIELD, vol.Optional("date_action"): str}),
+        schema=vol.Schema(
+            {
+                **_SERVICE_TARGET_FIELD,
+                vol.Optional("date_action"): str,
+                vol.Optional("hauteur_coupe_mm"): vol.All(
+                    vol.Coerce(float),
+                    vol.Range(min=10, max=120),
+                ),
+            }
+        ),
     )
     _register_service_if_missing(
         hass,
