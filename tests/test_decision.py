@@ -3075,3 +3075,118 @@ class TestIrrigationBlockedButCritical(unittest.TestCase):
         result = decision_watering._apply_irrigation_execution_contract(payload)
         self.assertFalse(result["irrigation_blocked_but_critical"])
         self.assertIsNone(result["critical_deficit_mm"])
+
+
+class TestMowingOverdue(unittest.TestCase):
+    """Tests pour la détection de retard de tonte et son influence sur la décision."""
+
+    def _make_bundle(self, history, today, hour_of_day=11, temperature=20, humidite=55, score_tonte_boost=0):
+        context = decision.DecisionContext.from_legacy_args(
+            history=history,
+            today=today,
+            hour_of_day=hour_of_day,
+            temperature=temperature,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=humidite,
+            type_sol="limoneux",
+            etp_capteur=3.0,
+        )
+        phase_bundle = decision_phase.build_phase_bundle(context)
+        water_bundle = decision_watering.build_water_bundle(context, phase_bundle)
+        risk_bundle = decision_risk.build_risk_bundle(context, phase_bundle, water_bundle)
+        return decision_mowing.build_mowing_bundle(context, phase_bundle, water_bundle, risk_bundle)
+
+    def test_not_overdue_when_no_mowing_history(self):
+        bundle = self._make_bundle(history=[], today=date(2026, 6, 15))
+        self.assertFalse(bundle["mowing_is_overdue"])
+        self.assertEqual(bundle["mowing_overdue_days"], 0)
+        self.assertEqual(bundle["mowing_overdue_factor"], 0.0)
+
+    def test_not_overdue_when_mowed_recently(self):
+        # Fréquence juin = 5/semaine → intervalle 1,4 j — tonte hier = 0,7× → pas overdue
+        bundle = self._make_bundle(
+            history=[{"type": "tonte", "date": "2026-06-14"}],
+            today=date(2026, 6, 15),
+        )
+        self.assertFalse(bundle["mowing_is_overdue"])
+        self.assertEqual(bundle["mowing_overdue_days"], 1)
+
+    def test_overdue_when_interval_exceeded_by_1_5x(self):
+        # Fréquence juin = 5/semaine → intervalle 1,4 j — tonte il y a 3 j = 2,1× → overdue
+        bundle = self._make_bundle(
+            history=[{"type": "tonte", "date": "2026-06-12"}],
+            today=date(2026, 6, 15),
+        )
+        self.assertTrue(bundle["mowing_is_overdue"])
+        self.assertEqual(bundle["mowing_overdue_days"], 3)
+        self.assertGreater(bundle["mowing_overdue_factor"], 1.5)
+
+    def test_overdue_reason_prefix_in_tonte_reason_when_blocked(self):
+        bundle = self._make_bundle(
+            history=[{"type": "tonte", "date": "2026-06-12"}],
+            today=date(2026, 6, 15),
+        )
+        self.assertTrue(bundle["mowing_is_overdue"])
+        self.assertIn("Retard de tonte", bundle["tonte_reason"])
+        self.assertIn("3 j", bundle["tonte_reason"])
+
+    def test_overdue_reason_prefix_when_tonte_allowed(self):
+        # Conditions idéales + tonte en retard → raison contient "Tonte recommandée"
+        bundle = self._make_bundle(
+            history=[{"type": "tonte", "date": "2026-06-10"}],
+            today=date(2026, 6, 15),
+            hour_of_day=11,
+            temperature=18,
+            humidite=50,
+        )
+        if bundle["tonte_autorisee"] and bundle["mowing_is_overdue"]:
+            self.assertIn("Tonte recommandée", bundle["tonte_reason"])
+
+    def test_overdue_does_not_override_hard_block_phase(self):
+        # Sursemis Germination → tonte interdite même si très en retard
+        context = decision.DecisionContext.from_legacy_args(
+            history=[
+                {"type": "Sursemis", "date": "2026-06-01"},
+                {"type": "tonte", "date": "2026-05-20"},
+            ],
+            today=date(2026, 6, 15),
+            hour_of_day=11,
+            temperature=18,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=50,
+            type_sol="limoneux",
+            etp_capteur=3.0,
+        )
+        phase_bundle = decision_phase.build_phase_bundle(context)
+        water_bundle = decision_watering.build_water_bundle(context, phase_bundle)
+        risk_bundle = decision_risk.build_risk_bundle(context, phase_bundle, water_bundle)
+        bundle = decision_mowing.build_mowing_bundle(context, phase_bundle, water_bundle, risk_bundle)
+        # La phase dure → tonte bloquée indépendamment du retard
+        self.assertFalse(bundle["tonte_autorisee"])
+        self.assertIn("phase_sursemis", (bundle.get("raison_blocage_code") or ""))
+
+    def test_overdue_does_not_override_night_block(self):
+        bundle = self._make_bundle(
+            history=[{"type": "tonte", "date": "2026-06-10"}],
+            today=date(2026, 6, 15),
+            hour_of_day=2,
+        )
+        self.assertFalse(bundle["tonte_autorisee"])
+        self.assertEqual(bundle["mowing_block_reason_code"], "mowing_night")
+
+    def test_overdue_keys_always_present(self):
+        bundle = self._make_bundle(history=[], today=date(2026, 6, 15))
+        self.assertIn("mowing_is_overdue", bundle)
+        self.assertIn("mowing_overdue_days", bundle)
+        self.assertIn("mowing_overdue_factor", bundle)
+
+    def test_not_overdue_in_winter_zero_frequency(self):
+        # Janvier → fréquence 0 → jamais overdue
+        bundle = self._make_bundle(
+            history=[{"type": "tonte", "date": "2025-11-01"}],
+            today=date(2026, 1, 15),
+        )
+        self.assertFalse(bundle["mowing_is_overdue"])
+        self.assertEqual(bundle["mowing_overdue_days"], 0)
