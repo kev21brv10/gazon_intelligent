@@ -1176,16 +1176,6 @@ def _select_mowing_block_reason(
             )
         )
 
-    if arrosage_recent_jour > 0.5:
-        candidates.append(
-            (
-                _MOWING_BLOCK_PRIORITIES["sol_humide_post_arrosage"],
-                "recent_watering",
-                "Arrosage récent: attendre 24 h avant de tondre.",
-                False,
-            )
-        )
-
     if score_stress >= 70 or (temperature >= 30 and etp >= 4):
         candidates.append(
             (
