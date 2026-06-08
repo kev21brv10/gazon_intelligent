@@ -171,6 +171,8 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "mowing_overdue_days",
     "mowing_overdue_factor",
     "gazon_hauteur_estimee_cm",
+    "mowing_watering_coordination",
+    "mowing_watering_coordination_msg",
     "mowing_cooldown_after_watering_minutes",
     "semis_followup_state",
     "semis_followup_due_at",

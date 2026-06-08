@@ -1190,6 +1190,8 @@ class GazonHauteurTonteSensor(GazonEntityBase, SensorEntity):
             "mowing_block_reason_label",
             "mowing_block_reason",
             "mowing_cooldown_remaining_minutes",
+            "mowing_watering_coordination",
+            "mowing_watering_coordination_msg",
         )
         return attrs or None
 

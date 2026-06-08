@@ -90,6 +90,8 @@ _MOWING_BUNDLE_CORE_KEYS = (
     "mowing_overdue_days",
     "mowing_overdue_factor",
     "gazon_hauteur_estimee_cm",
+    "mowing_watering_coordination",
+    "mowing_watering_coordination_msg",
 )
 _OVERDUE_SOFT_OVERRIDE_CODES = {"conditions_defavorables", "stress_thermique"}
 
@@ -313,6 +315,39 @@ def _has_recent_watering_history(context: DecisionContext) -> bool:
         and _watering_item_matches_zones(item, allowed_zone_ids)
         for item in context.history
     )
+
+
+def _upcoming_watering_coordination(
+    context: DecisionContext,
+    water_bundle: dict[str, Any],
+) -> tuple[str, str | None]:
+    """Retourne (niveau, message) si un arrosage est prévu et pas encore fait.
+
+    niveau : "block" (< 30 min), "discourage" (< 2 h), ou "none".
+    Message None si aucune action recommandée.
+    """
+    if not water_bundle.get("arrosage_recommande", False):
+        return "none", None
+    if _has_recent_watering_history(context):
+        return "none", None
+    start_minute = water_bundle.get("watering_window_start_minute")
+    if start_minute is None:
+        return "none", None
+    current_minute = (context.hour_of_day or 0) * 60
+    minutes_until = int(start_minute) - current_minute
+    if minutes_until <= 0:
+        # La fenêtre a déjà démarré ou est passée — arrosage peut survenir à tout moment
+        return "discourage", "Arrosage recommandé ce matin — arrose avant de tondre si possible."
+    if minutes_until <= 30:
+        return "block", (
+            f"Arrosage imminent dans ~{minutes_until} min: "
+            "inutile de tondre maintenant, attends la fin de l'arrosage."
+        )
+    if minutes_until <= 120:
+        h, m = divmod(minutes_until, 60)
+        time_str = f"{h}h{m:02d}" if h > 0 else f"{m} min"
+        return "discourage", f"Arrosage prévu dans ~{time_str} — tonds avant ou patiente après."
+    return "none", None
 
 
 def _watering_related_mowing_block(
@@ -1518,6 +1553,17 @@ def build_mowing_bundle(
         if not tonte_ok and next_mowing_display:
             reason = f"{reason} Prochaine tonte estimée le {next_mowing_display}."
 
+    watering_coord_level, watering_coord_msg = _upcoming_watering_coordination(context, water_bundle)
+    if watering_coord_level == "block" and not mowing_blocked and not post_application_active and not watering_in_progress and not cooldown_active:
+        tonte_ok = False
+        reason = watering_coord_msg or reason
+        reason_code = "upcoming_watering"
+        mowing_block_reason_code = reason_code
+        mowing_block_reason_label = watering_coord_msg
+        mowing_block_reason = "recent_watering"
+    elif watering_coord_msg and tonte_ok:
+        reason = f"{reason} {watering_coord_msg}"
+
     tonte_statut = _compute_mowing_status(
         phase_bundle=phase_bundle,
         risk_bundle=risk_bundle,
@@ -1563,6 +1609,8 @@ def build_mowing_bundle(
     bundle["mowing_overdue_days"] = overdue_days
     bundle["mowing_overdue_factor"] = overdue_factor
     bundle["gazon_hauteur_estimee_cm"] = _estimated_grass_height_cm(context, phase_bundle)
+    bundle["mowing_watering_coordination"] = watering_coord_level
+    bundle["mowing_watering_coordination_msg"] = watering_coord_msg
     mower_context = context.mower_context if isinstance(context.mower_context, dict) else {}
     if mower_context:
         bundle.update(

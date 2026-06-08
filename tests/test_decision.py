@@ -3371,3 +3371,78 @@ class TestMowingWindowReason(unittest.TestCase):
         bundle = self._make_bundle(hour_of_day=11)
         if bundle["tonte_autorisee"]:
             self.assertNotIn("déconseillé", bundle["tonte_reason"].lower())
+
+
+class TestMowingWateringCoordination(unittest.TestCase):
+    """Tests pour la coordination arrosage/tonte."""
+
+    def _make_bundle(self, hour_of_day, arrosage_recommande, watering_window_start_minute,
+                     has_recent_watering=False):
+        history = []
+        if has_recent_watering:
+            history.append({"type": "arrosage", "date": date(2026, 6, 7).isoformat(), "mm": 10})
+        context = decision.DecisionContext.from_legacy_args(
+            history=history,
+            today=date(2026, 6, 7),
+            hour_of_day=hour_of_day,
+            temperature=20,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=55,
+            type_sol="limoneux",
+            etp_capteur=3.0,
+        )
+        phase_bundle = decision_phase.build_phase_bundle(context)
+        water_bundle = decision_watering.build_water_bundle(context, phase_bundle)
+        # Patch the relevant water_bundle keys
+        water_bundle["arrosage_recommande"] = arrosage_recommande
+        water_bundle["watering_window_start_minute"] = watering_window_start_minute
+        risk_bundle = decision_risk.build_risk_bundle(context, phase_bundle, water_bundle)
+        return decision_mowing.build_mowing_bundle(context, phase_bundle, water_bundle, risk_bundle)
+
+    def test_no_advisory_when_no_watering_recommended(self):
+        bundle = self._make_bundle(
+            hour_of_day=11, arrosage_recommande=False, watering_window_start_minute=240
+        )
+        self.assertEqual(bundle["mowing_watering_coordination"], "none")
+        self.assertIsNone(bundle["mowing_watering_coordination_msg"])
+
+    def test_no_advisory_when_already_watered(self):
+        bundle = self._make_bundle(
+            hour_of_day=11, arrosage_recommande=True,
+            watering_window_start_minute=240, has_recent_watering=True
+        )
+        self.assertEqual(bundle["mowing_watering_coordination"], "none")
+
+    def test_block_when_watering_imminent(self):
+        # 11h00 (660 min), watering starts at 11h20 (680 min) → 20 min → block
+        bundle = self._make_bundle(
+            hour_of_day=11, arrosage_recommande=True, watering_window_start_minute=680
+        )
+        self.assertEqual(bundle["mowing_watering_coordination"], "block")
+        self.assertFalse(bundle["tonte_autorisee"])
+        self.assertIn("imminent", bundle["tonte_reason"].lower())
+
+    def test_discourage_when_watering_within_2h(self):
+        # 11h00 (660 min), watering starts at 12h30 (750 min) → 90 min → discourage
+        bundle = self._make_bundle(
+            hour_of_day=11, arrosage_recommande=True, watering_window_start_minute=750
+        )
+        self.assertEqual(bundle["mowing_watering_coordination"], "discourage")
+        # Tonte toujours possible, mais message d'avertissement présent
+        self.assertIsNotNone(bundle["mowing_watering_coordination_msg"])
+
+    def test_no_advisory_when_watering_far_away(self):
+        # 11h00 (660 min), watering starts at 4h00 tomorrow effective (but > 2h)
+        # 14h (840 min) start, current 11h (660 min) → 180 min → none
+        bundle = self._make_bundle(
+            hour_of_day=11, arrosage_recommande=True, watering_window_start_minute=840
+        )
+        self.assertEqual(bundle["mowing_watering_coordination"], "none")
+
+    def test_coordination_keys_always_present(self):
+        bundle = self._make_bundle(
+            hour_of_day=11, arrosage_recommande=False, watering_window_start_minute=None
+        )
+        self.assertIn("mowing_watering_coordination", bundle)
+        self.assertIn("mowing_watering_coordination_msg", bundle)
