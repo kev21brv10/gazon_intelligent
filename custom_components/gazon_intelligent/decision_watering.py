@@ -131,11 +131,10 @@ def build_water_bundle(
     reserve_actuelle_mm = float(water_balance.get("reserve_actuelle_mm") or 0.0)
     mm_cible_depletion = round(max(0.0, reserve_utile_mm - reserve_actuelle_mm), 1)
     balance_snapshot = dict(water_balance)
-    balance_snapshot["bilan_hydrique_journalier_mm"] = balance_snapshot.get("bilan_hydrique_mm", 0.0)
     if context.soil_balance:
         reserve_mm = context.soil_balance.get("reserve_mm")
         if reserve_mm is not None:
-            balance_snapshot["bilan_hydrique_mm"] = reserve_mm
+            balance_snapshot["reserve_hydrique_sol_mm"] = reserve_mm
         balance_snapshot["soil_balance"] = context.soil_balance
         balance_snapshot["bilan_hydrique_precedent_mm"] = context.soil_balance.get("previous_reserve_mm")
         balance_snapshot["pluie_jour_mm"] = context.soil_balance.get("pluie_mm")

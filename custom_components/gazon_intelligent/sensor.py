@@ -755,40 +755,14 @@ def _harmonized_hydric_labels(
 
 
 def _objective_display_balance(attrs: dict[str, object]) -> float | None:
-    reference = attrs.get("bilan_hydrique_journalier_mm")
+    # Use soil reserve for agronomic labels; fall back to daily balance when reserve is absent.
+    reference = attrs.get("reserve_hydrique_sol_mm")
     if reference in (None, "", [], {}):
         reference = attrs.get("bilan_hydrique_mm")
     try:
         return float(reference) if reference is not None else None
     except (TypeError, ValueError):
         return None
-
-
-def _add_hydric_storage_aliases(entity: GazonEntityBase, attrs: dict[str, object]) -> dict[str, object]:
-    # Legacy/public aliases intentionally kept for existing Lovelace cards,
-    # templates, exports and user dashboards. The dedicated hydric entities
-    # remain the canonical home for these values, but we preserve the older
-    # attribute names until a compatibility migration is planned explicitly.
-    aliases = {
-        "reserve_utile_max_mm": attrs.get("reserve_utile_mm", entity._decision_value("reserve_utile_mm")),
-        "reserve_utile_actuelle_mm": attrs.get(
-            "reserve_actuelle_mm",
-            entity._decision_value("reserve_actuelle_mm"),
-        ),
-        "reserve_totale_sol_mm": attrs.get("reserve_stock_mm", entity._decision_value("reserve_stock_mm")),
-        "reserve_totale_sol_max_mm": attrs.get(
-            "reserve_stock_max_mm",
-            entity._decision_value("reserve_stock_max_mm"),
-        ),
-        "surplus_hydrique_mm": attrs.get(
-            "reserve_surplus_mm",
-            entity._decision_value("reserve_surplus_mm"),
-        ),
-    }
-    for key, value in aliases.items():
-        if value not in (None, "", [], {}):
-            attrs[key] = value
-    return attrs
 
 
 def _score_level_and_tone(score: object) -> tuple[str | None, str]:
@@ -1274,7 +1248,7 @@ class GazonObjectifMmSensor(GazonEntityBase, SensorEntity):
             "phase_dominante",
             "sous_phase",
             "bilan_hydrique_mm",
-            "bilan_hydrique_journalier_mm",
+            "reserve_hydrique_sol_mm",
             "bilan_hydrique_precedent_mm",
             "deficit_3j",
             "deficit_7j",
@@ -1320,14 +1294,7 @@ class GazonObjectifMmSensor(GazonEntityBase, SensorEntity):
     @property
     def extra_state_attributes(self):
         attrs = self._attrs_from_result(*self._objective_attrs_keys()) or {}
-        attrs = _add_hydric_storage_aliases(self, attrs)
         display_balance = _objective_display_balance(attrs)
-        journalier = attrs.get("bilan_hydrique_journalier_mm")
-        reserve = attrs.get("bilan_hydrique_mm")
-        if journalier not in (None, "", [], {}):
-            attrs["bilan_hydrique_mm"] = journalier
-            if reserve not in (None, "", [], {}):
-                attrs["reserve_hydrique_sol_mm"] = reserve
         hydric_balance_level = _hydric_balance_level(
             display_balance,
             attrs.get("deficit_3j"),
@@ -1597,7 +1564,7 @@ class GazonReserveActuelleSensor(GazonEntityBase, SensorEntity):
             "mad_hysteresis_state",
             "mad_threshold_mm",
             "bilan_hydrique_mm",
-            "bilan_hydrique_journalier_mm",
+            "reserve_hydrique_sol_mm",
             "arrosage_recent_jour",
             "arrosage_recent_3j",
             "arrosage_recent_7j",
@@ -1607,9 +1574,8 @@ class GazonReserveActuelleSensor(GazonEntityBase, SensorEntity):
         ) or {}
         soil_balance = self._decision_value("soil_balance")
         if isinstance(soil_balance, dict):
-            attrs["soil_balance_previous_reserve_mm"] = soil_balance.get("previous_reserve_mm")
-            attrs["soil_balance_delta_mm"] = soil_balance.get("delta_mm")
-        attrs = _add_hydric_storage_aliases(self, attrs)
+            attrs["sol_reserve_precedente_mm"] = soil_balance.get("previous_reserve_mm")
+            attrs["sol_delta_mm"] = soil_balance.get("delta_mm")
         hydric_state = _hydric_state_for_objective_sensor(self, attrs)
         if hydric_state is not None:
             attrs["hydric_state"] = hydric_state
@@ -1705,7 +1671,6 @@ class GazonEtatHydriqueSensor(GazonEntityBase, SensorEntity):
             "mad_hysteresis_state",
             "mad_threshold_mm",
         ) or {}
-        attrs = _add_hydric_storage_aliases(self, attrs)
         hydric_state = _hydric_state_for_objective_sensor(self, attrs)
         if hydric_state is not None:
             attrs["hydric_state"] = hydric_state
