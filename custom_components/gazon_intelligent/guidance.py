@@ -149,11 +149,8 @@ def _to_float(value: Any) -> float | None:
 
 def _reference_hydric_balance_mm(water_balance: dict[str, Any] | None) -> float:
     water_balance = water_balance or {}
-    reference = water_balance.get("bilan_hydrique_journalier_mm")
-    if reference is None:
-        reference = water_balance.get("bilan_hydrique_mm", 0.0)
     try:
-        return float(reference or 0.0)
+        return float(water_balance.get("bilan_hydrique_mm") or 0.0)
     except (TypeError, ValueError):
         return 0.0
 

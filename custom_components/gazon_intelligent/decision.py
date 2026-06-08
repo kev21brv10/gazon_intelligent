@@ -264,7 +264,7 @@ def _build_decision_extra(
         "deficit_jour": water_balance.get("deficit_jour"),
         "deficit_3j": water_balance.get("deficit_3j"),
         "deficit_7j": water_balance.get("deficit_7j"),
-        "bilan_hydrique_journalier_mm": water_balance.get("bilan_hydrique_journalier_mm"),
+        "reserve_hydrique_sol_mm": water_balance.get("reserve_hydrique_sol_mm"),
         "bilan_hydrique_precedent_mm": water_balance.get("bilan_hydrique_precedent_mm"),
         "soil_balance": water_balance.get("soil_balance"),
         "pluie_efficace": water_balance.get("pluie_efficace"),

@@ -861,9 +861,9 @@ class GazonBrainTests(unittest.TestCase):
         reloaded = GazonBrain()
         reloaded.load_state(brain.dump_state())
 
-        self.assertGreater(snapshot["bilan_hydrique_mm"], 10.0)
-        self.assertIn("bilan_hydrique_journalier_mm", snapshot)
-        self.assertIn("bilan_hydrique_journalier_mm", brain.last_result.extra)
+        self.assertGreater(snapshot["reserve_hydrique_sol_mm"], 10.0)
+        self.assertIn("bilan_hydrique_mm", snapshot)
+        self.assertIn("bilan_hydrique_mm", brain.last_result.extra)
         self.assertIn("soil_balance", brain.last_result.extra)
         self.assertEqual(snapshot["soil_balance"]["reserve_mm"], reloaded.soil_balance["reserve_mm"])
         self.assertEqual(reloaded.soil_balance["reserve_mm"], brain.soil_balance["reserve_mm"])
