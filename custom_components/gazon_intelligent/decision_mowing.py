@@ -67,7 +67,6 @@ _MOWING_WINDOW_DISCOURAGED_WIND = 20
 _MOWING_WINDOW_BLOCK_WIND = 40
 _MOWING_WINDOW_DISCOURAGED_TEMP_MIN = 25
 _MOWING_WINDOW_BLOCK_TEMP_MIN = 30
-_MOWING_WINDOW_DISCOURAGED_HUMIDITY = 85
 _MOWING_WINDOW_BLOCK_HUMIDITY = 90
 _MOWING_BUNDLE_CORE_KEYS = (
     "tonte_autorisee",
@@ -367,13 +366,13 @@ def _resolve_mowing_window(
         return "blocked", "Rosée présente: attendre le ressuyage du feuillage."
     if temperature < 8:
         return "blocked", "Température trop basse pour tondre."
-    if temperature > 30:
+    if temperature > _MOWING_WINDOW_BLOCK_TEMP_MIN:
         return "blocked", "Température trop élevée pour tondre."
-    if vent > 40:
+    if vent > _MOWING_WINDOW_BLOCK_WIND:
         return "blocked", "Vent trop fort pour tondre."
-    if vent >= 20:
+    if vent >= _MOWING_WINDOW_DISCOURAGED_WIND:
         return "discouraged", "Vent soutenu: à éviter."
-    if 25 <= temperature <= 30:
+    if _MOWING_WINDOW_DISCOURAGED_TEMP_MIN <= temperature <= _MOWING_WINDOW_BLOCK_TEMP_MIN:
         return "discouraged", "Température élevée: à éviter."
     if hour < _MOWING_WINDOW_IDEAL_START:
         return "blocked", "Matin trop tôt: attendre le ressuyage."
@@ -465,7 +464,7 @@ def _resolve_mowing_block(
             return True, "machine_unavailable", "Robot indisponible: attendre qu'elle soit prête.", detail_code, detail_label
 
     temperature = float(context.temperature or 0.0)
-    if temperature < 8 or temperature > 30:
+    if temperature < 8 or temperature > _MOWING_WINDOW_BLOCK_TEMP_MIN:
         return True, "temp_extreme", "Température extrême: attendre une fenêtre plus clémente.", None, None
 
     advanced_context = water_bundle.get("advanced_context")
@@ -1076,7 +1075,7 @@ def _select_mowing_block_reason(
             )
         )
 
-    if float(context.vent or 0.0) > 40:
+    if float(context.vent or 0.0) > _MOWING_WINDOW_BLOCK_WIND:
         candidates.append(
             (
                 _MOWING_BLOCK_PRIORITIES["vent_fort"],

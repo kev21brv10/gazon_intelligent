@@ -1214,6 +1214,7 @@ class GazonHauteurEstimeeSensor(GazonEntityBase, SensorEntity):
         attrs = self._attrs_from_result(
             "tondeuse_hauteur_coupe_mm",
             "mowing_overdue_days",
+            "mowing_overdue_factor",
             "mowing_is_overdue",
         )
         return attrs or None
