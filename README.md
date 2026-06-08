@@ -29,12 +29,15 @@ L’intégration construit une lecture métier exploitable dans Home Assistant:
 
 Elle est conçue pour rester lisible côté UI, tout en gardant assez de structure pour les automatisations, le debug et les dashboards avancés.
 
-## ✨ Ce que la version actuelle apporte (v0.7.3)
+## ✨ Ce que la version actuelle apporte (v0.8.0)
 
-- **ET0 Penman-Monteith FAO-56** : calcul de l'évapotranspiration de référence remplacé par la formule standard internationale, 2 à 3× plus précise en été
-- **Latitude HA utilisée automatiquement** : le rayonnement extraterrestre Ra est calculé depuis la position géographique déjà configurée dans Home Assistant, permettant une variation saisonnière réelle (ex. 3,6 mm/j en juillet vs 1,4 mm/j en janvier à 48°N)
-- **Arrondi symétrique corrigé** : le delta négatif (réserve qui baisse) était mal arrondi, causant des incohérences `précédent + delta ≠ réserve`
-- **Attributs simplifiés** : suppression des attributs redondants ou trompeurs sur le capteur de réserve
+- **Coordination arrosage/tonte** : la tonte est bloquée automatiquement si un arrosage est imminent (< 30 min) et déconseillée si prévu dans les 2 h suivantes
+- **Ressuyage dynamique post-arrosage** : le délai avant de pouvoir tondre après un arrosage est calculé selon le type de sol — 1 h (sableux), 2 h (limoneux), 4 h (argileux) — avec ajustements automatiques selon l'humidité, les précipitations et la température
+- **Détection de retard de tonte** : quand la tonte est en retard, un soft override autorise la tonte même sur des conditions borderline (`conditions_defavorables`, `stress_thermique`)
+- **Hauteur de gazon estimée sans capteur** : `sensor.gazon_intelligent_hauteur_gazon_estimee` calcule la hauteur depuis la date de dernière coupe, la hauteur de coupe réglée et le taux de croissance mensuel
+- **Messages de blocage clarifiés** : la raison agronomique et la contrainte horaire sont maintenant affichées ensemble, sans l'une écraser l'autre
+
+*Versions précédentes : ET0 Penman-Monteith FAO-56, latitude HA automatique, arrondi symétrique, support multi-pelouse.*
 - une instance par pelouse, avec support multi-gazon propre
 - une façade publique centrée sur `sensor.gazon_intelligent_assistant`
 - une projection claire de:
@@ -176,6 +179,7 @@ Il résume l’action prioritaire ou la raison pour laquelle il faut attendre.
 - `sensor.gazon_intelligent_etat_de_tonte`
 - `sensor.gazon_intelligent_prochaine_tonte`
 - `sensor.gazon_intelligent_hauteur_de_tonte_conseillee`
+- `sensor.gazon_intelligent_hauteur_gazon_estimee` *(estimation sans capteur)*
 
 Attributs utiles côté tonte:
 
@@ -184,6 +188,8 @@ Attributs utiles côté tonte:
 - `action_possible`
 - `mowing_block_reason_code`
 - `mowing_block_reason_label`
+- `mowing_watering_coordination` *(none / discourage / block)*
+- `mowing_watering_coordination_msg`
 
 ### Phase et contexte
 
