@@ -90,6 +90,7 @@ _MOWING_BUNDLE_CORE_KEYS = (
     "mowing_is_overdue",
     "mowing_overdue_days",
     "mowing_overdue_factor",
+    "gazon_hauteur_estimee_cm",
 )
 _OVERDUE_SOFT_OVERRIDE_CODES = {"conditions_defavorables", "stress_thermique"}
 
@@ -694,6 +695,55 @@ def _mowing_overdue_state(
     return overdue_factor >= 1.5, round(overdue_factor, 2), days_since
 
 
+_GROWTH_RATE_BY_MONTH: dict[int, float] = {
+    1: 0.0, 2: 0.0,
+    3: 0.3, 4: 0.4,
+    5: 0.5, 6: 0.5,
+    7: 0.4, 8: 0.35,
+    9: 0.35, 10: 0.25,
+    11: 0.05, 12: 0.0,
+}
+
+
+def _growth_rate_cm_per_day(phase_bundle: dict[str, Any], month: int) -> float:
+    """Vitesse de croissance journalière estimée selon la phase et le mois."""
+    phase_dominante = str(phase_bundle.get("phase_dominante") or "")
+    sous_phase = str(phase_bundle.get("sous_phase") or "")
+    if phase_dominante == "Sursemis":
+        if sous_phase in {"Germination", "Enracinement"}:
+            return 0.0
+        if sous_phase == "Reprise":
+            return 0.2
+    return _GROWTH_RATE_BY_MONTH.get(month, 0.3)
+
+
+def _estimated_grass_height_cm(
+    context: DecisionContext,
+    phase_bundle: dict[str, Any],
+) -> float | None:
+    """Estime la hauteur actuelle du gazon depuis la date de dernière tonte.
+
+    Retourne None si la hauteur de coupe ou la date de dernière tonte est inconnue.
+    Ne remplace pas un capteur physique — utilisé comme fallback uniquement.
+    """
+    mower_context = context.mower_context if isinstance(context.mower_context, dict) else {}
+    cutting_height_mm = mower_context.get("tondeuse_hauteur_coupe_mm")
+    if cutting_height_mm is None:
+        return None
+    try:
+        cutting_height_cm = float(cutting_height_mm) / 10.0
+    except (TypeError, ValueError):
+        return None
+    if cutting_height_cm <= 0:
+        return None
+    last_mowing = _last_mowing_date(context)
+    if last_mowing is None:
+        return None
+    days_since = max((context.today - last_mowing).days, 0)
+    growth_rate = _growth_rate_cm_per_day(phase_bundle, context.today.month)
+    return round(cutting_height_cm + days_since * growth_rate, 1)
+
+
 def _mowing_spacing_min_days(
     phase_bundle: dict[str, Any],
 ) -> int:
@@ -1217,6 +1267,8 @@ def _recommended_mowing_height(
     min_height, max_height, step = _mowing_height_settings(context)
     theoretical_height = _theoretical_mowing_height(context, phase_bundle, water_bundle, risk_bundle)
     current_height = water_bundle["advanced_context"].get("hauteur_gazon")
+    if current_height is None:
+        current_height = _estimated_grass_height_cm(context, phase_bundle)
     third_floor = None
     robot_min_height = 4.0
     robot_max_height = 6.5
@@ -1504,6 +1556,7 @@ def build_mowing_bundle(
     bundle["mowing_is_overdue"] = mowing_is_overdue
     bundle["mowing_overdue_days"] = overdue_days
     bundle["mowing_overdue_factor"] = overdue_factor
+    bundle["gazon_hauteur_estimee_cm"] = _estimated_grass_height_cm(context, phase_bundle)
     mower_context = context.mower_context if isinstance(context.mower_context, dict) else {}
     if mower_context:
         bundle.update(

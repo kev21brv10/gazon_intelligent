@@ -3219,3 +3219,98 @@ class TestMowingOverdue(unittest.TestCase):
         self.assertGreaterEqual(bundle["mowing_overdue_factor"], 2.0)
         # Le soft override doit avoir levé le blocage conditions_defavorables
         self.assertTrue(bundle["tonte_autorisee"], "Le soft override overdue doit lever conditions_defavorables borderline")
+
+
+class TestEstimatedGrassHeight(unittest.TestCase):
+    """Tests pour l'estimation de la hauteur du gazon sans capteur physique."""
+
+    def _make_bundle(self, history, today, mower_context=None):
+        context = decision.DecisionContext.from_legacy_args(
+            history=history,
+            today=today,
+            hour_of_day=11,
+            temperature=20,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=55,
+            type_sol="limoneux",
+            etp_capteur=3.0,
+            mower_context=mower_context or {},
+        )
+        phase_bundle = decision_phase.build_phase_bundle(context)
+        water_bundle = decision_watering.build_water_bundle(context, phase_bundle)
+        risk_bundle = decision_risk.build_risk_bundle(context, phase_bundle, water_bundle)
+        return decision_mowing.build_mowing_bundle(context, phase_bundle, water_bundle, risk_bundle)
+
+    def test_estimation_none_without_cutting_height(self):
+        # Pas de hauteur de coupe configurée → estimation impossible
+        bundle = self._make_bundle(
+            history=[{"type": "tonte", "date": "2026-06-01"}],
+            today=date(2026, 6, 7),
+            mower_context={},
+        )
+        self.assertIsNone(bundle["gazon_hauteur_estimee_cm"])
+
+    def test_estimation_none_without_mowing_history(self):
+        # Hauteur de coupe connue mais pas de tonte → estimation impossible
+        bundle = self._make_bundle(
+            history=[],
+            today=date(2026, 6, 7),
+            mower_context={"tondeuse_hauteur_coupe_mm": 45},
+        )
+        self.assertIsNone(bundle["gazon_hauteur_estimee_cm"])
+
+    def test_estimation_equals_cut_height_day_of_mowing(self):
+        # Tonte aujourd'hui → hauteur = hauteur de coupe
+        bundle = self._make_bundle(
+            history=[{"type": "tonte", "date": "2026-06-07"}],
+            today=date(2026, 6, 7),
+            mower_context={"tondeuse_hauteur_coupe_mm": 45},
+        )
+        self.assertEqual(bundle["gazon_hauteur_estimee_cm"], 4.5)
+
+    def test_estimation_grows_after_mowing(self):
+        # Tonte il y a 4 jours en juin → hauteur = 4.5 + 4 * 0.5 = 6.5
+        bundle = self._make_bundle(
+            history=[{"type": "tonte", "date": "2026-06-03"}],
+            today=date(2026, 6, 7),
+            mower_context={"tondeuse_hauteur_coupe_mm": 45},
+        )
+        self.assertAlmostEqual(bundle["gazon_hauteur_estimee_cm"], 6.5, places=1)
+
+    def test_estimation_zero_growth_in_winter(self):
+        # Janvier → croissance 0 → hauteur reste égale à la hauteur de coupe
+        bundle = self._make_bundle(
+            history=[{"type": "tonte", "date": "2026-01-01"}],
+            today=date(2026, 1, 15),
+            mower_context={"tondeuse_hauteur_coupe_mm": 50},
+        )
+        self.assertEqual(bundle["gazon_hauteur_estimee_cm"], 5.0)
+
+    def test_physical_sensor_takes_priority_over_estimate(self):
+        # Un capteur physique doit être utilisé en priorité (hauteur actuelle dans advanced_context)
+        context = decision.DecisionContext.from_legacy_args(
+            history=[{"type": "tonte", "date": "2026-06-01"}],
+            today=date(2026, 6, 7),
+            hour_of_day=11,
+            temperature=20,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=55,
+            type_sol="limoneux",
+            etp_capteur=3.0,
+            hauteur_gazon=3.5,  # capteur physique = 3.5 cm
+            mower_context={"tondeuse_hauteur_coupe_mm": 45},  # aurait donné 7.5 cm d'estimation
+        )
+        phase_bundle = decision_phase.build_phase_bundle(context)
+        water_bundle = decision_watering.build_water_bundle(context, phase_bundle)
+        risk_bundle = decision_risk.build_risk_bundle(context, phase_bundle, water_bundle)
+        bundle = decision_mowing.build_mowing_bundle(context, phase_bundle, water_bundle, risk_bundle)
+        # La hauteur actuelle utilisée dans la recommandation doit refléter le capteur (3.5)
+        self.assertIsNotNone(bundle["hauteur_tonte_recommandee_cm"])
+        # L'estimation est quand même exposée dans le bundle
+        self.assertIsNotNone(bundle["gazon_hauteur_estimee_cm"])
+
+    def test_key_always_present_in_bundle(self):
+        bundle = self._make_bundle(history=[], today=date(2026, 6, 7))
+        self.assertIn("gazon_hauteur_estimee_cm", bundle)

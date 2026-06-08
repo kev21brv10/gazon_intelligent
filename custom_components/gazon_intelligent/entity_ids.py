@@ -31,6 +31,7 @@ PUBLIC_ENTITY_KEYS: dict[str, tuple[str, str]] = {
     "retour_mode_normal": ("button", f"{DOMAIN}_retour_mode_normal"),
     "date_action_today": ("button", f"{DOMAIN}_date_action_today"),
     "hauteur_tonte": ("sensor", f"{DOMAIN}_hauteur_de_tonte_conseillee"),
+    "hauteur_gazon_estimee": ("sensor", f"{DOMAIN}_hauteur_gazon_estimee"),
     "phase_active": ("sensor", f"{DOMAIN}_phase_dominante"),
     "sous_phase": ("sensor", f"{DOMAIN}_sous_phase"),
     "objectif_mm": ("sensor", f"{DOMAIN}_objectif_d_arrosage"),
