@@ -558,11 +558,20 @@ class GazonBrain:
         self.date_action = target_date
         return item
 
-    def record_mowing(self, date_action: date | None = None) -> dict[str, Any]:
-        item = {
+    def record_mowing(
+        self,
+        date_action: date | None = None,
+        hauteur_coupe_mm: float | None = None,
+    ) -> dict[str, Any]:
+        item: dict[str, Any] = {
             "type": "tonte",
             "date": (date_action or dt_util.now().date()).isoformat(),
         }
+        if hauteur_coupe_mm is not None:
+            try:
+                item["hauteur_coupe_mm"] = float(hauteur_coupe_mm)
+            except (TypeError, ValueError):
+                pass
         self._append_history(item)
         return item
 
