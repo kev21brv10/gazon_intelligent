@@ -504,8 +504,18 @@ async def _handle_remove_last_application(call: ServiceCall) -> None:
 async def _handle_declare_mowing(call: ServiceCall) -> None:
     _require_explicit_target_for_multi_instance(call)
     coordinator = await _coordinator_from_call(call)
+    hauteur_raw = call.data.get("hauteur_coupe_mm")
+    hauteur_coupe_mm: float | None = None
+    if hauteur_raw is not None:
+        try:
+            hauteur_coupe_mm = float(hauteur_raw)
+        except (TypeError, ValueError):
+            pass
     try:
-        await coordinator.async_record_mowing(parse_optional_date(call.data.get("date_action")))
+        await coordinator.async_record_mowing(
+            parse_optional_date(call.data.get("date_action")),
+            hauteur_coupe_mm=hauteur_coupe_mm,
+        )
     except ValueError as err:
         raise HomeAssistantError(_ERR_INVALID_DATE) from err
 

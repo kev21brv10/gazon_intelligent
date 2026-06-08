@@ -758,18 +758,41 @@ def _estimated_grass_height_cm(
     Retourne None si la hauteur de coupe ou la date de dernière tonte est inconnue.
     Ne remplace pas un capteur physique — utilisé comme fallback uniquement.
     """
-    mower_context = context.mower_context if isinstance(context.mower_context, dict) else {}
-    cutting_height_mm = mower_context.get("tondeuse_hauteur_coupe_mm")
-    if cutting_height_mm is None:
+    history = context.history if isinstance(context.history, list) else []
+    last_mowing_item: dict | None = None
+    last_mowing: date | None = None
+    for item in history:
+        if not isinstance(item, dict) or item.get("type") != "tonte":
+            continue
+        raw_date = item.get("date")
+        if not raw_date:
+            continue
+        try:
+            mowing_date = date.fromisoformat(str(raw_date))
+        except ValueError:
+            continue
+        if last_mowing is None or mowing_date > last_mowing:
+            last_mowing = mowing_date
+            last_mowing_item = item
+    if last_mowing is None or last_mowing_item is None:
         return None
-    try:
-        cutting_height_cm = float(cutting_height_mm) / 10.0
-    except (TypeError, ValueError):
-        return None
-    if cutting_height_cm <= 0:
-        return None
-    last_mowing = _last_mowing_date(context)
-    if last_mowing is None:
+
+    # Préférer la hauteur stockée au moment de la tonte; fallback sur la tondeuse courante.
+    stored_height_mm = last_mowing_item.get("hauteur_coupe_mm")
+    if stored_height_mm is not None:
+        try:
+            cutting_height_cm = float(stored_height_mm) / 10.0
+        except (TypeError, ValueError):
+            cutting_height_cm = None
+    else:
+        mower_context = context.mower_context if isinstance(context.mower_context, dict) else {}
+        fallback_mm = mower_context.get("tondeuse_hauteur_coupe_mm")
+        try:
+            cutting_height_cm = float(fallback_mm) / 10.0 if fallback_mm is not None else None
+        except (TypeError, ValueError):
+            cutting_height_cm = None
+
+    if cutting_height_cm is None or cutting_height_cm <= 0:
         return None
     days_since = max((context.today - last_mowing).days, 0)
     growth_rate = _growth_rate_cm_per_day(phase_bundle, context.today.month)
