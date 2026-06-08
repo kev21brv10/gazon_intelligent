@@ -1392,8 +1392,15 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._async_save_state()
         await self.async_request_refresh()
 
-    async def async_record_mowing(self, date_action: date | None = None) -> None:
-        self.brain.record_mowing(date_action)
+    async def async_record_mowing(
+        self,
+        date_action: date | None = None,
+        hauteur_coupe_mm: float | None = None,
+    ) -> None:
+        if hauteur_coupe_mm is None:
+            mower_ctx = self._build_mower_snapshot()
+            hauteur_coupe_mm = mower_ctx.get("tondeuse_hauteur_coupe_mm")
+        self.brain.record_mowing(date_action, hauteur_coupe_mm=hauteur_coupe_mm)
         await self._async_save_state()
         await self.async_request_refresh()
 
