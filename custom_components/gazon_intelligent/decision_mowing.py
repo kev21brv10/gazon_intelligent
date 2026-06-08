@@ -352,6 +352,7 @@ def _upcoming_watering_coordination(
 
 def _watering_related_mowing_block(
     context: DecisionContext,
+    phase_bundle: dict[str, Any],
     water_bundle: dict[str, Any],
 ) -> tuple[bool, str | None, str | None]:
     if not _has_recent_watering_history(context):
@@ -361,8 +362,11 @@ def _watering_related_mowing_block(
     reference_hour = context.hour_of_day if context.hour_of_day is not None else 6
     now_dt = datetime.combine(context.today, time(reference_hour % 24, 0), tzinfo=timezone.utc)
     elapsed_minutes = max(0, int((now_dt - latest_watering).total_seconds() // 60))
-    if elapsed_minutes < 24 * 60:
-        return True, "recent_watering", "Arrosage récent: attendre 24 h avant de tondre."
+    ressuyage_hours = _estimate_mowing_ressuyage_hours(context, phase_bundle, water_bundle)
+    ressuyage_minutes = int(ressuyage_hours * 60)
+    if elapsed_minutes < ressuyage_minutes:
+        remaining_h = max(1, (ressuyage_minutes - elapsed_minutes) // 60)
+        return True, "recent_watering", f"Arrosage récent: attendre encore ~{remaining_h}h avant de tondre."
 
     humidite_sol = water_bundle["advanced_context"].get("humidite_sol")
     if humidite_sol is None:
@@ -484,6 +488,7 @@ def _machine_unavailable_detail(
 
 def _resolve_mowing_block(
     context: DecisionContext,
+    phase_bundle: dict[str, Any],
     water_bundle: dict[str, Any],
 ) -> tuple[bool, str | None, str | None, str | None, str | None]:
     """Résout le blocage réel prioritaire, indépendant de la fenêtre métier."""
@@ -521,6 +526,7 @@ def _resolve_mowing_block(
 
     watering_block_active, watering_block_reason_code, watering_block_reason_label = _watering_related_mowing_block(
         context,
+        phase_bundle,
         water_bundle,
     )
     if watering_block_active:
@@ -1394,6 +1400,7 @@ def build_mowing_bundle(
     )
     mowing_blocked, mowing_block_reason_code, mowing_block_reason_label, mowing_machine_unavailable_detail, mowing_machine_unavailable_label = _resolve_mowing_block(
         context,
+        phase_bundle,
         water_bundle,
     )
     if mowing_blocked:

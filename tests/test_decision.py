@@ -2252,7 +2252,10 @@ class TestDecisionSnapshotMowing(unittest.TestCase):
         self.assertFalse(mowing_bundle["tonte_autorisee"])
         self.assertTrue(mowing_bundle["mowing_blocked_by_watering"])
         self.assertEqual(mowing_bundle["mowing_block_reason_code"], "recent_watering")
-        self.assertEqual(mowing_bundle["mowing_block_reason_label"], "Arrosage récent: attendre 24 h avant de tondre.")
+        self.assertTrue(
+            mowing_bundle["mowing_block_reason_label"].startswith("Arrosage récent: attendre encore ~"),
+            mowing_bundle["mowing_block_reason_label"],
+        )
         self.assertEqual(mowing_bundle["mowing_block_reason"], "recent_watering")
         self.assertTrue(mowing_bundle["mowing_blocked"])
         self.assertFalse(mowing_bundle["action_possible"])
