@@ -2252,7 +2252,10 @@ class TestDecisionSnapshotMowing(unittest.TestCase):
         self.assertFalse(mowing_bundle["tonte_autorisee"])
         self.assertTrue(mowing_bundle["mowing_blocked_by_watering"])
         self.assertEqual(mowing_bundle["mowing_block_reason_code"], "recent_watering")
-        self.assertEqual(mowing_bundle["mowing_block_reason_label"], "Arrosage récent: attendre 24 h avant de tondre.")
+        self.assertTrue(
+            mowing_bundle["mowing_block_reason_label"].startswith("Arrosage récent: attendre encore ~"),
+            mowing_bundle["mowing_block_reason_label"],
+        )
         self.assertEqual(mowing_bundle["mowing_block_reason"], "recent_watering")
         self.assertTrue(mowing_bundle["mowing_blocked"])
         self.assertFalse(mowing_bundle["action_possible"])
@@ -3075,3 +3078,374 @@ class TestIrrigationBlockedButCritical(unittest.TestCase):
         result = decision_watering._apply_irrigation_execution_contract(payload)
         self.assertFalse(result["irrigation_blocked_but_critical"])
         self.assertIsNone(result["critical_deficit_mm"])
+
+
+class TestMowingOverdue(unittest.TestCase):
+    """Tests pour la détection de retard de tonte et son influence sur la décision."""
+
+    def _make_bundle(self, history, today, hour_of_day=11, temperature=20, humidite=55, score_tonte_boost=0):
+        context = decision.DecisionContext.from_legacy_args(
+            history=history,
+            today=today,
+            hour_of_day=hour_of_day,
+            temperature=temperature,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=humidite,
+            type_sol="limoneux",
+            etp_capteur=3.0,
+        )
+        phase_bundle = decision_phase.build_phase_bundle(context)
+        water_bundle = decision_watering.build_water_bundle(context, phase_bundle)
+        risk_bundle = decision_risk.build_risk_bundle(context, phase_bundle, water_bundle)
+        return decision_mowing.build_mowing_bundle(context, phase_bundle, water_bundle, risk_bundle)
+
+    def test_not_overdue_when_no_mowing_history(self):
+        bundle = self._make_bundle(history=[], today=date(2026, 6, 15))
+        self.assertFalse(bundle["mowing_is_overdue"])
+        self.assertEqual(bundle["mowing_overdue_days"], 0)
+        self.assertEqual(bundle["mowing_overdue_factor"], 0.0)
+
+    def test_not_overdue_when_mowed_recently(self):
+        # Fréquence juin = 5/semaine → intervalle 1,4 j — tonte hier = 0,7× → pas overdue
+        bundle = self._make_bundle(
+            history=[{"type": "tonte", "date": "2026-06-14"}],
+            today=date(2026, 6, 15),
+        )
+        self.assertFalse(bundle["mowing_is_overdue"])
+        self.assertEqual(bundle["mowing_overdue_days"], 1)
+
+    def test_overdue_when_interval_exceeded_by_1_5x(self):
+        # Fréquence juin = 5/semaine → intervalle 1,4 j — tonte il y a 3 j = 2,1× → overdue
+        bundle = self._make_bundle(
+            history=[{"type": "tonte", "date": "2026-06-12"}],
+            today=date(2026, 6, 15),
+        )
+        self.assertTrue(bundle["mowing_is_overdue"])
+        self.assertEqual(bundle["mowing_overdue_days"], 3)
+        self.assertGreater(bundle["mowing_overdue_factor"], 1.5)
+
+    def test_overdue_reason_prefix_in_tonte_reason_when_blocked(self):
+        bundle = self._make_bundle(
+            history=[{"type": "tonte", "date": "2026-06-12"}],
+            today=date(2026, 6, 15),
+        )
+        self.assertTrue(bundle["mowing_is_overdue"])
+        self.assertIn("Retard de tonte", bundle["tonte_reason"])
+        self.assertIn("3 j", bundle["tonte_reason"])
+
+    def test_overdue_reason_prefix_when_tonte_allowed(self):
+        # Conditions idéales + tonte en retard → raison contient "Tonte recommandée"
+        bundle = self._make_bundle(
+            history=[{"type": "tonte", "date": "2026-06-10"}],
+            today=date(2026, 6, 15),
+            hour_of_day=11,
+            temperature=18,
+            humidite=50,
+        )
+        if bundle["tonte_autorisee"] and bundle["mowing_is_overdue"]:
+            self.assertIn("Tonte recommandée", bundle["tonte_reason"])
+
+    def test_overdue_does_not_override_hard_block_phase(self):
+        # Sursemis Germination → tonte interdite même si très en retard
+        context = decision.DecisionContext.from_legacy_args(
+            history=[
+                {"type": "Sursemis", "date": "2026-06-01"},
+                {"type": "tonte", "date": "2026-05-20"},
+            ],
+            today=date(2026, 6, 15),
+            hour_of_day=11,
+            temperature=18,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=50,
+            type_sol="limoneux",
+            etp_capteur=3.0,
+        )
+        phase_bundle = decision_phase.build_phase_bundle(context)
+        water_bundle = decision_watering.build_water_bundle(context, phase_bundle)
+        risk_bundle = decision_risk.build_risk_bundle(context, phase_bundle, water_bundle)
+        bundle = decision_mowing.build_mowing_bundle(context, phase_bundle, water_bundle, risk_bundle)
+        # La phase dure → tonte bloquée indépendamment du retard
+        self.assertFalse(bundle["tonte_autorisee"])
+        self.assertIn("phase_sursemis", (bundle.get("raison_blocage_code") or ""))
+
+    def test_overdue_does_not_override_night_block(self):
+        bundle = self._make_bundle(
+            history=[{"type": "tonte", "date": "2026-06-10"}],
+            today=date(2026, 6, 15),
+            hour_of_day=2,
+        )
+        self.assertFalse(bundle["tonte_autorisee"])
+        self.assertEqual(bundle["mowing_block_reason_code"], "mowing_night")
+
+    def test_overdue_keys_always_present(self):
+        bundle = self._make_bundle(history=[], today=date(2026, 6, 15))
+        self.assertIn("mowing_is_overdue", bundle)
+        self.assertIn("mowing_overdue_days", bundle)
+        self.assertIn("mowing_overdue_factor", bundle)
+
+    def test_not_overdue_in_winter_zero_frequency(self):
+        # Janvier → fréquence 0 → jamais overdue
+        bundle = self._make_bundle(
+            history=[{"type": "tonte", "date": "2025-11-01"}],
+            today=date(2026, 1, 15),
+        )
+        self.assertFalse(bundle["mowing_is_overdue"])
+        self.assertEqual(bundle["mowing_overdue_days"], 0)
+
+    def test_overdue_soft_override_activates_for_borderline_conditions_defavorables(self):
+        # score_tonte=65 (conditions_defavorables) + overdue factor >> 2.0 → soft override actif
+        # pluie_24h=6, pluie_demain=5, pluie_j2=2, humidite=80 → score_tonte=65, score_stress~16
+        # Sans override (pas de retard): tonte bloquée par conditions_defavorables
+        # Avec override (retard 37 j, factor~26×): tonte autorisée
+        context = decision.DecisionContext.from_legacy_args(
+            history=[{"type": "tonte", "date": "2026-05-01"}],  # 37 jours → factor >> 2
+            today=date(2026, 6, 7),
+            hour_of_day=11,
+            temperature=22,
+            pluie_24h=6,
+            pluie_demain=5,
+            pluie_j2=2,
+            pluie_3j=0,
+            pluie_probabilite_max_3j=0,
+            humidite=80,
+            type_sol="limoneux",
+            etp_capteur=3.0,
+        )
+        phase_bundle = decision_phase.build_phase_bundle(context)
+        water_bundle = decision_watering.build_water_bundle(context, phase_bundle)
+        risk_bundle = decision_risk.build_risk_bundle(context, phase_bundle, water_bundle)
+        bundle = decision_mowing.build_mowing_bundle(context, phase_bundle, water_bundle, risk_bundle)
+
+        self.assertTrue(bundle["mowing_is_overdue"])
+        self.assertGreaterEqual(bundle["mowing_overdue_factor"], 2.0)
+        # Le soft override doit avoir levé le blocage conditions_defavorables
+        self.assertTrue(bundle["tonte_autorisee"], "Le soft override overdue doit lever conditions_defavorables borderline")
+
+
+class TestEstimatedGrassHeight(unittest.TestCase):
+    """Tests pour l'estimation de la hauteur du gazon sans capteur physique."""
+
+    def _make_bundle(self, history, today, mower_context=None):
+        context = decision.DecisionContext.from_legacy_args(
+            history=history,
+            today=today,
+            hour_of_day=11,
+            temperature=20,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=55,
+            type_sol="limoneux",
+            etp_capteur=3.0,
+            mower_context=mower_context or {},
+        )
+        phase_bundle = decision_phase.build_phase_bundle(context)
+        water_bundle = decision_watering.build_water_bundle(context, phase_bundle)
+        risk_bundle = decision_risk.build_risk_bundle(context, phase_bundle, water_bundle)
+        return decision_mowing.build_mowing_bundle(context, phase_bundle, water_bundle, risk_bundle)
+
+    def test_estimation_none_without_cutting_height(self):
+        # Pas de hauteur de coupe configurée → estimation impossible
+        bundle = self._make_bundle(
+            history=[{"type": "tonte", "date": "2026-06-01"}],
+            today=date(2026, 6, 7),
+            mower_context={},
+        )
+        self.assertIsNone(bundle["gazon_hauteur_estimee_cm"])
+
+    def test_estimation_none_without_mowing_history(self):
+        # Hauteur de coupe connue mais pas de tonte → estimation impossible
+        bundle = self._make_bundle(
+            history=[],
+            today=date(2026, 6, 7),
+            mower_context={"tondeuse_hauteur_coupe_mm": 45},
+        )
+        self.assertIsNone(bundle["gazon_hauteur_estimee_cm"])
+
+    def test_estimation_equals_cut_height_day_of_mowing(self):
+        # Tonte aujourd'hui → hauteur = hauteur de coupe
+        bundle = self._make_bundle(
+            history=[{"type": "tonte", "date": "2026-06-07"}],
+            today=date(2026, 6, 7),
+            mower_context={"tondeuse_hauteur_coupe_mm": 45},
+        )
+        self.assertEqual(bundle["gazon_hauteur_estimee_cm"], 4.5)
+
+    def test_estimation_grows_after_mowing(self):
+        # Tonte il y a 4 jours en juin → hauteur = 4.5 + 4 * 0.5 = 6.5
+        bundle = self._make_bundle(
+            history=[{"type": "tonte", "date": "2026-06-03"}],
+            today=date(2026, 6, 7),
+            mower_context={"tondeuse_hauteur_coupe_mm": 45},
+        )
+        self.assertAlmostEqual(bundle["gazon_hauteur_estimee_cm"], 6.5, places=1)
+
+    def test_estimation_zero_growth_in_winter(self):
+        # Janvier → croissance 0 → hauteur reste égale à la hauteur de coupe
+        bundle = self._make_bundle(
+            history=[{"type": "tonte", "date": "2026-01-01"}],
+            today=date(2026, 1, 15),
+            mower_context={"tondeuse_hauteur_coupe_mm": 50},
+        )
+        self.assertEqual(bundle["gazon_hauteur_estimee_cm"], 5.0)
+
+    def test_physical_sensor_takes_priority_over_estimate(self):
+        # Un capteur physique doit être utilisé en priorité (hauteur actuelle dans advanced_context)
+        context = decision.DecisionContext.from_legacy_args(
+            history=[{"type": "tonte", "date": "2026-06-01"}],
+            today=date(2026, 6, 7),
+            hour_of_day=11,
+            temperature=20,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=55,
+            type_sol="limoneux",
+            etp_capteur=3.0,
+            hauteur_gazon=3.5,  # capteur physique = 3.5 cm
+            mower_context={"tondeuse_hauteur_coupe_mm": 45},  # aurait donné 7.5 cm d'estimation
+        )
+        phase_bundle = decision_phase.build_phase_bundle(context)
+        water_bundle = decision_watering.build_water_bundle(context, phase_bundle)
+        risk_bundle = decision_risk.build_risk_bundle(context, phase_bundle, water_bundle)
+        bundle = decision_mowing.build_mowing_bundle(context, phase_bundle, water_bundle, risk_bundle)
+        # La hauteur actuelle utilisée dans la recommandation doit refléter le capteur (3.5)
+        self.assertIsNotNone(bundle["hauteur_tonte_recommandee_cm"])
+        # L'estimation est quand même exposée dans le bundle
+        self.assertIsNotNone(bundle["gazon_hauteur_estimee_cm"])
+
+    def test_key_always_present_in_bundle(self):
+        bundle = self._make_bundle(history=[], today=date(2026, 6, 7))
+        self.assertIn("gazon_hauteur_estimee_cm", bundle)
+
+
+class TestMowingWindowReason(unittest.TestCase):
+    """Tests pour la clarté des messages de blocage de fenêtre de tonte."""
+
+    def _make_bundle(self, hour_of_day, history=None, temperature=20, vent=0, humidite=55):
+        context = decision.DecisionContext.from_legacy_args(
+            history=history or [{"type": "tonte", "date": "2026-06-05"}],
+            today=date(2026, 6, 7),
+            hour_of_day=hour_of_day,
+            temperature=temperature,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=humidite,
+            type_sol="limoneux",
+            etp_capteur=3.0,
+            vent=vent,
+        )
+        phase_bundle = decision_phase.build_phase_bundle(context)
+        water_bundle = decision_watering.build_water_bundle(context, phase_bundle)
+        risk_bundle = decision_risk.build_risk_bundle(context, phase_bundle, water_bundle)
+        return decision_mowing.build_mowing_bundle(context, phase_bundle, water_bundle, risk_bundle)
+
+    def test_window_only_block_shows_clear_reason(self):
+        # 3h du matin, bonnes conditions → raison = fenêtre bloquée uniquement
+        bundle = self._make_bundle(hour_of_day=3)
+        self.assertFalse(bundle["tonte_autorisee"])
+        reason = bundle["tonte_reason"]
+        # Le message doit mentionner pourquoi la fenêtre est bloquée
+        self.assertTrue(
+            "nuit" in reason.lower() or "soleil" in reason.lower() or "tôt" in reason.lower(),
+            f"Message attendu sur blocage nocturne, reçu: {reason}",
+        )
+
+    def test_window_block_added_to_agronomic_reason(self):
+        # 3h du matin + vent fort (> 40) → deux raisons : fenêtre ET vent
+        bundle = self._make_bundle(hour_of_day=3, vent=45)
+        self.assertFalse(bundle["tonte_autorisee"])
+        reason = bundle["tonte_reason"]
+        # La raison principale est agronomique mais la fenêtre doit être mentionnée
+        self.assertIn("Fenêtre horaire", reason, f"Fenêtre horaire absente du message: {reason}")
+
+    def test_discouraged_window_mentioned_when_tonte_ok(self):
+        # 18h, vent à 25 km/h (discouraged) + bonnes conditions → tonte ok mais créneau déconseillé
+        bundle = self._make_bundle(hour_of_day=18, vent=25)
+        if bundle["tonte_autorisee"]:
+            reason = bundle["tonte_reason"]
+            self.assertIn(
+                "déconseillé", reason.lower(),
+                f"Créneau déconseillé non mentionné: {reason}",
+            )
+
+    def test_ideal_window_no_spurious_discouraged_message(self):
+        # 11h, bonnes conditions → pas de message "déconseillé"
+        bundle = self._make_bundle(hour_of_day=11)
+        if bundle["tonte_autorisee"]:
+            self.assertNotIn("déconseillé", bundle["tonte_reason"].lower())
+
+
+class TestMowingWateringCoordination(unittest.TestCase):
+    """Tests pour la coordination arrosage/tonte."""
+
+    def _make_bundle(self, hour_of_day, arrosage_recommande, watering_window_start_minute,
+                     has_recent_watering=False):
+        history = []
+        if has_recent_watering:
+            history.append({"type": "arrosage", "date": date(2026, 6, 7).isoformat(), "mm": 10})
+        context = decision.DecisionContext.from_legacy_args(
+            history=history,
+            today=date(2026, 6, 7),
+            hour_of_day=hour_of_day,
+            temperature=20,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=55,
+            type_sol="limoneux",
+            etp_capteur=3.0,
+        )
+        phase_bundle = decision_phase.build_phase_bundle(context)
+        water_bundle = decision_watering.build_water_bundle(context, phase_bundle)
+        # Patch the relevant water_bundle keys
+        water_bundle["arrosage_recommande"] = arrosage_recommande
+        water_bundle["watering_window_start_minute"] = watering_window_start_minute
+        risk_bundle = decision_risk.build_risk_bundle(context, phase_bundle, water_bundle)
+        return decision_mowing.build_mowing_bundle(context, phase_bundle, water_bundle, risk_bundle)
+
+    def test_no_advisory_when_no_watering_recommended(self):
+        bundle = self._make_bundle(
+            hour_of_day=11, arrosage_recommande=False, watering_window_start_minute=240
+        )
+        self.assertEqual(bundle["mowing_watering_coordination"], "none")
+        self.assertIsNone(bundle["mowing_watering_coordination_msg"])
+
+    def test_no_advisory_when_already_watered(self):
+        bundle = self._make_bundle(
+            hour_of_day=11, arrosage_recommande=True,
+            watering_window_start_minute=240, has_recent_watering=True
+        )
+        self.assertEqual(bundle["mowing_watering_coordination"], "none")
+
+    def test_block_when_watering_imminent(self):
+        # 11h00 (660 min), watering starts at 11h20 (680 min) → 20 min → block
+        bundle = self._make_bundle(
+            hour_of_day=11, arrosage_recommande=True, watering_window_start_minute=680
+        )
+        self.assertEqual(bundle["mowing_watering_coordination"], "block")
+        self.assertFalse(bundle["tonte_autorisee"])
+        self.assertIn("imminent", bundle["tonte_reason"].lower())
+
+    def test_discourage_when_watering_within_2h(self):
+        # 11h00 (660 min), watering starts at 12h30 (750 min) → 90 min → discourage
+        bundle = self._make_bundle(
+            hour_of_day=11, arrosage_recommande=True, watering_window_start_minute=750
+        )
+        self.assertEqual(bundle["mowing_watering_coordination"], "discourage")
+        # Tonte toujours possible, mais message d'avertissement présent
+        self.assertIsNotNone(bundle["mowing_watering_coordination_msg"])
+
+    def test_no_advisory_when_watering_far_away(self):
+        # 11h00 (660 min), watering starts at 4h00 tomorrow effective (but > 2h)
+        # 14h (840 min) start, current 11h (660 min) → 180 min → none
+        bundle = self._make_bundle(
+            hour_of_day=11, arrosage_recommande=True, watering_window_start_minute=840
+        )
+        self.assertEqual(bundle["mowing_watering_coordination"], "none")
+
+    def test_coordination_keys_always_present(self):
+        bundle = self._make_bundle(
+            hour_of_day=11, arrosage_recommande=False, watering_window_start_minute=None
+        )
+        self.assertIn("mowing_watering_coordination", bundle)
+        self.assertIn("mowing_watering_coordination_msg", bundle)
