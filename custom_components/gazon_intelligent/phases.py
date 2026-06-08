@@ -116,16 +116,14 @@ def _validate_phase_referentials() -> None:
 def compute_phase_active(
     history: list[dict[str, Any]],
     today: date | None = None,
-    temperature: float | None = None,
 ) -> tuple[str, date | None, date | None]:
-    dominant = compute_dominant_phase(history, today=today, temperature=temperature)
+    dominant = compute_dominant_phase(history, today=today)
     return dominant["phase_dominante"], dominant["date_debut"], dominant["date_fin"]
 
 
 def compute_dominant_phase(
     history: list[dict[str, Any]],
     today: date | None = None,
-    temperature: float | None = None,
 ) -> dict[str, Any]:
     today = today or dt_util.now().date()
     best: tuple[int, date] | None = None
@@ -193,7 +191,7 @@ def compute_subphase(
     if date_debut is not None:
         age_jours = max((today - date_debut).days, 0)
 
-    rules = SUBPHASE_RULES.get(phase_dominante, [(999, phase_dominante)])
+    rules = sorted(SUBPHASE_RULES.get(phase_dominante, [(999, phase_dominante)]), key=lambda r: r[0])
     sous_phase = rules[-1][1]
     subphase_start_day = 0
     subphase_end_day = rules[-1][0]
