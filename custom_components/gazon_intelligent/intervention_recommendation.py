@@ -347,16 +347,21 @@ def _opportunity_evaluation(application_state: dict[str, Any] | None) -> dict[st
     reasons: list[str] = []
     score_delta = 0
     hydric_level = _normalize_text(state.get("hydric_balance_level"))
+    reserve_sol = None
     bilan_hydrique = None
+    try:
+        reserve_sol = float(state.get("reserve_hydrique_sol_mm") or state.get("bilan_hydrique_mm"))
+    except (TypeError, ValueError):
+        reserve_sol = None
     try:
         bilan_hydrique = float(state.get("bilan_hydrique_mm"))
     except (TypeError, ValueError):
         bilan_hydrique = None
 
-    if hydric_level == "excedentaire" or (bilan_hydrique is not None and bilan_hydrique >= 1.5):
+    if hydric_level == "excedentaire" or (reserve_sol is not None and reserve_sol >= 15.0):
         score_delta -= 3
         reasons.append("Contexte hydrique excédentaire")
-    elif hydric_level == "equilibre" or (bilan_hydrique is not None and bilan_hydrique >= 0.0):
+    elif hydric_level == "equilibre" or (reserve_sol is not None and reserve_sol >= 5.0):
         score_delta -= 2
         reasons.append("Contexte hydrique équilibré")
     elif bilan_hydrique is not None and bilan_hydrique <= -1.0:

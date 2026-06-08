@@ -1109,12 +1109,12 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertNotIn("block_reason", attrs)
         self.assertNotIn("block_label", attrs)
 
-    def test_objectif_sensor_prefers_daily_hydric_balance_over_soil_reserve_for_labels(self) -> None:
+    def test_objectif_sensor_shows_daily_balance_and_soil_reserve_separately(self) -> None:
         result = _make_result()
         result.extra.update(
             {
-                "bilan_hydrique_mm": 15.6,
-                "bilan_hydrique_journalier_mm": -1.1,
+                "bilan_hydrique_mm": -1.1,
+                "reserve_hydrique_sol_mm": 15.6,
                 "bilan_hydrique_precedent_mm": 16.7,
                 "deficit_3j": 3.4,
                 "deficit_7j": 8.0,
@@ -1133,7 +1133,7 @@ class DecisionResultChainTests(unittest.TestCase):
 
         self.assertEqual(objectif_sensor.native_value, 1.2)
         self.assertEqual(attrs["bilan_hydrique_mm"], -1.1)
-        self.assertEqual(attrs["bilan_hydrique_journalier_mm"], -1.1)
+        self.assertNotIn("bilan_hydrique_journalier_mm", attrs)
         self.assertEqual(attrs["reserve_hydrique_sol_mm"], 15.6)
         self.assertEqual(attrs["hydric_balance_level"], "déficit")
         self.assertEqual(attrs["hydric_strategy"], "arroser profondément")
@@ -1227,8 +1227,8 @@ class DecisionResultChainTests(unittest.TestCase):
         result.type_arrosage = "aucune_action"
         result.extra.update(
             {
-                "bilan_hydrique_mm": 21.8,
-                "bilan_hydrique_journalier_mm": -1.0,
+                "bilan_hydrique_mm": -1.0,
+                "reserve_hydrique_sol_mm": 21.8,
                 "deficit_3j": 0.0,
                 "deficit_7j": 0.0,
                 "application_post_watering_status": "non_requis",
@@ -1449,8 +1449,8 @@ class DecisionResultChainTests(unittest.TestCase):
                 "depletion_mm": 0.0,
                 "depletion_ratio": 0.0,
                 "reserve_actuelle_source": 21.6,
-                "bilan_hydrique_mm": 21.6,
-                "bilan_hydrique_journalier_mm": -1.8,
+                "bilan_hydrique_mm": -1.8,
+                "reserve_hydrique_sol_mm": 21.6,
                 "arrosage_recent_jour": 0.0,
                 "arrosage_recent_3j": 0.0,
                 "arrosage_recent_7j": 0.0,
@@ -1487,22 +1487,23 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(etc_sensor.extra_state_attributes["kc_gazon"], 0.8)
         self.assertEqual(reserve_sensor.native_value, 12.0)
         self.assertEqual(reserve_sensor.extra_state_attributes["hydric_state"], "plein")
-        self.assertEqual(reserve_sensor.extra_state_attributes["reserve_utile_max_mm"], 12.0)
-        self.assertEqual(reserve_sensor.extra_state_attributes["reserve_utile_actuelle_mm"], 12.0)
-        self.assertEqual(reserve_sensor.extra_state_attributes["reserve_totale_sol_mm"], 21.6)
-        self.assertEqual(reserve_sensor.extra_state_attributes["surplus_hydrique_mm"], 9.6)
+        self.assertNotIn("reserve_utile_max_mm", reserve_sensor.extra_state_attributes)
+        self.assertNotIn("reserve_utile_actuelle_mm", reserve_sensor.extra_state_attributes)
+        self.assertNotIn("reserve_totale_sol_mm", reserve_sensor.extra_state_attributes)
+        self.assertNotIn("surplus_hydrique_mm", reserve_sensor.extra_state_attributes)
         self.assertNotIn("reserve_actuelle_source", reserve_sensor.extra_state_attributes)
-        self.assertEqual(reserve_sensor.extra_state_attributes["bilan_hydrique_mm"], 21.6)
-        self.assertEqual(reserve_sensor.extra_state_attributes["bilan_hydrique_journalier_mm"], -1.8)
+        self.assertEqual(reserve_sensor.extra_state_attributes["bilan_hydrique_mm"], -1.8)
+        self.assertEqual(reserve_sensor.extra_state_attributes["reserve_hydrique_sol_mm"], 21.6)
+        self.assertNotIn("bilan_hydrique_journalier_mm", reserve_sensor.extra_state_attributes)
         self.assertNotIn("soil_balance_reserve_mm", reserve_sensor.extra_state_attributes)
-        self.assertEqual(reserve_sensor.extra_state_attributes["soil_balance_previous_reserve_mm"], 23.4)
-        self.assertEqual(reserve_sensor.extra_state_attributes["soil_balance_delta_mm"], -1.8)
+        self.assertEqual(reserve_sensor.extra_state_attributes["sol_reserve_precedente_mm"], 23.4)
+        self.assertEqual(reserve_sensor.extra_state_attributes["sol_delta_mm"], -1.8)
         self.assertEqual(depletion_ratio_sensor.native_value, 0.0)
         self.assertEqual(depletion_ratio_sensor.extra_state_attributes["depletion_ratio_raw"], 0.0)
         self.assertEqual(depletion_ratio_sensor.extra_state_attributes["hydric_state"], "plein")
         self.assertEqual(hydric_sensor.native_value, "plein")
         self.assertEqual(hydric_sensor.extra_state_attributes["reserve_stock_mm"], 21.6)
-        self.assertEqual(hydric_sensor.extra_state_attributes["reserve_totale_sol_mm"], 21.6)
+        self.assertNotIn("reserve_totale_sol_mm", hydric_sensor.extra_state_attributes)
 
     def test_entity_exposure_rounds_float_attributes_consistently(self) -> None:
         coordinator = _FakeCoordinator(
