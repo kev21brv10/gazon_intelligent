@@ -3,3 +3,12 @@ deploy.sh
 __pycache__/
 *.pyc
 *.pyo
+
+# macOS
+.DS_Store
+
+# Éditeurs / espaces de travail
+*.code-workspace
+
+# Claude Code
+.claude/
