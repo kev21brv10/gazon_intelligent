@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.9.0
+Nettoyage et déduplication suite à l'audit des domaines (aucun changement de comportement, 462 tests verts) :
+- **Tonte** : restructure la cascade de résolution du motif de blocage (`raison_code`) en `if/elif` à priorité explicite (phase agronomique > post-application > arrosage en cours > cooldown > blocage générique), au lieu du motif fragile « affecter puis écraser ». Ajoute un test verrouillant la priorité phase > arrosage.
+- **Météo** : supprime 7 clés mortes du résumé de prévisions (`forecast_condition_*`, `forecast_date_*`, `forecast_days`) qui étaient calculées mais jamais consommées par la décision ou les capteurs.
+- **Interventions** : factorise 2 blocs « unavailable » quasi-identiques (~120 lignes) dans `_build_unavailable_response()`. Unifie les 3 branches dupliquées de `_temperature_evaluation()` et supprime le champ `band` jamais lu (105 → 38 lignes).
+- **Arrosage** : extrait `_hydraulic_pressure()` pour dédupliquer le calcul `besoin_court`/`besoin_tendance`/`pression_hydrique` présent à deux endroits de `guidance.py`.
+- **Tonte** : fusionne le double bloc « nuit » et supprime un bloc de candidats Sursemis/Traitement/Hivernage inatteignable (déjà couvert par les retours anticipés).
+
+## 0.8.9
+- Corrige l'incohérence `arrosage_recent_3j > arrosage_recent_7j` : quand `recent_watering_mm_override` ne s'appliquait qu'à la fenêtre 7 jours alors que la fenêtre 3 jours était calculée depuis l'historique, on pouvait afficher un cumul 3j supérieur au cumul 7j. La monotonie `jour ≤ 3j ≤ 7j` est désormais garantie (une fenêtre plus large ne peut contenir moins d'eau qu'une fenêtre incluse).
+- Supprime le champ `bilan_hydrique_precedent_mm` (mal nommé : c'était une réserve, pas un bilan) qui faisait doublon avec `sol_reserve_precedente_mm`. Le capteur `objectif_d_arrosage` expose désormais uniquement `sol_reserve_precedente_mm`.
+- Documente explicitement `mm_cible_depletion` / `objective_from_depletion_mm` comme champs diagnostic-only (capteur `objectif_depletion`), non câblés dans la décision tant que `use_depletion_logic` est `False`.
+
+## 0.8.8
+- Corrige la surestimation de l'objectif d'arrosage en phase Normal quand le sol n'est pas encore au seuil MAD : `mm_cible` est désormais plafonné à la capacité d'absorption restante du sol (`reserve_stock_max_mm - reserve_stock_mm`). Exemple : sol à 70 % de remplissage → objectif réduit de 23.1 mm à 7.3 mm au lieu d'arroser au-delà de ce que le sol peut absorber.
+
 ## 0.8.7
 - Supprime le paramètre `temperature` inutilisé (code mort) dans `compute_dominant_phase()` et `compute_phase_active()` dans `phases.py`, ainsi que dans tous les appelants (tests inclus).
 - Rend `compute_subphase()` robuste à un ordre incorrect des règles dans `SUBPHASE_RULES` : tri défensif par limite croissante au moment du calcul.
