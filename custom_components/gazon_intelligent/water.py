@@ -380,6 +380,8 @@ def _recent_watering_windows(
         arrosage_recent_jour = max(arrosage_recent_jour, retour)
         arrosage_recent_3j = max(arrosage_recent_3j, retour)
         arrosage_recent_7j = max(arrosage_recent_7j, retour)
+    arrosage_recent_3j = max(arrosage_recent_3j, arrosage_recent_jour)
+    arrosage_recent_7j = max(arrosage_recent_7j, arrosage_recent_3j)
     if arrosage_recent_7j > 100:
         _LOGGER.warning("arrosage_recent_7j aberrant (%.1f mm), valeur clampée à 100 mm", arrosage_recent_7j)
         arrosage_recent_7j = 100.0
