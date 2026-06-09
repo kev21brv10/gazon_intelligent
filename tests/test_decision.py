@@ -193,6 +193,37 @@ class TestPhaseLogic(unittest.TestCase):
         self.assertEqual(subphase["age_jours"], 11)
         self.assertEqual(subphase["detail"], "Sursemis / Enracinement")
 
+    def test_compute_subphase_terminal_progression_bounded_by_phase_duration(self) -> None:
+        # Stabilisation = jours 35-45 d'un Sursemis de 45j. Au jour 44, la
+        # progression doit être proche de la fin (~85-95 %), pas ~1 % comme
+        # lorsque la sentinelle 999 était prise pour une durée réelle.
+        subphase = decision.compute_subphase(
+            phase_dominante="Sursemis",
+            date_debut=date(2026, 4, 26),
+            date_fin=date(2026, 6, 10),
+            today=date(2026, 6, 9),
+            now=datetime(2026, 6, 9, 12, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(subphase["sous_phase"], "Stabilisation")
+        self.assertEqual(subphase["age_jours"], 44)
+        self.assertGreaterEqual(subphase["progression"], 80.0)
+        self.assertLessEqual(subphase["progression"], 100.0)
+
+    def test_compute_subphase_hivernage_terminal_stays_open_ended(self) -> None:
+        # Hivernage (durée 999): la sous-phase Repos reste volontairement
+        # ouverte, le cap par durée de phase ne doit pas s'appliquer.
+        subphase = decision.compute_subphase(
+            phase_dominante="Hivernage",
+            date_debut=date(2026, 1, 1),
+            date_fin=None,
+            today=date(2026, 1, 11),
+            now=datetime(2026, 1, 11, 6, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(subphase["sous_phase"], "Repos")
+        self.assertLess(subphase["progression"], 5.0)
+
 class TestHydricCoreAndMemory(unittest.TestCase):
     def test_compute_water_balance_returns_detailed_metrics(self) -> None:
         history = [

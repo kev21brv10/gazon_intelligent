@@ -30,6 +30,7 @@ from .guidance import (
 from .memory import compute_application_state
 from .scores import classify_stress_level
 from .water import compute_advanced_context, compute_etp, compute_water_balance
+from .watering_policy import get_watering_policy
 
 _LOGGER = logging.getLogger(__name__)
 # La logique de dépletion (calcul objectif par épuisement de réserve utile) est
@@ -1677,6 +1678,7 @@ def build_watering_bundle(
         watering_passages = passages
         watering_pause_minutes = _watering_pause_minutes(passages)
 
+    rain_floor_block_reason: str | None = None
     if phase_dominante == "Normal":
         if not recommande:
             if pluie_demain >= 2:
@@ -1688,18 +1690,45 @@ def build_watering_bundle(
                 action_recommandee = "Réévalue au prochain cycle météo."
                 action_a_eviter = "Éviter tout arrosage inutile."
         else:
+            normal_execution = get_watering_policy(phase_dominante).execution
+            min_session_mm = (
+                normal_execution.min_session_mm
+                if normal_execution is not None and normal_execution.min_session_mm is not None
+                else 5.0
+            )
             if pluie_compensatrice:
                 reduction_mm = round(objectif_mm * 0.4, 1)
                 conseil_principal = "Réduis ou reporte l'arrosage: la pluie de demain peut compenser une grande partie du déficit."
-                if reduction_mm >= 0.5:
+                if reduction_mm >= min_session_mm:
+                    objectif_mm = min(objectif_mm, reduction_mm)
                     action_recommandee = f"Réduis l'apport à {reduction_mm:.1f} mm maximum."
                 else:
+                    objectif_mm = 0.0
+                    arrosage_recommande = False
+                    arrosage_auto_autorise = False
+                    type_arrosage = "bloque"
+                    arrosage_conseille = "personnalise"
+                    rain_floor_block_reason = "pluie_prevue_suffisante"
                     action_recommandee = _watering_needed_text()
+                mm_final = min(mm_final, objectif_mm)
+                mm_final_recommande = min(mm_final_recommande, objectif_mm)
                 action_a_eviter = "Lancer un cycle complet avant la pluie."
             elif pluie_demain > 0 or pluie_j2 > 0 or pluie_3j > 0:
                 reduction_mm = round(objectif_mm * 0.8, 1)
                 conseil_principal = "Réduis l'arrosage: la pluie annoncée peut déjà compenser une partie du besoin."
-                action_recommandee = f"Réduis l'apport à {reduction_mm:.1f} mm maximum."
+                if reduction_mm >= min_session_mm:
+                    objectif_mm = min(objectif_mm, reduction_mm)
+                    action_recommandee = f"Réduis l'apport à {reduction_mm:.1f} mm maximum."
+                else:
+                    objectif_mm = 0.0
+                    arrosage_recommande = False
+                    arrosage_auto_autorise = False
+                    type_arrosage = "bloque"
+                    arrosage_conseille = "personnalise"
+                    rain_floor_block_reason = "pluie_prevue_suffisante"
+                    action_recommandee = _watering_needed_text()
+                mm_final = min(mm_final, objectif_mm)
+                mm_final_recommande = min(mm_final_recommande, objectif_mm)
                 action_a_eviter = "Lancer un cycle complet sans tenir compte de la pluie annoncée."
             elif stress_thermique:
                 passages = _soil_fractionation_passages(
@@ -1767,7 +1796,7 @@ def build_watering_bundle(
     heat_stress_phase_value = water_bundle.get("heat_stress_phase")
     soil_profile_value = water_bundle.get("soil_profile")
     confidence_score_value = water_bundle.get("confidence_score")
-    block_reason_value = water_bundle.get("block_reason")
+    block_reason_value = rain_floor_block_reason or water_bundle.get("block_reason")
     cooldown_24h_hours_value = water_bundle.get("cooldown_24h_hours")
 
     raison_parts = [
@@ -1789,7 +1818,7 @@ def build_watering_bundle(
     ]
     if phase_dominante == "Normal":
         raison_parts.append(
-            "Mode Normal: arrosage profond et rare, seuil utile minimal 10 mm, "
+            "Mode Normal: arrosage profond et rare, déclenché sur déficit utile, "
             f"garde-fou hebdomadaire dynamique {weekly_guardrail_min:.1f} à {weekly_guardrail_max:.1f} mm sur 7 jours glissants."
         )
     elif phase_dominante == "Sursemis":
@@ -1798,6 +1827,11 @@ def build_watering_bundle(
         raison_parts.append(f"Stress thermique={heat_stress_level}; matin renforcé, soirée plus restrictive.")
     if heat_stress_phase_value not in (None, "normal"):
         raison_parts.append(f"Phase canicule={heat_stress_phase_value}")
+    reserve_available_ratio = float(water_balance.get("reserve_available_ratio") or 0.0)
+    if arrosage_recommande and reserve_available_ratio >= 1.0:
+        raison_parts.append(
+            "Réserve utile pleine mais ETP élevée: arrosage anticipatif pour couvrir les pertes à venir."
+        )
     if pluie_compensatrice or pluie_proche:
         raison_parts.append("pluie prévue suffisante: arrosage reporté ou bloqué.")
     if humidite_haute:
@@ -1865,7 +1899,7 @@ def build_watering_bundle(
         "heat_stress_phase": heat_stress_phase,
         "confidence_level": niveau_confiance,
         "confidence_score": confidence_score,
-        "block_reason": water_bundle.get("block_reason"),
+        "block_reason": rain_floor_block_reason or water_bundle.get("block_reason"),
         "cooldown_24h_hours": cooldown_24h_hours_value,
         "weekly_guardrail_mm_min": water_bundle.get("weekly_guardrail_mm_min"),
         "weekly_guardrail_mm_max": water_bundle.get("weekly_guardrail_mm_max"),
@@ -1889,8 +1923,8 @@ def build_watering_bundle(
         mm_cible=mm_cible,
         mm_final_recommande=mm_final_recommande,
         mm_final=mm_final,
-        mm_requested=water_bundle.get("mm_requested"),
-        mm_applied=water_bundle.get("mm_applied"),
+        mm_requested=water_bundle.get("mm_requested", mm_cible),
+        mm_applied=round(mm_final, 1),
         mm_detected=water_bundle.get("mm_detected"),
         conseil_principal=conseil_principal,
         action_recommandee=action_recommandee,
@@ -1906,7 +1940,7 @@ def build_watering_bundle(
         heat_stress_level=heat_stress_level,
         heat_stress_phase=water_bundle.get("heat_stress_phase"),
         decision_resume=decision_resume,
-        block_reason=water_bundle.get("block_reason"),
+        block_reason=rain_floor_block_reason or water_bundle.get("block_reason"),
         raison_decision=" ".join(raison_parts),
         niveau_action=niveau_action,
         fenetre_optimale=fenetre_optimale,
