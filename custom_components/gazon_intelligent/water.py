@@ -655,11 +655,31 @@ def compute_etp(
     else:
         Ra_ref = max(2.0, 0.5 * temperature + 2.0)
     Rns = 0.77 * sky_clear * 0.75 * Ra_ref   # rayonnement net courtes longueurs d'onde
-    Rnl = 0.5 + 0.01 * temperature             # rayonnement net grandes longueurs d'onde (sortant)
+    # Rayonnement net grandes longueurs d'onde sortant (FAO-56 éq. 39, simplifié) :
+    # loi de Stefan-Boltzmann pondérée par l'humidité (ea) et la couverture nuageuse.
+    # L'ancienne approximation (0.5 + 0.01*T ≈ 0.7 MJ/m²/j) sous-estimait Rnl d'un
+    # facteur ~7, gonflant Rn et surestimant l'ET0 (~8 mm à 20 °C au lieu de ~5).
+    sigma_tk4 = 4.903e-9 * (temperature + 273.16) ** 4
+    emissivity_net = max(0.05, 0.34 - 0.14 * math.sqrt(max(0.0, ea)))
+    cloud_factor = max(0.05, min(1.0, 1.35 * sky_clear - 0.35))
+    Rnl = sigma_tk4 * emissivity_net * cloud_factor
     Rn = max(0.0, Rns - Rnl)
 
-    # Vitesse du vent à 2 m (m/s) — 1.5 m/s par défaut (légère brise)
-    u2 = max(0.5, float(wind)) if wind is not None else 1.5
+    # Vitesse du vent à 2 m, convertie en m/s (Penman-Monteith l'exige en m/s).
+    # Les entités météo HA fournissent le vent en km/h par défaut ; l'utiliser tel
+    # quel comme des m/s surestimait fortement le terme aérodynamique de l'ET0.
+    if wind is not None:
+        wind_unit = str(weather_profile.get("weather_wind_speed_unit") or "").strip().lower()
+        wind_ms = float(wind)
+        if wind_unit in ("mph", "mi/h"):
+            wind_ms *= 0.44704
+        elif wind_unit in ("m/s", "ms", "mps"):
+            pass
+        else:  # km/h (défaut des entités météo HA) ou unité inconnue
+            wind_ms /= 3.6
+        u2 = max(0.5, wind_ms)
+    else:
+        u2 = 1.5  # légère brise par défaut
 
     # Formule Penman-Monteith FAO-56 (mm/j)
     numerator = 0.408 * delta * Rn + gamma * (900.0 / (temperature + 273.0)) * u2 * vpd

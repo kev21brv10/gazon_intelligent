@@ -1508,6 +1508,70 @@ class TestEtpComputation(unittest.TestCase):
         self.assertGreaterEqual(etp, 0.0)
         self.assertLess(etp, 2.0)
 
+    def test_compute_etp_fallback_realistic_in_mild_weather(self) -> None:
+        # Sans capteur ETP, par temps doux (20 °C, ciel ~dégagé), l'ET0 calculée
+        # doit rester réaliste (~4-6 mm) et NON surestimée. Les bugs Rnl (rayonnement
+        # longues ondes ~7x trop bas) + vent km/h utilisé comme m/s donnaient ~8 mm.
+        etp = decision.compute_etp(
+            temperature=None,
+            pluie_24h=0.0,
+            etp_capteur=None,
+            weather_profile={
+                "weather_temperature": 20.0,
+                "weather_humidity": 60.0,
+                "weather_wind_speed": 11.0,
+                "weather_wind_speed_unit": "km/h",
+                "weather_cloud_coverage": 10.0,
+                "ha_latitude": 48.0,
+                "ha_day_of_year": 161,
+            },
+        )
+        self.assertIsNotNone(etp)
+        self.assertGreaterEqual(etp, 3.0)
+        self.assertLessEqual(etp, 6.5)
+
+    def test_compute_etp_wind_unit_kmh_vs_ms_consistent(self) -> None:
+        # 10.8 km/h == 3.0 m/s : les deux unités doivent donner la même ET0.
+        common = {
+            "weather_temperature": 20.0,
+            "weather_humidity": 60.0,
+            "weather_cloud_coverage": 10.0,
+            "ha_latitude": 48.0,
+            "ha_day_of_year": 161,
+        }
+        etp_kmh = decision.compute_etp(
+            temperature=None,
+            pluie_24h=0.0,
+            etp_capteur=None,
+            weather_profile={**common, "weather_wind_speed": 10.8, "weather_wind_speed_unit": "km/h"},
+        )
+        etp_ms = decision.compute_etp(
+            temperature=None,
+            pluie_24h=0.0,
+            etp_capteur=None,
+            weather_profile={**common, "weather_wind_speed": 3.0, "weather_wind_speed_unit": "m/s"},
+        )
+        self.assertEqual(etp_kmh, etp_ms)
+
+    def test_compute_etp_still_high_in_heatwave(self) -> None:
+        # Garde-fou inverse : la correction ne doit pas écraser l'ET0 en vraie
+        # canicule (35 °C, sec, venté) — elle doit rester élevée.
+        etp = decision.compute_etp(
+            temperature=None,
+            pluie_24h=0.0,
+            etp_capteur=None,
+            weather_profile={
+                "weather_temperature": 35.0,
+                "weather_humidity": 30.0,
+                "weather_wind_speed": 20.0,
+                "weather_wind_speed_unit": "km/h",
+                "weather_cloud_coverage": 0.0,
+                "ha_latitude": 48.0,
+                "ha_day_of_year": 161,
+            },
+        )
+        self.assertGreaterEqual(etp, 8.0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -45,6 +45,7 @@ def extract_weather_profile(attributes: Mapping[str, Any] | None) -> dict[str, A
         ),
         "weather_humidity": get_float_from_attributes(attributes, "humidity", "native_humidity"),
         "weather_wind_speed": get_float_from_attributes(attributes, "wind_speed", "native_wind_speed"),
+        "weather_wind_speed_unit": attributes.get("wind_speed_unit"),
         "weather_pressure": get_float_from_attributes(attributes, "pressure", "native_pressure"),
         "weather_cloud_coverage": get_float_from_attributes(
             attributes,
