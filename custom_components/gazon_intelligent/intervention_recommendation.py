@@ -879,7 +879,7 @@ def _constraints_for_candidate(
                     "current_month": current_month if current_month is not None else candidate.get("current_month"),
                     "matched": bool(candidate.get("month_match")),
                 },
-                hint="Les mois d’application aident à garder la recommandation saisonnière cohérente.",
+                hint="Les mois d'application aident à garder la recommandation saisonnière cohérente.",
                 blocking=False,
                 met=bool(candidate.get("month_match")),
             )
@@ -1032,7 +1032,7 @@ def _constraints_for_candidate(
                     code="wait",
                     label="Attendre la fin du blocage",
                     value={"blocked_reason": block_reason},
-                    hint="Le délai ou l’arrosage post-application n’est pas encore terminé.",
+                    hint="Le délai ou l'arrosage post-application n'est pas encore terminé.",
                     blocking=True,
                 ),
             )
@@ -1174,12 +1174,12 @@ def _ui_for_state(
             )
         ),
         "declaration_hint": (
-            "Tu peux déclarer l’intervention maintenant."
+            "Tu peux déclarer l'intervention maintenant."
             if selected_ready
             else (
-                ("Le produit choisi doit correspondre à l’intervention." + (f" Phase actuelle : {phase_now}." if phase_now else ""))
+                ("Le produit choisi doit correspondre à l'intervention." + (f" Phase actuelle : {phase_now}." if phase_now else ""))
                 if selected_display
-                else "Le bouton se débloque dès qu’un produit est prêt."
+                else "Le bouton se débloque dès qu'un produit est prêt."
             )
         ),
         "history_summary": "Dernière application",
