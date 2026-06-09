@@ -29,16 +29,14 @@ L'intégration construit une lecture métier exploitable dans Home Assistant:
 
 Elle est conçue pour rester lisible côté UI, tout en gardant assez de structure pour les automatisations, le debug et les dashboards avancés.
 
-## ✨ Ce que la version actuelle apporte (v0.9.1)
+## ✨ Ce que la version actuelle apporte (v0.9.2)
 
-- **Conseil = exécution sous pluie** : en phase Normal avec pluie annoncée, la dose réduite (×0.8, ou ×0.4 si la pluie compense le déficit) est désormais propagée à l'objectif réellement arrosé. Fini le cas où le conseil affichait « Réduis l'apport à 6.1 mm » pendant que le plan canonique et le scheduler arrosaient 7.6 mm
-- **Plancher de session utile** : si la dose réduite par la pluie tombe sous le minimum utile (5 mm en Normal), l'arrosage est reporté à 0 plutôt que de lancer un cycle inefficace, avec un motif explicite (`pluie_prevue_suffisante`) lisible dans la raison de décision
-- **Progression de sous-phase corrigée** : la dernière sous-phase d'une phase (ex. Stabilisation d'un Sursemis) progresse maintenant correctement jusqu'à la fin au lieu de rester bloquée à ~1 % ; l'Hivernage reste volontairement ouvert
-- **467 tests unitaires** verts
+- **ET0 réaliste, même sans capteur** : le calcul d'évapotranspiration de secours (Penman-Monteith, sans capteur ETP dédié) surestimait l'ET0 — ~8 mm/jour à 20 °C au lieu de ~5 —, ce qui vidait artificiellement la réserve hydrique et déclenchait des arrosages inutiles. Deux corrections : le rayonnement net grandes longueurs d'onde, ~7× trop bas, est recalculé selon FAO-56 ; et le vent est converti km/h → m/s (les entités météo HA le fournissent en km/h, il était utilisé à tort comme des m/s). Résultat : 20 °C ciel clair → ~5,4 mm, et la réserve se vide à un rythme réaliste. Le capteur ETP dédié reste prioritaire s'il est configuré
+- **470 tests unitaires** verts
 
-*Version précédente (v0.9.0) : objectif d'arrosage plafonné à la capacité d'absorption restante du sol, cumuls glissants monotones `jour ≤ 3 jours ≤ 7 jours`, attributs hydriques clarifiés, audit complet des domaines (arrosage, tonte, phases, interventions, météo).*
+*Version précédente (v0.9.1) : cohérence conseil/exécution de l'arrosage sous pluie (réduction propagée à l'objectif réellement exécuté), plancher de session utile, et correction de la progression de sous-phase terminale.*
 
-*Versions précédentes (v0.8.x) : coordination arrosage/tonte, ressuyage dynamique post-arrosage par type de sol, détection de retard de tonte, hauteur de gazon estimée sans capteur, ET0 Penman-Monteith FAO-56, latitude HA automatique, support multi-pelouse.*
+*Versions antérieures (v0.9.0 et v0.8.x) : objectif d'arrosage plafonné à la capacité d'absorption du sol, ET0 Penman-Monteith FAO-56, coordination arrosage/tonte, support multi-pelouse, audit complet des domaines.*
 - une instance par pelouse, avec support multi-gazon propre
 - une façade publique centrée sur `sensor.gazon_intelligent_assistant`
 - une projection claire de:
