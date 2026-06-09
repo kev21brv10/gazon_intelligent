@@ -18,26 +18,25 @@
 
 ## 🌱 Pourquoi cette intégration
 
-Gazon Intelligent ne se contente pas d’allumer des zones d’arrosage ou de remonter quelques capteurs.
+Gazon Intelligent ne se contente pas d'allumer des zones d'arrosage ou de remonter quelques capteurs.
 
-L’intégration construit une lecture métier exploitable dans Home Assistant:
+L'intégration construit une lecture métier exploitable dans Home Assistant:
 
 - que faut-il faire maintenant
 - pourquoi faut-il agir ou attendre
-- quand reconsidérer la tonte ou l’arrosage
+- quand reconsidérer la tonte ou l'arrosage
 - quel contexte explique la décision
 
 Elle est conçue pour rester lisible côté UI, tout en gardant assez de structure pour les automatisations, le debug et les dashboards avancés.
 
-## ✨ Ce que la version actuelle apporte (v0.8.0)
+## ✨ Ce que la version actuelle apporte (v0.9.0)
 
-- **Coordination arrosage/tonte** : la tonte est bloquée automatiquement si un arrosage est imminent (< 30 min) et déconseillée si prévu dans les 2 h suivantes
-- **Ressuyage dynamique post-arrosage** : le délai avant de pouvoir tondre après un arrosage est calculé selon le type de sol — 1 h (sableux), 2 h (limoneux), 4 h (argileux) — avec ajustements automatiques selon l'humidité, les précipitations et la température
-- **Détection de retard de tonte** : quand la tonte est en retard, un soft override autorise la tonte même sur des conditions borderline (`conditions_defavorables`, `stress_thermique`)
-- **Hauteur de gazon estimée sans capteur** : `sensor.gazon_intelligent_hauteur_gazon_estimee` calcule la hauteur depuis la date de dernière coupe, la hauteur de coupe réglée et le taux de croissance mensuel
-- **Messages de blocage clarifiés** : la raison agronomique et la contrainte horaire sont maintenant affichées ensemble, sans l'une écraser l'autre
+- **Objectif d'arrosage réaliste** : en phase Normal, l'objectif est désormais plafonné à la capacité d'absorption restante du sol (`reserve_stock_max - reserve_stock`) quand le sol n'a pas atteint le seuil MAD. Fini les objectifs gonflés qui visaient le déficit cumulé sur 7 jours sur un sol déjà bien rempli
+- **Fenêtres d'arrosage cohérentes** : les cumuls glissants respectent maintenant la monotonie `jour ≤ 3 jours ≤ 7 jours` (une fenêtre plus large ne peut plus afficher moins d'eau qu'une fenêtre incluse)
+- **Attributs hydriques clarifiés** : la réserve du jour précédent est exposée sous un seul nom correct (`sol_reserve_precedente_mm`), sans doublon trompeur
+- **Moteur allégé et durci** : audit complet des domaines (arrosage, tonte, phases, interventions, météo) — déduplication, suppression de code mort et cascade de blocage tonte réécrite en priorités explicites, sans changement de comportement (462 tests unitaires)
 
-*Versions précédentes : ET0 Penman-Monteith FAO-56, latitude HA automatique, arrondi symétrique, support multi-pelouse.*
+*Versions précédentes (v0.8.x) : coordination arrosage/tonte, ressuyage dynamique post-arrosage par type de sol, détection de retard de tonte, hauteur de gazon estimée sans capteur, ET0 Penman-Monteith FAO-56, latitude HA automatique, support multi-pelouse.*
 - une instance par pelouse, avec support multi-gazon propre
 - une façade publique centrée sur `sensor.gazon_intelligent_assistant`
 - une projection claire de:
@@ -46,12 +45,12 @@ Elle est conçue pour rester lisible côté UI, tout en gardant assez de structu
   - `sensor.gazon_intelligent_prochaine_intervention`
 - une séparation explicite entre:
   - état du gazon
-  - décision d’arrosage
+  - décision d'arrosage
   - décision de tonte
   - disponibilité machine
   - action réellement possible
 - une coordination tondeuse activable ou désactivable par pelouse
-- une carte Lovelace dédiée en complément de l’intégration
+- une carte Lovelace dédiée en complément de l'intégration
 
 Pour le détail du contrat public des attributs exposés, voir:
 
@@ -59,7 +58,7 @@ Pour le détail du contrat public des attributs exposés, voir:
 
 ## 🧠 Philosophie
 
-L’intégration sépare trois niveaux:
+L'intégration sépare trois niveaux:
 
 1. **Le gazon**
    - phase dominante
@@ -73,7 +72,7 @@ L’intégration sépare trois niveaux:
    - prochaine fenêtre
    - blocage ou attente
 
-3. **L’exécution**
+3. **L'exécution**
    - machine disponible ou non
    - coordination tondeuse active ou non
    - action réellement possible
@@ -94,13 +93,13 @@ Cette séparation évite les faux signaux du type:
 4. Installe `Gazon Intelligent`
 5. Redémarre Home Assistant
 6. Va dans **Paramètres → Appareils et services**
-7. Ajoute l’intégration `Gazon Intelligent`
+7. Ajoute l'intégration `Gazon Intelligent`
 
 ### Installation manuelle
 
 1. Copie [`custom_components/gazon_intelligent`](custom_components/gazon_intelligent) dans `config/custom_components`
 2. Redémarre Home Assistant
-3. Ajoute l’intégration depuis **Paramètres → Appareils et services**
+3. Ajoute l'intégration depuis **Paramètres → Appareils et services**
 
 ## ✅ Compatibilité
 
@@ -109,7 +108,7 @@ Cette séparation évite les faux signaux du type:
 
 ## ⚙️ Configuration
 
-Aucune configuration YAML n’est requise.
+Aucune configuration YAML n'est requise.
 
 ### 1. Une configuration par pelouse
 
@@ -152,7 +151,7 @@ La coordination tondeuse est indépendante et configurable par pelouse:
 - `hauteur_min_tondeuse_cm`
 - `hauteur_max_tondeuse_cm`
 
-Si la coordination tondeuse est désactivée, l’intégration continue de calculer la logique gazon, mais ne considère plus la machine comme pilotable.
+Si la coordination tondeuse est désactivée, l'intégration continue de calculer la logique gazon, mais ne considère plus la machine comme pilotable.
 
 ## 📊 Les entités à lire en premier
 
@@ -160,8 +159,8 @@ Si la coordination tondeuse est désactivée, l’intégration continue de calcu
 
 - `sensor.gazon_intelligent_assistant`
 
-C’est le point d’entrée le plus utile.  
-Il résume l’action prioritaire ou la raison pour laquelle il faut attendre.
+C'est le point d'entrée le plus utile.  
+Il résume l'action prioritaire ou la raison pour laquelle il faut attendre.
 
 ### Arrosage
 
@@ -221,9 +220,9 @@ Exemples:
 
 ### Tonte
 
-`binary_sensor.gazon_intelligent_tonte_autorisee` exprime l’autorisation métier.
+`binary_sensor.gazon_intelligent_tonte_autorisee` exprime l'autorisation métier.
 
-Mais l’action finale dépend aussi de la machine:
+Mais l'action finale dépend aussi de la machine:
 
 - gazon autorisé
 - machine prête ou non
@@ -244,7 +243,7 @@ Exemple attendu:
 
 - `Phase Sursemis: tonte interdite pendant l'installation du gazon.`
 
-## 🎛️ Entités de réglage et d’action
+## 🎛️ Entités de réglage et d'action
 
 ### Boutons
 
@@ -298,7 +297,7 @@ Exemple attendu:
 
 ## 🧩 Carte Lovelace optionnelle
 
-Une carte dédiée existe pour exploiter la façade publique de l’intégration:
+Une carte dédiée existe pour exploiter la façade publique de l'intégration:
 
 - `lovelace-gazon-intelligent-card`
 
@@ -312,12 +311,12 @@ Elle organise la lecture en onglets:
 - intervention
 - réglages
 
-La carte ne remplace pas l’intégration.  
+La carte ne remplace pas l'intégration.  
 Elle lit les entités publiques et les structure pour une lecture rapide dans Home Assistant.
 
-## 🚫 Ce que l’intégration ne prétend pas faire
+## 🚫 Ce que l'intégration ne prétend pas faire
 
-- elle ne remplace pas ton matériel d’arrosage
+- elle ne remplace pas ton matériel d'arrosage
 - elle ne remplace pas les sécurités natives de ta tondeuse
 - elle ne garantit pas seule un déclenchement automatique sans automatisations autour
 
