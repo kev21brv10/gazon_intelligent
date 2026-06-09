@@ -82,7 +82,7 @@ def build_water_bundle(
     context: DecisionContext,
     phase_bundle: dict[str, Any],
 ) -> dict[str, Any]:
-    application_state = compute_application_state(context.history)
+    application_state = compute_application_state(context.history, today=context.today)
     advanced_context = compute_advanced_context(
         humidite_sol=context.humidite_sol,
         vent=context.vent,
@@ -1438,7 +1438,7 @@ def build_watering_bundle(
     )
     stress_thermique = temperature >= 30 and etp >= 4
     humidite_haute = humidite >= 85
-    application_state = water_bundle.get("application_state") or compute_application_state(context.history)
+    application_state = water_bundle.get("application_state") or compute_application_state(context.history, today=context.today)
     application_payload = _application_payload(application_state)
     application_type = application_state.get("application_type")
     application_mode = str(application_state.get("application_irrigation_mode") or "").strip().lower()
