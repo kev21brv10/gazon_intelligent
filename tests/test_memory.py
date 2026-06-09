@@ -263,6 +263,47 @@ class MemoryCatalogTests(unittest.TestCase):
         self.assertTrue(ready_state["application_post_watering_ready"])
         self.assertEqual(ready_state["application_post_watering_delay_remaining_minutes"], 0.0)
 
+    def test_post_watering_pending_only_on_application_day(self) -> None:
+        # L'arrosage technique d'incorporation (pending → conseil + override + auto)
+        # ne doit se déclencher que le JOUR MÊME de l'épandage. Pour une application
+        # plus ancienne (ex. déclarée rétroactivement), l'incorporation est présumée
+        # faite → ni pending, ni ready, ni objectif.
+        def _state(application_date: str, now: "memory.datetime") -> dict:
+            return memory.compute_application_state(
+                [
+                    {
+                        "type": "Fertilisation",
+                        "date": application_date,
+                        "declared_at": "2026-06-09T18:00:00+00:00",
+                        "produit": "Floranid Twin Permanent",
+                        "application_type": "sol",
+                        "application_requires_watering_after": True,
+                        "application_post_watering_mm": 1.0,
+                        "application_irrigation_block_hours": 0.0,
+                        "application_irrigation_delay_minutes": 0.0,
+                        "application_irrigation_mode": "auto",
+                    }
+                ],
+                now=now,
+            )
+
+        # 1. Jour même → pending actif (non-régression du cas légitime).
+        same_day = _state("2026-06-09", memory.datetime(2026, 6, 9, 18, 0, tzinfo=memory.timezone.utc))
+        self.assertTrue(same_day["application_post_watering_pending"])
+        self.assertTrue(same_day["application_post_watering_ready"])
+        self.assertGreater(same_day["application_post_watering_remaining_mm"], 0.0)
+
+        # 2. Application antérieure (J-4, déclarée rétroactivement) → plus de pending.
+        old = _state("2026-06-06", memory.datetime(2026, 6, 10, 8, 0, tzinfo=memory.timezone.utc))
+        self.assertFalse(old["application_post_watering_pending"])
+        self.assertFalse(old["application_post_watering_ready"])
+        self.assertEqual(old["application_post_watering_status"], "termine")
+
+        # 3. Cas limite J-1 : la bascule se fait bien dès le lendemain (J+1).
+        yesterday = _state("2026-06-09", memory.datetime(2026, 6, 10, 0, 30, tzinfo=memory.timezone.utc))
+        self.assertFalse(yesterday["application_post_watering_pending"])
+        self.assertFalse(yesterday["application_post_watering_ready"])
+
     def test_compute_application_state_marks_completed_post_watering(self) -> None:
         state = memory.compute_application_state(
             [

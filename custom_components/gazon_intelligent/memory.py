@@ -392,6 +392,8 @@ def _compute_post_watering_state(
     now: datetime,
     water_after_application: float,
     application_block_active: bool,
+    application_date: date | None = None,
+    reference_date: date | None = None,
 ) -> dict[str, Any]:
     declared_dt = runtime_fields.get("declared_dt")
     application_type = runtime_fields.get("application_type")
@@ -416,10 +418,18 @@ def _compute_post_watering_state(
         0.0,
         application_post_watering_mm - water_after_application,
     )
+    # L'arrosage technique d'incorporation n'a de sens que le jour même de l'épandage.
+    # Pour une application plus ancienne (ex. déclarée rétroactivement), l'incorporation
+    # est présumée faite → on éteint le pending (et donc conseil, override, arrosage auto).
+    # Référence = le `today` de la décision (et non l'horloge murale) ; à défaut, now.date().
+    # Date d'application absente = traitée comme « aujourd'hui » (non-régression sans date).
+    reference_date = reference_date if reference_date is not None else now.date()
+    applied_today = application_date is None or application_date == reference_date
     application_post_watering_pending = bool(
         application_type == APPLICATION_TYPE_SOL
         and application_requires_watering_after
         and application_post_watering_remaining_mm > 0.1
+        and applied_today
     )
     application_post_watering_ready = bool(
         application_type == APPLICATION_TYPE_SOL
@@ -757,6 +767,7 @@ def build_application_summary(item: dict[str, Any] | None) -> dict[str, Any] | N
 def compute_application_state(
     history: list[dict[str, Any]],
     now: datetime | None = None,
+    today: date | None = None,
 ) -> dict[str, Any]:
     now = now or _current_datetime()
     history = [item for item in history if isinstance(item, dict)]
@@ -775,11 +786,15 @@ def compute_application_state(
             if item.get("type") != "arrosage":
                 continue
             water_after_application += float(_watering_item_mm(item) or 0.0)
+    application_dt = _parse_datetime(latest_item.get("date"))
+    application_date = application_dt.date() if application_dt is not None else None
     post_watering_state = _compute_post_watering_state(
         runtime_fields,
         now=now,
         water_after_application=water_after_application,
         application_block_active=bool(block_state["application_block_active"]),
+        application_date=application_date,
+        reference_date=today,
     )
 
     return {
@@ -947,7 +962,7 @@ def compute_memory(
         }
 
     _, last_application = _latest_application_item(history)
-    application_state = compute_application_state(history, now=_current_datetime())
+    application_state = compute_application_state(history, now=_current_datetime(), today=today)
     feedback_observation = build_feedback_observation(history, previous_memory, decision, today=today)
 
     return {

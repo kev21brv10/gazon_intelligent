@@ -1942,7 +1942,9 @@ class DecisionResultChainTests(unittest.TestCase):
             "application_requires_watering_after",
             application_allowed_sensor.extra_state_attributes["derniere_application"],
         )
-        self.assertTrue(application_allowed_sensor.is_on)
+        # Application vieille de 17 jours (18/03 vs horloge 04/04) : l'arrosage technique
+        # d'incorporation n'est plus autorisé (règle « jour même »).
+        self.assertFalse(application_allowed_sensor.is_on)
         self.assertEqual(application_allowed_sensor.extra_state_attributes["application_post_watering_mm"], 1.0)
 
     def test_application_state_falls_back_to_history_without_memory(self) -> None:
@@ -1979,6 +1981,36 @@ class DecisionResultChainTests(unittest.TestCase):
             last_application_sensor.extra_state_attributes["last_application_when"],
             "18/03/2026",
         )
+        # Application vieille de 17 jours (18/03 vs horloge 04/04) : l'arrosage technique
+        # d'incorporation n'est plus autorisé (règle « jour même »).
+        self.assertFalse(application_allowed_sensor.is_on)
+        self.assertEqual(application_allowed_sensor.extra_state_attributes["application_type"], "sol")
+
+    def test_application_post_watering_allowed_same_day(self) -> None:
+        # Symétrique du cas « appli ancienne » : une application SOL du JOUR MÊME
+        # (date == horloge stubbée 04/04) autorise l'arrosage technique → is_on True.
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={},
+            result=None,
+            history=[
+                {
+                    "type": "Fertilisation",
+                    "date": "2026-04-04",
+                    "declared_at": "2026-04-04T08:00:00+00:00",
+                    "produit": "Engrais printemps",
+                    "application_type": "sol",
+                    "application_requires_watering_after": True,
+                    "application_post_watering_mm": 1.0,
+                    "application_irrigation_block_hours": 0.0,
+                    "application_irrigation_delay_minutes": 0.0,
+                    "application_irrigation_mode": "auto",
+                }
+            ],
+            memory=None,
+        )
+
+        application_allowed_sensor = binary_sensor.GazonApplicationArrosageAutoriseBinarySensor(coordinator)
         self.assertTrue(application_allowed_sensor.is_on)
         self.assertEqual(application_allowed_sensor.extra_state_attributes["application_type"], "sol")
 

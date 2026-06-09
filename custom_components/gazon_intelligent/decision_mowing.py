@@ -443,7 +443,7 @@ def _soil_is_wet(advanced_context: dict[str, Any], context: DecisionContext) -> 
 
 
 def _post_application_mowing_block(context: DecisionContext) -> tuple[bool, str | None, str | None]:
-    application_state = compute_application_state(context.history)
+    application_state = compute_application_state(context.history, today=context.today)
     status = str(application_state.get("application_post_watering_status") or "").strip().lower()
     if status not in {"bloque", "en_attente", "autorise"}:
         return False, None, None
@@ -650,7 +650,7 @@ def _mowing_projection_forecast_offset_days(
 
 def _mowing_projection_application_offset_hours(context: DecisionContext) -> tuple[float, list[str]]:
     """Ajoute une prudence si une application récente peut encore gêner la tonte."""
-    application_state = compute_application_state(context.history)
+    application_state = compute_application_state(context.history, today=context.today)
     raw_date = application_state.get("date_action") or application_state.get("date")
     if not raw_date:
         return 0.0, []
