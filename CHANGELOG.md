@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.2
+Correction de la surestimation de l'ET0 sans capteur (470 tests verts) :
+- **Hydrique** : le calcul Penman-Monteith de secours (sans capteur ETP dédié) surestimait l'ET0 d'un facteur ~1,5-2 — ~8 mm/jour à 20 °C au lieu de ~5 —, ce qui vidait artificiellement la réserve hydrique et déclenchait des arrosages inutiles. Deux causes corrigées dans `compute_etp` : (1) le rayonnement net grandes longueurs d'onde `Rnl` était approximé à ~0,7 MJ/m²/j (≈7× trop bas), gonflant le rayonnement net `Rn` — remplacé par la formule FAO-56 (Stefan-Boltzmann pondérée par l'humidité et la couverture nuageuse) ; (2) le vent des entités météo HA, fourni en km/h, était utilisé tel quel comme des m/s dans le terme aérodynamique (~3,6× trop) — désormais converti selon l'unité réelle (`weather_wind_speed_unit`). Résultat : 20 °C ciel clair → ~5,4 mm, couvert → ~2,4 mm, vraie canicule 35 °C → reste élevé. Le calcul fonctionne correctement **même sans capteur ETP** ; le capteur dédié reste prioritaire s'il est configuré.
+
 ## 0.9.1
 Cohérence conseil/exécution de l'arrosage sous pluie + fix de progression terminale (467 tests verts) :
 - **Arrosage** : la réduction de dose liée à la pluie annoncée est désormais propagée aux valeurs réellement exécutées. En mode Normal avec pluie prévue, le moteur calculait bien une dose réduite (×0.8, ou ×0.4 si pluie compensatrice) mais ne l'écrivait que dans le texte `action_recommandee` : `objectif_mm` / `mm_final` / `mm_applied` restaient à la dose pleine. Résultat en production : conseil « Réduis l'apport à 6.1 mm » pendant que le plan canonique et le scheduler arrosaient 7.6 mm. Conseil et exécution sont maintenant alignés sur la même valeur.
