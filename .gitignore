@@ -10,8 +10,9 @@ __pycache__/
 # Éditeurs / espaces de travail
 *.code-workspace
 
-# Claude Code
+# Claude Code (config perso d'assistant, hors dépôt)
 .claude/
+/CLAUDE.md
 
 # Flows Node-RED personnels (config locale, hors dépôt)
 docs/node_red/
