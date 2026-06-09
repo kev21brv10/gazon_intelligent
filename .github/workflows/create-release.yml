@@ -1,0 +1,43 @@
+name: Create Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag name (e.g. v0.9.0)'
+        required: true
+        default: 'v0.9.0'
+      name:
+        description: 'Release name'
+        required: true
+        default: 'v0.9.0 — Audit nettoyage, plafonnement objectif arrosage, monotonie fenêtres'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag }}
+          name: ${{ github.event.inputs.name }}
+          body: |
+            ## 0.9.0
+            - **Tonte** : restructure la cascade `raison_code` en priorité explicite (phase > post-application > arrosage > cooldown > blocage générique). Ajoute un test verrouillant phase > arrosage.
+            - **Météo** : supprime 7 clés mortes du résumé de prévisions (`forecast_condition_*`, `forecast_date_*`, `forecast_days`).
+            - **Interventions** : factorise 2 blocs « unavailable » (~120 lignes) en helper. Unifie `_temperature_evaluation()` (105 → 38 lignes), supprime `band` jamais lu.
+            - **Arrosage** : extrait `_hydraulic_pressure()` pour dédupliquer `besoin_court/tendance/pression_hydrique`.
+            - **Tonte** : fusionne le double bloc nuit, supprime un bloc candidats inatteignable.
+
+            ## 0.8.9
+            - Corrige `arrosage_recent_3j > arrosage_recent_7j` : monotonie `jour ≤ 3j ≤ 7j` désormais garantie.
+            - Supprime `bilan_hydrique_precedent_mm` (doublon de `sol_reserve_precedente_mm`).
+
+            ## 0.8.8
+            - Corrige la surestimation de l'objectif arrosage en phase Normal quand sol < MAD : plafonnement à la capacité restante. Exemple : 23.1 mm → 7.3 mm.
+          draft: false
+          prerelease: false
+          generate_release_notes: false
