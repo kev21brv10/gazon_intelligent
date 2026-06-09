@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from math import ceil
 from typing import Any
@@ -1041,6 +1042,772 @@ def _build_guidance_window_payload(
     }
 
 
+@dataclass
+class _WateringCtx:
+    # inputs
+    phase_dominante: str
+    sous_phase: str
+    water_balance: dict[str, Any]
+    weather_profile: dict[str, Any]
+    history: list[dict[str, Any]]
+    today: date
+    now: datetime
+    pluie_24h: float
+    pluie_demain: float
+    pluie_j2: float
+    pluie_3j: float
+    pluie_probabilite_max_3j: float
+    pluie_probabilite_24h: float
+    humidite: float
+    temperature: float
+    etp: float
+    vent: float | None
+    soil_profile: str
+    sous_phase_age_days: int | None
+    sous_phase_progression: float | None
+    hauteur_gazon: float | None
+    transition_ready: bool
+    application_type: str | None
+    # computed — shared preamble
+    now_hour: int
+    now_minutes: int
+    recent_watering_count: int
+    recent_watering_mm_7j: float
+    latest_watering_dt: datetime | None
+    cooldown_24h_hours: float | None
+    cooldown_24h_active: bool
+    bilan_hydrique_mm: float
+    deficit_jour: float
+    deficit_3j: float
+    deficit_7j: float
+    deficit_mm_brut: float
+    pluie_support: float
+    deficit_mm_ajuste: float
+    heat_stress_level: str
+    heat_stress_phase: str
+    guardrail_min_mm: float
+    guardrail_max_mm: float
+    guardrail_reason: str
+    seasonal_profile_payload: dict[str, Any]
+    # morning window (original, before possible Sursemis override)
+    morning_start_minute: int
+    morning_end_minute: int
+    acceptable_end_minute: int
+    temperature_band: str
+    # computed — post-preamble (after Hivernage guard)
+    besoin_court: float = 0.0
+    besoin_tendance: float = 0.0
+    pression_hydrique: float = 0.0
+    pluie_compensatrice: bool = False
+    pluie_proche: bool = False
+    saturation_block: bool = False
+    evening_allowed: bool = False
+
+
+def _build_watering_ctx(
+    phase_dominante: str,
+    sous_phase: str,
+    water_balance: dict[str, float],
+    today: date,
+    pluie_24h: float,
+    pluie_demain: float,
+    pluie_j2: float,
+    pluie_3j: float,
+    pluie_probabilite_max_3j: float,
+    humidite: float,
+    temperature: float,
+    etp: float,
+    type_sol: str,
+    weather_profile: dict[str, Any],
+    history: list[dict[str, Any]],
+    sous_phase_age_days: int | None,
+    sous_phase_progression: float | None,
+    hauteur_gazon: float | None,
+    transition_ready: bool,
+    application_type: str | None,
+) -> _WateringCtx:
+    pluie_probabilite_24h_raw = _to_float(weather_profile.get("weather_precipitation_probability"))
+    pluie_probabilite_24h = pluie_probabilite_24h_raw if pluie_probabilite_24h_raw is not None else 0.0
+    vent = _to_float(weather_profile.get("weather_wind_speed"))
+    soil_profile = (type_sol or "limoneux").strip().lower()
+    recent_watering_count = compute_recent_watering_count(history, today=today, days=7) if history else 0
+    latest_watering_dt = _latest_watering_datetime(history) if history else None
+    now = _current_datetime()
+    cooldown_24h_hours: float | None = None
+    cooldown_24h_active = False
+    if phase_dominante == "Normal" and latest_watering_dt is not None:
+        delta_hours = (now - latest_watering_dt.astimezone(now.tzinfo)).total_seconds() / 3600.0
+        if delta_hours >= 0:
+            cooldown_24h_hours = delta_hours
+            cooldown_24h_active = delta_hours < 24.0
+    bilan_hydrique_mm = _reference_hydric_balance_mm(water_balance)
+    deficit_jour = water_balance.get("deficit_jour", 0.0)
+    deficit_3j = water_balance.get("deficit_3j", 0.0)
+    deficit_7j = water_balance.get("deficit_7j", 0.0)
+    recent_watering_mm_7j = float(water_balance.get("arrosage_recent_7j", 0.0) or 0.0)
+    deficit_mm_brut = max(0.0, max(deficit_jour, deficit_3j, deficit_7j))
+    pluie_support = max(
+        0.0,
+        (pluie_24h * 0.35) + (pluie_demain * 0.35) + (pluie_j2 * 0.2) + (pluie_3j * 0.1),
+    )
+    historique_support = min(recent_watering_mm_7j * 0.2, deficit_mm_brut * 0.5)
+    humidite_penalty = 0.0
+    if humidite >= 85:
+        humidite_penalty = deficit_mm_brut * 0.2
+    elif humidite >= 75:
+        humidite_penalty = deficit_mm_brut * 0.1
+    deficit_mm_ajuste = max(0.0, deficit_mm_brut - pluie_support - historique_support - humidite_penalty)
+    heat_stress_level = _heat_stress_level(
+        temperature=temperature, etp=etp, humidite=humidite,
+        weather_profile=weather_profile, deficit_mm_brut=deficit_mm_brut,
+    )
+    heat_stress_phase = _heat_stress_phase(
+        heat_stress_level=heat_stress_level, temperature=temperature, etp=etp,
+        pluie_demain=pluie_demain, pluie_3j=pluie_3j,
+        recent_watering_count=recent_watering_count, recent_watering_mm_7j=recent_watering_mm_7j,
+    )
+    guardrail_min_mm, guardrail_max_mm, guardrail_reason = _dynamic_weekly_guardrail(
+        today=today, phase_dominante=phase_dominante,
+        heat_stress_phase=heat_stress_phase, soil_profile=soil_profile,
+    )
+    seasonal_profile_payload = _seasonal_profile_payload(today)
+    morning_start_minute, morning_end_minute, acceptable_end_minute, temperature_band = _morning_window_bounds(
+        phase_dominante=phase_dominante, temperature=temperature,
+    )
+    return _WateringCtx(
+        phase_dominante=phase_dominante,
+        sous_phase=sous_phase,
+        water_balance=water_balance,
+        weather_profile=weather_profile,
+        history=history,
+        today=today,
+        now=now,
+        pluie_24h=pluie_24h,
+        pluie_demain=pluie_demain,
+        pluie_j2=pluie_j2,
+        pluie_3j=pluie_3j,
+        pluie_probabilite_max_3j=pluie_probabilite_max_3j,
+        pluie_probabilite_24h=pluie_probabilite_24h,
+        humidite=humidite,
+        temperature=temperature,
+        etp=etp,
+        vent=vent,
+        soil_profile=soil_profile,
+        sous_phase_age_days=sous_phase_age_days,
+        sous_phase_progression=sous_phase_progression,
+        hauteur_gazon=hauteur_gazon,
+        transition_ready=transition_ready,
+        application_type=application_type,
+        now_hour=now.hour,
+        now_minutes=now.hour * 60 + now.minute,
+        recent_watering_count=recent_watering_count,
+        recent_watering_mm_7j=recent_watering_mm_7j,
+        latest_watering_dt=latest_watering_dt,
+        cooldown_24h_hours=cooldown_24h_hours,
+        cooldown_24h_active=cooldown_24h_active,
+        bilan_hydrique_mm=bilan_hydrique_mm,
+        deficit_jour=deficit_jour,
+        deficit_3j=deficit_3j,
+        deficit_7j=deficit_7j,
+        deficit_mm_brut=deficit_mm_brut,
+        pluie_support=pluie_support,
+        deficit_mm_ajuste=deficit_mm_ajuste,
+        heat_stress_level=heat_stress_level,
+        heat_stress_phase=heat_stress_phase,
+        guardrail_min_mm=guardrail_min_mm,
+        guardrail_max_mm=guardrail_max_mm,
+        guardrail_reason=guardrail_reason,
+        seasonal_profile_payload=seasonal_profile_payload,
+        morning_start_minute=morning_start_minute,
+        morning_end_minute=morning_end_minute,
+        acceptable_end_minute=acceptable_end_minute,
+        temperature_band=temperature_band,
+    )
+
+
+def _fill_post_preamble(ctx: _WateringCtx) -> None:
+    ctx.besoin_court, ctx.besoin_tendance, ctx.pression_hydrique = _hydraulic_pressure(
+        ctx.bilan_hydrique_mm, ctx.deficit_3j, ctx.deficit_7j
+    )
+    ctx.pluie_compensatrice, ctx.pluie_proche = _rain_signals(
+        objective_reference_mm=ctx.deficit_mm_brut,
+        pluie_24h=ctx.pluie_24h,
+        pluie_demain=ctx.pluie_demain,
+        pluie_j2=ctx.pluie_j2,
+        pluie_3j=ctx.pluie_3j,
+        pluie_probabilite_max_3j=ctx.pluie_probabilite_max_3j,
+    )
+    ctx.saturation_block = ctx.phase_dominante != "Sursemis" and ctx.bilan_hydrique_mm > SATURATION_BILAN_HYDRIQUE_MM
+    ctx.evening_allowed = _evening_window_allowed(
+        temperature=ctx.temperature,
+        humidite=ctx.humidite,
+        water_balance=ctx.water_balance,
+        objectif_mm=ctx.deficit_mm_brut,
+        heat_stress_level=ctx.heat_stress_level,
+    )
+
+
+def _confidence(ctx: _WateringCtx, block_reason: str | None, mm_final: float) -> tuple[float, str, list]:
+    return _confidence_assessment(
+        phase_dominante=ctx.phase_dominante,
+        temperature=ctx.temperature,
+        humidite=ctx.humidite,
+        etp=ctx.etp,
+        weather_profile=ctx.weather_profile,
+        soil_profile=ctx.soil_profile,
+        heat_stress_level=ctx.heat_stress_level,
+        heat_stress_phase=ctx.heat_stress_phase,
+        block_reason=block_reason,
+        mm_final=mm_final,
+    )
+
+
+def _profile_for_blocked(ctx: _WateringCtx, block_reason: str) -> dict[str, Any]:
+    confidence_score, confidence_level, confidence_reasons = _confidence(ctx, block_reason, 0.0)
+    return _build_profile_payload(
+        deficit_mm_brut=0.0,
+        deficit_mm_ajuste=0.0,
+        mm_cible=0.0,
+        mm_final=0.0,
+        mm_detected=ctx.recent_watering_mm_7j,
+        type_arrosage="bloque",
+        arrosage_recommande=False,
+        arrosage_auto_autorise=False,
+        arrosage_conseille="personnalise",
+        passages=1,
+        pause_minutes=0,
+        fractionnement_reason=block_reason,
+        niveau_confiance=confidence_level,
+        confidence_score=confidence_score,
+        confidence_reasons=confidence_reasons,
+        raison_decision_base=f"Phase {ctx.phase_dominante}: arrosage bloqué.",
+        block_reason=block_reason,
+        fenetre_optimale="attendre",
+        niveau_action="surveiller",
+        risque_gazon="faible",
+        heat_stress_level=ctx.heat_stress_level,
+        heat_stress_phase=ctx.heat_stress_phase,
+        morning_start_minute=ctx.morning_start_minute,
+        acceptable_end_minute=ctx.acceptable_end_minute,
+        morning_end_minute=ctx.morning_end_minute,
+        temperature_band=ctx.temperature_band,
+        evening_allowed=False,
+        recent_watering_count=ctx.recent_watering_count,
+        recent_watering_mm_7j=ctx.recent_watering_mm_7j,
+        guardrail_min_mm=ctx.guardrail_min_mm,
+        guardrail_max_mm=ctx.guardrail_max_mm,
+        guardrail_reason=ctx.guardrail_reason,
+        seasonal_profile=ctx.seasonal_profile_payload,
+        cooldown_24h_hours=ctx.cooldown_24h_hours,
+    )
+
+
+def _profile_for_sursemis(ctx: _WateringCtx) -> dict[str, Any]:
+    opt_start, opt_end, acc_end, temp_band = _semis_window_bounds(
+        temperature=ctx.temperature,
+        humidite=ctx.humidite,
+        vent=ctx.vent,
+        pluie_24h=ctx.pluie_24h,
+        pluie_demain=ctx.pluie_demain,
+    )
+    resolved_policy = _resolve_phase_policy(
+        phase_dominante=ctx.phase_dominante,
+        sous_phase=ctx.sous_phase,
+    )
+    policy_key, sursemis_policy, transition_ready, tonte_count = _select_sursemis_policy(
+        history=ctx.history,
+        sous_phase=ctx.sous_phase,
+        sous_phase_age_days=ctx.sous_phase_age_days,
+        sous_phase_progression=ctx.sous_phase_progression,
+        hauteur_gazon=ctx.hauteur_gazon,
+        water_balance=ctx.water_balance,
+        pluie_24h=ctx.pluie_24h,
+        pluie_demain=ctx.pluie_demain,
+        pluie_probabilite_24h=ctx.pluie_probabilite_24h,
+        temperature=ctx.temperature,
+    )
+    sursemis_state = _sursemis_micro_apport_decision(
+        policy=sursemis_policy,
+        sous_phase=ctx.sous_phase,
+        transition_ready=transition_ready,
+        pluie_24h=ctx.pluie_24h,
+        pluie_demain=ctx.pluie_demain,
+        pluie_probabilite_24h=ctx.pluie_probabilite_24h,
+        bilan_hydrique_mm=ctx.bilan_hydrique_mm,
+        mm_detected_24h=float(ctx.water_balance.get("arrosage_recent_jour", 0.0) or 0.0),
+        temperature=ctx.temperature,
+        humidite=ctx.humidite,
+        humidite_sol=(
+            _to_float(ctx.water_balance.get("humidite_sol"))
+            if ctx.water_balance.get("humidite_sol") is not None
+            else None
+        ),
+        reserve_stock_mm=_to_float(ctx.water_balance.get("reserve_stock_mm")),
+        reserve_actuelle_mm=_to_float(ctx.water_balance.get("reserve_actuelle_mm")),
+        vent=ctx.vent,
+        soil_profile=ctx.soil_profile,
+    )
+    mm_cible = float(sursemis_state.get("surface_cycle_mm") or 0.0) if sursemis_state["allowed"] else 0.0
+    block_reason = sursemis_state["block_reason"]
+    mm_final = mm_cible
+    watering_strategy = str(sursemis_state.get("watering_strategy") or WATERING_STRATEGY_SEMIS_FREQUENT)
+    objective_scope = str(sursemis_state.get("objective_scope") or OBJECTIVE_SCOPE_SURFACE_CYCLE)
+    watering_stage = str(sursemis_state.get("watering_stage") or WATERING_STAGE_LEVEE)
+    surface_cycle_mm = float(sursemis_state.get("surface_cycle_mm") or mm_cible or 0.0)
+    daily_cycles_target = int(sursemis_state.get("daily_cycles_target") or 1)
+    cycle_spacing_minutes = int(sursemis_state.get("cycle_spacing_minutes") or 0)
+    type_arrosage = "manuel_frequent" if mm_final > 0 else ("bloque" if block_reason else "aucune_action")
+    if policy_key == "reprise_transition":
+        if not sursemis_state["allowed"]:
+            fenetre_optimale = "attendre"
+        elif ctx.now_minutes < opt_start:
+            fenetre_optimale = "ce_matin"
+        elif ctx.now_minutes < acc_end and (ctx.vent is None or ctx.vent < 15):
+            fenetre_optimale = "maintenant"
+        else:
+            fenetre_optimale = "attendre"
+        niveau_action = "surveiller"
+        risque_gazon = "modere" if transition_ready else "faible"
+    elif policy_key == "germination_stricte":
+        fenetre_optimale = "apres_pluie" if ctx.pluie_compensatrice or ctx.pluie_proche else (
+            "ce_matin" if ctx.now_minutes < opt_start
+            else "maintenant" if ctx.now_minutes < acc_end and (ctx.vent is None or ctx.vent < 15)
+            else "demain_matin"
+        )
+        niveau_action = "critique" if ctx.bilan_hydrique_mm <= -1.0 or ctx.pression_hydrique >= 1.8 else "a_faire"
+        risque_gazon = "eleve" if ctx.bilan_hydrique_mm <= -1.0 or ctx.pression_hydrique >= 2.0 else "modere"
+    else:
+        fenetre_optimale = "apres_pluie" if ctx.pluie_compensatrice or ctx.pluie_proche else (
+            "ce_matin" if ctx.now_minutes < opt_start
+            else "maintenant" if ctx.now_minutes < acc_end and (ctx.vent is None or ctx.vent < 15)
+            else "demain_matin"
+        )
+        niveau_action = "critique" if ctx.pression_hydrique >= 2.2 or ctx.bilan_hydrique_mm <= -1.5 else "a_faire"
+        risque_gazon = "eleve" if ctx.bilan_hydrique_mm <= -1.5 or ctx.pression_hydrique >= 2.5 else "modere"
+    if ctx.heat_stress_level in {"canicule", "extreme"}:
+        risque_gazon = _risk_from_rank(min(_risk_rank(risque_gazon) + 1, 2))
+    if ctx.vent is not None and ctx.vent >= 20:
+        risque_gazon = "eleve"
+    if ctx.hauteur_gazon is not None and ctx.hauteur_gazon >= 12:
+        risque_gazon = "eleve"
+    confidence_score, confidence_level, confidence_reasons = _confidence(ctx, block_reason, mm_final)
+    return _build_profile_payload(
+        deficit_mm_brut=ctx.deficit_mm_brut,
+        deficit_mm_ajuste=ctx.deficit_mm_ajuste,
+        mm_cible=mm_cible,
+        mm_final=mm_final,
+        mm_detected=ctx.recent_watering_mm_7j,
+        type_arrosage=type_arrosage,
+        arrosage_recommande=mm_final > 0,
+        arrosage_auto_autorise=False,
+        arrosage_conseille="personnalise",
+        passages=1,
+        pause_minutes=0,
+        fractionnement_reason="semis_surface_cycle" if mm_final > 0 else "sursemis_aucune_action",
+        niveau_confiance=confidence_level,
+        confidence_score=confidence_score,
+        confidence_reasons=confidence_reasons,
+        raison_decision_base=(
+            f"Sursemis / {ctx.sous_phase}: stratégie semis_frequent en cycle de surface, "
+            f"{daily_cycles_target} cycle(s)/jour cible(s), {cycle_spacing_minutes} min entre cycles."
+        ),
+        block_reason=block_reason,
+        fenetre_optimale=fenetre_optimale,
+        niveau_action=niveau_action,
+        risque_gazon=risque_gazon,
+        heat_stress_level=ctx.heat_stress_level,
+        heat_stress_phase=ctx.heat_stress_phase,
+        morning_start_minute=ctx.morning_start_minute,
+        acceptable_end_minute=ctx.acceptable_end_minute,
+        morning_end_minute=ctx.morning_end_minute,
+        temperature_band=temp_band,
+        evening_allowed=False,
+        recent_watering_count=ctx.recent_watering_count,
+        recent_watering_mm_7j=ctx.recent_watering_mm_7j,
+        guardrail_min_mm=ctx.guardrail_min_mm,
+        guardrail_max_mm=ctx.guardrail_max_mm,
+        guardrail_reason=ctx.guardrail_reason,
+        watering_strategy=watering_strategy,
+        objective_scope=objective_scope,
+        watering_stage=watering_stage,
+        surface_cycle_mm=surface_cycle_mm,
+        daily_cycles_target=daily_cycles_target,
+        cycle_spacing_minutes=cycle_spacing_minutes,
+        surface_moisture_target=str(sursemis_state.get("surface_moisture_target") or ""),
+        surface_dryness_risk=str(sursemis_state.get("surface_dryness_risk") or ""),
+        runoff_risk=str(sursemis_state.get("runoff_risk") or ""),
+        surface_saturation_level=sursemis_state.get("surface_saturation_level"),
+        surface_saturation_limit=sursemis_state.get("surface_saturation_limit"),
+        seeding_transition_ready=transition_ready,
+        seeding_block_reason=block_reason,
+        seasonal_profile=ctx.seasonal_profile_payload,
+        cooldown_24h_hours=ctx.cooldown_24h_hours,
+        extra={
+            "mm_detected_24h": sursemis_state["mm_detected_24h"],
+            "pluie_probabilite_24h": sursemis_state["pluie_probabilite_24h"],
+            "surface_sec": sursemis_state["surface_sec"],
+            "sursemis_micro_apport_allowed": sursemis_state["allowed"],
+            "sursemis_block_reason": block_reason,
+            "sursemis_reason": sursemis_state["reason"],
+            "sursemis_seuil_declencheur": sursemis_state["seuil_declencheur"],
+            "sursemis_policy": policy_key,
+            "sursemis_policy_mode": resolved_policy.selected_mode,
+            "sursemis_override_behavior": resolved_policy.override_behavior,
+            "sursemis_execution_preferred": (
+                resolved_policy.policy.execution.preferred if resolved_policy.policy.execution is not None else None
+            ),
+            "sursemis_daily_min_mm_per_cycle": (
+                resolved_policy.policy.daily_program.min_mm_per_cycle
+                if resolved_policy.policy.daily_program is not None else None
+            ),
+            "sursemis_daily_max_mm_per_cycle": (
+                resolved_policy.policy.daily_program.max_mm_per_cycle
+                if resolved_policy.policy.daily_program is not None else None
+            ),
+            "sursemis_daily_min_cycles": (
+                resolved_policy.policy.daily_program.min_cycles_per_day
+                if resolved_policy.policy.daily_program is not None else None
+            ),
+            "sursemis_daily_max_cycles": (
+                resolved_policy.policy.daily_program.max_cycles_per_day
+                if resolved_policy.policy.daily_program is not None else None
+            ),
+            "sursemis_transition_ready": transition_ready,
+            "sursemis_tonte_count": tonte_count,
+            "watering_strategy": watering_strategy,
+            "objective_scope": objective_scope,
+            "watering_stage": watering_stage,
+            "surface_cycle_mm": surface_cycle_mm,
+            "daily_cycles_target": daily_cycles_target,
+            "cycle_spacing_minutes": cycle_spacing_minutes,
+            "surface_moisture_target": sursemis_state.get("surface_moisture_target"),
+            "surface_dryness_risk": sursemis_state.get("surface_dryness_risk"),
+            "runoff_risk": sursemis_state.get("runoff_risk"),
+            "surface_saturation_level": sursemis_state.get("surface_saturation_level"),
+            "surface_saturation_limit": sursemis_state.get("surface_saturation_limit"),
+            "seeding_transition_ready": transition_ready,
+            "seeding_block_reason": block_reason,
+        },
+    )
+
+
+def _profile_for_traitement(ctx: _WateringCtx) -> dict[str, Any]:
+    resolved_policy = _resolve_phase_policy(
+        phase_dominante=ctx.phase_dominante,
+        sous_phase=ctx.sous_phase,
+        application_type=ctx.application_type,
+        pluie_proche=ctx.pluie_proche,
+        pluie_compensatrice=ctx.pluie_compensatrice,
+    )
+    target_range = resolved_policy.target_range
+    minimum = target_range.min_mm if target_range is not None else 0.0
+    maximum = target_range.max_mm if target_range is not None else 0.0
+    mm_cible = 0.0
+    block_reason = None
+    if resolved_policy.blocking.is_blocked:
+        block_reason = _normalize_public_block_reason(resolved_policy.blocking.reason)
+    elif resolved_policy.override_behavior == "block_watering":
+        block_reason = "application_foliaire"
+    else:
+        mm_cible = _clamp((ctx.besoin_court * 0.4) + (ctx.besoin_tendance * 0.08), minimum, maximum)
+        mm_cible = _apply_watering_floor_constraints(mm_cible, ctx.deficit_mm_brut, minimum)
+    mm_final = 0.0 if block_reason else mm_cible
+    passages = 1 if mm_final <= 4.0 else 2
+    pause_minutes = 25 if passages > 1 else 0
+    confidence_score, confidence_level, confidence_reasons = _confidence(ctx, block_reason, mm_final)
+    return _build_profile_payload(
+        deficit_mm_brut=ctx.deficit_mm_brut,
+        deficit_mm_ajuste=ctx.deficit_mm_ajuste,
+        mm_cible=mm_cible,
+        mm_final=mm_final,
+        mm_detected=float(ctx.water_balance.get("arrosage_recent_jour", 0.0) or 0.0),
+        type_arrosage=(
+            "bloque"
+            if block_reason in {"application_type_required", "unsupported_application_type", "application_foliaire"}
+            else "auto" if mm_final > 0 else "aucune_action"
+        ),
+        arrosage_recommande=mm_final > 0 and block_reason is None,
+        arrosage_auto_autorise=mm_final > 0 and block_reason is None,
+        arrosage_conseille="personnalise" if block_reason else "auto" if mm_final > 0 else "aucune_action",
+        passages=passages,
+        pause_minutes=pause_minutes,
+        fractionnement_reason="managed_fractionation" if passages > 1 else "single_pass",
+        niveau_confiance=confidence_level,
+        confidence_score=confidence_score,
+        confidence_reasons=confidence_reasons,
+        raison_decision_base=f"Traitement ({ctx.application_type or 'inconnu'}): application dépendante du produit.",
+        block_reason=block_reason,
+        fenetre_optimale="ce_matin" if mm_final > 0 else "attendre",
+        niveau_action="a_faire" if mm_final > 0 else "surveiller",
+        risque_gazon="faible" if mm_final > 0 else "modere",
+        heat_stress_level=ctx.heat_stress_level,
+        heat_stress_phase=ctx.heat_stress_phase,
+        morning_start_minute=ctx.morning_start_minute,
+        acceptable_end_minute=ctx.acceptable_end_minute,
+        morning_end_minute=ctx.morning_end_minute,
+        temperature_band=ctx.temperature_band,
+        evening_allowed=ctx.evening_allowed,
+        recent_watering_count=ctx.recent_watering_count,
+        recent_watering_mm_7j=float(ctx.water_balance.get("arrosage_recent_7j", 0.0) or 0.0),
+        guardrail_min_mm=ctx.guardrail_min_mm,
+        guardrail_max_mm=ctx.guardrail_max_mm,
+        guardrail_reason=ctx.guardrail_reason,
+        seasonal_profile=ctx.seasonal_profile_payload,
+        extra={"application_type": ctx.application_type},
+    )
+
+
+def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
+    resolved_policy = _resolve_phase_policy(
+        phase_dominante=ctx.phase_dominante,
+        sous_phase=ctx.sous_phase,
+        pluie_proche=ctx.pluie_proche,
+        pluie_compensatrice=ctx.pluie_compensatrice,
+    )
+    normal_weekly_range = resolved_policy.target_range
+    normal_execution = resolved_policy.policy.execution
+    weekly_min_mm = normal_weekly_range.min_mm if normal_weekly_range is not None else ctx.guardrail_min_mm
+    weekly_max_mm = normal_weekly_range.max_mm if normal_weekly_range is not None else ctx.guardrail_max_mm
+    min_session_mm = normal_execution.min_session_mm if normal_execution is not None else NORMAL_MIN_USEFUL_SESSION_MM
+    max_session_mm = normal_execution.max_session_mm if normal_execution is not None else None
+    rain_adjustment = min(ctx.pluie_support * 0.7, 5.0)
+    guardrail_min_effective = round(
+        _clamp(max(min_session_mm, ctx.guardrail_min_mm - rain_adjustment), weekly_min_mm, weekly_max_mm), 1,
+    )
+    guardrail_max_effective = round(
+        _clamp(
+            max(guardrail_min_effective + 4.0, ctx.guardrail_max_mm - rain_adjustment),
+            guardrail_min_effective + 4.0,
+            weekly_max_mm,
+        ), 1,
+    )
+    useful_threshold = max(min_session_mm, guardrail_min_effective * 0.5)
+    block_reason = None
+    if ctx.pluie_compensatrice or ctx.pluie_proche:
+        block_reason = "pluie_prevue_suffisante"
+    elif ctx.cooldown_24h_active:
+        block_reason = "cooldown_24h"
+    elif ctx.saturation_block:
+        block_reason = "sol_deja_humide"
+    elif ctx.humidite >= 85 or ctx.bilan_hydrique_mm > 0.5:
+        block_reason = "humidite_excessive"
+    elif (
+        ctx.recent_watering_count >= 3
+        and ctx.recent_watering_mm_7j >= ctx.guardrail_min_mm
+        and ctx.deficit_mm_ajuste < ctx.guardrail_min_mm
+    ):
+        block_reason = "garde_fou_hebdomadaire"
+    if ctx.deficit_mm_ajuste < useful_threshold:
+        mm_cible = 0.0
+    else:
+        upper_bound = min(guardrail_max_effective, ctx.deficit_mm_brut)
+        if upper_bound <= guardrail_min_effective:
+            mm_cible = upper_bound
+        else:
+            mm_cible = _clamp(
+                max(ctx.deficit_mm_ajuste, guardrail_min_effective),
+                guardrail_min_effective,
+                upper_bound,
+            )
+    if block_reason is not None:
+        mm_cible = 0.0
+    else:
+        mm_cible = _apply_watering_floor_constraints(mm_cible, ctx.deficit_mm_brut, min_session_mm)
+    mm_final = mm_cible
+    if not block_reason and mm_final > 0:
+        _reserve_max = float(ctx.water_balance.get("reserve_stock_max_mm") or 0.0)
+        _reserve_cur = float(ctx.water_balance.get("reserve_stock_mm") or 0.0)
+        _depletion_r = float(ctx.water_balance.get("depletion_ratio") or 0.0)
+        _mad = float(ctx.water_balance.get("mad_ratio") or 0.5)
+        if _reserve_max > 0 and _depletion_r < _mad:
+            _fill_cap = max(0.0, _reserve_max - _reserve_cur)
+            mm_cible = round(min(mm_cible, _fill_cap), 1)
+            mm_final = mm_cible
+    passages = 1
+    if max_session_mm is not None and mm_final > max_session_mm:
+        passages = max(passages, int(ceil(mm_final / max_session_mm)))
+    elif mm_final > 12.0:
+        passages = 2
+    if ctx.recent_watering_count >= 2 and ctx.recent_watering_mm_7j >= ctx.guardrail_max_mm:
+        passages = max(passages, 2)
+    pause_minutes = 25 if passages > 1 else 0
+    confidence_score, confidence_level, confidence_reasons = _confidence(ctx, block_reason, mm_final)
+    return _build_profile_payload(
+        deficit_mm_brut=ctx.deficit_mm_brut,
+        deficit_mm_ajuste=ctx.deficit_mm_ajuste,
+        mm_cible=mm_cible,
+        mm_final=mm_final,
+        mm_detected=float(ctx.water_balance.get("arrosage_recent_jour", 0.0) or 0.0),
+        type_arrosage="bloque" if block_reason is not None else ("auto" if mm_final > 0 else "aucune_action"),
+        arrosage_recommande=mm_final > 0 and block_reason is None,
+        arrosage_auto_autorise=mm_final > 0 and block_reason is None,
+        arrosage_conseille="personnalise" if block_reason is not None else "aucune_action" if mm_final <= 0 else "auto",
+        passages=passages,
+        pause_minutes=pause_minutes,
+        fractionnement_reason="deep_watering_fractionation" if passages > 1 else "single_pass_deep_watering",
+        niveau_confiance=confidence_level,
+        confidence_score=confidence_score,
+        confidence_reasons=confidence_reasons,
+        raison_decision_base="Mode Normal: arrosage profond uniquement si le déficit est utile.",
+        block_reason=block_reason,
+        fenetre_optimale="maintenant" if ctx.morning_start_minute <= ctx.now_minutes < ctx.acceptable_end_minute else "ce_matin",
+        niveau_action="a_faire" if mm_final > 0 else "surveiller",
+        risque_gazon="modere" if ctx.deficit_mm_brut >= 5 else "faible",
+        heat_stress_level=ctx.heat_stress_level,
+        heat_stress_phase=ctx.heat_stress_phase,
+        morning_start_minute=ctx.morning_start_minute,
+        acceptable_end_minute=ctx.acceptable_end_minute,
+        morning_end_minute=ctx.morning_end_minute,
+        temperature_band=ctx.temperature_band,
+        evening_allowed=ctx.evening_allowed,
+        recent_watering_count=ctx.recent_watering_count,
+        recent_watering_mm_7j=ctx.recent_watering_mm_7j,
+        guardrail_min_mm=guardrail_min_effective,
+        guardrail_max_mm=guardrail_max_effective,
+        guardrail_reason=f"{ctx.guardrail_reason}; pluie_support={ctx.pluie_support:.1f}",
+        seasonal_profile=ctx.seasonal_profile_payload,
+        cooldown_24h_hours=ctx.cooldown_24h_hours,
+    )
+
+
+def _profile_for_agro_phases(ctx: _WateringCtx) -> dict[str, Any]:
+    resolved_policy = _resolve_phase_policy(
+        phase_dominante=ctx.phase_dominante,
+        sous_phase=ctx.sous_phase,
+        pluie_proche=ctx.pluie_proche,
+        pluie_compensatrice=ctx.pluie_compensatrice,
+        temperature=ctx.temperature,
+        humidite=ctx.humidite,
+        saturation_block=ctx.saturation_block,
+    )
+    minimum = resolved_policy.target_range.min_mm if resolved_policy.target_range is not None else 0.0
+    maximum = resolved_policy.target_range.max_mm if resolved_policy.target_range is not None else 0.0
+    if ctx.phase_dominante == "Fertilisation":
+        mm_cible = _clamp((ctx.besoin_court * 0.4) + (ctx.besoin_tendance * 0.08), minimum, maximum)
+    elif ctx.phase_dominante == "Biostimulant":
+        mm_cible = _clamp((ctx.besoin_court * 0.5) + (ctx.besoin_tendance * 0.08), minimum, maximum)
+    elif ctx.phase_dominante == "Agent Mouillant":
+        mm_cible = _clamp((ctx.besoin_court * 0.55) + (ctx.besoin_tendance * 0.1), minimum, maximum)
+    else:
+        mm_cible = _clamp((ctx.besoin_court * 0.6) + (ctx.besoin_tendance * 0.1), minimum, maximum)
+    block_reason = None
+    if resolved_policy is not None and resolved_policy.blocking.is_blocked:
+        block_reason = _normalize_public_block_reason(resolved_policy.blocking.reason)
+    elif ctx.pluie_compensatrice or ctx.pluie_proche:
+        block_reason = "pluie_prevue_suffisante"
+    elif ctx.saturation_block:
+        block_reason = "sol_deja_humide"
+    elif ctx.humidite >= 85:
+        block_reason = "humidite_elevee"
+    if block_reason is None:
+        if resolved_policy is not None and resolved_policy.target_range is not None:
+            mm_cible = _apply_watering_floor_constraints(mm_cible, ctx.deficit_mm_brut, resolved_policy.target_range.min_mm)
+        else:
+            mm_cible = _apply_mode_watering_constraints(mm_cible, ctx.deficit_mm_brut, ctx.phase_dominante)
+    mm_final = 0.0 if block_reason else mm_cible
+    if (
+        resolved_policy is not None
+        and resolved_policy.policy.execution is not None
+        and resolved_policy.policy.execution.preferred == "single_pass"
+    ):
+        passages = 1
+    else:
+        passages = 1 if mm_final <= 4.0 else 2
+    pause_minutes = 25 if passages > 1 else 0
+    fenetre_optimale = "soir" if ctx.evening_allowed and ctx.temperature >= 24 and ctx.now_hour < EVENING_END_HOUR else "ce_matin"
+    confidence_score, confidence_level, confidence_reasons = _confidence(ctx, block_reason, mm_final)
+    return _build_profile_payload(
+        deficit_mm_brut=ctx.deficit_mm_brut,
+        deficit_mm_ajuste=ctx.deficit_mm_ajuste,
+        mm_cible=mm_cible,
+        mm_final=mm_final,
+        mm_detected=float(ctx.water_balance.get("arrosage_recent_jour", 0.0) or 0.0),
+        type_arrosage="auto" if mm_final > 0 else "aucune_action",
+        arrosage_recommande=mm_final > 0,
+        arrosage_auto_autorise=mm_final > 0,
+        arrosage_conseille="auto" if ctx.phase_dominante == "Fertilisation" else "personnalise",
+        passages=passages,
+        pause_minutes=pause_minutes,
+        fractionnement_reason="managed_fractionation" if passages > 1 else "single_pass",
+        niveau_confiance=confidence_level,
+        confidence_score=confidence_score,
+        confidence_reasons=confidence_reasons,
+        raison_decision_base=f"{ctx.phase_dominante}: arrosage léger adapté.",
+        block_reason=block_reason,
+        fenetre_optimale=fenetre_optimale if mm_final > 0 else "attendre",
+        niveau_action="a_faire" if mm_final > 0 else "surveiller",
+        risque_gazon="faible" if mm_final > 0 else "modere",
+        heat_stress_level=ctx.heat_stress_level,
+        heat_stress_phase=ctx.heat_stress_phase,
+        morning_start_minute=ctx.morning_start_minute,
+        acceptable_end_minute=ctx.acceptable_end_minute,
+        morning_end_minute=ctx.morning_end_minute,
+        temperature_band=ctx.temperature_band,
+        evening_allowed=ctx.evening_allowed,
+        recent_watering_count=ctx.recent_watering_count,
+        recent_watering_mm_7j=float(ctx.water_balance.get("arrosage_recent_7j", 0.0) or 0.0),
+        guardrail_min_mm=ctx.guardrail_min_mm,
+        guardrail_max_mm=ctx.guardrail_max_mm,
+        guardrail_reason=ctx.guardrail_reason,
+        seasonal_profile=ctx.seasonal_profile_payload,
+        cooldown_24h_hours=ctx.cooldown_24h_hours,
+    )
+
+
+def _profile_for_generic(ctx: _WateringCtx) -> dict[str, Any]:
+    mm_cible = _clamp(max(ctx.deficit_mm_ajuste, 5.0), 5.0, 20.0)
+    block_reason = None
+    if ctx.pluie_compensatrice or ctx.pluie_proche:
+        block_reason = "pluie_prevue_suffisante"
+    elif ctx.saturation_block:
+        block_reason = "sol_deja_humide"
+    elif ctx.humidite >= 85:
+        block_reason = "humidite_elevee"
+    if block_reason is None:
+        mm_cible = _apply_mode_watering_constraints(mm_cible, ctx.deficit_mm_brut, ctx.phase_dominante)
+    mm_final = 0.0 if block_reason else mm_cible
+    passages = 1 if mm_final <= 12.0 else 2
+    pause_minutes = 25 if passages > 1 else 0
+    confidence_score, confidence_level, confidence_reasons = _confidence(ctx, block_reason, mm_final)
+    return _build_profile_payload(
+        deficit_mm_brut=ctx.deficit_mm_brut,
+        deficit_mm_ajuste=ctx.deficit_mm_ajuste,
+        mm_cible=mm_cible,
+        mm_final=mm_final,
+        mm_detected=float(ctx.water_balance.get("arrosage_recent_jour", 0.0) or 0.0),
+        type_arrosage="aucune_action" if mm_final <= 0 else "auto",
+        arrosage_recommande=mm_final > 0,
+        arrosage_auto_autorise=mm_final > 0,
+        arrosage_conseille="personnalise",
+        passages=passages,
+        pause_minutes=pause_minutes,
+        fractionnement_reason="generic_deep_watering" if passages > 1 else "single_pass",
+        niveau_confiance=confidence_level,
+        confidence_score=confidence_score,
+        confidence_reasons=confidence_reasons,
+        raison_decision_base=f"Phase {ctx.phase_dominante}: arrosage maîtrisé.",
+        block_reason=block_reason,
+        fenetre_optimale="soir"
+        if ctx.evening_allowed and ctx.temperature >= 24 and ctx.now_hour < EVENING_END_HOUR
+        else ("ce_matin" if mm_final > 0 else "attendre"),
+        niveau_action="a_faire" if mm_final > 0 else "surveiller",
+        risque_gazon="faible",
+        heat_stress_level=ctx.heat_stress_level,
+        heat_stress_phase=ctx.heat_stress_phase,
+        morning_start_minute=ctx.morning_start_minute,
+        acceptable_end_minute=ctx.acceptable_end_minute,
+        morning_end_minute=ctx.morning_end_minute,
+        temperature_band=ctx.temperature_band,
+        evening_allowed=ctx.evening_allowed,
+        recent_watering_count=ctx.recent_watering_count,
+        recent_watering_mm_7j=float(ctx.water_balance.get("arrosage_recent_7j", 0.0) or 0.0),
+        guardrail_min_mm=ctx.guardrail_min_mm,
+        guardrail_max_mm=ctx.guardrail_max_mm,
+        guardrail_reason=ctx.guardrail_reason,
+        seasonal_profile=ctx.seasonal_profile_payload,
+    )
+
+
 def compute_watering_profile(
     phase_dominante: str,
     sous_phase: str,
@@ -1066,729 +1833,48 @@ def compute_watering_profile(
     today = today or _current_date()
     weather_profile = weather_profile or {}
     history = [item for item in (history or []) if isinstance(item, dict)]
-    pluie_demain = pluie_demain or 0.0
-    pluie_j2 = pluie_j2 or 0.0
-    pluie_3j = pluie_3j or 0.0
-    pluie_probabilite_max_3j = pluie_probabilite_max_3j or 0.0
-    pluie_24h = pluie_24h or 0.0
-    pluie_probabilite_24h = _to_float(weather_profile.get("weather_precipitation_probability"))
-    pluie_probabilite_24h = pluie_probabilite_24h if pluie_probabilite_24h is not None else 0.0
-    humidite = humidite or 0.0
-    temperature = temperature or 0.0
-    etp = etp or 0.0
-    vent = _to_float(weather_profile.get("weather_wind_speed"))
-    soil_profile = (type_sol or "limoneux").strip().lower()
-    recent_watering_count = compute_recent_watering_count(history, today=today, days=7) if history else 0
-    latest_watering_dt = _latest_watering_datetime(history) if history else None
-    now = _current_datetime()
-    cooldown_24h_hours: float | None = None
-    cooldown_24h_active = False
-    if phase_dominante == "Normal" and latest_watering_dt is not None:
-        delta_hours = (now - latest_watering_dt.astimezone(now.tzinfo)).total_seconds() / 3600.0
-        if delta_hours >= 0:
-            cooldown_24h_hours = delta_hours
-            cooldown_24h_active = delta_hours < 24.0
-
-    bilan_hydrique_mm = _reference_hydric_balance_mm(water_balance)
-    deficit_jour = water_balance.get("deficit_jour", 0.0)
-    deficit_3j = water_balance.get("deficit_3j", 0.0)
-    deficit_7j = water_balance.get("deficit_7j", 0.0)
-    recent_watering_mm_7j = float(water_balance.get("arrosage_recent_7j", 0.0) or 0.0)
-    deficit_mm_brut = max(0.0, max(deficit_jour, deficit_3j, deficit_7j))
-    pluie_support = max(
-        0.0,
-        (pluie_24h * 0.35)
-        + (pluie_demain * 0.35)
-        + (pluie_j2 * 0.2)
-        + (pluie_3j * 0.1),
-    )
-    historique_support = min(recent_watering_mm_7j * 0.2, deficit_mm_brut * 0.5)
-    humidite_penalty = 0.0
-    if humidite >= 85:
-        humidite_penalty = deficit_mm_brut * 0.2
-    elif humidite >= 75:
-        humidite_penalty = deficit_mm_brut * 0.1
-    deficit_mm_ajuste = max(0.0, deficit_mm_brut - pluie_support - historique_support - humidite_penalty)
-    heat_stress_level = _heat_stress_level(
-        temperature=temperature,
-        etp=etp,
-        humidite=humidite,
-        weather_profile=weather_profile,
-        deficit_mm_brut=deficit_mm_brut,
-    )
-    heat_stress_phase = _heat_stress_phase(
-        heat_stress_level=heat_stress_level,
-        temperature=temperature,
-        etp=etp,
-        pluie_demain=pluie_demain,
-        pluie_3j=pluie_3j,
-        recent_watering_count=recent_watering_count,
-        recent_watering_mm_7j=recent_watering_mm_7j,
-    )
-    guardrail_min_mm, guardrail_max_mm, guardrail_reason = _dynamic_weekly_guardrail(
-        today=today,
+    ctx = _build_watering_ctx(
         phase_dominante=phase_dominante,
-        heat_stress_phase=heat_stress_phase,
-        soil_profile=soil_profile,
-    )
-    seasonal_profile_payload = _seasonal_profile_payload(today)
-    optimal_start_minute, optimal_end_minute, acceptable_end_minute, temperature_band = _morning_window_bounds(
-        phase_dominante=phase_dominante,
-        temperature=temperature,
-    )
-    if phase_dominante == "Hivernage" or is_active_rain_weather(weather_profile):
-        if phase_dominante == "Hivernage":
-            resolved_policy = _resolve_phase_policy(
-                phase_dominante=phase_dominante,
-                sous_phase=sous_phase,
-                prolonged_drought=False,
-            )
-            block_reason = _normalize_public_block_reason(resolved_policy.blocking.reason) or "mode_bloque"
-        else:
-            block_reason = "pluie_active"
-        confidence_score, confidence_level, confidence_reasons = _confidence_assessment(
-            phase_dominante=phase_dominante,
-            temperature=temperature,
-            humidite=humidite,
-            etp=etp,
-            weather_profile=weather_profile,
-            soil_profile=soil_profile,
-            heat_stress_level=heat_stress_level,
-            heat_stress_phase=heat_stress_phase,
-            block_reason=block_reason,
-            mm_final=0.0,
-        )
-        return _build_profile_payload(
-            deficit_mm_brut=0.0,
-            deficit_mm_ajuste=0.0,
-            mm_cible=0.0,
-            mm_final=0.0,
-            mm_detected=recent_watering_mm_7j,
-            type_arrosage="bloque",
-            arrosage_recommande=False,
-            arrosage_auto_autorise=False,
-            arrosage_conseille="personnalise",
-            passages=1,
-            pause_minutes=0,
-            fractionnement_reason=block_reason,
-            niveau_confiance=confidence_level,
-            confidence_score=confidence_score,
-            confidence_reasons=confidence_reasons,
-            raison_decision_base=f"Phase {phase_dominante}: arrosage bloqué.",
-            block_reason=block_reason,
-            fenetre_optimale="attendre",
-            niveau_action="surveiller",
-            risque_gazon="faible",
-            heat_stress_level=heat_stress_level,
-            heat_stress_phase=heat_stress_phase,
-            morning_start_minute=optimal_start_minute,
-            acceptable_end_minute=acceptable_end_minute,
-            morning_end_minute=optimal_end_minute,
-            temperature_band=temperature_band,
-            evening_allowed=False,
-            recent_watering_count=recent_watering_count,
-            recent_watering_mm_7j=recent_watering_mm_7j,
-            guardrail_min_mm=guardrail_min_mm,
-            guardrail_max_mm=guardrail_max_mm,
-            guardrail_reason=guardrail_reason,
-            seasonal_profile=seasonal_profile_payload,
-            cooldown_24h_hours=cooldown_24h_hours,
-        )
-
-    besoin_court, besoin_tendance, pression_hydrique = _hydraulic_pressure(
-        bilan_hydrique_mm, deficit_3j, deficit_7j
-    )
-    pluie_compensatrice, pluie_proche = _rain_signals(
-        objective_reference_mm=deficit_mm_brut,
-        pluie_24h=pluie_24h,
-        pluie_demain=pluie_demain,
-        pluie_j2=pluie_j2,
-        pluie_3j=pluie_3j,
-        pluie_probabilite_max_3j=pluie_probabilite_max_3j,
-    )
-    morning_start_minute = optimal_start_minute
-    morning_end_minute = optimal_end_minute
-    now_hour = now.hour
-    now_minutes = now.hour * 60 + now.minute
-    saturation_block = phase_dominante != "Sursemis" and bilan_hydrique_mm > SATURATION_BILAN_HYDRIQUE_MM
-    evening_allowed = _evening_window_allowed(
-        temperature=temperature,
-        humidite=humidite,
+        sous_phase=sous_phase,
         water_balance=water_balance,
-        objectif_mm=deficit_mm_brut,
-        heat_stress_level=heat_stress_level,
-    )
-    if phase_dominante == "Sursemis":
-        optimal_start_minute, optimal_end_minute, acceptable_end_minute, temperature_band = _semis_window_bounds(
-            temperature=temperature,
-            humidite=humidite,
-            vent=vent,
-            pluie_24h=pluie_24h,
-            pluie_demain=pluie_demain,
-        )
-        resolved_policy = _resolve_phase_policy(
-            phase_dominante=phase_dominante,
-            sous_phase=sous_phase,
-        )
-        policy_key, sursemis_policy, transition_ready, tonte_count = _select_sursemis_policy(
-            history=history,
-            sous_phase=sous_phase,
-            sous_phase_age_days=sous_phase_age_days,
-            sous_phase_progression=sous_phase_progression,
-            hauteur_gazon=hauteur_gazon,
-            water_balance=water_balance,
-            pluie_24h=pluie_24h,
-            pluie_demain=pluie_demain,
-            pluie_probabilite_24h=pluie_probabilite_24h,
-            temperature=temperature,
-        )
-        sursemis_state = _sursemis_micro_apport_decision(
-            policy=sursemis_policy,
-            sous_phase=sous_phase,
-            transition_ready=transition_ready,
-            pluie_24h=pluie_24h,
-            pluie_demain=pluie_demain,
-            pluie_probabilite_24h=pluie_probabilite_24h,
-            bilan_hydrique_mm=_reference_hydric_balance_mm(water_balance),
-            mm_detected_24h=float(water_balance.get("arrosage_recent_jour", 0.0) or 0.0),
-            temperature=temperature,
-            humidite=humidite,
-            humidite_sol=(
-                _to_float(water_balance.get("humidite_sol"))
-                if water_balance.get("humidite_sol") is not None
-                else None
-            ),
-            reserve_stock_mm=_to_float(water_balance.get("reserve_stock_mm")),
-            reserve_actuelle_mm=_to_float(water_balance.get("reserve_actuelle_mm")),
-            vent=vent,
-            soil_profile=soil_profile,
-        )
-        mm_cible = float(sursemis_state.get("surface_cycle_mm") or 0.0) if sursemis_state["allowed"] else 0.0
-        block_reason = sursemis_state["block_reason"]
-        mm_final = mm_cible
-        watering_strategy = str(sursemis_state.get("watering_strategy") or WATERING_STRATEGY_SEMIS_FREQUENT)
-        objective_scope = str(sursemis_state.get("objective_scope") or OBJECTIVE_SCOPE_SURFACE_CYCLE)
-        watering_stage = str(sursemis_state.get("watering_stage") or WATERING_STAGE_LEVEE)
-        surface_cycle_mm = float(sursemis_state.get("surface_cycle_mm") or mm_cible or 0.0)
-        daily_cycles_target = int(sursemis_state.get("daily_cycles_target") or 1)
-        cycle_spacing_minutes = int(sursemis_state.get("cycle_spacing_minutes") or 0)
-        type_arrosage = "manuel_frequent" if mm_final > 0 else ("bloque" if block_reason else "aucune_action")
-        arrosage_auto = False
-        passages = 1
-        pause_minutes = 0
-        if policy_key == "reprise_transition":
-            if not sursemis_state["allowed"]:
-                fenetre_optimale = "attendre"
-            elif now_minutes < optimal_start_minute:
-                fenetre_optimale = "ce_matin"
-            elif now_minutes < acceptable_end_minute and (vent is None or vent < 15):
-                fenetre_optimale = "maintenant"
-            else:
-                fenetre_optimale = "attendre"
-            niveau_action = "surveiller"
-            risque_gazon = "modere" if transition_ready else "faible"
-        elif policy_key == "germination_stricte":
-            fenetre_optimale = "apres_pluie" if pluie_compensatrice or pluie_proche else (
-                "ce_matin"
-                if now_minutes < optimal_start_minute
-                else "maintenant"
-                if now_minutes < acceptable_end_minute and (vent is None or vent < 15)
-                else "demain_matin"
-            )
-            niveau_action = "critique" if bilan_hydrique_mm <= -1.0 or pression_hydrique >= 1.8 else "a_faire"
-            risque_gazon = "eleve" if bilan_hydrique_mm <= -1.0 or pression_hydrique >= 2.0 else "modere"
-        else:
-            fenetre_optimale = "apres_pluie" if pluie_compensatrice or pluie_proche else (
-                "ce_matin"
-                if now_minutes < optimal_start_minute
-                else "maintenant"
-                if now_minutes < acceptable_end_minute and (vent is None or vent < 15)
-                else "demain_matin"
-            )
-            niveau_action = "critique" if pression_hydrique >= 2.2 or bilan_hydrique_mm <= -1.5 else "a_faire"
-            risque_gazon = "eleve" if bilan_hydrique_mm <= -1.5 or pression_hydrique >= 2.5 else "modere"
-        if heat_stress_level in {"canicule", "extreme"}:
-            risque_gazon = _risk_from_rank(min(_risk_rank(risque_gazon) + 1, 2))
-        if vent is not None and vent >= 20:
-            risque_gazon = "eleve"
-        if hauteur_gazon is not None and hauteur_gazon >= 12:
-            risque_gazon = "eleve"
-        confidence_score, confidence_level, confidence_reasons = _confidence_assessment(
-            phase_dominante=phase_dominante,
-            temperature=temperature,
-            humidite=humidite,
-            etp=etp,
-            weather_profile=weather_profile,
-            soil_profile=soil_profile,
-            heat_stress_level=heat_stress_level,
-            heat_stress_phase=heat_stress_phase,
-            block_reason=block_reason,
-            mm_final=mm_final,
-        )
-        return _build_profile_payload(
-            deficit_mm_brut=deficit_mm_brut,
-            deficit_mm_ajuste=deficit_mm_ajuste,
-            mm_cible=mm_cible,
-            mm_final=mm_final,
-            mm_detected=recent_watering_mm_7j,
-            type_arrosage=type_arrosage,
-            arrosage_recommande=mm_final > 0,
-            arrosage_auto_autorise=False,
-            arrosage_conseille="personnalise",
-            passages=passages,
-            pause_minutes=pause_minutes,
-            fractionnement_reason="semis_surface_cycle" if mm_final > 0 else "sursemis_aucune_action",
-            niveau_confiance=confidence_level,
-            confidence_score=confidence_score,
-            confidence_reasons=confidence_reasons,
-            raison_decision_base=(
-                f"Sursemis / {sous_phase}: stratégie semis_frequent en cycle de surface, "
-                f"{daily_cycles_target} cycle(s)/jour cible(s), {cycle_spacing_minutes} min entre cycles."
-            ),
-            block_reason=block_reason,
-            fenetre_optimale=fenetre_optimale,
-            niveau_action=niveau_action,
-            risque_gazon=risque_gazon,
-            heat_stress_level=heat_stress_level,
-            heat_stress_phase=heat_stress_phase,
-            morning_start_minute=morning_start_minute,
-            acceptable_end_minute=acceptable_end_minute,
-            morning_end_minute=morning_end_minute,
-            temperature_band=temperature_band,
-            evening_allowed=False,
-            recent_watering_count=recent_watering_count,
-            recent_watering_mm_7j=recent_watering_mm_7j,
-            guardrail_min_mm=guardrail_min_mm,
-            guardrail_max_mm=guardrail_max_mm,
-            guardrail_reason=guardrail_reason,
-            watering_strategy=watering_strategy,
-            objective_scope=objective_scope,
-            watering_stage=watering_stage,
-            surface_cycle_mm=surface_cycle_mm,
-            daily_cycles_target=daily_cycles_target,
-            cycle_spacing_minutes=cycle_spacing_minutes,
-            surface_moisture_target=str(sursemis_state.get("surface_moisture_target") or ""),
-            surface_dryness_risk=str(sursemis_state.get("surface_dryness_risk") or ""),
-            runoff_risk=str(sursemis_state.get("runoff_risk") or ""),
-            surface_saturation_level=sursemis_state.get("surface_saturation_level"),
-            surface_saturation_limit=sursemis_state.get("surface_saturation_limit"),
-            seeding_transition_ready=transition_ready,
-            seeding_block_reason=block_reason,
-            seasonal_profile=seasonal_profile_payload,
-            cooldown_24h_hours=cooldown_24h_hours,
-            extra={
-                "mm_detected_24h": sursemis_state["mm_detected_24h"],
-                "pluie_probabilite_24h": sursemis_state["pluie_probabilite_24h"],
-                "surface_sec": sursemis_state["surface_sec"],
-                "sursemis_micro_apport_allowed": sursemis_state["allowed"],
-                "sursemis_block_reason": block_reason,
-                "sursemis_reason": sursemis_state["reason"],
-                "sursemis_seuil_declencheur": sursemis_state["seuil_declencheur"],
-                "sursemis_policy": policy_key,
-                "sursemis_policy_mode": resolved_policy.selected_mode,
-                "sursemis_override_behavior": resolved_policy.override_behavior,
-                "sursemis_execution_preferred": (
-                    resolved_policy.policy.execution.preferred if resolved_policy.policy.execution is not None else None
-                ),
-                "sursemis_daily_min_mm_per_cycle": (
-                    resolved_policy.policy.daily_program.min_mm_per_cycle
-                    if resolved_policy.policy.daily_program is not None
-                    else None
-                ),
-                "sursemis_daily_max_mm_per_cycle": (
-                    resolved_policy.policy.daily_program.max_mm_per_cycle
-                    if resolved_policy.policy.daily_program is not None
-                    else None
-                ),
-                "sursemis_daily_min_cycles": (
-                    resolved_policy.policy.daily_program.min_cycles_per_day
-                    if resolved_policy.policy.daily_program is not None
-                    else None
-                ),
-                "sursemis_daily_max_cycles": (
-                    resolved_policy.policy.daily_program.max_cycles_per_day
-                    if resolved_policy.policy.daily_program is not None
-                    else None
-                ),
-                "sursemis_transition_ready": transition_ready,
-                "sursemis_tonte_count": tonte_count,
-                "watering_strategy": watering_strategy,
-                "objective_scope": objective_scope,
-                "watering_stage": watering_stage,
-                "surface_cycle_mm": surface_cycle_mm,
-                "daily_cycles_target": daily_cycles_target,
-                "cycle_spacing_minutes": cycle_spacing_minutes,
-                "surface_moisture_target": sursemis_state.get("surface_moisture_target"),
-                "surface_dryness_risk": sursemis_state.get("surface_dryness_risk"),
-                "runoff_risk": sursemis_state.get("runoff_risk"),
-                "surface_saturation_level": sursemis_state.get("surface_saturation_level"),
-                "surface_saturation_limit": sursemis_state.get("surface_saturation_limit"),
-                "seeding_transition_ready": transition_ready,
-                "seeding_block_reason": block_reason,
-            },
-        )
-
-    if phase_dominante == "Traitement":
-        resolved_policy = _resolve_phase_policy(
-            phase_dominante=phase_dominante,
-            sous_phase=sous_phase,
-            application_type=application_type,
-            pluie_proche=pluie_proche,
-            pluie_compensatrice=pluie_compensatrice,
-        )
-        target_range = resolved_policy.target_range
-        minimum = target_range.min_mm if target_range is not None else 0.0
-        maximum = target_range.max_mm if target_range is not None else 0.0
-        mm_cible = 0.0
-        block_reason = None
-        if resolved_policy.blocking.is_blocked:
-            block_reason = _normalize_public_block_reason(resolved_policy.blocking.reason)
-        elif resolved_policy.override_behavior == "block_watering":
-            block_reason = "application_foliaire"
-        else:
-            mm_cible = _clamp((besoin_court * 0.4) + (besoin_tendance * 0.08), minimum, maximum)
-            mm_cible = _apply_watering_floor_constraints(mm_cible, deficit_mm_brut, minimum)
-        mm_final = 0.0 if block_reason else mm_cible
-        passages = 1 if mm_final <= 4.0 else 2
-        pause_minutes = 25 if passages > 1 else 0
-        confidence_score, confidence_level, confidence_reasons = _confidence_assessment(
-            phase_dominante=phase_dominante,
-            temperature=temperature,
-            humidite=humidite,
-            etp=etp,
-            weather_profile=weather_profile,
-            soil_profile=soil_profile,
-            heat_stress_level=heat_stress_level,
-            heat_stress_phase=heat_stress_phase,
-            block_reason=block_reason,
-            mm_final=mm_final,
-        )
-        return _build_profile_payload(
-            deficit_mm_brut=deficit_mm_brut,
-            deficit_mm_ajuste=deficit_mm_ajuste,
-            mm_cible=mm_cible,
-            mm_final=mm_final,
-            mm_detected=float(water_balance.get("arrosage_recent_jour", 0.0) or 0.0),
-            type_arrosage=(
-                "bloque"
-                if block_reason in {"application_type_required", "unsupported_application_type", "application_foliaire"}
-                else "auto" if mm_final > 0 else "aucune_action"
-            ),
-            arrosage_recommande=mm_final > 0 and block_reason is None,
-            arrosage_auto_autorise=mm_final > 0 and block_reason is None,
-            arrosage_conseille="personnalise" if block_reason else "auto" if mm_final > 0 else "aucune_action",
-            passages=passages,
-            pause_minutes=pause_minutes,
-            fractionnement_reason="managed_fractionation" if passages > 1 else "single_pass",
-            niveau_confiance=confidence_level,
-            confidence_score=confidence_score,
-            confidence_reasons=confidence_reasons,
-            raison_decision_base=f"Traitement ({application_type or 'inconnu'}): application dépendante du produit.",
-            block_reason=block_reason,
-            fenetre_optimale="ce_matin" if mm_final > 0 else "attendre",
-            niveau_action="a_faire" if mm_final > 0 else "surveiller",
-            risque_gazon="faible" if mm_final > 0 else "modere",
-            heat_stress_level=heat_stress_level,
-            heat_stress_phase=heat_stress_phase,
-            morning_start_minute=morning_start_minute,
-            acceptable_end_minute=acceptable_end_minute,
-            morning_end_minute=morning_end_minute,
-            temperature_band=temperature_band,
-            evening_allowed=evening_allowed,
-            recent_watering_count=recent_watering_count,
-            recent_watering_mm_7j=float(water_balance.get("arrosage_recent_7j", 0.0) or 0.0),
-            guardrail_min_mm=guardrail_min_mm,
-            guardrail_max_mm=guardrail_max_mm,
-            guardrail_reason=guardrail_reason,
-            seasonal_profile=seasonal_profile_payload,
-            extra={"application_type": application_type},
-        )
-
-    if phase_dominante == "Normal":
-        resolved_policy = _resolve_phase_policy(
-            phase_dominante=phase_dominante,
-            sous_phase=sous_phase,
-            pluie_proche=pluie_proche,
-            pluie_compensatrice=pluie_compensatrice,
-        )
-        normal_weekly_range = resolved_policy.target_range
-        normal_execution = resolved_policy.policy.execution
-        weekly_min_mm = normal_weekly_range.min_mm if normal_weekly_range is not None else guardrail_min_mm
-        weekly_max_mm = normal_weekly_range.max_mm if normal_weekly_range is not None else guardrail_max_mm
-        min_session_mm = normal_execution.min_session_mm if normal_execution is not None else NORMAL_MIN_USEFUL_SESSION_MM
-        max_session_mm = normal_execution.max_session_mm if normal_execution is not None else None
-        rain_adjustment = min(pluie_support * 0.7, 5.0)
-        guardrail_min_effective = round(
-            _clamp(max(min_session_mm, guardrail_min_mm - rain_adjustment), weekly_min_mm, weekly_max_mm),
-            1,
-        )
-        guardrail_max_effective = round(
-            _clamp(
-                max(guardrail_min_effective + 4.0, guardrail_max_mm - rain_adjustment),
-                guardrail_min_effective + 4.0,
-                weekly_max_mm,
-            ),
-            1,
-        )
-        useful_threshold = max(min_session_mm, guardrail_min_effective * 0.5)
-        block_reason = None
-        if pluie_compensatrice or pluie_proche:
-            block_reason = "pluie_prevue_suffisante"
-        elif cooldown_24h_active:
-            block_reason = "cooldown_24h"
-        elif saturation_block:
-            block_reason = "sol_deja_humide"
-        elif humidite >= 85 or bilan_hydrique_mm > 0.5:
-            block_reason = "humidite_excessive"
-        elif (
-            recent_watering_count >= 3
-            and recent_watering_mm_7j >= guardrail_min_mm
-            and deficit_mm_ajuste < guardrail_min_mm
-        ):
-            block_reason = "garde_fou_hebdomadaire"
-        if deficit_mm_ajuste < useful_threshold:
-            mm_cible = 0.0
-        else:
-            upper_bound = min(guardrail_max_effective, deficit_mm_brut)
-            if upper_bound <= guardrail_min_effective:
-                mm_cible = upper_bound
-            else:
-                mm_cible = _clamp(
-                    max(deficit_mm_ajuste, guardrail_min_effective),
-                    guardrail_min_effective,
-                    upper_bound,
-                )
-        if block_reason is not None:
-            mm_cible = 0.0
-        else:
-            mm_cible = _apply_watering_floor_constraints(mm_cible, deficit_mm_brut, min_session_mm)
-        mm_final = mm_cible
-        if not block_reason and mm_final > 0:
-            _reserve_max = float(water_balance.get("reserve_stock_max_mm") or 0.0)
-            _reserve_cur = float(water_balance.get("reserve_stock_mm") or 0.0)
-            _depletion_r = float(water_balance.get("depletion_ratio") or 0.0)
-            _mad = float(water_balance.get("mad_ratio") or 0.5)
-            if _reserve_max > 0 and _depletion_r < _mad:
-                _fill_cap = max(0.0, _reserve_max - _reserve_cur)
-                mm_cible = round(min(mm_cible, _fill_cap), 1)
-                mm_final = mm_cible
-        passages = 1
-        if max_session_mm is not None and mm_final > max_session_mm:
-            passages = max(passages, int(ceil(mm_final / max_session_mm)))
-        elif mm_final > 12.0:
-            passages = 2
-        if recent_watering_count >= 2 and recent_watering_mm_7j >= guardrail_max_mm:
-            passages = max(passages, 2)
-        pause_minutes = 25 if passages > 1 else 0
-        confidence_score, confidence_level, confidence_reasons = _confidence_assessment(
-            phase_dominante=phase_dominante,
-            temperature=temperature,
-            humidite=humidite,
-            etp=etp,
-            weather_profile=weather_profile,
-            soil_profile=soil_profile,
-            heat_stress_level=heat_stress_level,
-            heat_stress_phase=heat_stress_phase,
-            block_reason=block_reason,
-            mm_final=mm_final,
-        )
-        return _build_profile_payload(
-            deficit_mm_brut=deficit_mm_brut,
-            deficit_mm_ajuste=deficit_mm_ajuste,
-            mm_cible=mm_cible,
-            mm_final=mm_final,
-            mm_detected=float(water_balance.get("arrosage_recent_jour", 0.0) or 0.0),
-            type_arrosage="bloque" if block_reason is not None else ("auto" if mm_final > 0 else "aucune_action"),
-            arrosage_recommande=mm_final > 0 and block_reason is None,
-            arrosage_auto_autorise=mm_final > 0 and block_reason is None,
-            arrosage_conseille="personnalise" if block_reason is not None else "aucune_action" if mm_final <= 0 else "auto",
-            passages=passages,
-            pause_minutes=pause_minutes,
-            fractionnement_reason="deep_watering_fractionation" if passages > 1 else "single_pass_deep_watering",
-            niveau_confiance=confidence_level,
-            confidence_score=confidence_score,
-            confidence_reasons=confidence_reasons,
-            raison_decision_base="Mode Normal: arrosage profond uniquement si le déficit est utile.",
-            block_reason=block_reason,
-            fenetre_optimale="maintenant" if morning_start_minute <= now_minutes < acceptable_end_minute else "ce_matin",
-            niveau_action="a_faire" if mm_final > 0 else "surveiller",
-            risque_gazon="modere" if deficit_mm_brut >= 5 else "faible",
-            heat_stress_level=heat_stress_level,
-            heat_stress_phase=heat_stress_phase,
-            morning_start_minute=morning_start_minute,
-            acceptable_end_minute=acceptable_end_minute,
-            morning_end_minute=morning_end_minute,
-            temperature_band=temperature_band,
-            evening_allowed=evening_allowed,
-            recent_watering_count=recent_watering_count,
-            recent_watering_mm_7j=recent_watering_mm_7j,
-            guardrail_min_mm=guardrail_min_effective,
-            guardrail_max_mm=guardrail_max_effective,
-            guardrail_reason=f"{guardrail_reason}; pluie_support={pluie_support:.1f}",
-            seasonal_profile=seasonal_profile_payload,
-            cooldown_24h_hours=cooldown_24h_hours,
-        )
-
-    if phase_dominante in {"Fertilisation", "Biostimulant", "Agent Mouillant", "Scarification"}:
-        resolved_policy = _resolve_phase_policy(
-            phase_dominante=phase_dominante,
-            sous_phase=sous_phase,
-            pluie_proche=pluie_proche,
-            pluie_compensatrice=pluie_compensatrice,
-            temperature=temperature,
-            humidite=humidite,
-            saturation_block=saturation_block,
-        )
-        minimum = resolved_policy.target_range.min_mm if resolved_policy.target_range is not None else 0.0
-        maximum = resolved_policy.target_range.max_mm if resolved_policy.target_range is not None else 0.0
-        if phase_dominante == "Fertilisation":
-            mm_cible = _clamp((besoin_court * 0.4) + (besoin_tendance * 0.08), minimum, maximum)
-        elif phase_dominante == "Biostimulant":
-            mm_cible = _clamp((besoin_court * 0.5) + (besoin_tendance * 0.08), minimum, maximum)
-        elif phase_dominante == "Agent Mouillant":
-            mm_cible = _clamp((besoin_court * 0.55) + (besoin_tendance * 0.1), minimum, maximum)
-        else:
-            mm_cible = _clamp((besoin_court * 0.6) + (besoin_tendance * 0.1), minimum, maximum)
-        block_reason = None
-        if resolved_policy is not None and resolved_policy.blocking.is_blocked:
-            block_reason = _normalize_public_block_reason(resolved_policy.blocking.reason)
-        elif pluie_compensatrice or pluie_proche:
-            block_reason = "pluie_prevue_suffisante"
-        elif saturation_block:
-            block_reason = "sol_deja_humide"
-        elif humidite >= 85:
-            block_reason = "humidite_elevee"
-        if block_reason is None:
-            if resolved_policy is not None and resolved_policy.target_range is not None:
-                mm_cible = _apply_watering_floor_constraints(
-                    mm_cible,
-                    deficit_mm_brut,
-                    resolved_policy.target_range.min_mm,
-                )
-            else:
-                mm_cible = _apply_mode_watering_constraints(mm_cible, deficit_mm_brut, phase_dominante)
-        mm_final = 0.0 if block_reason else mm_cible
-        if (
-            resolved_policy is not None
-            and resolved_policy.policy.execution is not None
-            and resolved_policy.policy.execution.preferred == "single_pass"
-        ):
-            passages = 1
-        else:
-            passages = 1 if mm_final <= 4.0 else 2
-        pause_minutes = 25 if passages > 1 else 0
-        fenetre_optimale = "soir" if evening_allowed and temperature >= 24 and now_hour < EVENING_END_HOUR else "ce_matin"
-        confidence_score, confidence_level, confidence_reasons = _confidence_assessment(
-            phase_dominante=phase_dominante,
-            temperature=temperature,
-            humidite=humidite,
-            etp=etp,
-            weather_profile=weather_profile,
-            soil_profile=soil_profile,
-            heat_stress_level=heat_stress_level,
-            heat_stress_phase=heat_stress_phase,
-            block_reason=block_reason,
-            mm_final=mm_final,
-        )
-        return _build_profile_payload(
-            deficit_mm_brut=deficit_mm_brut,
-            deficit_mm_ajuste=deficit_mm_ajuste,
-            mm_cible=mm_cible,
-            mm_final=mm_final,
-            mm_detected=float(water_balance.get("arrosage_recent_jour", 0.0) or 0.0),
-            type_arrosage="auto" if mm_final > 0 else "aucune_action",
-            arrosage_recommande=mm_final > 0,
-            arrosage_auto_autorise=mm_final > 0,
-            arrosage_conseille="auto" if phase_dominante == "Fertilisation" else "personnalise",
-            passages=passages,
-            pause_minutes=pause_minutes,
-            fractionnement_reason="managed_fractionation" if passages > 1 else "single_pass",
-            niveau_confiance=confidence_level,
-            confidence_score=confidence_score,
-            confidence_reasons=confidence_reasons,
-            raison_decision_base=f"{phase_dominante}: arrosage léger adapté.",
-            block_reason=block_reason,
-            fenetre_optimale=fenetre_optimale if mm_final > 0 else "attendre",
-            niveau_action="a_faire" if mm_final > 0 else "surveiller",
-            risque_gazon="faible" if mm_final > 0 else "modere",
-            heat_stress_level=heat_stress_level,
-            heat_stress_phase=heat_stress_phase,
-            morning_start_minute=morning_start_minute,
-            acceptable_end_minute=acceptable_end_minute,
-            morning_end_minute=morning_end_minute,
-            temperature_band=temperature_band,
-            evening_allowed=evening_allowed,
-            recent_watering_count=recent_watering_count,
-            recent_watering_mm_7j=float(water_balance.get("arrosage_recent_7j", 0.0) or 0.0),
-            guardrail_min_mm=guardrail_min_mm,
-            guardrail_max_mm=guardrail_max_mm,
-            guardrail_reason=guardrail_reason,
-            seasonal_profile=seasonal_profile_payload,
-            cooldown_24h_hours=cooldown_24h_hours,
-        )
-
-    mm_cible = _clamp(max(deficit_mm_ajuste, 5.0), 5.0, 20.0)
-    block_reason = None
-    if pluie_compensatrice or pluie_proche:
-        block_reason = "pluie_prevue_suffisante"
-    elif saturation_block:
-        block_reason = "sol_deja_humide"
-    elif humidite >= 85:
-        block_reason = "humidite_elevee"
-    if block_reason is None:
-        mm_cible = _apply_mode_watering_constraints(mm_cible, deficit_mm_brut, phase_dominante)
-    mm_final = 0.0 if block_reason else mm_cible
-    passages = 1 if mm_final <= 12.0 else 2
-    pause_minutes = 25 if passages > 1 else 0
-    confidence_score, confidence_level, confidence_reasons = _confidence_assessment(
-        phase_dominante=phase_dominante,
-        temperature=temperature,
-        humidite=humidite,
-        etp=etp,
+        today=today,
+        pluie_24h=pluie_24h or 0.0,
+        pluie_demain=pluie_demain or 0.0,
+        pluie_j2=pluie_j2 or 0.0,
+        pluie_3j=pluie_3j or 0.0,
+        pluie_probabilite_max_3j=pluie_probabilite_max_3j or 0.0,
+        humidite=humidite or 0.0,
+        temperature=temperature or 0.0,
+        etp=etp or 0.0,
+        type_sol=type_sol,
         weather_profile=weather_profile,
-        soil_profile=soil_profile,
-        heat_stress_level=heat_stress_level,
-        heat_stress_phase=heat_stress_phase,
-        block_reason=block_reason,
-        mm_final=mm_final,
+        history=history,
+        sous_phase_age_days=sous_phase_age_days,
+        sous_phase_progression=sous_phase_progression,
+        hauteur_gazon=hauteur_gazon,
+        transition_ready=transition_ready,
+        application_type=application_type,
     )
-    return _build_profile_payload(
-        deficit_mm_brut=deficit_mm_brut,
-        deficit_mm_ajuste=deficit_mm_ajuste,
-        mm_cible=mm_cible,
-        mm_final=mm_final,
-        mm_detected=float(water_balance.get("arrosage_recent_jour", 0.0) or 0.0),
-        type_arrosage="aucune_action" if mm_final <= 0 else "auto",
-        arrosage_recommande=mm_final > 0,
-        arrosage_auto_autorise=mm_final > 0,
-        arrosage_conseille="personnalise",
-        passages=passages,
-        pause_minutes=pause_minutes,
-        fractionnement_reason="generic_deep_watering" if passages > 1 else "single_pass",
-        niveau_confiance=confidence_level,
-        confidence_score=confidence_score,
-        confidence_reasons=confidence_reasons,
-        raison_decision_base=f"Phase {phase_dominante}: arrosage maîtrisé.",
-        block_reason=block_reason,
-        fenetre_optimale="soir"
-        if evening_allowed and temperature >= 24 and now_hour < EVENING_END_HOUR
-        else ("ce_matin" if mm_final > 0 else "attendre"),
-        niveau_action="a_faire" if mm_final > 0 else "surveiller",
-        risque_gazon="faible",
-        heat_stress_level=heat_stress_level,
-        heat_stress_phase=heat_stress_phase,
-        morning_start_minute=morning_start_minute,
-        acceptable_end_minute=acceptable_end_minute,
-        morning_end_minute=morning_end_minute,
-        temperature_band=temperature_band,
-        evening_allowed=evening_allowed,
-        recent_watering_count=recent_watering_count,
-        recent_watering_mm_7j=float(water_balance.get("arrosage_recent_7j", 0.0) or 0.0),
-        guardrail_min_mm=guardrail_min_mm,
-        guardrail_max_mm=guardrail_max_mm,
-        guardrail_reason=guardrail_reason,
-        seasonal_profile=seasonal_profile_payload,
-    )
+    if phase_dominante == "Hivernage":
+        resolved_policy = _resolve_phase_policy(
+            phase_dominante=phase_dominante,
+            sous_phase=sous_phase,
+            prolonged_drought=False,
+        )
+        block_reason = _normalize_public_block_reason(resolved_policy.blocking.reason) or "mode_bloque"
+        return _profile_for_blocked(ctx, block_reason)
+    if is_active_rain_weather(weather_profile):
+        return _profile_for_blocked(ctx, "pluie_active")
+    _fill_post_preamble(ctx)
+    if phase_dominante == "Sursemis":
+        return _profile_for_sursemis(ctx)
+    if phase_dominante == "Traitement":
+        return _profile_for_traitement(ctx)
+    if phase_dominante == "Normal":
+        return _profile_for_normal(ctx)
+    if phase_dominante in {"Fertilisation", "Biostimulant", "Agent Mouillant", "Scarification"}:
+        return _profile_for_agro_phases(ctx)
+    return _profile_for_generic(ctx)
 
 
 def compute_objectif_mm(
