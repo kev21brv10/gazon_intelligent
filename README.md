@@ -29,12 +29,14 @@ L'intégration construit une lecture métier exploitable dans Home Assistant:
 
 Elle est conçue pour rester lisible côté UI, tout en gardant assez de structure pour les automatisations, le debug et les dashboards avancés.
 
-## ✨ Ce que la version actuelle apporte (v0.9.0)
+## ✨ Ce que la version actuelle apporte (v0.9.1)
 
-- **Objectif d'arrosage réaliste** : en phase Normal, l'objectif est désormais plafonné à la capacité d'absorption restante du sol (`reserve_stock_max - reserve_stock`) quand le sol n'a pas atteint le seuil MAD. Fini les objectifs gonflés qui visaient le déficit cumulé sur 7 jours sur un sol déjà bien rempli
-- **Fenêtres d'arrosage cohérentes** : les cumuls glissants respectent maintenant la monotonie `jour ≤ 3 jours ≤ 7 jours` (une fenêtre plus large ne peut plus afficher moins d'eau qu'une fenêtre incluse)
-- **Attributs hydriques clarifiés** : la réserve du jour précédent est exposée sous un seul nom correct (`sol_reserve_precedente_mm`), sans doublon trompeur
-- **Moteur allégé et durci** : audit complet des domaines (arrosage, tonte, phases, interventions, météo) — déduplication, suppression de code mort et cascade de blocage tonte réécrite en priorités explicites, sans changement de comportement (462 tests unitaires)
+- **Conseil = exécution sous pluie** : en phase Normal avec pluie annoncée, la dose réduite (×0.8, ou ×0.4 si la pluie compense le déficit) est désormais propagée à l'objectif réellement arrosé. Fini le cas où le conseil affichait « Réduis l'apport à 6.1 mm » pendant que le plan canonique et le scheduler arrosaient 7.6 mm
+- **Plancher de session utile** : si la dose réduite par la pluie tombe sous le minimum utile (5 mm en Normal), l'arrosage est reporté à 0 plutôt que de lancer un cycle inefficace, avec un motif explicite (`pluie_prevue_suffisante`) lisible dans la raison de décision
+- **Progression de sous-phase corrigée** : la dernière sous-phase d'une phase (ex. Stabilisation d'un Sursemis) progresse maintenant correctement jusqu'à la fin au lieu de rester bloquée à ~1 % ; l'Hivernage reste volontairement ouvert
+- **467 tests unitaires** verts
+
+*Version précédente (v0.9.0) : objectif d'arrosage plafonné à la capacité d'absorption restante du sol, cumuls glissants monotones `jour ≤ 3 jours ≤ 7 jours`, attributs hydriques clarifiés, audit complet des domaines (arrosage, tonte, phases, interventions, météo).*
 
 *Versions précédentes (v0.8.x) : coordination arrosage/tonte, ressuyage dynamique post-arrosage par type de sol, détection de retard de tonte, hauteur de gazon estimée sans capteur, ET0 Penman-Monteith FAO-56, latitude HA automatique, support multi-pelouse.*
 - une instance par pelouse, avec support multi-gazon propre

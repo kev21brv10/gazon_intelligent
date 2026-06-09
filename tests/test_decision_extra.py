@@ -1912,3 +1912,84 @@ class TestMowingWateringCoordination(unittest.TestCase):
         )
         self.assertIn("mowing_watering_coordination", bundle)
         self.assertIn("mowing_watering_coordination_msg", bundle)
+
+
+class TestNormalRainReductionPropagation(unittest.TestCase):
+    """Cohérence conseil/exécution sous pluie en mode Normal + phrase réserve pleine."""
+
+    @staticmethod
+    def _snapshot(**overrides):
+        params = dict(
+            history=[],
+            today=date(2026, 7, 15),
+            hour_of_day=6,
+            temperature=30.0,
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            pluie_j2=0.0,
+            pluie_3j=0.0,
+            humidite=40.0,
+            type_sol="limoneux",
+            etp_capteur=7.0,
+        )
+        params.update(overrides)
+        return decision.build_decision_snapshot(**params)
+
+    def test_rain_reduction_propagates_to_executed_values(self):
+        # Mode Normal, déficit important, pluie annoncée J+1 (branche ×0.8).
+        no_rain = self._snapshot(pluie_demain=0.0)
+        rain = self._snapshot(pluie_demain=0.5)
+
+        self.assertEqual(no_rain["phase_active"], "Normal")
+        self.assertEqual(rain["phase_active"], "Normal")
+        # La réduction pluie est réellement propagée aux valeurs exécutées.
+        self.assertLess(rain["objectif_mm"], no_rain["objectif_mm"])
+        self.assertEqual(rain["objectif_mm"], round(rain["mm_requested"] * 0.8, 1))
+        self.assertEqual(rain["mm_final"], rain["objectif_mm"])
+        self.assertEqual(rain["mm_applied"], rain["objectif_mm"])
+        # Le conseil cite exactement la valeur exécutée (plus de divergence).
+        self.assertIn(f"{rain['objectif_mm']:.1f} mm", rain["action_recommandee"])
+        self.assertIn("Réduis", rain["action_recommandee"])
+        # mm_requested conserve la demande brute (traçabilité).
+        self.assertGreater(rain["mm_requested"], rain["objectif_mm"])
+
+    def test_rain_reduction_below_min_session_zeroes_objective(self):
+        # Dose réduite par la pluie sous min_session_mm (5.0) → objectif basculé à 0
+        # plutôt que de publier une dose sous le minimum utile (correction plancher).
+        snap = self._snapshot(soil_balance={"reserve_mm": 18.0}, etp_capteur=8.0, pluie_demain=2.0)
+
+        self.assertEqual(snap["phase_active"], "Normal")
+        self.assertGreater(snap["mm_requested"], 0.0)        # demande brute non nulle
+        self.assertLess(snap["mm_requested"] * 0.8, 5.0)     # mais réduite sous le minimum utile
+        self.assertEqual(snap["objectif_mm"], 0.0)
+        self.assertEqual(snap["mm_final"], 0.0)
+        self.assertEqual(snap["mm_applied"], 0.0)
+        self.assertFalse(snap["arrosage_recommande"])
+        self.assertNotIn("0.0 mm", snap["action_recommandee"])
+        # Le blocage par la pluie porte un motif explicite (cohérence dashboard).
+        self.assertEqual(snap["block_reason"], "pluie_prevue_suffisante")
+        self.assertIn("Motif exact: pluie_prevue_suffisante", snap["raison_decision"])
+
+    def test_no_rain_objective_unchanged(self):
+        snap = self._snapshot(pluie_demain=0.0, pluie_j2=0.0, pluie_3j=0.0)
+
+        self.assertEqual(snap["phase_active"], "Normal")
+        self.assertTrue(snap["arrosage_recommande"])
+        # Aucune réduction: objectif == demande brute, conseil "Applique".
+        self.assertEqual(snap["objectif_mm"], snap["mm_requested"])
+        self.assertEqual(snap["mm_applied"], snap["objectif_mm"])
+        self.assertIn("Applique", snap["action_recommandee"])
+        self.assertNotIn("Réduis", snap["action_recommandee"])
+
+    def test_full_reserve_phrase_present_only_when_ratio_full(self):
+        # Réserve utile pleine (ratio == 1.0) mais arrosage encore recommandé (ETP élevée).
+        full = self._snapshot(soil_balance={"reserve_mm": 18.0}, etp_capteur=8.0, pluie_demain=0.0)
+        self.assertEqual(full["reserve_available_ratio"], 1.0)   # assert explicite du ratio plein
+        self.assertTrue(full["arrosage_recommande"])
+        self.assertIn("Réserve utile pleine", full["raison_decision"])
+
+        # Réserve partielle (ratio < 1.0): la phrase est absente.
+        partial = self._snapshot(soil_balance={"reserve_mm": 8.0}, etp_capteur=8.0, pluie_demain=0.0)
+        self.assertLess(partial["reserve_available_ratio"], 1.0)
+        self.assertTrue(partial["arrosage_recommande"])
+        self.assertNotIn("Réserve utile pleine", partial["raison_decision"])

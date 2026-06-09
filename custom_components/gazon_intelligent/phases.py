@@ -204,6 +204,14 @@ def compute_subphase(
             break
         previous_limit = limit
 
+    # La sentinelle 999 signifie "jusqu'à la fin de la phase": pour la progression,
+    # borner la sous-phase terminale par la durée réelle de la phase au lieu de
+    # traiter 999 comme une durée (sinon la barre rampe à ~0.1 %/jour).
+    # Hivernage (durée 999) reste volontairement ouvert.
+    phase_total_days = PHASE_DURATIONS_DAYS.get(phase_dominante, 0)
+    if subphase_end_day >= 999 and 0 < phase_total_days < 999:
+        subphase_end_day = max(phase_total_days, subphase_start_day)
+
     if date_debut is not None:
         subphase_start_date = date_debut + timedelta(days=subphase_start_day)
         subphase_duration_days = max((subphase_end_day - subphase_start_day) + 1, 1)

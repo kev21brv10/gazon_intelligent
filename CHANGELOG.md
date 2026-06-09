@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.1
+Cohérence conseil/exécution de l'arrosage sous pluie + fix de progression terminale (467 tests verts) :
+- **Arrosage** : la réduction de dose liée à la pluie annoncée est désormais propagée aux valeurs réellement exécutées. En mode Normal avec pluie prévue, le moteur calculait bien une dose réduite (×0.8, ou ×0.4 si pluie compensatrice) mais ne l'écrivait que dans le texte `action_recommandee` : `objectif_mm` / `mm_final` / `mm_applied` restaient à la dose pleine. Résultat en production : conseil « Réduis l'apport à 6.1 mm » pendant que le plan canonique et le scheduler arrosaient 7.6 mm. Conseil et exécution sont maintenant alignés sur la même valeur.
+- **Arrosage** : plancher de session utile. Si la dose réduite par la pluie tombe sous `min_session_mm` (5.0 mm en Normal), l'objectif bascule à 0 au lieu de publier une dose agronomiquement inutile, et l'arrosage n'est plus marqué « recommandé ».
+- **Arrosage** : ce blocage par la pluie porte désormais un motif explicite (`block_reason = "pluie_prevue_suffisante"`), affiché en « Motif exact » dans `raison_decision` — cohérent avec les autres motifs de blocage du système (plus de « bloqué » muet).
+- **Arrosage** : corrige le libellé obsolète « seuil utile minimal 10 mm » de `raison_decision` (la valeur effective est 5.0 mm depuis le passage de `min_session_mm` à la politique), remplacé par « déclenché sur déficit utile » (texte neutre, sans valeur codée en dur).
+- **Phases** : corrige la progression de sous-phase terminale bloquée à ~1 %. Dans `compute_subphase`, la sentinelle `999` de la dernière règle de `SUBPHASE_RULES` était prise pour une durée réelle (dénominateur ~965 jours pour la Stabilisation d'un Sursemis). La sous-phase terminale est désormais bornée par `PHASE_DURATIONS_DAYS` quand `0 < durée < 999`. Exemple : Stabilisation d'un Sursemis de 45 j au jour 44 → ~85 % au lieu de ~1 %. L'Hivernage (durée `999`) reste volontairement ouvert.
+
 ## 0.9.0
 Nettoyage et déduplication suite à l'audit des domaines (aucun changement de comportement, 462 tests verts) :
 - **Tonte** : restructure la cascade de résolution du motif de blocage (`raison_code`) en `if/elif` à priorité explicite (phase agronomique > post-application > arrosage en cours > cooldown > blocage générique), au lieu du motif fragile « affecter puis écraser ». Ajoute un test verrouillant la priorité phase > arrosage.
