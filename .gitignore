@@ -12,3 +12,6 @@ __pycache__/
 
 # Claude Code
 .claude/
+
+# Flows Node-RED personnels (config locale, hors dépôt)
+docs/node_red/
