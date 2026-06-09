@@ -575,6 +575,35 @@ class TestDecisionSnapshotMowing(unittest.TestCase):
         self.assertEqual(mowing_bundle["mowing_block_reason_code"], "post_application_active")
         self.assertFalse(mowing_bundle["action_possible"])
 
+    def test_build_mowing_bundle_prioritizes_phase_block_over_active_watering(self) -> None:
+        # Phase Traitement active ET arrosage en cours : le blocage de phase doit gagner
+        # (priorité la plus haute), pas le blocage lié à l'arrosage.
+        context = decision.DecisionContext.from_legacy_args(
+            history=[{"type": "Traitement", "date": "2026-06-15"}],
+            today=date(2026, 6, 15),
+            hour_of_day=8,
+            temperature=22,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=50,
+            type_sol="limoneux",
+            etp_capteur=3.0,
+            runtime_context={
+                "active_irrigation_session": {"status": "running", "started_at": "2026-06-15T06:30:00+00:00"},
+                "mowing_cooldown_after_watering_minutes": 180,
+            },
+        )
+        phase_bundle = decision_phase.build_phase_bundle(context)
+        water_bundle = decision_watering.build_water_bundle(context, phase_bundle)
+        risk_bundle = decision_risk.build_risk_bundle(context, phase_bundle, water_bundle)
+
+        mowing_bundle = decision_mowing.build_mowing_bundle(context, phase_bundle, water_bundle, risk_bundle)
+
+        self.assertFalse(mowing_bundle["tonte_autorisee"])
+        self.assertTrue(mowing_bundle["mowing_blocked"])
+        self.assertEqual(mowing_bundle["mowing_block_reason_code"], "phase_traitement")
+        self.assertFalse(mowing_bundle["mowing_blocked_by_watering"])
+
     def test_build_mowing_bundle_blocks_on_runtime_watering_session(self) -> None:
         context = decision.DecisionContext.from_legacy_args(
             history=[],
