@@ -839,6 +839,17 @@ def _fallback_machine_unavailable_label_from_attrs(attrs: dict[str, object]) -> 
     operation_state = str(attrs.get("mower_operation_state") or attrs.get("tondeuse_statut") or "").strip().lower()
     operation_label = str(attrs.get("mower_operation_label") or attrs.get("tondeuse_statut_libelle") or "").strip()
     reason_code = str(attrs.get("mower_reason_code") or "").strip().lower()
+    error_code = str(
+        attrs.get("tondeuse_erreur") or attrs.get("mower_error") or attrs.get("tondeuse_erreur_code") or ""
+    ).strip().lower()
+    has_error_code = error_code not in {"", "no_error", "no error", "none", "ok", "aucune", "aucune_erreur", "aucune erreur"}
+    if operation_state in {"error", "erreur"} or reason_code == "error" or has_error_code:
+        message = (
+            str(attrs.get("mower_reason_label") or "").strip()
+            or str(attrs.get("tondeuse_erreur_libelle") or "").strip()
+            or "défaut signalé, vérifier le robot"
+        )
+        return f"Robot en erreur: {message}"
     if operation_state in {"mowing", "tonte", "tonte_en_cours", "edgecut"} or reason_code == "mower_mowing":
         return "Robot déjà en tonte: attendre la fin du cycle en cours."
     if operation_state in {"returning", "going_home", "homing", "retour_station"} or reason_code == "mower_returning":

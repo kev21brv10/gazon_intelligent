@@ -942,6 +942,40 @@ class TestDecisionSnapshotMowing(unittest.TestCase):
         self.assertTrue(mowing_bundle["tonte_autorisee"])
         self.assertFalse(mowing_bundle["action_possible"])
 
+    def test_machine_unavailable_detail_error_label(self) -> None:
+        # Robot en erreur → libellé précis « Robot en erreur: … », prioritaire sur
+        # « hors ligne » / le libellé générique.
+        detail = decision_mowing._machine_unavailable_detail(
+            {
+                "tondeuse_connectee": False,  # même apparemment hors ligne, l'erreur prime
+                "tondeuse_statut": "erreur",
+                "tondeuse_erreur": "blade_blocked",
+                "tondeuse_erreur_libelle": "Lame bloquée",
+            }
+        )
+        self.assertEqual(detail, ("error", "Robot en erreur: Lame bloquée"))
+
+        # Détecté via le seul code d'erreur, libellé de repli si aucun label dispo.
+        detail_fallback = decision_mowing._machine_unavailable_detail({"tondeuse_erreur": "E42"})
+        self.assertEqual(
+            detail_fallback,
+            ("error", "Robot en erreur: défaut signalé, vérifier le robot"),
+        )
+
+        # Non-régression : un robot en charge garde son libellé dédié.
+        detail_charging = decision_mowing._machine_unavailable_detail(
+            {"tondeuse_connectee": True, "tondeuse_en_charge": True}
+        )
+        self.assertEqual(detail_charging, ("charging", "Robot en charge: attendre qu'elle soit prête."))
+
+        # Garde anti faux positif : la sentinelle « no_error » (robot OK) ne déclenche rien.
+        self.assertIsNone(decision_mowing._machine_unavailable_detail({"tondeuse_erreur": "no_error"}))
+
+        # Compatibilité « toutes tondeuses HA » : l'état standard `error` du domaine
+        # lawn_mower → statut "erreur" (sans capteur d'erreur dédié) → libellé générique.
+        detail_generic = decision_mowing._machine_unavailable_detail({"tondeuse_statut": "erreur"})
+        self.assertEqual(detail_generic, ("error", "Robot en erreur: défaut signalé, vérifier le robot"))
+
     def test_build_mowing_bundle_does_not_block_on_watering_three_days_old(self) -> None:
         context = decision.DecisionContext.from_legacy_args(
             history=[

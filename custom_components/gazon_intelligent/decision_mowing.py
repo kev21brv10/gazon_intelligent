@@ -450,6 +450,13 @@ def _post_application_mowing_block(context: DecisionContext) -> tuple[bool, str 
     return True, "post_application_active", "Post-produit actif: attends la fin du post-arrosage."
 
 
+# Sentinelles « pas d'erreur » : valeurs de capteur à NE PAS interpréter comme une panne
+# (l'adapter neutralise déjà `no_error` en amont ; garde défensive contre une valeur brute).
+_NO_ERROR_CODES = frozenset(
+    {"", "no_error", "no error", "none", "ok", "aucune", "aucune_erreur", "aucune erreur"}
+)
+
+
 def _machine_unavailable_detail(
     mower_context: dict[str, Any],
 ) -> tuple[str, str] | None:
@@ -460,6 +467,28 @@ def _machine_unavailable_detail(
     mower_is_ready = mower_context.get("mower_coordination_ready") is not False and mower_context.get("tondeuse_prete") is not False
     mower_is_connected = mower_context.get("tondeuse_connectee") is not False
     mower_is_charging = bool(mower_context.get("tondeuse_en_charge"))
+
+    # Erreur/panne du robot : libellé précis prioritaire sur « hors ligne »/générique.
+    mower_status = str(mower_context.get("tondeuse_statut") or "").strip().lower()
+    mower_error_code = str(
+        mower_context.get("tondeuse_erreur")
+        or mower_context.get("mower_error")
+        or mower_context.get("tondeuse_erreur_code")
+        or ""
+    ).strip().lower()
+    mower_in_error = (
+        mower_operation_state in {"error", "erreur"}
+        or mower_status == "erreur"
+        or mower_reason_code == "error"
+        or (mower_error_code not in _NO_ERROR_CODES)
+    )
+    if mower_in_error:
+        message = (
+            str(mower_context.get("mower_reason_label") or "").strip()
+            or str(mower_context.get("tondeuse_erreur_libelle") or "").strip()
+            or "défaut signalé, vérifier le robot"
+        )
+        return "error", f"Robot en erreur: {message}"
 
     if not mower_is_connected:
         return "offline", "Robot hors ligne: attendre qu'elle redevienne joignable."
