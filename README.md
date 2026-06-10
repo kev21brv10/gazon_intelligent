@@ -29,14 +29,14 @@ L'intégration construit une lecture métier exploitable dans Home Assistant:
 
 Elle est conçue pour rester lisible côté UI, tout en gardant assez de structure pour les automatisations, le debug et les dashboards avancés.
 
-## ✨ Ce que la version actuelle apporte (v0.9.3)
+## ✨ Ce que la version actuelle apporte (v0.9.4)
 
-- **Arrosage post-application limité au jour même** : l'arrosage technique d'incorporation après une application au sol (conseil + déclenchement auto + blocage de la tonte) ne se déclenche plus que si le produit a été appliqué **le jour même**. Une application plus ancienne — par exemple déclarée rétroactivement — est présumée déjà incorporée (la pluie et l'humidité ont fait le travail) : plus de conseil ni d'arrosage parasite. La règle est posée à la source en comparant la date d'épandage au jour de la décision
-- **472 tests unitaires** verts
+- **Libellé d'erreur tondeuse précis** : quand la tonte est bloquée parce que le robot est en faute (lame bloquée, soulevé, défaut…), la carte affiche désormais « **Robot en erreur : …** » au lieu de « hors ligne » ou d'un libellé générique. Compatible avec **toutes les tondeuses Home Assistant** : la détection s'appuie sur l'état standard `error` du domaine `lawn_mower`, et le capteur d'erreur dédié (quand il existe) ne fait qu'enrichir le texte. Aucun nouvel attribut, la carte affiche le libellé automatiquement
+- **474 tests unitaires** verts
 
-*Version précédente (v0.9.2) : correction de la surestimation de l'ET0 sans capteur (rayonnement longues ondes recalculé FAO-56 + conversion du vent km/h → m/s).*
+*Version précédente (v0.9.3) : arrosage technique post-application limité au jour même de l'épandage (plus de conseil/arrosage parasite sur une application ancienne).*
 
-*Versions antérieures (v0.9.1 · v0.9.0 · v0.8.x) : cohérence conseil/exécution de l'arrosage sous pluie, plancher de session utile, objectif plafonné à la capacité d'absorption du sol, ET0 Penman-Monteith FAO-56, coordination arrosage/tonte, support multi-pelouse.*
+*Versions antérieures (v0.9.2 · v0.9.1 · v0.9.0/v0.8.x) : ET0 réaliste sans capteur (FAO-56 + vent km/h→m/s), cohérence conseil/exécution sous pluie, objectif plafonné à la capacité du sol, coordination arrosage/tonte, support multi-pelouse.*
 - une instance par pelouse, avec support multi-gazon propre
 - une façade publique centrée sur `sensor.gazon_intelligent_assistant`
 - une projection claire de:

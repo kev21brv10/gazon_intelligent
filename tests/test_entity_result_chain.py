@@ -2310,6 +2310,39 @@ class DecisionResultChainTests(unittest.TestCase):
             "Robot déjà en tonte: attendre la fin du cycle en cours.",
         )
 
+    def test_fallback_machine_unavailable_label_error(self) -> None:
+        # Robot en erreur → libellé précis dans le fallback entité (symétrie décision).
+        self.assertEqual(
+            sensor._fallback_machine_unavailable_label_from_attrs(
+                {
+                    "tondeuse_statut": "erreur",
+                    "tondeuse_erreur": "blade_blocked",
+                    "tondeuse_erreur_libelle": "Lame bloquée",
+                }
+            ),
+            "Robot en erreur: Lame bloquée",
+        )
+        # Détecté via le seul code d'erreur, repli si aucun label.
+        self.assertEqual(
+            sensor._fallback_machine_unavailable_label_from_attrs({"mower_error": "E42"}),
+            "Robot en erreur: défaut signalé, vérifier le robot",
+        )
+        # Non-régression : un robot en charge garde son libellé.
+        self.assertEqual(
+            sensor._fallback_machine_unavailable_label_from_attrs({"mower_operation_state": "charging"}),
+            "Robot en charge: attendre qu'elle soit prête.",
+        )
+        # Garde anti faux positif : « no_error » (robot OK) ne déclenche pas le libellé erreur.
+        self.assertIsNone(
+            sensor._fallback_machine_unavailable_label_from_attrs({"tondeuse_erreur": "no_error"})
+        )
+        # Compatibilité « toutes tondeuses HA » : état standard `error` du domaine
+        # lawn_mower (sans capteur d'erreur dédié) → libellé générique.
+        self.assertEqual(
+            sensor._fallback_machine_unavailable_label_from_attrs({"mower_operation_state": "error"}),
+            "Robot en erreur: défaut signalé, vérifier le robot",
+        )
+
     def test_tonte_state_sensor_prefers_smoothed_public_facade_when_present(self) -> None:
         result = _make_result()
         result.tonte_statut = "autorisee"
