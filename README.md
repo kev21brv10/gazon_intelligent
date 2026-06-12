@@ -29,16 +29,15 @@ L'intégration construit une lecture métier exploitable dans Home Assistant:
 
 Elle est conçue pour rester lisible côté UI, tout en gardant assez de structure pour les automatisations, le debug et les dashboards avancés.
 
-## ✨ Ce que la version actuelle apporte (v0.9.5)
+## ✨ Ce que la version actuelle apporte (v0.10.0)
 
-- **L'arrosage automatique se déclenche enfin** : correction d'un bug où l'arrosage auto ne partait **jamais** — une garde de démarrage (`startup_guard`) restait bloquée en permanence. Elle se lève désormais au premier cycle de données sain (et se réarme à chaque redémarrage pour ne pas agir avant que les capteurs soient prêts)
-- **Déblocage après incident** : le verrou de sécurité (qui s'arme si une vanne ne se confirme pas fermée) peut maintenant être levé via le bouton **« Retour au mode normal »** — avant, il bloquait l'arrosage auto définitivement
-- **Nouveau capteur de diagnostic** `arrosage_auto_blocage` : dit **explicitement pourquoi** l'arrosage auto ne part pas et **comment le débloquer** (attributs `bloque`, `pourquoi`, `comment_debloquer`)
-- **481 tests unitaires** verts
+- **Arrosage piloté par la réserve du sol (mode Normal)** : la pelouse établie n'est plus arrosée tant que la réserve utile reste au-dessus du **seuil d'épuisement (MAD 50 %)** ; une fois ce seuil atteint, une **recharge profonde** ramène la réserve au plein. Résultat : arrosages **plus espacés et plus profonds**, qui favorisent l'enracinement (léger stress bénéfique) — au lieu de petits apports fréquents. Borné par le garde-fou hebdomadaire ; repli automatique sur l'ancien modèle tant que le bilan sol interne n'est pas encore établi
+- **Phase semis préservée** : la recharge profonde reste **exclue du Sursemis** (inadaptée au semis), verrouillée par un test d'anti-régression
+- **485 tests unitaires** verts
 
-*Version précédente (v0.9.4) : libellé d'erreur tondeuse précis sur la carte, compatible toutes tondeuses Home Assistant.*
+*Version précédente (v0.9.5) : déclenchement enfin de l'arrosage automatique (`startup_guard`), déblocage du verrou de sécurité, capteur de diagnostic `arrosage_auto_blocage`.*
 
-*Versions antérieures (v0.9.3 · v0.9.2 · v0.9.1 · v0.9.0/v0.8.x) : arrosage post-application limité au jour même, ET0 réaliste sans capteur (FAO-56 + vent km/h→m/s), cohérence conseil/exécution sous pluie, objectif plafonné à la capacité du sol, coordination arrosage/tonte, support multi-pelouse.*
+*Versions antérieures (v0.9.4 · v0.9.3 · v0.9.2 · v0.9.1 · v0.9.0/v0.8.x) : libellé d'erreur tondeuse précis, arrosage post-application limité au jour même, ET0 réaliste sans capteur (FAO-56 + vent km/h→m/s), cohérence conseil/exécution sous pluie, objectif plafonné à la capacité du sol, coordination arrosage/tonte, support multi-pelouse.*
 - une instance par pelouse, avec support multi-gazon propre
 - une façade publique centrée sur `sensor.gazon_intelligent_assistant`
 - une projection claire de:

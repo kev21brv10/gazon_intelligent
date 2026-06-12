@@ -414,10 +414,15 @@ def _soil_balance_priority(
     reserve_utile_mm: float,
     bilan_hydrique_mm: float,
     soil_balance: dict[str, Any] | None,
-) -> dict[str, float]:
+) -> dict[str, Any]:
     reserve_actuelle_source = None
     if isinstance(soil_balance, dict):
         reserve_actuelle_source = _to_float(soil_balance.get("reserve_mm"))
+    # Réserve issue du bilan sol interne de l'intégration (ledger soil_balance, mis à jour
+    # chaque cycle : réserve += pluie + arrosage − ETc, borné par type de sol) ?
+    # Le pilotage par épuisement (MAD) n'est fiable que dans ce cas ; sinon la réserve
+    # dérive du bilan court et n'atteint pas le seuil, d'où le repli sur le modèle déficit.
+    reserve_from_soil_ledger = reserve_actuelle_source is not None
     if reserve_actuelle_source is None:
         reserve_actuelle_source = reserve_utile_mm + bilan_hydrique_mm
     reserve_stock_max_mm = _to_float(soil_balance.get("reserve_max_mm")) if isinstance(soil_balance, dict) else None
@@ -427,6 +432,7 @@ def _soil_balance_priority(
     return {
         "reserve_actuelle_source": float(reserve_actuelle_source),
         "reserve_stock_max_mm": reserve_stock_max_mm,
+        "reserve_from_soil_ledger": reserve_from_soil_ledger,
     }
 
 
@@ -793,6 +799,7 @@ def compute_water_balance(
         "reserve_utile_mm": _round_half_up_1(reserve_utile_mm),
         "reserve_stock_mm": _round_half_up_1(reserve_metrics["reserve_stock_mm"]),
         "reserve_stock_max_mm": _round_half_up_1(soil_balance_priority["reserve_stock_max_mm"]),
+        "reserve_from_soil_ledger": bool(soil_balance_priority["reserve_from_soil_ledger"]),
         "reserve_surplus_mm": _round_half_up_1(reserve_metrics["reserve_surplus_mm"]),
         "reserve_actuelle_mm": _round_half_up_1(reserve_metrics["reserve_actuelle_mm"]),
         "reserve_fill_ratio": round(_bound(reserve_metrics["reserve_fill_ratio"], 0.0, 1.0), 3),

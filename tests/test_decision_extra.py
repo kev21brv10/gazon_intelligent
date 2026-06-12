@@ -51,6 +51,7 @@ decision_phase = importlib.import_module("custom_components.gazon_intelligent.de
 decision_risk = importlib.import_module("custom_components.gazon_intelligent.decision_risk")
 decision_watering = importlib.import_module("custom_components.gazon_intelligent.decision_watering")
 water = importlib.import_module("custom_components.gazon_intelligent.water")
+guidance = importlib.import_module("custom_components.gazon_intelligent.guidance")
 
 FIXED_NOW_UTC = datetime(2026, 3, 17, 12, 0, tzinfo=timezone.utc)
 FIXED_TODAY = FIXED_NOW_UTC.date()
@@ -2052,9 +2053,10 @@ class TestNormalRainReductionPropagation(unittest.TestCase):
         self.assertGreater(rain["mm_requested"], rain["objectif_mm"])
 
     def test_rain_reduction_below_min_session_zeroes_objective(self):
-        # Dose réduite par la pluie sous min_session_mm (5.0) → objectif basculé à 0
-        # plutôt que de publier une dose sous le minimum utile (correction plancher).
-        snap = self._snapshot(soil_balance={"reserve_mm": 18.0}, etp_capteur=8.0, pluie_demain=2.0)
+        # Réserve sol au seuil MAD (6/12) → la dépletion déclenche une recharge de 6 mm,
+        # mais la réduction pluie (×0.8) la ramène à 4,8 mm, sous min_session_mm (5.0) :
+        # l'objectif bascule à 0 plutôt que de publier une dose sous le minimum utile.
+        snap = self._snapshot(soil_balance={"reserve_mm": 6.0}, etp_capteur=8.0, pluie_demain=2.0)
 
         self.assertEqual(snap["phase_active"], "Normal")
         self.assertGreater(snap["mm_requested"], 0.0)        # demande brute non nulle
@@ -2079,15 +2081,112 @@ class TestNormalRainReductionPropagation(unittest.TestCase):
         self.assertIn("Applique", snap["action_recommandee"])
         self.assertNotIn("Réduis", snap["action_recommandee"])
 
-    def test_full_reserve_phrase_present_only_when_ratio_full(self):
-        # Réserve utile pleine (ratio == 1.0) mais arrosage encore recommandé (ETP élevée).
-        full = self._snapshot(soil_balance={"reserve_mm": 18.0}, etp_capteur=8.0, pluie_demain=0.0)
-        self.assertEqual(full["reserve_available_ratio"], 1.0)   # assert explicite du ratio plein
-        self.assertTrue(full["arrosage_recommande"])
-        self.assertIn("Réserve utile pleine", full["raison_decision"])
+    def test_depletion_gates_watering_on_mad_with_soil_sensor(self):
+        # Quand le bilan sol interne fournit une réserve réelle (ledger soil_balance), le
+        # mode Normal passe en pilotage par épuisement (deplete-to-MAD, refill-to-full) :
+        # tant que la réserve reste au-dessus du seuil MAD (50 %), pas d'arrosage — même par
+        # ETP élevée.
+        comfortable = self._snapshot(soil_balance={"reserve_mm": 18.0}, etp_capteur=8.0, pluie_demain=0.0)
+        self.assertEqual(comfortable["phase_active"], "Normal")
+        self.assertTrue(comfortable["use_depletion_logic"])
+        self.assertEqual(comfortable["reserve_available_ratio"], 1.0)
+        self.assertLess(comfortable["depletion_ratio"], 0.5)
+        self.assertFalse(comfortable["arrosage_recommande"])
+        self.assertEqual(comfortable["objectif_mm"], 0.0)
 
-        # Réserve partielle (ratio < 1.0): la phrase est absente.
-        partial = self._snapshot(soil_balance={"reserve_mm": 8.0}, etp_capteur=8.0, pluie_demain=0.0)
-        self.assertLess(partial["reserve_available_ratio"], 1.0)
-        self.assertTrue(partial["arrosage_recommande"])
-        self.assertNotIn("Réserve utile pleine", partial["raison_decision"])
+        # Réserve encore au-dessus du seuil (8/12 ≈ 33 % épuisé) : toujours pas d'arrosage.
+        above_mad = self._snapshot(soil_balance={"reserve_mm": 8.0}, etp_capteur=8.0, pluie_demain=0.0)
+        self.assertLess(above_mad["depletion_ratio"], 0.5)
+        self.assertFalse(above_mad["arrosage_recommande"])
+        self.assertEqual(above_mad["objectif_mm"], 0.0)
+
+        # Réserve descendue au seuil MAD (5/12 ≈ 58 % épuisé) : recharge profonde déclenchée,
+        # bornée par la réserve utile (pas de sur-remplissage).
+        depleted = self._snapshot(soil_balance={"reserve_mm": 5.0}, etp_capteur=8.0, pluie_demain=0.0)
+        self.assertGreaterEqual(depleted["depletion_ratio"], 0.5)
+        self.assertTrue(depleted["arrosage_recommande"])
+        self.assertGreater(depleted["objectif_mm"], 0.0)
+        self.assertLessEqual(depleted["objectif_mm"], depleted["reserve_utile_mm"])
+
+
+class TestDepletionWateringModel(unittest.TestCase):
+    """Modèle de dépletion (Normal + réserve sol interne) : deplete-to-MAD, refill-to-full."""
+
+    @staticmethod
+    def _profile(**overrides):
+        water_balance = dict(
+            bilan_hydrique_mm=-7.0,
+            deficit_jour=4.0,
+            deficit_3j=8.0,
+            deficit_7j=20.0,
+            arrosage_recent_7j=0.0,
+            arrosage_recent=0.0,
+            reserve_from_soil_ledger=True,
+            reserve_utile_mm=12.0,
+            reserve_actuelle_mm=5.0,
+            reserve_stock_mm=5.0,
+            reserve_stock_max_mm=24.0,
+            depletion_mm=7.0,
+            depletion_ratio=0.583,
+            mad_ratio=0.5,
+        )
+        water_balance.update(overrides)
+        return guidance.compute_watering_profile(
+            phase_dominante="Normal",
+            sous_phase="Normal",
+            water_balance=water_balance,
+            today=date(2026, 7, 15),
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            pluie_j2=0.0,
+            pluie_3j=0.0,
+            pluie_probabilite_max_3j=0.0,
+            humidite=40.0,
+            temperature=30.0,
+            etp=7.0,
+            type_sol="limoneux",
+            weather_profile={},
+            history=[],
+        )
+
+    def test_no_watering_while_reserve_above_mad(self):
+        # Réserve à 8/12 (33 % épuisé, sous le seuil MAD 50 %) : pas d'arrosage.
+        profile = self._profile(reserve_actuelle_mm=8.0, depletion_mm=4.0, depletion_ratio=0.333)
+        self.assertEqual(profile["mm_final_recommande"], 0.0)
+        self.assertIsNone(profile["block_reason"])
+
+    def test_refill_targets_reserve_utile_when_mad_reached(self):
+        # Réserve à 5/12 (58 % épuisé) : recharge = déficit jusqu'au plein utile (7 mm),
+        # jamais au-delà de la réserve utile.
+        profile = self._profile()
+        self.assertEqual(profile["mm_final_recommande"], 7.0)
+        self.assertLessEqual(profile["mm_final_recommande"], 12.0)
+        self.assertIsNone(profile["block_reason"])
+
+    def test_dose_capped_by_weekly_budget(self):
+        # 22 mm déjà arrosés sur 7 jours glissants : la recharge est plafonnée au reste du
+        # budget hebdomadaire (cap dur), même si la réserve est épuisée.
+        profile = self._profile(arrosage_recent_7j=22.0)
+        weekly_room = round(profile["weekly_guardrail_mm_max"] - 22.0, 1)
+        self.assertEqual(profile["mm_final_recommande"], weekly_room)
+        self.assertLess(profile["mm_final_recommande"], 7.0)
+
+    def test_depletion_not_applied_in_sursemis(self):
+        # Anti-régression du bug d'origine : en Sursemis, même avec une réserve sol épuisée,
+        # la dépletion ne s'applique pas (recharge profonde inadaptée au semis).
+        snapshot = decision.build_decision_snapshot(
+            history=[{"type": "Sursemis", "date": "2026-07-10"}],
+            today=date(2026, 7, 15),
+            hour_of_day=6,
+            temperature=25.0,
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            pluie_j2=0.0,
+            pluie_3j=0.0,
+            humidite=50.0,
+            type_sol="limoneux",
+            etp_capteur=6.0,
+            soil_balance={"reserve_mm": 5.0},
+        )
+        self.assertEqual(snapshot["phase_active"], "Sursemis")
+        self.assertFalse(snapshot["use_depletion_logic"])

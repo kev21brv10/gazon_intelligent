@@ -1581,7 +1581,6 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
             weekly_max_mm,
         ), 1,
     )
-    useful_threshold = max(min_session_mm, guardrail_min_effective * 0.5)
     block_reason = None
     if ctx.pluie_compensatrice or ctx.pluie_proche:
         block_reason = "pluie_prevue_suffisante"
@@ -1597,32 +1596,60 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
         and ctx.deficit_mm_ajuste < ctx.guardrail_min_mm
     ):
         block_reason = "garde_fou_hebdomadaire"
-    if ctx.deficit_mm_ajuste < useful_threshold:
-        mm_cible = 0.0
-    else:
-        upper_bound = min(guardrail_max_effective, ctx.deficit_mm_brut)
-        if upper_bound <= guardrail_min_effective:
-            mm_cible = upper_bound
+    # Mode Normal (pelouse établie).
+    # Si le bilan sol interne fournit une réserve réelle (ledger soil_balance tenu par
+    # l'intégration), on pilote par épuisement de la réserve utile : on laisse descendre
+    # jusqu'au seuil MAD (épuisement autorisé) puis on recharge en profondeur jusqu'au
+    # plein utile — arrosages espacés, enracinement profond, mini-stress sain, borné par le
+    # garde-fou hebdomadaire (cap dur). Sans réserve sol (ex. tout premier cycle, ledger
+    # vide), la réserve dérive du bilan court et n'atteindrait pas le seuil : on retombe
+    # alors sur le modèle déficit (legacy), plus prudent. La dépletion reste cantonnée à
+    # Normal : en Sursemis elle surestimait (recharge profonde inadaptée au semis), d'où
+    # _profile_for_sursemis.
+    reserve_from_ledger = bool(ctx.water_balance.get("reserve_from_soil_ledger"))
+    if reserve_from_ledger:
+        depletion_ratio = float(ctx.water_balance.get("depletion_ratio") or 0.0)
+        mad_ratio = float(ctx.water_balance.get("mad_ratio") or 0.5)
+        depletion_mm = float(ctx.water_balance.get("depletion_mm") or 0.0)
+        if depletion_ratio < mad_ratio:
+            mm_cible = 0.0
         else:
-            mm_cible = _clamp(
-                max(ctx.deficit_mm_ajuste, guardrail_min_effective),
-                guardrail_min_effective,
-                upper_bound,
-            )
-    if block_reason is not None:
-        mm_cible = 0.0
+            mm_cible = max(depletion_mm, min_session_mm)
+            if max_session_mm is not None:
+                mm_cible = min(mm_cible, max_session_mm)
+            weekly_room = max(0.0, guardrail_max_effective - ctx.recent_watering_mm_7j)
+            mm_cible = round(min(mm_cible, weekly_room), 1)
+        if block_reason is not None:
+            mm_cible = 0.0
+        mm_final = mm_cible
     else:
-        mm_cible = _apply_watering_floor_constraints(mm_cible, ctx.deficit_mm_brut, min_session_mm)
-    mm_final = mm_cible
-    if not block_reason and mm_final > 0:
-        _reserve_max = float(ctx.water_balance.get("reserve_stock_max_mm") or 0.0)
-        _reserve_cur = float(ctx.water_balance.get("reserve_stock_mm") or 0.0)
-        _depletion_r = float(ctx.water_balance.get("depletion_ratio") or 0.0)
-        _mad = float(ctx.water_balance.get("mad_ratio") or 0.5)
-        if _reserve_max > 0 and _depletion_r < _mad:
-            _fill_cap = max(0.0, _reserve_max - _reserve_cur)
-            mm_cible = round(min(mm_cible, _fill_cap), 1)
-            mm_final = mm_cible
+        useful_threshold = max(min_session_mm, guardrail_min_effective * 0.5)
+        if ctx.deficit_mm_ajuste < useful_threshold:
+            mm_cible = 0.0
+        else:
+            upper_bound = min(guardrail_max_effective, ctx.deficit_mm_brut)
+            if upper_bound <= guardrail_min_effective:
+                mm_cible = upper_bound
+            else:
+                mm_cible = _clamp(
+                    max(ctx.deficit_mm_ajuste, guardrail_min_effective),
+                    guardrail_min_effective,
+                    upper_bound,
+                )
+        if block_reason is not None:
+            mm_cible = 0.0
+        else:
+            mm_cible = _apply_watering_floor_constraints(mm_cible, ctx.deficit_mm_brut, min_session_mm)
+        mm_final = mm_cible
+        if not block_reason and mm_final > 0:
+            _reserve_max = float(ctx.water_balance.get("reserve_stock_max_mm") or 0.0)
+            _reserve_cur = float(ctx.water_balance.get("reserve_stock_mm") or 0.0)
+            _depletion_r = float(ctx.water_balance.get("depletion_ratio") or 0.0)
+            _mad = float(ctx.water_balance.get("mad_ratio") or 0.5)
+            if _reserve_max > 0 and _depletion_r < _mad:
+                _fill_cap = max(0.0, _reserve_max - _reserve_cur)
+                mm_cible = round(min(mm_cible, _fill_cap), 1)
+                mm_final = mm_cible
     passages = 1
     if max_session_mm is not None and mm_final > max_session_mm:
         passages = max(passages, int(ceil(mm_final / max_session_mm)))
@@ -1648,7 +1675,7 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
         niveau_confiance=confidence_level,
         confidence_score=confidence_score,
         confidence_reasons=confidence_reasons,
-        raison_decision_base="Mode Normal: arrosage profond uniquement si le déficit est utile.",
+        raison_decision_base="Mode Normal: arrosage profond déclenché quand la réserve atteint le seuil d'épuisement (MAD).",
         block_reason=block_reason,
         fenetre_optimale="maintenant" if ctx.morning_start_minute <= ctx.now_minutes < ctx.acceptable_end_minute else "ce_matin",
         niveau_action="a_faire" if mm_final > 0 else "surveiller",
