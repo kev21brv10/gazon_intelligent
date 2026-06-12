@@ -29,13 +29,14 @@ L'intégration construit une lecture métier exploitable dans Home Assistant:
 
 Elle est conçue pour rester lisible côté UI, tout en gardant assez de structure pour les automatisations, le debug et les dashboards avancés.
 
-## ✨ Ce que la version actuelle apporte (v0.10.0)
+## ✨ Ce que la version actuelle apporte (v0.10.1)
 
 - **Arrosage piloté par la réserve du sol (mode Normal)** : la pelouse établie n'est plus arrosée tant que la réserve utile reste au-dessus du **seuil d'épuisement (MAD 50 %)** ; une fois ce seuil atteint, une **recharge profonde** ramène la réserve au plein. Résultat : arrosages **plus espacés et plus profonds**, qui favorisent l'enracinement (léger stress bénéfique) — au lieu de petits apports fréquents. Borné par le garde-fou hebdomadaire ; repli automatique sur l'ancien modèle tant que le bilan sol interne n'est pas encore établi
 - **Phase semis préservée** : la recharge profonde reste **exclue du Sursemis** (inadaptée au semis), verrouillée par un test d'anti-régression
-- **485 tests unitaires** verts
+- **Capteur de blocage plus honnête (0.10.1)** : quand l'arrosage auto ne part pas à cause d'un blocage (cooldown, pluie prévue, sol humide, budget hebdo…), le capteur `arrosage_auto_blocage` affiche le **vrai motif** au lieu de « réserve suffisante »
+- **487 tests unitaires** verts
 
-*Version précédente (v0.9.5) : déclenchement enfin de l'arrosage automatique (`startup_guard`), déblocage du verrou de sécurité, capteur de diagnostic `arrosage_auto_blocage`.*
+*Versions précédentes (v0.10.0 · v0.9.5) : pilotage de l'arrosage par épuisement de la réserve (deplete-to-MAD) ; déclenchement enfin de l'arrosage automatique (`startup_guard`), déblocage du verrou de sécurité, capteur de diagnostic `arrosage_auto_blocage`.*
 
 *Versions antérieures (v0.9.4 · v0.9.3 · v0.9.2 · v0.9.1 · v0.9.0/v0.8.x) : libellé d'erreur tondeuse précis, arrosage post-application limité au jour même, ET0 réaliste sans capteur (FAO-56 + vent km/h→m/s), cohérence conseil/exécution sous pluie, objectif plafonné à la capacité du sol, coordination arrosage/tonte, support multi-pelouse.*
 - une instance par pelouse, avec support multi-gazon propre

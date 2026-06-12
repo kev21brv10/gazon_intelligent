@@ -2051,6 +2051,39 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(blocage_sensor.native_value, "Prêt")
         self.assertFalse(blocage_sensor.extra_state_attributes["bloque"])
 
+    def test_arrosage_auto_blocage_sensor_reports_decision_block_over_no_objective(self) -> None:
+        # L'exécution rapporte "no_objective" (objectif 0) mais la vraie cause est le
+        # cooldown : le capteur doit afficher CE motif réel, pas « réserve suffisante ».
+        import dataclasses
+
+        base = _make_result()
+        result = dataclasses.replace(base, extra={**base.extra, "block_reason": "cooldown_24h"})
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={"auto_irrigation_block_reason": "no_objective", "auto_irrigation_safety_lock": False},
+            result=result,
+            history=[],
+        )
+        blocage_sensor = sensor.GazonArrosageAutoBlocageSensor(coordinator)
+        self.assertEqual(blocage_sensor.native_value, "Repos après arrosage")
+        attrs = blocage_sensor.extra_state_attributes
+        self.assertEqual(attrs["code"], "cooldown_24h")
+        self.assertFalse(attrs["bloque"])
+        self.assertNotIn("suffisante", attrs["pourquoi"])
+
+    def test_arrosage_auto_blocage_sensor_keeps_no_objective_without_decision_block(self) -> None:
+        # Sans blocage de décision, « no_objective » reste « Aucun besoin » (réserve OK).
+        base = _make_result()
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={"auto_irrigation_block_reason": "no_objective", "auto_irrigation_safety_lock": False},
+            result=base,
+            history=[],
+        )
+        blocage_sensor = sensor.GazonArrosageAutoBlocageSensor(coordinator)
+        self.assertEqual(blocage_sensor.native_value, "Aucun besoin")
+        self.assertEqual(blocage_sensor.extra_state_attributes["code"], "no_objective")
+
     def test_catalogue_products_sensor_lists_registered_products(self) -> None:
         coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=None, history=[], memory={})
         coordinator.products = {

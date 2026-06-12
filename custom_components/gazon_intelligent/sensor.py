@@ -1137,6 +1137,44 @@ _AUTO_IRRIGATION_BLOCK_INFO: dict[str, tuple[str, bool, str, str]] = {
         "Le prochain micro-cycle de semis n'est pas encore dû.",
         "Aucune action.",
     ),
+    # Motifs côté DÉCISION qui mettent l'objectif à 0 (l'exécution rapporte alors
+    # "no_objective", mais la vraie cause est l'un de ceux-ci → on l'affiche).
+    "cooldown_24h": (
+        "Repos après arrosage",
+        False,
+        "La pelouse a été arrosée il y a moins de 24 h : un délai est respecté avant un nouvel arrosage.",
+        "Aucune action : si la réserve reste basse, l'arrosage repartira à la fin du délai.",
+    ),
+    "pluie_prevue_suffisante": (
+        "Pluie prévue suffisante",
+        False,
+        "De la pluie est annoncée et devrait couvrir le besoin : arroser serait inutile.",
+        "Aucune action : l'arrosage repartira si la pluie ne tombe pas comme prévu.",
+    ),
+    "pluie_active": (
+        "Pluie en cours",
+        False,
+        "Il pleut actuellement : pas d'arrosage.",
+        "Aucune action : se lèvera après la pluie.",
+    ),
+    "sol_deja_humide": (
+        "Sol déjà humide",
+        False,
+        "Le sol est déjà suffisamment humide : pas besoin d'arroser.",
+        "Aucune action.",
+    ),
+    "humidite_excessive": (
+        "Conditions trop humides",
+        False,
+        "L'humidité est élevée (ou la réserve est déjà au-dessus du plein) : l'arrosage est superflu.",
+        "Aucune action.",
+    ),
+    "garde_fou_hebdomadaire": (
+        "Budget hebdo atteint",
+        False,
+        "Le budget d'arrosage de la semaine est atteint : on plafonne pour éviter le sur-arrosage.",
+        "Aucune action : le budget se reconstitue au fil des jours.",
+    ),
 }
 
 _AUTO_IRRIGATION_READY_REASONS = {"ready", "post_application_ready"}
@@ -1158,9 +1196,25 @@ class GazonArrosageAutoBlocageSensor(GazonEntityBase, SensorEntity):
         data = getattr(self.coordinator, "data", None)
         return data if isinstance(data, dict) else {}
 
+    def _resolve_block_reason(self):
+        """Raison la plus informative pour l'utilisateur.
+
+        L'exécution rapporte « no_objective » dès que l'objectif est à 0 — y compris
+        quand c'est un blocage de décision (cooldown, pluie, sol humide, budget hebdo…)
+        qui a mis l'objectif à 0. Dans ce cas on remonte le **vrai** motif plutôt que de
+        laisser croire à une « réserve suffisante » (qui serait faux si la réserve est
+        basse mais qu'on est en cooldown, par exemple).
+        """
+        reason = self._coordinator_data().get("auto_irrigation_block_reason")
+        if reason == "no_objective":
+            decision_block = str(self._decision_value("block_reason") or "").strip()
+            if decision_block and decision_block in _AUTO_IRRIGATION_BLOCK_INFO:
+                return decision_block
+        return reason
+
     @property
     def native_value(self):
-        reason = self._coordinator_data().get("auto_irrigation_block_reason")
+        reason = self._resolve_block_reason()
         if reason in _AUTO_IRRIGATION_READY_REASONS:
             return "Prêt"
         if reason is None:
@@ -1171,7 +1225,7 @@ class GazonArrosageAutoBlocageSensor(GazonEntityBase, SensorEntity):
     @property
     def extra_state_attributes(self):
         data = self._coordinator_data()
-        reason = data.get("auto_irrigation_block_reason")
+        reason = self._resolve_block_reason()
         safety_lock = bool(data.get("auto_irrigation_safety_lock"))
         if reason in _AUTO_IRRIGATION_READY_REASONS:
             return {
