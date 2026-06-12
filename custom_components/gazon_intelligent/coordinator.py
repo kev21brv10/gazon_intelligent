@@ -256,6 +256,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "last_irrigation_execution": None,
             "last_auto_irrigation_reason": None,
             "auto_irrigation_safety_lock": False,
+            # Garde anti-démarrage : reste False tant qu'aucun cycle de données sain
+            # n'a eu lieu. Volontairement NON persisté → se réarme à chaque (re)démarrage.
+            "auto_irrigation_bootstrap_complete": False,
         }
 
     def _current_datetime(self) -> datetime:
@@ -477,6 +480,16 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "auto_irrigation_enabled",
             self.auto_irrigation_enabled,
         )
+        # Diagnostic « pourquoi l'arrosage auto ne part pas » : raison du dernier passage
+        # de _should_launch_auto_irrigation (mise à jour par _maybe_schedule juste avant)
+        # + état du verrou de sécurité. Exploités par le capteur de blocage.
+        last_reason = self._runtime_state.get("last_auto_irrigation_reason")
+        payload["auto_irrigation_block_reason"] = (
+            last_reason.get("reason") if isinstance(last_reason, dict) else None
+        )
+        payload["auto_irrigation_safety_lock"] = bool(
+            self._runtime_state.get("auto_irrigation_safety_lock")
+        )
         return payload
 
     async def _async_update_data(self) -> dict[str, Any]:
@@ -612,6 +625,14 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._latest_full_snapshot = dict(snapshot)
         _LOGGER.debug("Gazon Intelligent V2 observability: %s", self._build_observability_payload(snapshot))
         await self._async_save_state()
+        # Armer l'arrosage auto une fois le premier snapshot sain calculé. Le startup_guard
+        # de _should_launch_auto_irrigation bloque tout déclenchement tant que ce flag est
+        # absent/False, pour éviter d'agir pendant le démarrage de HA (capteurs unavailable).
+        self._ensure_irrigation_runtime_bootstrap()
+        if not self._runtime_state.get("auto_irrigation_bootstrap_complete"):
+            snapshot_sain = temperature is not None and snapshot.get("objectif_mm") is not None
+            if snapshot_sain:
+                self._runtime_state["auto_irrigation_bootstrap_complete"] = True
         maybe_schedule = self._maybe_schedule_auto_irrigation(snapshot)
         if asyncio.iscoroutine(maybe_schedule):
             await maybe_schedule
@@ -1350,6 +1371,12 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_set_normal(self) -> None:
         """Réinitialise la phase active vers Normal (historique conservé)."""
         self.brain.set_normal()
+        # Lève le verrou de sécurité d'arrosage : « Retour au mode normal » (bouton ou
+        # service reset_mode) est l'action utilisateur explicite « j'ai vérifié les vannes,
+        # on peut reprendre ». Sans ça, un seul échec de fermeture de vanne bloquerait
+        # l'arrosage auto définitivement, sans aucun recours.
+        self._ensure_irrigation_runtime_bootstrap()
+        self._runtime_state["auto_irrigation_safety_lock"] = False
         await self._async_save_state()
         await self.async_request_refresh()
 
@@ -1882,12 +1909,14 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "last_irrigation_execution": None,
                 "last_auto_irrigation_reason": None,
                 "auto_irrigation_safety_lock": False,
+                "auto_irrigation_bootstrap_complete": False,
             }
             return
         runtime_state.setdefault("active_irrigation_session", None)
         runtime_state.setdefault("last_irrigation_execution", None)
         runtime_state.setdefault("last_auto_irrigation_reason", None)
         runtime_state.setdefault("auto_irrigation_safety_lock", False)
+        runtime_state.setdefault("auto_irrigation_bootstrap_complete", False)
 
     def _serialized_runtime_state(self) -> dict[str, Any]:
         self._ensure_irrigation_runtime_bootstrap()

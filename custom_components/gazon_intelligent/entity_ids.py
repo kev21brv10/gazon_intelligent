@@ -66,6 +66,7 @@ PUBLIC_ENTITY_KEYS: dict[str, tuple[str, str]] = {
     "score_niveau": ("sensor", f"{DOMAIN}_niveau_de_pertinence"),
     "prochaine_fenetre_optimale": ("sensor", f"{DOMAIN}_prochaine_fenetre_optimale"),
     "prochain_blocage_attendu": ("sensor", f"{DOMAIN}_prochain_blocage_attendu"),
+    "arrosage_auto_blocage": ("sensor", f"{DOMAIN}_arrosage_auto_blocage"),
     "signal_intervention": ("binary_sensor", f"{DOMAIN}_signal_intervention"),
     "signal_irrigation": ("binary_sensor", f"{DOMAIN}_signal_irrigation"),
     "arrosage_apres_application_autorise": ("binary_sensor", f"{DOMAIN}_arrosage_apres_application_autorise"),

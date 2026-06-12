@@ -177,6 +177,7 @@ class EntityRegistryTests(unittest.TestCase):
             sensor.GazonScoreNiveauSensor(coordinator),
             sensor.GazonProchaineFenetreOptimaleSensor(coordinator),
             sensor.GazonProchainBlocageAttenduSensor(coordinator),
+            sensor.GazonArrosageAutoBlocageSensor(coordinator),
             sensor.GazonArrosageEnCoursSensor(coordinator),
             sensor.GazonTonteEtatSensor(coordinator),
             sensor.GazonHauteurTonteSensor(coordinator),

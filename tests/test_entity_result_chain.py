@@ -2014,6 +2014,43 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertTrue(application_allowed_sensor.is_on)
         self.assertEqual(application_allowed_sensor.extra_state_attributes["application_type"], "sol")
 
+    def test_arrosage_auto_blocage_sensor_explains_safety_lock(self) -> None:
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={"auto_irrigation_block_reason": "safety_lock", "auto_irrigation_safety_lock": True},
+            result=None,
+            history=[],
+        )
+        blocage_sensor = sensor.GazonArrosageAutoBlocageSensor(coordinator)
+        self.assertEqual(blocage_sensor.native_value, "Bloqué (sécurité)")
+        attrs = blocage_sensor.extra_state_attributes
+        self.assertTrue(attrs["bloque"])
+        self.assertEqual(attrs["code"], "safety_lock")
+        self.assertIn("Retour au mode normal", attrs["comment_debloquer"])
+        self.assertTrue(attrs["safety_lock_actif"])
+
+    def test_arrosage_auto_blocage_sensor_soft_state_is_not_blocked(self) -> None:
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={"auto_irrigation_block_reason": "no_objective", "auto_irrigation_safety_lock": False},
+            result=None,
+            history=[],
+        )
+        blocage_sensor = sensor.GazonArrosageAutoBlocageSensor(coordinator)
+        self.assertEqual(blocage_sensor.native_value, "Aucun besoin")
+        self.assertFalse(blocage_sensor.extra_state_attributes["bloque"])
+
+    def test_arrosage_auto_blocage_sensor_ready_state(self) -> None:
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={"auto_irrigation_block_reason": "ready", "auto_irrigation_safety_lock": False},
+            result=None,
+            history=[],
+        )
+        blocage_sensor = sensor.GazonArrosageAutoBlocageSensor(coordinator)
+        self.assertEqual(blocage_sensor.native_value, "Prêt")
+        self.assertFalse(blocage_sensor.extra_state_attributes["bloque"])
+
     def test_catalogue_products_sensor_lists_registered_products(self) -> None:
         coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=None, history=[], memory={})
         coordinator.products = {

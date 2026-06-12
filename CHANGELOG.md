@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.5
+Déblocage de l'arrosage automatique (qui ne se déclenchait jamais) + diagnostic (481 tests verts) :
+- **Arrosage** : corrige un bug où l'arrosage **automatique ne se déclenchait jamais**. La garde de démarrage `startup_guard` (qui empêche d'agir pendant le boot de HA quand les capteurs sont encore `unavailable`) n'était **jamais levée** : le flag `auto_irrigation_bootstrap_complete` était lu mais écrit nulle part → `_should_launch_auto_irrigation` retournait toujours `(False, "startup_guard")`. Le flag est désormais armé au **premier cycle de données sain** (température + objectif présents), et reste volatil (se réarme à chaque redémarrage, pour ne pas agir avant que les capteurs soient prêts).
+- **Arrosage** : le verrou de sécurité `safety_lock` — qui s'arme quand une vanne ne se confirme pas fermée en fin d'arrosage et bloque tout arrosage auto — n'avait **aucun moyen d'être levé** (latence définitive). Le bouton **« Retour au mode normal »** (et le service `reset_mode`) le lèvent désormais.
+- **Diagnostic** : nouveau capteur `sensor.gazon_intelligent_arrosage_auto_blocage` qui indique **explicitement pourquoi l'arrosage auto ne part pas** (état lisible) et, en attributs, `bloque` (action requise ou non), `pourquoi` et `comment_debloquer`.
+
 ## 0.9.4
 Libellé d'erreur tondeuse précis pour la carte, compatible toutes tondeuses HA (474 tests verts) :
 - **Tonte** : quand la tonte est bloquée parce que le robot est en faute (lame bloquée, soulevé, défaut…), l'intégration expose désormais un libellé précis « **Robot en erreur : …** » (au lieu de « hors ligne » ou d'un libellé générique). La détection est posée dans la résolution de `machine_unavailable_label` (`decision_mowing` + le fallback de `sensor`), prioritaire sur les autres motifs machine. Elle s'appuie sur l'**état standard `error` du domaine `lawn_mower`** (mappé en statut « erreur ») → **compatible avec n'importe quelle tondeuse Home Assistant**, le capteur d'erreur dédié (enum Husqvarna…) n'ajoutant que la précision du texte. Garde anti faux positif : les sentinelles `no_error`/`none`/`ok`/`aucune` ne déclenchent jamais le libellé. Aucun nouvel attribut public (réutilise `machine_unavailable_label` / `machine_unavailable_detail`) ; la carte affiche le nouveau libellé automatiquement.
