@@ -292,6 +292,76 @@ def _build_runtime_ready_coordinator(
     return coord
 
 
+def _build_update_data_coordinator(*, weather_temperature: float | None) -> object:
+    """Coordinator prêt à exécuter `_async_update_data`, avec température pilotable.
+
+    `auto_irrigation_bootstrap_complete` est mis à False au départ pour observer son
+    armement par le cycle. `fenetre_optimale = "attendre"` isole l'armement (aucun
+    lancement réel d'arrosage déclenché).
+    """
+    coordinator = _build_coordinator()
+    coordinator._loaded = True
+    coordinator._auto_irrigation_task = None
+    coordinator._auto_irrigation_scheduler_task = None
+    coordinator._runtime_state["auto_irrigation_bootstrap_complete"] = False
+
+    async def _load_state():
+        return None
+
+    class _Brain:
+        last_result = None
+        memory = {}
+
+        def compute_snapshot(self, **kwargs):  # noqa: ARG002
+            return {
+                "mode": "Normal",
+                "phase_active": "Normal",
+                "objectif_mm": 5.0,
+                "tonte_autorisee": True,
+                "tonte_statut": "autorisee",
+                "arrosage_recommande": True,
+                "type_arrosage": "auto",
+                "fenetre_optimale": "attendre",
+                "conseil_principal": "ok",
+                "action_recommandee": "ok",
+                "action_a_eviter": "ok",
+                "niveau_action": "surveiller",
+                "risque_gazon": "faible",
+                "phase_dominante": "Normal",
+                "phase_dominante_source": "historique",
+                "sous_phase": "Normal",
+                "sous_phase_detail": "Normal",
+                "sous_phase_age_days": 1,
+                "sous_phase_progression": "early",
+            }
+
+    coordinator._async_load_state = _load_state
+    coordinator.brain = _Brain()
+    coordinator.history = []
+    coordinator._get_conf = lambda key: {
+        "capteur_temperature": "sensor.temperature",
+        "type_sol": "limoneux",
+    }.get(key)
+    coordinator._get_float_state = lambda entity_id: None
+    coordinator._get_weather_profile = lambda entity_id: {  # noqa: ARG005
+        "weather_temperature": weather_temperature,
+        "weather_apparent_temperature": weather_temperature,
+        "weather_humidity": 55.0,
+    }
+
+    async def _forecast_summary(entity_id):  # noqa: ARG001
+        return {}
+
+    async def _save_state():
+        return None
+
+    coordinator._get_weather_forecast_summary = _forecast_summary
+    coordinator._estimate_rosee = lambda weather_profile, temperature, humidite: 0.0  # noqa: ARG005
+    coordinator._get_float_conf = lambda key, default: default  # noqa: ARG005
+    coordinator._async_save_state = _save_state
+    return coordinator
+
+
 class WateringSessionMonitoringTests(unittest.TestCase):
     def test_get_conf_prefers_local_option_over_shared_state(self) -> None:
         coordinator = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
@@ -647,6 +717,46 @@ class WateringSessionMonitoringTests(unittest.TestCase):
         self.assertEqual(captured["temperature"], 0.0)
         self.assertEqual(captured["temperature_source"], "weather")
         self.assertEqual(result["objectif_mm"], 1.2)
+
+    def test_update_data_arms_auto_irrigation_after_healthy_snapshot(self) -> None:
+        # Premier cycle sain (température + objectif présents) → le startup_guard se lève.
+        coordinator = _build_update_data_coordinator(weather_temperature=18.0)
+        self.assertFalse(coordinator._runtime_state["auto_irrigation_bootstrap_complete"])
+
+        asyncio.run(coordinator._async_update_data())
+
+        self.assertTrue(coordinator._runtime_state["auto_irrigation_bootstrap_complete"])
+        _, reason = coordinator._should_launch_auto_irrigation(coordinator._latest_full_snapshot)
+        self.assertNotEqual(reason, "startup_guard")
+
+    def test_update_data_keeps_startup_guard_when_sensors_unavailable(self) -> None:
+        # Capteurs encore unavailable au démarrage (température None) → on n'arme PAS.
+        coordinator = _build_update_data_coordinator(weather_temperature=None)
+
+        asyncio.run(coordinator._async_update_data())
+
+        self.assertFalse(coordinator._runtime_state["auto_irrigation_bootstrap_complete"])
+        _, reason = coordinator._should_launch_auto_irrigation(coordinator._latest_full_snapshot)
+        self.assertEqual(reason, "startup_guard")
+
+    def test_async_set_normal_clears_safety_lock(self) -> None:
+        # « Retour au mode normal » (bouton/service) lève le verrou de sécurité.
+        coordinator = _build_coordinator()
+        coordinator._runtime_state["auto_irrigation_safety_lock"] = True
+        coordinator.brain.set_normal = lambda: None
+        coordinator._async_save_state = AsyncMock()
+        coordinator.async_request_refresh = AsyncMock()
+
+        asyncio.run(coordinator.async_set_normal())
+
+        self.assertFalse(coordinator._runtime_state["auto_irrigation_safety_lock"])
+
+    def test_update_data_exposes_startup_guard_block_reason(self) -> None:
+        # Capteurs unavailable → non armé → la raison de blocage exposée est "startup_guard".
+        coordinator = _build_update_data_coordinator(weather_temperature=None)
+        result = asyncio.run(coordinator._async_update_data())
+        self.assertEqual(result.get("auto_irrigation_block_reason"), "startup_guard")
+        self.assertFalse(result.get("auto_irrigation_safety_lock"))
 
     def test_recent_watering_block_ignores_yesterday_session_total(self) -> None:
         coordinator = _build_coordinator()

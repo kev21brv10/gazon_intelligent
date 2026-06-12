@@ -1017,6 +1017,193 @@ def _public_intervention_attributes(payload: dict[str, object]) -> dict[str, obj
     return _clean_public_attrs(attrs) or {}
 
 
+# Table de présentation des raisons de blocage de l'arrosage automatique.
+# Clé = code renvoyé par coordinator._should_launch_auto_irrigation.
+# Valeur = (état lisible, blocage « dur » nécessitant une action, pourquoi, comment débloquer).
+_AUTO_IRRIGATION_BLOCK_INFO: dict[str, tuple[str, bool, str, str]] = {
+    "safety_lock": (
+        "Bloqué (sécurité)",
+        True,
+        "Une vanne ne s'est pas confirmée fermée lors d'un arrosage : par sécurité, "
+        "l'arrosage automatique est suspendu (risque de vanne restée ouverte).",
+        "Vérifie que tes vannes d'arrosage sont bien fermées, puis appuie sur le bouton "
+        "« Retour au mode normal » (ou appelle le service gazon_intelligent.reset_mode).",
+    ),
+    "startup_guard": (
+        "Démarrage en cours",
+        False,
+        "Home Assistant vient de démarrer : les capteurs ne sont pas encore tous prêts.",
+        "Aucune action : se débloque automatiquement au premier cycle de données valide.",
+    ),
+    "auto_irrigation_disabled": (
+        "Désactivé",
+        True,
+        "L'arrosage automatique est désactivé.",
+        "Active l'interrupteur « Arrosage auto autorisé ».",
+    ),
+    "user_confirmation_required": (
+        "Confirmation requise",
+        True,
+        "L'arrosage automatique attend une confirmation explicite de l'utilisateur.",
+        "Confirme l'arrosage automatique.",
+    ),
+    "no_plan_available": (
+        "Plan indisponible",
+        True,
+        "Aucun plan d'arrosage exploitable n'a pu être construit (zones ou débits manquants ?).",
+        "Vérifie la configuration des zones et de leurs débits dans l'intégration.",
+    ),
+    "auto_not_allowed": (
+        "Mode non automatique",
+        False,
+        "Le profil d'arrosage courant n'autorise pas le déclenchement automatique.",
+        "Aucune action : la phase/le mode courant gère l'arrosage autrement.",
+    ),
+    "execution_not_allowed": (
+        "Exécution non autorisée",
+        False,
+        "L'exécution de l'arrosage n'est pas permise dans le contexte courant.",
+        "Aucune action immédiate.",
+    ),
+    "no_objective": (
+        "Aucun besoin",
+        False,
+        "Aucun besoin d'arrosage : l'objectif est à 0 (réserve hydrique suffisante).",
+        "Aucune action : l'arrosage partira quand la réserve baissera.",
+    ),
+    "not_recommended": (
+        "Non recommandé",
+        False,
+        "L'arrosage n'est pas recommandé actuellement.",
+        "Aucune action.",
+    ),
+    "irrigation_blocked": (
+        "Bloqué par conditions",
+        False,
+        "Arrosage bloqué par les conditions (pluie annoncée, sol déjà humide, ou tondeuse en cours).",
+        "Aucune action : se lèvera quand les conditions le permettront.",
+    ),
+    "window_unavailable": (
+        "Hors fenêtre",
+        False,
+        "On est hors de la fenêtre d'arrosage du jour.",
+        "Aucune action : l'arrosage partira dans la fenêtre du matin (ou du soir si activé).",
+    ),
+    "outside_window": (
+        "Hors fenêtre",
+        False,
+        "On est hors de la fenêtre d'arrosage du matin.",
+        "Aucune action : attends la fenêtre du matin.",
+    ),
+    "outside_evening_window": (
+        "Hors fenêtre du soir",
+        False,
+        "On est hors de la fenêtre d'arrosage du soir.",
+        "Aucune action.",
+    ),
+    "evening_disabled": (
+        "Soir désactivé",
+        False,
+        "L'arrosage du soir n'est pas autorisé.",
+        "Active l'arrosage du soir si tu le souhaites.",
+    ),
+    "watering_in_progress": (
+        "Arrosage en cours",
+        False,
+        "Un arrosage est déjà en cours.",
+        "Aucune action : attends la fin du cycle.",
+    ),
+    "recent_watering": (
+        "Arrosé récemment",
+        False,
+        "La pelouse a été arrosée récemment.",
+        "Aucune action.",
+    ),
+    "target_date_future": (
+        "Programmé plus tard",
+        False,
+        "La date cible d'arrosage est dans le futur.",
+        "Aucune action.",
+    ),
+    "semis_target_reached": (
+        "Objectif semis atteint",
+        False,
+        "Le nombre de cycles d'arrosage du jour pour le semis est atteint.",
+        "Aucune action.",
+    ),
+    "semis_cycle_pending": (
+        "Cycle semis en attente",
+        False,
+        "Le prochain micro-cycle de semis n'est pas encore dû.",
+        "Aucune action.",
+    ),
+}
+
+_AUTO_IRRIGATION_READY_REASONS = {"ready", "post_application_ready"}
+
+
+class GazonArrosageAutoBlocageSensor(GazonEntityBase, SensorEntity):
+    """Diagnostic : dit explicitement pourquoi l'arrosage automatique ne se déclenche pas."""
+
+    _attr_name = "Blocage arrosage auto"
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:water-alert"
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._set_entity_identity("sensor", "arrosage_auto_blocage")
+
+    def _coordinator_data(self) -> dict:
+        data = getattr(self.coordinator, "data", None)
+        return data if isinstance(data, dict) else {}
+
+    @property
+    def native_value(self):
+        reason = self._coordinator_data().get("auto_irrigation_block_reason")
+        if reason in _AUTO_IRRIGATION_READY_REASONS:
+            return "Prêt"
+        if reason is None:
+            return "En attente"
+        info = _AUTO_IRRIGATION_BLOCK_INFO.get(str(reason))
+        return info[0] if info is not None else str(reason)
+
+    @property
+    def extra_state_attributes(self):
+        data = self._coordinator_data()
+        reason = data.get("auto_irrigation_block_reason")
+        safety_lock = bool(data.get("auto_irrigation_safety_lock"))
+        if reason in _AUTO_IRRIGATION_READY_REASONS:
+            return {
+                "bloque": False,
+                "code": reason,
+                "pourquoi": "L'arrosage automatique est prêt à se déclencher (ou en cours de lancement).",
+                "comment_debloquer": "Aucune action requise.",
+                "safety_lock_actif": safety_lock,
+            }
+        info = _AUTO_IRRIGATION_BLOCK_INFO.get(str(reason)) if reason is not None else None
+        if info is None:
+            return {
+                "bloque": False,
+                "code": reason,
+                "pourquoi": (
+                    "Aucun cycle d'arrosage automatique n'a encore été évalué."
+                    if reason is None
+                    else "Raison de blocage inconnue."
+                ),
+                "comment_debloquer": "Aucune action connue.",
+                "safety_lock_actif": safety_lock,
+            }
+        _label, blocked, pourquoi, comment = info
+        return {
+            "bloque": blocked,
+            "code": reason,
+            "pourquoi": pourquoi,
+            "comment_debloquer": comment,
+            "safety_lock_actif": safety_lock,
+        }
+
+
 async def async_setup_entry(hass, entry, async_add_entities):
     await _async_ensure_assistant_entity_id(hass, entry)
     coordinator = _entry_coordinator(hass, entry)
@@ -1059,6 +1246,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
             GazonScoreNiveauSensor(coordinator),
             GazonProchaineFenetreOptimaleSensor(coordinator),
             GazonProchainBlocageAttenduSensor(coordinator),
+            GazonArrosageAutoBlocageSensor(coordinator),
         ]
     )
 

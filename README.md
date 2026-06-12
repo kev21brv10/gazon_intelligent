@@ -29,14 +29,16 @@ L'intégration construit une lecture métier exploitable dans Home Assistant:
 
 Elle est conçue pour rester lisible côté UI, tout en gardant assez de structure pour les automatisations, le debug et les dashboards avancés.
 
-## ✨ Ce que la version actuelle apporte (v0.9.4)
+## ✨ Ce que la version actuelle apporte (v0.9.5)
 
-- **Libellé d'erreur tondeuse précis** : quand la tonte est bloquée parce que le robot est en faute (lame bloquée, soulevé, défaut…), la carte affiche désormais « **Robot en erreur : …** » au lieu de « hors ligne » ou d'un libellé générique. Compatible avec **toutes les tondeuses Home Assistant** : la détection s'appuie sur l'état standard `error` du domaine `lawn_mower`, et le capteur d'erreur dédié (quand il existe) ne fait qu'enrichir le texte. Aucun nouvel attribut, la carte affiche le libellé automatiquement
-- **474 tests unitaires** verts
+- **L'arrosage automatique se déclenche enfin** : correction d'un bug où l'arrosage auto ne partait **jamais** — une garde de démarrage (`startup_guard`) restait bloquée en permanence. Elle se lève désormais au premier cycle de données sain (et se réarme à chaque redémarrage pour ne pas agir avant que les capteurs soient prêts)
+- **Déblocage après incident** : le verrou de sécurité (qui s'arme si une vanne ne se confirme pas fermée) peut maintenant être levé via le bouton **« Retour au mode normal »** — avant, il bloquait l'arrosage auto définitivement
+- **Nouveau capteur de diagnostic** `arrosage_auto_blocage` : dit **explicitement pourquoi** l'arrosage auto ne part pas et **comment le débloquer** (attributs `bloque`, `pourquoi`, `comment_debloquer`)
+- **481 tests unitaires** verts
 
-*Version précédente (v0.9.3) : arrosage technique post-application limité au jour même de l'épandage (plus de conseil/arrosage parasite sur une application ancienne).*
+*Version précédente (v0.9.4) : libellé d'erreur tondeuse précis sur la carte, compatible toutes tondeuses Home Assistant.*
 
-*Versions antérieures (v0.9.2 · v0.9.1 · v0.9.0/v0.8.x) : ET0 réaliste sans capteur (FAO-56 + vent km/h→m/s), cohérence conseil/exécution sous pluie, objectif plafonné à la capacité du sol, coordination arrosage/tonte, support multi-pelouse.*
+*Versions antérieures (v0.9.3 · v0.9.2 · v0.9.1 · v0.9.0/v0.8.x) : arrosage post-application limité au jour même, ET0 réaliste sans capteur (FAO-56 + vent km/h→m/s), cohérence conseil/exécution sous pluie, objectif plafonné à la capacité du sol, coordination arrosage/tonte, support multi-pelouse.*
 - une instance par pelouse, avec support multi-gazon propre
 - une façade publique centrée sur `sensor.gazon_intelligent_assistant`
 - une projection claire de:
