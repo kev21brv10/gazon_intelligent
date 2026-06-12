@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.0
+Pilotage de l'arrosage par épuisement de la réserve en mode Normal, pour un arrosage profond et espacé (485 tests verts) :
+- **Arrosage** : en mode Normal (pelouse établie), l'arrosage est désormais piloté par l'**épuisement de la réserve utile** plutôt que par le déficit cumulé. Le gazon n'est plus arrosé tant que la réserve reste au-dessus du **seuil MAD (50 %)** ; une fois ce seuil atteint, une **recharge profonde** ramène la réserve au plein utile (jamais au-delà), bornée par le garde-fou hebdomadaire et le cooldown. Résultat : arrosages **plus espacés et plus profonds** (favorisant l'enracinement, avec un léger stress bénéfique) au lieu de petits apports fréquents. La logique de dépletion (implémentée mais désactivée jusqu'ici) est **réactivée uniquement en phase Normal ET quand le bilan sol interne fournit une réserve réelle** (`reserve_from_soil_ledger`, alimenté par le ledger `soil_balance.py` tenu par l'intégration) ; sinon repli automatique sur le modèle déficit (legacy, inchangé), utile au tout premier cycle avant que le bilan sol soit établi.
+- **Anti-régression** : la dépletion reste **exclue de la phase Sursemis** (recharge profonde inadaptée au semis — cause historique de la surestimation qui avait fait désactiver la logique), désormais verrouillée par un test dédié. Les autres phases (`_profile_for_sursemis`, agro…) sont inchangées.
+- **Observabilité** : le drapeau `use_depletion_logic` reflète l'état réel (Normal + réserve interne), et `reserve_from_soil_ledger` distingue la réserve réelle du repli dérivé du bilan court.
+
 ## 0.9.5
 Déblocage de l'arrosage automatique (qui ne se déclenchait jamais) + diagnostic (481 tests verts) :
 - **Arrosage** : corrige un bug où l'arrosage **automatique ne se déclenchait jamais**. La garde de démarrage `startup_guard` (qui empêche d'agir pendant le boot de HA quand les capteurs sont encore `unavailable`) n'était **jamais levée** : le flag `auto_irrigation_bootstrap_complete` était lu mais écrit nulle part → `_should_launch_auto_irrigation` retournait toujours `(False, "startup_guard")`. Le flag est désormais armé au **premier cycle de données sain** (température + objectif présents), et reste volatil (se réarme à chaque redémarrage, pour ne pas agir avant que les capteurs soient prêts).

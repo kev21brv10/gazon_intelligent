@@ -33,12 +33,14 @@ from .water import compute_advanced_context, compute_etp, compute_water_balance
 from .watering_policy import get_watering_policy
 
 _LOGGER = logging.getLogger(__name__)
-# La logique de dépletion (calcul objectif par épuisement de réserve utile) est
-# implémentée mais non activée : les tests de terrain ont montré une surestimation
-# de l'objectif sur sol limoneux en phase Sursemis. À réactiver quand le modèle
-# de réserve utile sera calibré par type de sol.
-# Voir : mm_cible_depletion et objective_from_depletion_mm dans build_water_bundle.
-# USE_DEPLETION_LOGIC = False  # Laisser commenté jusqu'à calibration complète
+# La logique de dépletion (recharge profonde par épuisement de la réserve utile) est
+# active UNIQUEMENT en phase Normal (pelouse établie), dans _profile_for_normal
+# (guidance.py) : arrosage déclenché au seuil MAD, recharge vers la réserve utile,
+# borné par le garde-fou hebdomadaire. Elle reste exclue des autres phases — en
+# Sursemis elle surestimait (recharge profonde inadaptée au semis), d'où la stratégie
+# de surface dédiée dans _profile_for_sursemis.
+# Le champ legacy ci-dessous (objective_from_depletion_mm) reste exposé pour
+# l'observabilité ; l'objectif réel vient de watering_profile["mm_final_recommande"].
 
 _MOWER_WATERING_BLOCK_LABELS = {
     "mower_mowing": "Arrosage bloqué: tondeuse en cours de tonte.",
@@ -186,7 +188,10 @@ def build_water_bundle(
         "et0_source": context.et0_source,
         "kc_gazon": round(min(max(kc_gazon, 0.4), 1.1), 2),
         "etc_mm": etc_mm,
-        "use_depletion_logic": False,  # voir commentaire USE_DEPLETION_LOGIC en haut du fichier
+        "use_depletion_logic": (
+            phase_bundle["phase_dominante"] == "Normal"
+            and bool(balance_snapshot.get("reserve_from_soil_ledger"))
+        ),  # dépletion active en Normal + réserve sol interne ; sinon repli déficit
         "mm_cible_depletion": mm_cible_depletion,
         "objective_from_depletion_mm": mm_cible_depletion,
         "advanced_context": advanced_context,
