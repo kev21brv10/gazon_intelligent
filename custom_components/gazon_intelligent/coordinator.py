@@ -3353,6 +3353,12 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         error_reason: str | None = None
         cancelled = False
         executed_zones: list[dict[str, Any]] = list(runtime_session.get("zones_done") or [])
+        # Suspend le moniteur passif de sessions pendant tout le cycle piloté (passages ET
+        # pauses) : c'est ce cycle qui enregistre l'arrosage (source auto/manuel). Sans ça,
+        # le moniteur passif finalise un doublon `zone_session` à chaque pause inter-passage
+        # (la garde _zone_tracking_suspended était déclarée mais jamais armée → l'arrosage
+        # était compté plusieurs fois, sur-créditant la réserve et le budget hebdo).
+        self._zone_tracking_suspended += 1
         try:
             start_passage = max(1, int(runtime_session.get("current_passage") or 1))
             start_zone_index = max(0, int(runtime_session.get("current_zone_index") or 0))
@@ -3586,6 +3592,12 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     passages=user_action_context.get("passages"),
                 )
         finally:
+            # La garde compteur (armée avant la boucle, donc avant toute ouverture de vanne
+            # du cycle) suffit à empêcher le moniteur passif de doublonner ce cycle. On NE
+            # purge PAS la session passive ici : une session externe/manuelle légitime en
+            # fenêtre de grâce (vannes déjà fermées, finalize en attente) ne bloque pas le
+            # lancement auto — l'effacer ferait perdre son enregistrement.
+            self._zone_tracking_suspended = max(0, self._zone_tracking_suspended - 1)
             self._auto_irrigation_task = None
             if not cancelled:
                 self._set_active_irrigation_session(None)
