@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.0
+Nouveau service de calibration manuelle de la réserve hydrique du sol (492 tests verts) :
+- **Calibration** : nouveau service `gazon_intelligent.recalibrate_reserve` (cible + champ `reserve_mm`) qui **fixe la réserve hydrique du sol à une valeur connue**. Utile pour recaler la réserve après un écart (ex. un ancien arrosage mal compté avant le correctif 0.10.2), ou pour calibrer au premier démarrage. Le recalage est **persistant** (survit au redémarrage) grâce à une entrée « ancre » que le bilan sol ne recalcule pas. **Note** : la valeur est figée pour le reste de la journée du recalage (pluie / arrosage / ETc du jour ignorés ce jour-là) ; l'évolution normale reprend dès le lendemain — à appeler de préférence le soir, hors pluie ou arrosage important.
+
 ## 0.10.2
 Correction d'un double-comptage des arrosages pilotés (réserve et budget hebdo sur-crédités) (488 tests verts) :
 - **Arrosage** : pendant un cycle d'arrosage piloté par l'intégration (auto ou manuel), le **moniteur passif** de sessions (qui surveille l'état des vannes) enregistrait un doublon `zone_session` **à chaque pause inter-passage** — en plus de l'enregistrement du cycle lui-même. Le garde-fou prévu pour ça (`_zone_tracking_suspended`) était **déclaré et testé mais jamais armé** (code mort). Conséquence : l'arrosage du jour était **sur-compté** (ex. 14,8 mm pour ~11 mm réellement délivrés), ce qui **sur-créditait la réserve hydrique et le budget hebdomadaire** → l'intégration croyait le sol plus arrosé qu'il ne l'était et **retardait l'arrosage suivant** (tendance au sous-arrosage). Le garde-fou est désormais **armé pendant tout le cycle** (passages + pauses) dans `_execute_canonical_watering_plan` ; les arrosages réellement externes/manuels (vanne ouverte hors intégration) restent enregistrés normalement. Les éventuels doublons déjà inscrits s'effacent d'eux-mêmes en sortant de la fenêtre de 7 jours glissants.

@@ -330,3 +330,24 @@ declare_watering:
           max: 30
           step: 0.5
           unit_of_measurement: mm
+
+recalibrate_reserve:
+  description: >-
+    Recale la réserve hydrique du sol du gazon ciblé à une valeur connue (calibration
+    manuelle). La valeur fixée est figée pour le reste de la journée (la pluie, l'arrosage
+    et l'évapotranspiration du jour ne sont plus comptés ce jour-là) ; l'évolution normale
+    reprend dès le lendemain. À appeler de préférence quand aucune pluie/arrosage important
+    n'est attendu dans la journée (ex. le soir).
+  target:
+    entity:
+      integration: gazon_intelligent
+  fields:
+    reserve_mm:
+      required: true
+      example: 8
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 0.1
+          unit_of_measurement: mm
