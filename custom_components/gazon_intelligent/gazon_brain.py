@@ -25,7 +25,7 @@ from .memory import (
     normalize_product_record,
 )
 from .phases import phase_duration_days
-from .soil_balance import normalize_soil_balance_state, update_soil_balance
+from .soil_balance import normalize_soil_balance_state, set_reserve_mm, update_soil_balance
 from .water import compute_etp, compute_recent_watering_mm, build_watering_session_summary
 from .decision_risk import compute_fungal_risk
 
@@ -667,6 +667,15 @@ class GazonBrain:
             payload["session_total_mm"] = float(total_mm)
         self._append_history(payload)
         return payload
+
+    def recalibrate_soil_reserve(
+        self,
+        reserve_mm: float,
+        today: date | None = None,
+    ) -> dict[str, Any]:
+        """Recale la réserve hydrique du sol à une valeur connue (calibration manuelle)."""
+        self.soil_balance = set_reserve_mm(self.soil_balance, reserve_mm, today=today)
+        return self.soil_balance
 
     def record_user_action(
         self,

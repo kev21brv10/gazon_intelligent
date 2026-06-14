@@ -1480,6 +1480,12 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._async_save_state()
         await self.async_request_refresh()
 
+    async def async_recalibrate_reserve(self, reserve_mm: float) -> None:
+        """Recale la réserve hydrique du sol à une valeur connue (calibration manuelle)."""
+        self.brain.recalibrate_soil_reserve(float(reserve_mm), today=self._current_date())
+        await self._async_save_state()
+        await self.async_request_refresh()
+
     async def async_start_zone_monitoring(self) -> None:
         """Surveille les switches de zones pour reconstruire l'arrosage réel."""
         self._cancel_zone_monitoring()

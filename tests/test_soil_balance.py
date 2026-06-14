@@ -109,3 +109,91 @@ class SoilBalanceTests(unittest.TestCase):
         self.assertLessEqual(state["reserve_mm"], state["reserve_max_mm"])
         # Vérifier que pluie utilisée est 30mm (clampée)
         self.assertEqual(state["ledger"][-1]["pluie_mm"], 30.0)
+
+    def test_set_reserve_mm_anchors_and_survives_same_day_recompute(self) -> None:
+        # Réserve « polluée » au départ.
+        state = soil_balance.update_soil_balance(
+            previous_state=None,
+            today=date(2026, 6, 14),
+            pluie_mm=0.0,
+            arrosage_mm=14.8,
+            etp_mm=8.2,
+            type_sol="limoneux",
+        )
+        # Recalage manuel à 8 mm → ancre posée.
+        state = soil_balance.set_reserve_mm(state, 8.0, today=date(2026, 6, 14))
+        self.assertEqual(state["reserve_mm"], 8.0)
+        self.assertTrue(state["ledger"][-1].get("manual_anchor"))
+
+        # Cycle suivant le MÊME jour : l'ancre tient, pas de recalcul depuis l'historique.
+        recomputed = soil_balance.update_soil_balance(
+            state,
+            today=date(2026, 6, 14),
+            pluie_mm=0.0,
+            arrosage_mm=14.8,
+            etp_mm=8.5,
+            type_sol="limoneux",
+        )
+        self.assertEqual(recomputed["reserve_mm"], 8.0)
+
+    def test_manual_anchor_releases_next_day(self) -> None:
+        state = soil_balance.update_soil_balance(
+            previous_state=None,
+            today=date(2026, 6, 14),
+            pluie_mm=0.0,
+            arrosage_mm=14.8,
+            etp_mm=8.2,
+            type_sol="limoneux",
+        )
+        state = soil_balance.set_reserve_mm(state, 8.0, today=date(2026, 6, 14))
+        # Lendemain : l'évolution normale reprend depuis 8 mm (− ETc).
+        nextday = soil_balance.update_soil_balance(
+            state,
+            today=date(2026, 6, 15),
+            pluie_mm=0.0,
+            arrosage_mm=0.0,
+            etp_mm=5.0,
+            type_sol="limoneux",
+        )
+        self.assertEqual(nextday["previous_reserve_mm"], 8.0)
+        self.assertEqual(nextday["reserve_mm"], 3.0)
+        self.assertFalse(nextday["ledger"][-1].get("manual_anchor"))
+
+    def test_set_reserve_mm_clamps_to_bounds(self) -> None:
+        state = soil_balance.update_soil_balance(
+            previous_state=None,
+            today=date(2026, 6, 14),
+            pluie_mm=0.0,
+            arrosage_mm=0.0,
+            etp_mm=0.0,
+            type_sol="limoneux",
+        )
+        high = soil_balance.set_reserve_mm(state, 999.0, today=date(2026, 6, 14))
+        self.assertLessEqual(high["reserve_mm"], high["reserve_max_mm"])
+        low = soil_balance.set_reserve_mm(state, -5.0, today=date(2026, 6, 14))
+        self.assertGreaterEqual(low["reserve_mm"], 0.0)
+
+    def test_manual_anchor_survives_normalize_round_trip(self) -> None:
+        # Simule une sauvegarde→restauration (passage par normalize) : l'ancre doit
+        # survivre, sinon le recalage serait perdu au redémarrage de Home Assistant.
+        state = soil_balance.update_soil_balance(
+            previous_state=None,
+            today=date(2026, 6, 14),
+            pluie_mm=0.0,
+            arrosage_mm=14.8,
+            etp_mm=8.2,
+            type_sol="limoneux",
+        )
+        state = soil_balance.set_reserve_mm(state, 8.0, today=date(2026, 6, 14))
+        restored = soil_balance.normalize_soil_balance_state(state)
+        self.assertTrue(restored["ledger"][-1].get("manual_anchor"))
+        # Et l'ancre reste honorée après restauration (même jour).
+        recomputed = soil_balance.update_soil_balance(
+            restored,
+            today=date(2026, 6, 14),
+            pluie_mm=0.0,
+            arrosage_mm=14.8,
+            etp_mm=9.0,
+            type_sol="limoneux",
+        )
+        self.assertEqual(recomputed["reserve_mm"], 8.0)

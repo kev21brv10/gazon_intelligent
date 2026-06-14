@@ -29,13 +29,14 @@ L'intégration construit une lecture métier exploitable dans Home Assistant:
 
 Elle est conçue pour rester lisible côté UI, tout en gardant assez de structure pour les automatisations, le debug et les dashboards avancés.
 
-## ✨ Ce que la version actuelle apporte (v0.10.2)
+## ✨ Ce que la version actuelle apporte (v0.11.0)
 
 - **Arrosage piloté par la réserve du sol (mode Normal)** : la pelouse établie n'est plus arrosée tant que la réserve utile reste au-dessus du **seuil d'épuisement (MAD 50 %)** ; une fois ce seuil atteint, une **recharge profonde** ramène la réserve au plein. Résultat : arrosages **plus espacés et plus profonds**, qui favorisent l'enracinement (léger stress bénéfique) — au lieu de petits apports fréquents. Borné par le garde-fou hebdomadaire ; repli automatique sur l'ancien modèle tant que le bilan sol interne n'est pas encore établi
 - **Phase semis préservée** : la recharge profonde reste **exclue du Sursemis** (inadaptée au semis), verrouillée par un test d'anti-régression
 - **Capteur de blocage plus honnête (0.10.1)** : quand l'arrosage auto ne part pas à cause d'un blocage (cooldown, pluie prévue, sol humide, budget hebdo…), le capteur `arrosage_auto_blocage` affiche le **vrai motif** au lieu de « réserve suffisante »
 - **Comptage d'arrosage fiable (0.10.2)** : fin d'un double-comptage des cycles fractionnés qui sur-créditait la réserve et le budget hebdomadaire (et retardait l'arrosage suivant)
-- **488 tests unitaires** verts
+- **Calibration manuelle de la réserve (0.11.0)** : nouveau service `recalibrate_reserve` pour fixer la réserve hydrique du sol à une valeur connue (recalage / calibration), persistant au redémarrage
+- **492 tests unitaires** verts
 
 *Versions précédentes (v0.10.0 · v0.9.5) : pilotage de l'arrosage par épuisement de la réserve (deplete-to-MAD) ; déclenchement enfin de l'arrosage automatique (`startup_guard`), déblocage du verrou de sécurité, capteur de diagnostic `arrosage_auto_blocage`.*
 

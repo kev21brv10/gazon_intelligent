@@ -68,6 +68,7 @@ SERVICE_DECLARE_MOWING = "declare_mowing"
 SERVICE_DECLARE_WATERING = "declare_watering"
 SERVICE_REGISTER_PRODUCT = "register_product"
 SERVICE_REMOVE_PRODUCT = "remove_product"
+SERVICE_RECALIBRATE_RESERVE = "recalibrate_reserve"
 
 if cv is None:
     CONFIG_SCHEMA = vol.Schema({})
@@ -382,6 +383,20 @@ def _async_register_services(hass: HomeAssistant) -> None:
             }
         ),
     )
+    _register_service_if_missing(
+        hass,
+        SERVICE_RECALIBRATE_RESERVE,
+        _handle_recalibrate_reserve,
+        schema=vol.Schema(
+            {
+                **_SERVICE_TARGET_FIELD,
+                vol.Required("reserve_mm"): vol.All(
+                    vol.Coerce(float),
+                    vol.Range(min=0, max=100),
+                ),
+            }
+        ),
+    )
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -539,6 +554,16 @@ async def _handle_declare_watering(call: ServiceCall) -> None:
         )
     except ValueError as err:
         raise HomeAssistantError(_ERR_INVALID_DATE) from err
+
+
+async def _handle_recalibrate_reserve(call: ServiceCall) -> None:
+    _require_explicit_target_for_multi_instance(call)
+    coordinator = await _coordinator_from_call(call)
+    try:
+        await coordinator.async_recalibrate_reserve(float(call.data["reserve_mm"]))
+    except (HomeAssistantError, ValueError) as err:
+        _LOGGER.debug("Echec recalibrate_reserve: %s", err)
+        raise HomeAssistantError(f"Echec recalibrate_reserve: {err}") from err
 
 
 async def _handle_register_product(call: ServiceCall) -> None:
