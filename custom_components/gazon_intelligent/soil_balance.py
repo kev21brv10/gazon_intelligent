@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, timezone
 from typing import Any
 
@@ -7,6 +8,8 @@ try:
     from homeassistant.util import dt as dt_util
 except Exception:  # pragma: no cover - standalone fallback
     dt_util = None
+
+_LOGGER = logging.getLogger(__name__)
 
 SOIL_RESERVE_BASE_MM = {
     "sableux": 8.0,
@@ -180,6 +183,16 @@ def update_soil_balance(
     arrosage_suspect = arrosage_raw > 50.0
     pluie = min(pluie_raw, 30.0) if pluie_suspect else pluie_raw
     arrosage = min(arrosage_raw, 25.0) if arrosage_suspect else arrosage_raw
+    if pluie_suspect:
+        _LOGGER.warning(
+            "Pluie aberrante (%.1f mm) clampée à 30 mm dans le bilan sol — vérifie le capteur pluie.",
+            pluie_raw,
+        )
+    if arrosage_suspect:
+        _LOGGER.warning(
+            "Arrosage aberrant (%.1f mm) clampé à 25 mm dans le bilan sol — vérifie la détection d'arrosage.",
+            arrosage_raw,
+        )
     etp = max(0.0, _to_float(etp_mm) or 0.0)
     delta = pluie + arrosage - etp
     reserve_mm = min(max(previous_reserve + delta, reserve_min_mm), reserve_max_mm)

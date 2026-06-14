@@ -56,6 +56,21 @@ def _install_homeassistant_stubs() -> None:
     class ConfigEntry:
         def __init__(self, entry_id: str = "entry123") -> None:
             self.entry_id = entry_id
+            self._update_listeners: list = []
+            self._on_unload: list = []
+
+        def add_update_listener(self, listener):
+            self._update_listeners.append(listener)
+
+            def _unsub():
+                if listener in self._update_listeners:
+                    self._update_listeners.remove(listener)
+
+            return _unsub
+
+        def async_on_unload(self, fn):
+            self._on_unload.append(fn)
+            return fn
 
     class ServiceCall:
         def __init__(self, hass, data: dict[str, object] | None = None) -> None:
@@ -137,6 +152,9 @@ class _FakeServices:
     def async_register(self, domain: str, service: str, handler, schema=None) -> None:
         self._services[(domain, service)] = {"handler": handler, "schema": schema}
         self.register_calls.append((domain, service))
+
+    def async_remove(self, domain: str, service: str) -> None:
+        self._services.pop((domain, service), None)
 
 
 class _FakeConfigEntriesManager:

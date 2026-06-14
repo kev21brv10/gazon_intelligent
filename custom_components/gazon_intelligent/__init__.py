@@ -70,6 +70,24 @@ SERVICE_REGISTER_PRODUCT = "register_product"
 SERVICE_REMOVE_PRODUCT = "remove_product"
 SERVICE_RECALIBRATE_RESERVE = "recalibrate_reserve"
 
+# Tous les services du domaine, pour le dé-enregistrement à la suppression de la
+# dernière instance (évite des services orphelins après désinstallation complète).
+_ALL_SERVICES = (
+    SERVICE_SET_MODE,
+    SERVICE_SET_DATE_ACTION,
+    SERVICE_RESET_MODE,
+    SERVICE_START_MANUAL_IRRIGATION,
+    SERVICE_START_AUTO_IRRIGATION,
+    SERVICE_START_APPLICATION_IRRIGATION,
+    SERVICE_DECLARE_INTERVENTION,
+    SERVICE_REMOVE_LAST_APPLICATION,
+    SERVICE_DECLARE_MOWING,
+    SERVICE_DECLARE_WATERING,
+    SERVICE_REGISTER_PRODUCT,
+    SERVICE_REMOVE_PRODUCT,
+    SERVICE_RECALIBRATE_RESERVE,
+)
+
 if cv is None:
     CONFIG_SCHEMA = vol.Schema({})
 else:
@@ -420,6 +438,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # 3. enregistrement dans hass.data
     domain_data = _ensure_domain_data(hass)
     domain_data[entry.entry_id] = coordinator
+    # Recharger l'intégration si les options changent (sinon les abonnements gardent les
+    # anciens capteurs jusqu'à un reload manuel).
+    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     # 4. cleanup entities
     await async_cleanup_obsolete_entities(hass, entry.entry_id)
     # 5. forward platforms
@@ -434,6 +455,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
+async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Recharge l'entrée quand un capteur surveillé change dans les options.
+
+    On évite un reload complet pour un simple ajustement de number (débit de zone,
+    hauteur de coupe) : ces réglages écrivent aussi dans `entry.options` mais sont
+    appliqués en place et ne modifient pas les abonnements.
+    """
+    coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if coordinator is not None and not coordinator.source_config_changed():
+        return
+    await hass.config_entries.async_reload(entry.entry_id)
+
+
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     domain_data = _ensure_domain_data(hass)
     coordinator = domain_data.get(entry.entry_id)
@@ -442,6 +476,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if coordinator is not None:
             await coordinator.async_shutdown()
         domain_data.pop(entry.entry_id, None)
+        # Dernière instance retirée → dé-enregistrer les services pour ne pas laisser
+        # de services orphelins (qui lèveraient « aucune instance configurée »).
+        if not domain_data:
+            for service_name in _ALL_SERVICES:
+                hass.services.async_remove(DOMAIN, service_name)
 
     return unload_ok
 

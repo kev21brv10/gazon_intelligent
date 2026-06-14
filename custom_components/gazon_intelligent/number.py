@@ -34,7 +34,9 @@ def _round_to_mower_step(value: float) -> float:
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    coordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if coordinator is None:
+        return
     async_add_entities(
         [
             GazonDebitZoneNumber(coordinator, 1, CONF_DEBIT_ZONE_1),

@@ -1238,7 +1238,11 @@ class GazonArrosageAutoBlocageSensor(GazonEntityBase, SensorEntity):
         info = _AUTO_IRRIGATION_BLOCK_INFO.get(str(reason)) if reason is not None else None
         if info is None:
             return {
-                "bloque": False,
+                # Défaut prudent : un motif présent mais non répertorié signifie que
+                # quelque chose bloque réellement → bloque=True (ne pas faire croire à
+                # une automatisation que l'arrosage est opérationnel). reason=None = pas
+                # encore évalué → non bloqué.
+                "bloque": reason is not None,
                 "code": reason,
                 "pourquoi": (
                     "Aucun cycle d'arrosage automatique n'a encore été évalué."
@@ -2971,7 +2975,6 @@ class GazonProchaineTonteSensor(GazonEntityBase, SensorEntity):
             "action_possible",
             "mowing_daily_session_limit",
             "mowing_daily_session_policy",
-            "mowing_resume_requires_full_battery",
             "tondeuse_prochain_depart",
             "tondeuse_prochain_depart_display",
             "tondeuse_statut",
@@ -3071,7 +3074,6 @@ class GazonProchaineTonteSensor(GazonEntityBase, SensorEntity):
             "machine_unavailable_label": machine_label or None,
             "daily_session_limit": attrs.get("mowing_daily_session_limit"),
             "daily_session_policy": attrs.get("mowing_daily_session_policy"),
-            "resume_requires_full_battery": attrs.get("mowing_resume_requires_full_battery"),
             "reason": reason or None,
             "summary": summary,
         }

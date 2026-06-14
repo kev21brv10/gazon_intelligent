@@ -1318,7 +1318,6 @@ def _build_mowing_bundle_payload(
         "mowing_window_reason": mowing_window_reason,
         "mowing_daily_session_limit": mowing_daily_session_limit,
         "mowing_daily_session_policy": mowing_daily_session_policy,
-        "mowing_resume_requires_full_battery": True,
         "mowing_blocked_by_watering": False,
         "mowing_blocked": False,
         "mowing_block_reason_code": None,
@@ -1552,7 +1551,7 @@ def build_mowing_bundle(
         "watering_in_progress",
         "watering_cooldown",
     }
-    soil_wet_is_permssive = reason_code == "soil_wet" and _has_recent_watering_history(context)
+    soil_wet_is_permissive = reason_code == "soil_wet" and _has_recent_watering_history(context)
 
     mowing_is_overdue, overdue_factor, overdue_days = _mowing_overdue_state(context, phase_bundle)
     overdue_relaxed_baseline = False
@@ -1561,7 +1560,7 @@ def build_mowing_bundle(
         overdue_relaxed_baseline = score_tonte < extended_threshold and score_stress < 70
 
     tonte_ok = (baseline_tonte_ok or overdue_relaxed_baseline) and not mowing_window_blocked_by_schedule and (
-        reason_code not in agronomic_block_codes or soil_wet_is_permssive or overdue_relaxed_baseline
+        reason_code not in agronomic_block_codes or soil_wet_is_permissive or overdue_relaxed_baseline
     )
     if reason is None:
         if mowing_window_state == "discouraged" and mowing_window_reason:

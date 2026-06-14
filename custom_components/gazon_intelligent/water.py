@@ -419,7 +419,10 @@ def _soil_balance_priority(
     if isinstance(soil_balance, dict):
         reserve_actuelle_source = _to_float(soil_balance.get("reserve_mm"))
     # Réserve issue du bilan sol interne de l'intégration (ledger soil_balance, mis à jour
-    # chaque cycle : réserve += pluie + arrosage − ETc, borné par type de sol) ?
+    # chaque cycle : réserve += pluie + arrosage − ET0, borné par type de sol). NB : c'est
+    # l'ET0 de référence qui est soustraite, pas l'ETc (= ET0 × Kc gazon) — choix
+    # conservateur (perte légèrement surestimée). Voir audit : appliquer le Kc recalibrerait
+    # la déplétion.
     # Le pilotage par épuisement (MAD) n'est fiable que dans ce cas ; sinon la réserve
     # dérive du bilan court et n'atteint pas le seuil, d'où le repli sur le modèle déficit.
     reserve_from_soil_ledger = reserve_actuelle_source is not None

@@ -1581,10 +1581,14 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
             weekly_max_mm,
         ), 1,
     )
+    # Déplétion critique : réserve très basse (≥ 80 % épuisée). Dans ce cas seulement, on
+    # autorise l'arrosage à outrepasser le cooldown 24 h — respecter le délai laisserait le
+    # gazon en stress sévère. Les autres blocages (pluie, sol détrempé) restent prioritaires.
+    _critical_depletion = float(ctx.water_balance.get("depletion_ratio") or 0.0) >= 0.8
     block_reason = None
     if ctx.pluie_compensatrice or ctx.pluie_proche:
         block_reason = "pluie_prevue_suffisante"
-    elif ctx.cooldown_24h_active:
+    elif ctx.cooldown_24h_active and not _critical_depletion:
         block_reason = "cooldown_24h"
     elif ctx.saturation_block:
         block_reason = "sol_deja_humide"
