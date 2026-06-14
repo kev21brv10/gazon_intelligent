@@ -1931,6 +1931,59 @@ class WateringSessionMonitoringTests(unittest.TestCase):
         self.assertEqual(execution["reconciliation"]["planned_mm"], 1.5)
         self.assertEqual(execution["reconciliation"]["executed_mm"], 1.5)
 
+    def test_auto_cycle_suspends_passive_zone_tracking(self) -> None:
+        # Anti double-comptage : pendant un cycle piloté (fractionné, avec pauses), le
+        # moniteur passif de sessions doit être suspendu, sinon il enregistre un doublon
+        # `zone_session` à chaque pause inter-passage (la garde _zone_tracking_suspended
+        # n'était jamais armée → l'arrosage était sur-compté).
+        plan = watering_plan_mod.build_watering_plan(
+            1.5,
+            [("switch.zone_1", 60.0)],
+            passages=2,
+            pause_minutes=25,
+        )
+        assert plan is not None
+        suspended_at_turn_on: list[int] = []
+
+        def _capture(domain, service, data, blocking):
+            if domain == "switch" and service == "turn_on":
+                suspended_at_turn_on.append(coordinator._zone_tracking_suspended)
+            return None
+
+        coordinator = _build_runtime_ready_coordinator(
+            plan_attrs=plan.as_dict(), service_handler=_capture
+        )
+
+        async def _run() -> None:
+            original_sleep = coordinator_mod.asyncio.sleep
+
+            async def _noop_sleep(*args, **kwargs):
+                return None
+
+            coordinator_mod.asyncio.sleep = _noop_sleep
+            try:
+                await coordinator_mod.GazonIntelligentCoordinator.async_start_auto_irrigation(
+                    coordinator,
+                    1.5,
+                    plan_arrosage_entity_id="sensor.gazon_intelligent_plan_arrosage",
+                    source="auto_irrigation",
+                )
+                task = coordinator._auto_irrigation_task
+                assert task is not None
+                await task
+            finally:
+                coordinator_mod.asyncio.sleep = original_sleep
+
+        asyncio.run(_run())
+
+        # Le moniteur passif était suspendu à chaque ouverture de vanne (2 passages)…
+        self.assertTrue(suspended_at_turn_on)
+        self.assertTrue(all(value > 0 for value in suspended_at_turn_on))
+        # …et la garde est relâchée proprement en fin de cycle (pas de fuite du compteur).
+        self.assertEqual(coordinator._zone_tracking_suspended, 0)
+        # Un seul enregistrement d'arrosage (le cycle lui-même), pas de doublon passif.
+        coordinator.async_record_watering.assert_awaited_once()
+
     def test_active_irrigation_session_keeps_post_application_cause(self) -> None:
         plan = watering_plan_mod.build_watering_plan(1.5, [("switch.zone_1", 60.0)])
         assert plan is not None
