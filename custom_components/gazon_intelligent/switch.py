@@ -8,7 +8,9 @@ from .entity_base import GazonEntityBase
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    coordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if coordinator is None:
+        return
     async_add_entities(
         [
             GazonAutoIrrigationSwitch(coordinator),

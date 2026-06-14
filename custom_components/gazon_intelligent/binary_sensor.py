@@ -313,7 +313,9 @@ def _compact_application_summary(summary: object) -> dict[str, object] | None:
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    coordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if coordinator is None:
+        return
     async_add_entities(
         [
             GazonTonteAutoriseeBinarySensor(coordinator),
@@ -354,7 +356,6 @@ class GazonTonteAutoriseeBinarySensor(GazonEntityBase, BinarySensorEntity):
             "mowing_window_reason",
             "mowing_daily_session_limit",
             "mowing_daily_session_policy",
-            "mowing_resume_requires_full_battery",
             "next_mowing_date",
             "next_mowing_display",
             "raison_blocage_tonte",

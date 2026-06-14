@@ -497,14 +497,13 @@ def _normalize_dose_band(value: str | None) -> str:
 
 def _dose_candidate_band(dose_inputs: DoseInputs) -> DosePolicyBand:
     phase = str(dose_inputs.get("phase_dominante") or "").strip()
-    sous_phase = str(dose_inputs.get("sous_phase") or "").strip()
     temperature = _dose_to_float(dose_inputs.get("temperature"))
     et0_mm = _dose_to_float(dose_inputs.get("et0_mm"))
     heat_stress_level = str(dose_inputs.get("heat_stress_level") or "").strip().casefold()
     heat_stress_phase = str(dose_inputs.get("heat_stress_phase") or "").strip().casefold()
     month = dose_inputs.get("month")
 
-    if phase == "Sursemis" or sous_phase in {"Germination", "Enracinement", "Reprise"} and phase == "Sursemis":
+    if phase == "Sursemis":
         return DOSE_POLICY_BANDS[DOSE_BAND_SURSEMIS]
 
     if phase == "Hivernage" or month in _DOSE_WINTER_MONTHS:

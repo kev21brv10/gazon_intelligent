@@ -45,7 +45,6 @@ Attributs canoniques:
 - `mowing_window_reason`
 - `mowing_daily_session_limit`
 - `mowing_daily_session_policy`
-- `mowing_resume_requires_full_battery`
 - `next_mowing_date`
 - `next_mowing_display`
 - `gazon_permet_tonte`
@@ -83,7 +82,6 @@ Attributs canoniques:
 - `machine_unavailable_label`
 - `daily_session_limit`
 - `daily_session_policy`
-- `resume_requires_full_battery`
 - `reason`
 - `summary`
 

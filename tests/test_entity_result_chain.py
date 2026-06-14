@@ -2084,6 +2084,20 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(blocage_sensor.native_value, "Aucun besoin")
         self.assertEqual(blocage_sensor.extra_state_attributes["code"], "no_objective")
 
+    def test_arrosage_auto_blocage_sensor_unknown_reason_defaults_to_blocked(self) -> None:
+        # Défaut prudent : un motif présent mais non répertorié (futur code) → bloque=True
+        # (ne pas faire croire à une automatisation que l'arrosage est opérationnel).
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={"auto_irrigation_block_reason": "un_nouveau_code", "auto_irrigation_safety_lock": False},
+            result=None,
+            history=[],
+        )
+        blocage_sensor = sensor.GazonArrosageAutoBlocageSensor(coordinator)
+        attrs = blocage_sensor.extra_state_attributes
+        self.assertTrue(attrs["bloque"])
+        self.assertEqual(attrs["code"], "un_nouveau_code")
+
     def test_catalogue_products_sensor_lists_registered_products(self) -> None:
         coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=None, history=[], memory={})
         coordinator.products = {

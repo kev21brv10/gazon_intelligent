@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.0
+Lot de correctifs issus d'un audit complet — sécurité runtime, cohérence, propreté (493 tests verts) :
+- **Sécurité runtime** : plus de session « fantôme » bloquant tout arrosage après un redémarrage en plein cycle ; la reprise après redémarrage **respecte le verrou de sécurité** (ne ré-arrose pas après un incident de vanne) ; timer de finalisation de session annulé proprement à l'arrêt ; les 5 plateformes d'entités ne plantent plus si le coordinator n'est pas encore prêt.
+- **Arrosage** : en **déplétion critique** (réserve ≥ 80 % épuisée), l'arrosage peut désormais outrepasser le cooldown 24 h pour éviter un stress sévère (les blocages pluie / sol détrempé restent prioritaires).
+- **Cohérence / Home Assistant** : le capteur `arrosage_auto_blocage` signale `bloque=True` sur un motif inconnu (ne laisse plus croire à tort que l'arrosage est opérationnel) ; un **changement de capteur dans les options recharge** automatiquement l'intégration (pas de reload sur un simple réglage de débit/hauteur) ; les **services sont dé-enregistrés** à la désinstallation de la dernière instance.
+- **Propreté** : retrait de l'attribut trompeur `resume_requires_full_battery` (jamais appliqué) ; avertissements de log sur valeurs pluie/arrosage aberrantes clampées ; suppression de code mort ; commentaires corrigés (le bilan sol soustrait l'ET0, documenté).
+
 ## 0.11.0
 Nouveau service de calibration manuelle de la réserve hydrique du sol (492 tests verts) :
 - **Calibration** : nouveau service `gazon_intelligent.recalibrate_reserve` (cible + champ `reserve_mm`) qui **fixe la réserve hydrique du sol à une valeur connue**. Utile pour recaler la réserve après un écart (ex. un ancien arrosage mal compté avant le correctif 0.10.2), ou pour calibrer au premier démarrage. Le recalage est **persistant** (survit au redémarrage) grâce à une entrée « ancre » que le bilan sol ne recalcule pas. **Note** : la valeur est figée pour le reste de la journée du recalage (pluie / arrosage / ETc du jour ignorés ce jour-là) ; l'évolution normale reprend dès le lendemain — à appeler de préférence le soir, hors pluie ou arrosage important.

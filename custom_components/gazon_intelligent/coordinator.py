@@ -1496,7 +1496,12 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             async_track_state_change_event(self.hass, zone_ids, self._handle_zone_state_change)
         ]
         await self._restore_active_irrigation_session()
-        self._rebuild_watering_session_from_current_state()
+        # Ne reconstruire une session passive (à partir des vannes actuellement ouvertes)
+        # QUE si aucun cycle piloté n'est actif/repris. Sinon le suivi passif est suspendu
+        # par le cycle → l'événement de fermeture serait ignoré, laissant une session
+        # « fantôme » non finalisée qui bloquerait tout arrosage ultérieur.
+        if self._get_active_irrigation_session() is None:
+            self._rebuild_watering_session_from_current_state()
 
     def _source_entity_ids(self) -> list[str]:
         entity_ids: list[str] = []
@@ -1546,11 +1551,21 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Surveille les capteurs sources pour rafraîchir les entités dérivées."""
         self._cancel_source_monitoring()
         entity_ids = self._source_entity_ids()
+        # Mémorise les entités surveillées pour détecter un vrai changement de capteur
+        # (vs un simple ajustement de débit/hauteur) côté listener d'options.
+        self._monitored_source_entities = set(entity_ids)
         if not entity_ids:
             return
         self._unsub_source_listeners = [
             async_track_state_change_event(self.hass, entity_ids, self._handle_source_state_change)
         ]
+
+    def source_config_changed(self) -> bool:
+        """Indique si les entités sources surveillées (capteurs / météo / tondeuse) ont
+        changé depuis le dernier démarrage du monitoring. Permet de ne recharger
+        l'intégration sur changement d'options que si un capteur a réellement changé —
+        un simple réglage de débit/hauteur (entité number) est appliqué en place."""
+        return set(self._source_entity_ids()) != getattr(self, "_monitored_source_entities", set())
 
     async def async_start_auto_irrigation_monitoring(self) -> None:
         """Surveille l'état courant pour déclencher l'arrosage automatique sans dépendre d'un refresh."""
@@ -3678,6 +3693,17 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
             await self._persist_runtime_state()
             return
+        if self._auto_irrigation_safety_lock_active():
+            # Verrou de sécurité actif (vanne non confirmée fermée lors d'un cycle) : ne
+            # PAS reprendre l'arrosage au redémarrage. On marque la session échouée ;
+            # la reprise restera gelée tant que le verrou n'est pas levé (bouton « Retour
+            # au mode normal » / service reset_mode).
+            session["status"] = "failed"
+            session["last_error"] = "safety_lock_active"
+            self._persist_execution_snapshot(session, status="failed", error="safety_lock_active")
+            self._set_active_irrigation_session(None)
+            await self._persist_runtime_state()
+            return
         if self._auto_irrigation_task and not self._auto_irrigation_task.done():
             return
         if session.get("status") not in {"running", "paused", "recovery_required"}:
@@ -3805,6 +3831,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._cancel_auto_irrigation_monitoring()
         self._cancel_source_monitoring()
         self._cancel_zone_monitoring()
+        self._cancel_watering_session_finalize()
         if self._auto_irrigation_scheduler_task and not self._auto_irrigation_scheduler_task.done():
             self._auto_irrigation_scheduler_task.cancel()
             try:
