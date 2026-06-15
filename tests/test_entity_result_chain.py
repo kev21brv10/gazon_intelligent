@@ -1659,6 +1659,28 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertNotIn("selected_product_usage_mode", product_select.extra_state_attributes)
         self.assertEqual(product_select.extra_state_attributes["summary"], "Produit sélectionné : Bio Boost")
 
+    def test_intervention_product_select_exposes_raw_selection_details(self) -> None:
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=None, history=[], memory={})
+        coordinator.products = {
+            "engrais-ete": {
+                "id": "engrais-ete",
+                "nom": "Engrais Été",
+                "application_months": [6, 7, 8],
+                "application_months_label": "Juin à Août",
+                "usage_mode": "foliaire",
+                "max_applications_per_year": 4,
+            }
+        }
+        coordinator.selected_product_id = "engrais-ete"
+
+        product_select = select.GazonInterventionProductSelect(coordinator)
+        attrs = product_select.extra_state_attributes
+
+        # Clés brutes consommées par la carte (en plus des libellés).
+        self.assertEqual(attrs["selected_product_months"], [6, 7, 8])
+        self.assertEqual(attrs["selected_product_usage_mode"], "foliaire")
+        self.assertEqual(attrs["selected_product_max_applications_per_year"], 4)
+
     def test_niveau_action_sensor_uses_friendly_state_for_no_action(self) -> None:
         result = _make_result()
         result.niveau_action = "surveiller"
@@ -1905,6 +1927,45 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(window_sensor.extra_state_attributes["status"], "bloque")
         self.assertIn("type d'application inconnu", window_sensor.extra_state_attributes["summary"])
         self.assertEqual(window_sensor.extra_state_attributes["next_action"], "Vérifier le type d'application")
+
+    def test_watering_window_sensor_exposes_block_reason_label(self) -> None:
+        result = _make_result()
+        result.objectif_arrosage = 6.0
+        result.arrosage_recommande = False
+        result.type_arrosage = "bloque"
+        result.fenetre_optimale = "attendre"
+        result.extra.update(
+            {
+                "block_reason": "pluie_prevue_suffisante",
+                "temperature": 16.0,
+            }
+        )
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=result, history=[], memory={})
+
+        window_sensor = sensor.GazonFenetreOptimaleSensor(coordinator)
+        attrs = window_sensor.extra_state_attributes
+
+        # La carte consomme block_reason_label tout fait (au lieu de re-formater localement).
+        self.assertEqual(attrs["block_reason"], "pluie_prevue_suffisante")
+        self.assertEqual(attrs["block_reason_label"], "Pluie prévue suffisante")
+
+    def test_block_reason_display_label_covers_semis_and_foliar_codes(self) -> None:
+        self.assertEqual(
+            sensor._block_reason_display_label("application_foliaire"),
+            "Application foliaire en cours",
+        )
+        self.assertEqual(
+            sensor._block_reason_display_label("temperature_trop_basse_germination"),
+            "Température trop basse (germination)",
+        )
+        self.assertEqual(
+            sensor._block_reason_display_label("semis_cycle_daily_target_reached"),
+            "Objectif du jour atteint (semis)",
+        )
+        self.assertEqual(
+            sensor._block_reason_display_label("semis_cycle_pending"),
+            "Cycle de semis en attente",
+        )
 
     def test_application_entities_surface_latest_application_state(self) -> None:
         coordinator = _FakeCoordinator(

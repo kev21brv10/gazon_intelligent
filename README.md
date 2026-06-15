@@ -29,7 +29,7 @@ L'intégration construit une lecture métier exploitable dans Home Assistant:
 
 Elle est conçue pour rester lisible côté UI, tout en gardant assez de structure pour les automatisations, le debug et les dashboards avancés.
 
-## ✨ Ce que la version actuelle apporte (v0.12.0)
+## ✨ Ce que la version actuelle apporte (v0.12.1)
 
 - **Arrosage piloté par la réserve du sol (mode Normal)** : la pelouse établie n'est plus arrosée tant que la réserve utile reste au-dessus du **seuil d'épuisement (MAD 50 %)** ; une fois ce seuil atteint, une **recharge profonde** ramène la réserve au plein. Résultat : arrosages **plus espacés et plus profonds**, qui favorisent l'enracinement (léger stress bénéfique) — au lieu de petits apports fréquents. Borné par le garde-fou hebdomadaire ; repli automatique sur l'ancien modèle tant que le bilan sol interne n'est pas encore établi
 - **Phase semis préservée** : la recharge profonde reste **exclue du Sursemis** (inadaptée au semis), verrouillée par un test d'anti-régression
@@ -37,7 +37,8 @@ Elle est conçue pour rester lisible côté UI, tout en gardant assez de structu
 - **Comptage d'arrosage fiable (0.10.2)** : fin d'un double-comptage des cycles fractionnés qui sur-créditait la réserve et le budget hebdomadaire (et retardait l'arrosage suivant)
 - **Calibration manuelle de la réserve (0.11.0)** : nouveau service `recalibrate_reserve` pour fixer la réserve hydrique du sol à une valeur connue (recalage / calibration), persistant au redémarrage
 - **Audit complet & durcissement (0.12.0)** : sécurité runtime (plus de blocage d'arrosage après redémarrage en plein cycle ; reprise qui respecte le verrou de sécurité), arrosage qui peut outrepasser le cooldown en déplétion critique, reload auto sur changement de capteur, et nettoyage (code mort, attribut trompeur retiré)
-- **493 tests unitaires** verts
+- **Cohérence carte ↔ intégration (0.12.1)** : exposition de `block_reason_label` sur `fenetre_optimale`, libellés de blocage complétés (foliaire / semis), et valeurs brutes de sélection produit sur l'entité `select` — pour que la carte Lovelace affiche les bonnes données
+- **496 tests unitaires** verts
 
 *Versions précédentes (v0.10.0 · v0.9.5) : pilotage de l'arrosage par épuisement de la réserve (deplete-to-MAD) ; déclenchement enfin de l'arrosage automatique (`startup_guard`), déblocage du verrou de sécurité, capteur de diagnostic `arrosage_auto_blocage`.*
 

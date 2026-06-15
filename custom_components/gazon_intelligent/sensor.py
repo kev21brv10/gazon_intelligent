@@ -831,6 +831,10 @@ def _block_reason_display_label(value: object) -> str | None:
         "post_application_active": "Post-produit actif",
         "watering_in_progress": "Arrosage en cours",
         "watering_cooldown": "Cooldown tonte après arrosage",
+        "application_foliaire": "Application foliaire en cours",
+        "temperature_trop_basse_germination": "Température trop basse (germination)",
+        "semis_cycle_daily_target_reached": "Objectif du jour atteint (semis)",
+        "semis_cycle_pending": "Cycle de semis en attente",
     }
     return labels.get(normalized, normalized.replace("_", " "))
 
@@ -4102,6 +4106,8 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
         if next_action_date_attrs:
             attrs = attrs or {}
             attrs.update(next_action_date_attrs)
+        if attrs and attrs.get("block_reason"):
+            attrs["block_reason_label"] = _block_reason_display_label(attrs["block_reason"])
         if attrs:
             possible_values = self._possible_values_attr("fenetre_optimale")
             if possible_values:
