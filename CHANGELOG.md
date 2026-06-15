@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.1
+Cohérence carte ↔ intégration : l'audit croisé a révélé que la carte Lovelace attendait des données non exposées par l'intégration (496 tests verts) :
+- **Motif de blocage arrosage** : l'entité `fenetre_optimale` expose désormais aussi `block_reason_label` (libellé prêt à afficher), comme `prochain_arrosage` — la carte n'a plus à re-formater localement (et affiche enfin proprement « pluie prévue suffisante », « garde-fou hebdomadaire », etc.).
+- **Libellés de blocage complétés** : `application_foliaire`, `temperature_trop_basse_germination`, `semis_cycle_daily_target_reached`, `semis_cycle_pending` ont désormais un libellé dédié (au lieu d'un texte brut).
+- **Sélection de produit** : l'entité `select` du produit d'intervention expose les valeurs **brutes** `selected_product_months` / `selected_product_usage_mode` / `selected_product_max_applications_per_year` (en plus des libellés), consommées par la carte (omises quand vides).
+
 ## 0.12.0
 Lot de correctifs issus d'un audit complet — sécurité runtime, cohérence, propreté (493 tests verts) :
 - **Sécurité runtime** : plus de session « fantôme » bloquant tout arrosage après un redémarrage en plein cycle ; la reprise après redémarrage **respecte le verrou de sécurité** (ne ré-arrose pas après un incident de vanne) ; timer de finalisation de session annulé proprement à l'arrêt ; les 5 plateformes d'entités ne plantent plus si le coordinator n'est pas encore prêt.

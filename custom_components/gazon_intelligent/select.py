@@ -210,7 +210,7 @@ class GazonInterventionProductSelect(GazonEntityBase, SelectEntity):
                 summary = "Aucun produit sélectionné"
         else:
             summary = "Aucun produit enregistré"
-        return {
+        attrs = {
             "selected_product_id": str(selected_product_id).strip() if selected_product_id else None,
             "selected_product_name": selected_product_name,
             "selected_product_months_label": selected_product_months_label,
@@ -219,6 +219,15 @@ class GazonInterventionProductSelect(GazonEntityBase, SelectEntity):
             "summary": summary,
             "products_count": len(catalogue),
         }
+        # Valeurs brutes consommées par la carte (catalogue/sélection) ; omises quand
+        # absentes pour garder le contrat d'attributs léger (cf. tests select).
+        if selected_product_months is not None:
+            attrs["selected_product_months"] = selected_product_months
+        if selected_product_usage_mode is not None:
+            attrs["selected_product_usage_mode"] = selected_product_usage_mode
+        if selected_product_max_applications_per_year is not None:
+            attrs["selected_product_max_applications_per_year"] = selected_product_max_applications_per_year
+        return attrs
 
     async def async_select_option(self, option: str):
         option = str(option).strip()
