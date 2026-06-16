@@ -515,6 +515,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         forecast_pluie_3j = forecast_summary.get("forecast_pluie_3j")
         forecast_probabilite_max_3j = forecast_summary.get("forecast_probabilite_max_3j")
         sun_context = self._get_sun_context()
+        sunset_minute = self._sunset_minute_from_context(sun_context)
+        if sunset_minute is not None:
+            # Transmis à la guidance (via weather_profile) pour le garde-fou « séchage
+            # avant la nuit » de l'arrosage du soir en canicule.
+            weather_profile["sunset_minute"] = sunset_minute
         pluie_24h_sensor = self._validate_sensor_value(pluie_24h_sensor, "pluie")
         pluie_demain_sensor = self._validate_sensor_value(pluie_demain_sensor, "pluie")
         pluie_24h, pluie_24h_source, pluie_demain, pluie_demain_source = self._resolve_precipitation_inputs(
@@ -1251,6 +1256,22 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "sun_next_setting": attrs.get("next_setting"),
             "sun_elevation": attrs.get("elevation"),
         }
+
+    def _sunset_minute_from_context(self, sun_context: dict[str, Any]) -> int | None:
+        """Minute locale (depuis minuit) du prochain coucher du soleil, ou None."""
+        if not isinstance(sun_context, dict):
+            return None
+        raw = sun_context.get("sun_next_setting")
+        if not raw:
+            return None
+        try:
+            parsed = dt_util.parse_datetime(str(raw))
+            if parsed is None:
+                return None
+            local = dt_util.as_local(parsed)
+            return local.hour * 60 + local.minute
+        except (TypeError, ValueError):
+            return None
 
     def _estimate_rosee(
         self,

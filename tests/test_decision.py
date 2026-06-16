@@ -51,6 +51,7 @@ decision_phase = importlib.import_module("custom_components.gazon_intelligent.de
 decision_risk = importlib.import_module("custom_components.gazon_intelligent.decision_risk")
 decision_watering = importlib.import_module("custom_components.gazon_intelligent.decision_watering")
 water = importlib.import_module("custom_components.gazon_intelligent.water")
+guidance_module = importlib.import_module("custom_components.gazon_intelligent.guidance")
 
 FIXED_NOW_UTC = datetime(2026, 3, 17, 12, 0, tzinfo=timezone.utc)
 FIXED_TODAY = FIXED_NOW_UTC.date()
@@ -1591,6 +1592,81 @@ class TestObjectiveAndGuidance(unittest.TestCase):
         )
 
         self.assertEqual(guidance["fenetre_optimale"], "apres_pluie")
+
+    def test_rain_signals_ignore_high_probability_when_quantity_is_trace(self) -> None:
+        # Une averse de trace (0,8 mm) annoncée à 95 % ne doit PAS bloquer l'arrosage
+        # d'un sol sec — c'était la cause d'un faux « pluie prévue suffisante ».
+        compensatrice, proche = guidance_module._rain_signals(
+            objective_reference_mm=12.0,
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            pluie_j2=0.8,
+            pluie_3j=0.8,
+            pluie_probabilite_max_3j=95.0,
+        )
+        self.assertFalse(compensatrice)
+        self.assertFalse(proche)
+
+    def test_rain_signals_block_when_high_probability_and_real_quantity(self) -> None:
+        # Forte probabilité + quantité réelle (5 mm) → on considère la pluie suffisante.
+        compensatrice, proche = guidance_module._rain_signals(
+            objective_reference_mm=12.0,
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            pluie_j2=2.2,
+            pluie_3j=5.0,
+            pluie_probabilite_max_3j=85.0,
+        )
+        self.assertTrue(compensatrice or proche)
+
+    def test_evening_cooling_allowed_in_extreme_heat_with_drying_margin(self) -> None:
+        # Chaleur extrême + air sec + coucher du soleil dans 2 h → petit arrosage de
+        # rafraîchissement du soir autorisé (l'herbe sèchera avant la nuit).
+        allowed = guidance_module._evening_window_allowed(
+            temperature=36.0,
+            humidite=30.0,
+            water_balance={"bilan_hydrique_mm": -10.0, "deficit_3j": 9.0},
+            objectif_mm=4.0,
+            heat_stress_level="extreme",
+            minutes_to_sunset=120,
+        )
+        self.assertTrue(allowed)
+
+    def test_evening_cooling_blocked_when_too_close_to_sunset(self) -> None:
+        # Coucher dans 60 min (< 90) → pas d'arrosage du soir (séchage insuffisant).
+        allowed = guidance_module._evening_window_allowed(
+            temperature=36.0,
+            humidite=30.0,
+            water_balance={"bilan_hydrique_mm": -10.0, "deficit_3j": 9.0},
+            objectif_mm=4.0,
+            heat_stress_level="extreme",
+            minutes_to_sunset=60,
+        )
+        self.assertFalse(allowed)
+
+    def test_evening_cooling_blocked_when_sunset_unknown(self) -> None:
+        # Coucher du soleil inconnu (pas de capteur) → on s'abstient le soir en canicule.
+        allowed = guidance_module._evening_window_allowed(
+            temperature=36.0,
+            humidite=30.0,
+            water_balance={"bilan_hydrique_mm": -10.0, "deficit_3j": 9.0},
+            objectif_mm=4.0,
+            heat_stress_level="extreme",
+            minutes_to_sunset=None,
+        )
+        self.assertFalse(allowed)
+
+    def test_evening_cooling_blocked_when_humidity_high(self) -> None:
+        # Air humide → séchage trop lent → pas d'arrosage du soir (risque maladie).
+        allowed = guidance_module._evening_window_allowed(
+            temperature=36.0,
+            humidite=80.0,
+            water_balance={"bilan_hydrique_mm": -10.0, "deficit_3j": 9.0},
+            objectif_mm=4.0,
+            heat_stress_level="extreme",
+            minutes_to_sunset=120,
+        )
+        self.assertFalse(allowed)
 
     def test_compute_action_guidance_exposes_stable_window_keys_across_paths(self) -> None:
         expected_keys = {

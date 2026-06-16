@@ -2171,6 +2171,58 @@ class TestDepletionWateringModel(unittest.TestCase):
         self.assertEqual(profile["mm_final_recommande"], weekly_room)
         self.assertLess(profile["mm_final_recommande"], 7.0)
 
+    def test_survival_watering_during_heatwave_overrides_weekly_cap(self):
+        # Réserve à 0/12 (100 % épuisé) + canicule (temp 30 / ET0 7 → stress extrême) +
+        # budget hebdo dépassé : un petit cycle de survie est délivré malgré le garde-fou,
+        # sinon le gazon grillerait.
+        profile = self._profile(
+            reserve_actuelle_mm=0.0,
+            reserve_stock_mm=0.0,
+            depletion_mm=12.0,
+            depletion_ratio=1.0,
+            arrosage_recent_7j=40.0,
+        )
+        self.assertGreater(profile["mm_final_recommande"], 0.0)
+        self.assertNotEqual(profile.get("block_reason"), "garde_fou_hebdomadaire")
+
+    def test_no_survival_watering_without_heatwave(self):
+        # Même réserve épuisée + budget dépassé, MAIS sans canicule (temps frais) :
+        # le plafond hebdomadaire reste un cap dur, aucun arrosage.
+        water_balance = dict(
+            bilan_hydrique_mm=-7.0,
+            deficit_jour=4.0,
+            deficit_3j=8.0,
+            deficit_7j=20.0,
+            arrosage_recent_7j=40.0,
+            arrosage_recent=0.0,
+            reserve_from_soil_ledger=True,
+            reserve_utile_mm=12.0,
+            reserve_actuelle_mm=0.0,
+            reserve_stock_mm=0.0,
+            reserve_stock_max_mm=24.0,
+            depletion_mm=12.0,
+            depletion_ratio=1.0,
+            mad_ratio=0.5,
+        )
+        profile = guidance.compute_watering_profile(
+            phase_dominante="Normal",
+            sous_phase="Normal",
+            water_balance=water_balance,
+            today=date(2026, 7, 15),
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            pluie_j2=0.0,
+            pluie_3j=0.0,
+            pluie_probabilite_max_3j=0.0,
+            humidite=70.0,
+            temperature=15.0,
+            etp=1.0,
+            type_sol="limoneux",
+            weather_profile={},
+            history=[],
+        )
+        self.assertEqual(profile["mm_final_recommande"], 0.0)
+
     def test_depletion_not_applied_in_sursemis(self):
         # Anti-régression du bug d'origine : en Sursemis, même avec une réserve sol épuisée,
         # la dépletion ne s'applique pas (recharge profonde inadaptée au semis).
