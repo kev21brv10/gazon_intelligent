@@ -3847,6 +3847,22 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
             }
 
         if objective <= 0 or not arrosage_recommande:
+            depletion_ratio = float(extra.get("depletion_ratio") or 0.0)
+            mad_ratio = float(extra.get("mad_ratio") or 0.5)
+            soil_needs_water = depletion_ratio >= mad_ratio
+            if block_reason == "garde_fou_hebdomadaire" and soil_needs_water:
+                # Objectif ramené à 0 par le plafond hebdomadaire alors que le sol a
+                # réellement besoin (réserve sous le seuil MAD) : l'afficher honnêtement
+                # comme un plafonnement plutôt que « aucun arrosage nécessaire » (qui
+                # masquait le vrai motif). Si le sol n'a pas de besoin, on garde « aucun
+                # arrosage nécessaire » et on n'alarme pas inutilement.
+                return {
+                    "status": "bloque",
+                    "next_action": "Attendre la reconstitution du budget hebdomadaire",
+                    "summary": "Arrosage plafonné cette semaine (garde-fou hebdomadaire)",
+                    "block_reason": block_reason,
+                    "watering_cause": watering_cause,
+                }
             return {
                 "status": "termine",
                 "next_action": "Aucun arrosage nécessaire",

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.12.2
+Affichage honnête du plafonnement hebdomadaire (497 tests verts) :
+- **Garde-fou hebdomadaire** : quand le budget d'arrosage de la semaine est atteint **alors que le sol a réellement besoin d'eau** (réserve sous le seuil MAD), le capteur d'arrosage affiche désormais le statut **« bloqué »** avec « Arrosage plafonné cette semaine (garde-fou hebdomadaire) » au lieu de « Aucun arrosage nécessaire » (qui masquait le vrai motif, notamment en canicule). Quand il n'y a réellement aucun besoin, le message « Aucun arrosage nécessaire » est conservé (pas d'alarme inutile).
+
 ## 0.12.1
 Cohérence carte ↔ intégration : l'audit croisé a révélé que la carte Lovelace attendait des données non exposées par l'intégration (496 tests verts) :
 - **Motif de blocage arrosage** : l'entité `fenetre_optimale` expose désormais aussi `block_reason_label` (libellé prêt à afficher), comme `prochain_arrosage` — la carte n'a plus à re-formater localement (et affiche enfin proprement « pluie prévue suffisante », « garde-fou hebdomadaire », etc.).
