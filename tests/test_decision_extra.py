@@ -2035,9 +2035,9 @@ class TestNormalRainReductionPropagation(unittest.TestCase):
         return decision.build_decision_snapshot(**params)
 
     def test_rain_reduction_propagates_to_executed_values(self):
-        # Mode Normal, déficit important, pluie annoncée J+1 (branche ×0.8).
+        # Mode Normal, déficit important, pluie SIGNIFICATIVE annoncée J+1 (≥ 2 mm, branche ×0.8).
         no_rain = self._snapshot(pluie_demain=0.0)
-        rain = self._snapshot(pluie_demain=0.5)
+        rain = self._snapshot(pluie_demain=3.0)
 
         self.assertEqual(no_rain["phase_active"], "Normal")
         self.assertEqual(rain["phase_active"], "Normal")
@@ -2051,6 +2051,19 @@ class TestNormalRainReductionPropagation(unittest.TestCase):
         self.assertIn("Réduis", rain["action_recommandee"])
         # mm_requested conserve la demande brute (traçabilité).
         self.assertGreater(rain["mm_requested"], rain["objectif_mm"])
+
+    def test_trace_rain_does_not_reduce_or_block_watering(self):
+        # Anti-régression du bug réel : une pluie de trace (0,8 mm à J+2) ne doit NI
+        # réduire NI bloquer l'arrosage d'un sol sec (sinon « pluie prévue suffisante »
+        # à tort, en pleine canicule).
+        no_rain = self._snapshot(pluie_demain=0.0)
+        trace = self._snapshot(pluie_j2=0.8)
+
+        # Pas de blocage « pluie prévue suffisante » et arrosage maintenu.
+        self.assertNotEqual(trace.get("block_reason"), "pluie_prevue_suffisante")
+        self.assertGreater(trace["objectif_mm"], 0.0)
+        # La réduction ×0.8 ne s'applique pas pour une trace : l'objectif reste quasi intact.
+        self.assertGreater(trace["objectif_mm"], no_rain["objectif_mm"] * 0.9)
 
     def test_rain_reduction_below_min_session_zeroes_objective(self):
         # Réserve sol au seuil MAD (6/12) → la dépletion déclenche une recharge de 6 mm,
