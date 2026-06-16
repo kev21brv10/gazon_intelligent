@@ -1279,6 +1279,31 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertNotIn("confidence_reasons", attrs)
         self.assertEqual(attrs["window_reason_summary"], "Aucun arrosage nécessaire")
 
+    def test_watering_window_sensor_surfaces_weekly_cap_when_soil_needs_water(self) -> None:
+        result = _make_result()
+        result.objectif_arrosage = 0.0
+        result.arrosage_recommande = False
+        result.type_arrosage = "aucune_action"
+        result.fenetre_optimale = "attendre"
+        result.extra.update(
+            {
+                "block_reason": "garde_fou_hebdomadaire",
+                "depletion_ratio": 1.0,  # réserve totalement épuisée → besoin réel
+                "mad_ratio": 0.5,
+                "temperature": 30.0,
+            }
+        )
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=result, history=[], memory={})
+
+        fenetre_sensor = sensor.GazonFenetreOptimaleSensor(coordinator)
+        attrs = fenetre_sensor.extra_state_attributes
+
+        # Plafonné par le garde-fou alors que le sol a besoin : affichage honnête.
+        self.assertEqual(attrs["status"], "bloque")
+        self.assertIn("plafonné", attrs["summary"].lower())
+        self.assertEqual(attrs["block_reason"], "garde_fou_hebdomadaire")
+        self.assertEqual(attrs["block_reason_label"], "Garde-fou hebdomadaire")
+
     def test_signal_irrigation_prefers_no_need_over_blocked_when_objective_is_zero(self) -> None:
         result = _make_result()
         result.objectif_arrosage = 0.0
