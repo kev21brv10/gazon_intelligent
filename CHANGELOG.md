@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.13.1
+Correctif : une pluie de trace ne bloque plus l'arrosage (506 tests verts) :
+- **`decision_watering.py`** : une 2ᵉ logique pluie (« rain floor », distincte de `_rain_signals`) réduisait l'arrosage **dès la moindre pluie prévue (> 0 mm, même 0,8 mm à J+2)**. Quand l'objectif était déjà plafonné (garde-fou hebdomadaire), la réduction le faisait passer **sous la dose minimale → blocage total « pluie prévue suffisante »**, laissant le sol à sec en pleine canicule. Désormais la réduction/le report ne s'applique que pour une **pluie réellement significative** (≥ 2 mm demain, ≥ 4 mm à J+2, ou ≥ 4 mm de cumul sur 3 jours). +1 test anti-régression.
+
 ## 0.13.0
 Gestion canicule (survie + rafraîchissement du soir) et correctif pluie (505 tests verts) :
 - **Pluie « trace » ne bloque plus l'arrosage** : une forte probabilité de pluie ne met l'arrosage en pause que si le **cumul prévu sur 3 jours est ≥ 4 mm**. Avant, ~0,8 mm annoncés à 80-100 % déclenchaient un faux « pluie prévue suffisante » et laissaient le sol à sec.

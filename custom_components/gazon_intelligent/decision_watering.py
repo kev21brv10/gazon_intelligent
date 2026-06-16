@@ -1718,7 +1718,11 @@ def build_watering_bundle(
                 mm_final = min(mm_final, objectif_mm)
                 mm_final_recommande = min(mm_final_recommande, objectif_mm)
                 action_a_eviter = "Lancer un cycle complet avant la pluie."
-            elif pluie_demain > 0 or pluie_j2 > 0 or pluie_3j > 0:
+            elif pluie_demain >= 2.0 or pluie_j2 >= 4.0 or pluie_3j >= 4.0:
+                # On ne réduit l'arrosage que pour une pluie prévue SIGNIFICATIVE. Une
+                # averse de trace (ex. 0,8 mm à J+2) ne doit pas réduire/annuler l'arrosage
+                # d'un sol sec : sinon, quand l'objectif réduit passe sous la dose mini, on
+                # bloquait tout à tort (« pluie prévue suffisante ») en pleine canicule.
                 reduction_mm = round(objectif_mm * 0.8, 1)
                 conseil_principal = "Réduis l'arrosage: la pluie annoncée peut déjà compenser une partie du besoin."
                 if reduction_mm >= min_session_mm:
