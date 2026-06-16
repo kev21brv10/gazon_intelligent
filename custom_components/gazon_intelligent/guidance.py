@@ -43,6 +43,9 @@ SEMIS_WINDOW_END_HOUR = 17
 SEMIS_DAYTIME_ACCEPTABLE_END_HOUR = 18
 EVENING_START_HOUR = 18
 EVENING_END_HOUR = 20
+# Marge de séchage : un arrosage du soir doit finir au moins ce nombre de minutes avant
+# le coucher du soleil, pour que l'herbe sèche avant la nuit (sinon risque fongique).
+EVENING_DRYING_MARGIN_MIN = 90
 NORMAL_WEEKLY_GUARDRAIL_MM_MIN = 20.0
 NORMAL_WEEKLY_GUARDRAIL_MM_MAX = 25.0
 NORMAL_MIN_USEFUL_SESSION_MM = 10.0
@@ -146,6 +149,11 @@ def _to_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _to_int_or_none(value: Any) -> int | None:
+    parsed = _to_float(value)
+    return int(parsed) if parsed is not None else None
 
 
 def _reference_hydric_balance_mm(water_balance: dict[str, Any] | None) -> float:
@@ -676,18 +684,23 @@ def _rain_signals(
     pluie_demain_effective = pluie_demain * 0.70
     pluie_j2_effective = pluie_j2 * 0.45
     pluie_3j_effective = pluie_3j * 0.30
+    # Une forte probabilité de pluie ne doit compter que si la QUANTITÉ prévue est
+    # significative : une averse de trace (ex. 0,8 mm annoncée à 80-100 %) ne doit pas
+    # bloquer l'arrosage d'un sol sec — sinon on laisse le gazon en stress alors qu'il
+    # ne tombera quasiment rien. On exige donc ≥ 4 mm de cumul prévu sur 3 jours.
+    proba_pluie_significative = pluie_probabilite_max_3j >= 80.0 and pluie_3j >= 4.0
     pluie_compensatrice = (
         pluie_demain_effective >= max(2.0, objective_reference_mm * 0.8)
         or pluie_j2_effective >= max(2.0, objective_reference_mm * 0.8)
         or pluie_3j_effective >= max(4.0, objective_reference_mm * 1.2)
-        or pluie_probabilite_max_3j >= 80.0
+        or proba_pluie_significative
     )
     pluie_proche = (
         pluie_24h >= 4.0
         or pluie_demain_effective >= 4.0
         or pluie_j2_effective >= 4.0
         or pluie_3j_effective >= 6.0
-        or pluie_probabilite_max_3j >= 80.0
+        or proba_pluie_significative
     )
     return pluie_compensatrice, pluie_proche
 
@@ -804,6 +817,7 @@ def _evening_window_allowed(
     objectif_mm: float,
     heat_stress_level: str = "normal",
     fungal_risk_level: str | None = None,
+    minutes_to_sunset: float | None = None,
 ) -> bool:
     # Bloquer fenêtre soir avril-septembre sauf déficit critique
     today = _current_date()
@@ -822,8 +836,20 @@ def _evening_window_allowed(
     # Blocage supplémentaire si risque fongique élevé
     if fungal_risk_level in {"moderate", "high"}:
         return False
-    if heat_stress_level == "extreme":
+    # Garde-fou séchage : jamais d'arrosage du soir à moins de 90 min du coucher du
+    # soleil — l'herbe doit pouvoir sécher avant la nuit, sinon risque de maladies
+    # fongiques (le séchage prime sur le rafraîchissement). Quand le coucher est inconnu
+    # (pas de capteur soleil), on ne s'appuie pas sur cette marge.
+    if minutes_to_sunset is not None and minutes_to_sunset < EVENING_DRYING_MARGIN_MIN:
         return False
+    if heat_stress_level == "extreme":
+        # Chaleur extrême : un petit arrosage de rafraîchissement le soir est utile pour
+        # faire baisser la température du gazon — autorisé UNIQUEMENT si l'herbe peut
+        # sécher (coucher du soleil connu + marge ≥ 90 min déjà vérifiée, et air assez
+        # sec). Sinon on s'abstient pour ne pas laisser le gazon humide la nuit.
+        if minutes_to_sunset is None or humidite > 60:
+            return False
+        return objectif_mm > 0
     if temperature < 24:
         return False
     if humidite > 65:
@@ -1102,6 +1128,7 @@ class _WateringCtx:
     pluie_proche: bool = False
     saturation_block: bool = False
     evening_allowed: bool = False
+    sunset_minute: int | None = None
 
 
 def _build_watering_ctx(
@@ -1200,6 +1227,7 @@ def _build_watering_ctx(
         application_type=application_type,
         now_hour=now.hour,
         now_minutes=now.hour * 60 + now.minute,
+        sunset_minute=_to_int_or_none(weather_profile.get("sunset_minute")),
         recent_watering_count=recent_watering_count,
         recent_watering_mm_7j=recent_watering_mm_7j,
         latest_watering_dt=latest_watering_dt,
@@ -1238,12 +1266,16 @@ def _fill_post_preamble(ctx: _WateringCtx) -> None:
         pluie_probabilite_max_3j=ctx.pluie_probabilite_max_3j,
     )
     ctx.saturation_block = ctx.phase_dominante != "Sursemis" and ctx.bilan_hydrique_mm > SATURATION_BILAN_HYDRIQUE_MM
+    _minutes_to_sunset = (
+        ctx.sunset_minute - ctx.now_minutes if ctx.sunset_minute is not None else None
+    )
     ctx.evening_allowed = _evening_window_allowed(
         temperature=ctx.temperature,
         humidite=ctx.humidite,
         water_balance=ctx.water_balance,
         objectif_mm=ctx.deficit_mm_brut,
         heat_stress_level=ctx.heat_stress_level,
+        minutes_to_sunset=_minutes_to_sunset,
     )
 
 
@@ -1585,6 +1617,15 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
     # autorise l'arrosage à outrepasser le cooldown 24 h — respecter le délai laisserait le
     # gazon en stress sévère. Les autres blocages (pluie, sol détrempé) restent prioritaires.
     _critical_depletion = float(ctx.water_balance.get("depletion_ratio") or 0.0) >= 0.8
+    # Survie canicule : réserve quasi épuisée (≥ 90 %) ET stress thermique canicule/extrême.
+    # Dans ce seul cas, on autorise un petit cycle de survie même si le garde-fou
+    # hebdomadaire est atteint — laisser le sol à 0 en pleine canicule dépasse le « stress
+    # bénéfique » et grille le gazon. Les blocages pluie réelle / sol détrempé restent
+    # prioritaires (on n'arrose pas s'il pleut vraiment ou si le sol est déjà gorgé).
+    _survie_canicule = (
+        float(ctx.water_balance.get("depletion_ratio") or 0.0) >= 0.9
+        and ctx.heat_stress_level in {"canicule", "extreme"}
+    )
     block_reason = None
     if ctx.pluie_compensatrice or ctx.pluie_proche:
         block_reason = "pluie_prevue_suffisante"
@@ -1598,6 +1639,7 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
         ctx.recent_watering_count >= 3
         and ctx.recent_watering_mm_7j >= ctx.guardrail_min_mm
         and ctx.deficit_mm_ajuste < ctx.guardrail_min_mm
+        and not _survie_canicule
     ):
         block_reason = "garde_fou_hebdomadaire"
     # Mode Normal (pelouse établie).
@@ -1622,6 +1664,9 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
             if max_session_mm is not None:
                 mm_cible = min(mm_cible, max_session_mm)
             weekly_room = max(0.0, guardrail_max_effective - ctx.recent_watering_mm_7j)
+            if _survie_canicule:
+                # Garantit une dose de survie minimale même si le budget hebdo est épuisé.
+                weekly_room = max(weekly_room, min_session_mm)
             mm_cible = round(min(mm_cible, weekly_room), 1)
         if block_reason is not None:
             mm_cible = 0.0
@@ -1681,7 +1726,21 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
         confidence_reasons=confidence_reasons,
         raison_decision_base="Mode Normal: arrosage profond déclenché quand la réserve atteint le seuil d'épuisement (MAD).",
         block_reason=block_reason,
-        fenetre_optimale="maintenant" if ctx.morning_start_minute <= ctx.now_minutes < ctx.acceptable_end_minute else "ce_matin",
+        fenetre_optimale=(
+            # Canicule : si la fenêtre du soir est autorisée (chaleur extrême + l'herbe
+            # peut sécher avant la nuit) et qu'on est effectivement le soir, on propose un
+            # petit arrosage de rafraîchissement plutôt que d'attendre le lendemain matin.
+            "soir"
+            if (
+                mm_final > 0
+                and ctx.evening_allowed
+                and ctx.now_minutes >= ctx.acceptable_end_minute
+                and ctx.now_minutes >= EVENING_START_HOUR * 60
+            )
+            else "maintenant"
+            if ctx.morning_start_minute <= ctx.now_minutes < ctx.acceptable_end_minute
+            else "ce_matin"
+        ),
         niveau_action="a_faire" if mm_final > 0 else "surveiller",
         risque_gazon="modere" if ctx.deficit_mm_brut >= 5 else "faible",
         heat_stress_level=ctx.heat_stress_level,

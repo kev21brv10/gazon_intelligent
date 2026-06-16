@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.0
+Gestion canicule (survie + rafraîchissement du soir) et correctif pluie (505 tests verts) :
+- **Pluie « trace » ne bloque plus l'arrosage** : une forte probabilité de pluie ne met l'arrosage en pause que si le **cumul prévu sur 3 jours est ≥ 4 mm**. Avant, ~0,8 mm annoncés à 80-100 % déclenchaient un faux « pluie prévue suffisante » et laissaient le sol à sec.
+- **Survie canicule** : quand la réserve est **≥ 90 % épuisée ET** qu'on est en **canicule/chaleur extrême** (et qu'il ne pleut pas vraiment / sol non gorgé), un **petit cycle de survie** (dose minimale) est autorisé **le matin malgré le garde-fou hebdomadaire** — laisser le gazon à 0 mm en pleine canicule dépasse le « stress bénéfique ». Auto-limité (dose mini, espacé par le cooldown 24 h).
+- **Rafraîchissement du soir en chaleur extrême** : un petit arrosage du soir pour faire baisser la température du gazon est désormais possible, **uniquement si l'herbe peut sécher avant la nuit** — fin **≥ 90 min avant le coucher du soleil réel** (`sun.sun`), air assez sec (humidité ≤ 60 %) et aucun risque fongique. Si le coucher est inconnu ou trop proche → on s'abstient (priorité au séchage pour éviter les maladies fongiques).
+
 ## 0.12.2
 Affichage honnête du plafonnement hebdomadaire (497 tests verts) :
 - **Garde-fou hebdomadaire** : quand le budget d'arrosage de la semaine est atteint **alors que le sol a réellement besoin d'eau** (réserve sous le seuil MAD), le capteur d'arrosage affiche désormais le statut **« bloqué »** avec « Arrosage plafonné cette semaine (garde-fou hebdomadaire) » au lieu de « Aucun arrosage nécessaire » (qui masquait le vrai motif, notamment en canicule). Quand il n'y a réellement aucun besoin, le message « Aucun arrosage nécessaire » est conservé (pas d'alarme inutile).
