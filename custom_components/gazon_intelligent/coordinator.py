@@ -97,6 +97,11 @@ AUTO_IRRIGATION_AUTO_SOURCES = {
 }
 
 AUTO_IRRIGATION_CHECK_INTERVAL = timedelta(minutes=2)
+# Cooldown anti-relance : après la fin d'un cycle auto, aucun NOUVEAU gros cycle ne peut
+# repartir avant ce délai. La fenêtre du soir (petit rafraîchissement canicule) en est
+# exemptée. Objectif : un seul gros cycle « du matin » par jour, fini les relances en
+# boucle observées en canicule (le déclencheur repartait ~10 s après la fin du cycle).
+AUTO_IRRIGATION_RELAUNCH_COOLDOWN = timedelta(hours=6)
 
 _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "mode",
@@ -256,6 +261,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "active_irrigation_session": None,
             "last_irrigation_execution": None,
             "last_auto_irrigation_reason": None,
+            "last_auto_irrigation_completed_at": None,
             "auto_irrigation_safety_lock": False,
             # Garde anti-démarrage : reste False tant qu'aucun cycle de données sain
             # n'a eu lieu. Volontairement NON persisté → se réarme à chaque (re)démarrage.
@@ -1978,6 +1984,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "active_irrigation_session": None,
                 "last_irrigation_execution": None,
                 "last_auto_irrigation_reason": None,
+                "last_auto_irrigation_completed_at": None,
                 "auto_irrigation_safety_lock": False,
                 "auto_irrigation_bootstrap_complete": False,
             }
@@ -1985,6 +1992,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         runtime_state.setdefault("active_irrigation_session", None)
         runtime_state.setdefault("last_irrigation_execution", None)
         runtime_state.setdefault("last_auto_irrigation_reason", None)
+        runtime_state.setdefault("last_auto_irrigation_completed_at", None)
         runtime_state.setdefault("auto_irrigation_safety_lock", False)
         runtime_state.setdefault("auto_irrigation_bootstrap_complete", False)
 
@@ -2014,6 +2022,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "last_irrigation_execution": self._serialize_runtime_value(last_execution),
             "last_auto_irrigation_reason": self._serialize_runtime_value(
                 self._runtime_state.get("last_auto_irrigation_reason")
+            ),
+            "last_auto_irrigation_completed_at": self._serialize_runtime_value(
+                self._runtime_state.get("last_auto_irrigation_completed_at")
             ),
             "auto_irrigation_safety_lock": bool(
                 self._runtime_state.get("auto_irrigation_safety_lock")
@@ -2074,6 +2085,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "active_irrigation_session": active_session,
             "last_irrigation_execution": last_execution,
             "last_auto_irrigation_reason": last_auto_irrigation_reason,
+            "last_auto_irrigation_completed_at": runtime.get("last_auto_irrigation_completed_at"),
             "auto_irrigation_safety_lock": bool(runtime.get("auto_irrigation_safety_lock")),
         }
 
@@ -2385,11 +2397,37 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 return False, "semis_target_reached"
             if str(semis_progress.get("state") or "") == "waiting":
                 return False, "semis_cycle_pending"
-        elif not post_application_auto_ready and self._recent_watering_block_active(objectif_mm):
+        elif (
+            not post_application_auto_ready
+            and fenetre != "soir"
+            and self._recent_watering_block_active(objectif_mm)
+        ):
+            # La fenêtre du soir (rafraîchissement canicule) n'est PAS bloquée par l'eau déjà
+            # appliquée aujourd'hui : son but est de refroidir, pas de combler un déficit. La
+            # protection anti-boucle est assurée par le cooldown de relance ci-dessous.
             return False, "recent_watering"
 
         if post_application_auto_ready:
             return True, "post_application_ready"
+
+        # Cooldown anti-relance : après un cycle auto terminé, on n'autorise pas un nouveau
+        # cycle avant AUTO_IRRIGATION_RELAUNCH_COOLDOWN (cause des relances en boucle en
+        # canicule, où le déclencheur repartait ~10 s après la fin du cycle). S'applique AUSSI
+        # à la fenêtre du soir : c'est ce qui empêche le rafraîchissement de canicule de se
+        # relancer en boucle dans la fenêtre 18-20 h (l'écart matin→soir étant toujours > 6 h,
+        # ce cooldown ne bloque jamais le PREMIER cycle du soir). EXEMPTÉ : le Sursemis
+        # (`semis_progress`), qui arrose volontairement plusieurs fois par jour (cycles ~90 min)
+        # et a sa propre cadence (`semis_cycle_pending`).
+        # Basé sur la fin du dernier cycle (état runtime persisté), pas sur l'historique
+        # écrit en différé — donc fiable même juste après la clôture du cycle.
+        if semis_progress is None:
+            last_completed = self._parse_datetime_value(
+                self._runtime_state.get("last_auto_irrigation_completed_at")
+            )
+            if last_completed is not None:
+                elapsed = (self._current_utc_datetime() - last_completed).total_seconds()
+                if elapsed < AUTO_IRRIGATION_RELAUNCH_COOLDOWN.total_seconds():
+                    return False, "relaunch_cooldown"
 
         current = self._current_datetime()
         current_minutes = current.hour * 60 + current.minute
@@ -3675,6 +3713,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._zone_tracking_resumed_at = self._current_utc_datetime()
             self._auto_irrigation_task = None
             if not cancelled:
+                if str(source or "") == "auto_irrigation":
+                    # Arme le cooldown anti-relance : un cycle auto vient de se terminer.
+                    self._runtime_state["last_auto_irrigation_completed_at"] = self._current_utc_datetime()
                 self._set_active_irrigation_session(None)
                 await self._persist_runtime_state()
 

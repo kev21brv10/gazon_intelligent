@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from datetime import date, datetime, timezone
 from typing import Any
 import logging
@@ -110,6 +111,76 @@ def _zone_session_total_mm(zones: list[dict[str, Any]] | None) -> float | None:
     if not values:
         return None
     return _round_half_up_1(sum(values))
+
+
+def compute_live_session_water(
+    session: dict[str, Any] | None,
+    *,
+    now: datetime,
+    rate_fn: Callable[[str], float],
+) -> dict[str, Any]:
+    """mm appliqués EN TEMPS RÉEL pendant une session d'arrosage en cours.
+
+    Additionne, par zone, les segments déjà terminés et le segment en cours
+    (zone active : ``durée_écoulée × débit``). Renvoie :
+    - ``zone_mm`` : détail des mm par zone (arrondi),
+    - ``surface_mm`` : dose surface (moyenne des zones, cohérente avec le modèle
+      « lame surfacique » utilisé à la finalisation),
+    - ``total_mm`` : cumul brut toutes zones.
+
+    Fonction pure (aucun accès HA) pour rester testable hors Home Assistant.
+    """
+    zone_mm: dict[str, float] = {}
+    if not isinstance(session, dict):
+        return {"zone_mm": {}, "surface_mm": 0.0, "total_mm": 0.0}
+
+    def _add(zone_id: Any, amount: float | None) -> None:
+        if not zone_id or amount is None or amount <= 0:
+            return
+        key = str(zone_id)
+        zone_mm[key] = zone_mm.get(key, 0.0) + float(amount)
+
+    # Segments déjà terminés : `zones_done` (cycle piloté) ou `zones` (moniteur passif).
+    zones_done = session.get("zones_done")
+    if isinstance(zones_done, list) and zones_done:
+        for segment in zones_done:
+            if isinstance(segment, dict):
+                _add(segment.get("zone") or segment.get("entity_id"), _to_float(segment.get("mm")))
+    else:
+        zones = session.get("zones")
+        if isinstance(zones, dict):
+            for zone_id, record in zones.items():
+                if isinstance(record, dict):
+                    _add(zone_id, _to_float(record.get("mm")))
+
+    # Segment EN COURS : zone active × débit × temps écoulé (sauf en pause).
+    if session.get("status") in (None, "running"):
+        active = session.get("active_zones")
+        pairs: list[tuple[Any, Any]] = []
+        if isinstance(active, dict):
+            pairs = list(active.items())
+        elif isinstance(active, list):
+            started = session.get("last_activity_at") or session.get("last_update")
+            pairs = [(zone_id, started) for zone_id in active]
+        for zone_id, started_at in pairs:
+            if not isinstance(started_at, datetime):
+                continue
+            elapsed = (now - started_at).total_seconds()
+            if elapsed <= 0:
+                continue
+            rate = max(0.0, float(rate_fn(str(zone_id))))
+            if rate <= 0:
+                continue
+            _add(zone_id, (rate * elapsed) / 3600.0)
+
+    zone_list = [{"zone": zone_id, "mm": amount} for zone_id, amount in zone_mm.items()]
+    surface_mm = _zone_session_surface_mm(zone_list) or 0.0
+    total_mm = _zone_session_total_mm(zone_list) or 0.0
+    return {
+        "zone_mm": {zone_id: _round_half_up_1(amount) for zone_id, amount in zone_mm.items()},
+        "surface_mm": surface_mm,
+        "total_mm": total_mm,
+    }
 
 
 def _normalize_allowed_zone_ids(allowed_zone_ids: Any) -> set[str]:
@@ -231,12 +302,24 @@ def _compute_soil_profile(
 def _watering_item_mm(item: dict[str, Any] | None) -> float | None:
     if not isinstance(item, dict):
         return None
+    # Priorité au total surface CANONIQUE enregistré au moment de l'arrosage
+    # (`total_mm` / `session_total_mm` = dose surface du cycle complet, déjà calculée).
+    # Re-dériver depuis la liste `zones` via _zone_session_surface_mm() est FAUX pour un
+    # cycle multi-passages : chaque passage y est une entrée distincte, et la moyenne
+    # renvoie alors la dose d'UN passage, pas le cumul → sous-comptage ≈ ×nombre de
+    # passages (réserve et budget hebdo gravement sous-crédités).
+    for key in ("total_mm", "session_total_mm"):
+        amount = _to_float(item.get(key))
+        if amount is not None:
+            return amount
+    # Repli : pas de total stocké → on dérive depuis les zones (eau réellement appliquée),
+    # puis l'objectif, puis mm. (Cas des records légers / historiques sans total.)
     zones = item.get("zones")
     if isinstance(zones, list):
         surface_mm = _zone_session_surface_mm(zones)
         if surface_mm is not None:
             return surface_mm
-    for key in ("total_mm", "session_total_mm", "objectif_mm", "mm"):
+    for key in ("objectif_mm", "objective_mm", "mm"):
         amount = _to_float(item.get(key))
         if amount is not None:
             return amount

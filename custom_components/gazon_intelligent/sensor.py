@@ -15,7 +15,11 @@ from .entity_ids import public_entity_id, resolve_entry_instance_slug
 from .intervention_recommendation import build_intervention_recommendation, public_intervention_ui
 from .memory import build_application_summary, compute_application_state, normalize_post_application_status
 from .watering_plan import build_watering_plan
-from .water import _zone_session_surface_mm, _zone_session_total_mm
+from .water import (
+    _zone_session_surface_mm,
+    _zone_session_total_mm,
+    compute_live_session_water,
+)
 from .decision_risk import compute_fungal_risk as _sensor_compute_fungal_risk
 
 RECOMMENDATION_RUNTIME_PROBE = "constraints_probe_20260404_01"
@@ -3272,6 +3276,49 @@ class GazonArrosageEnCoursSensor(GazonEntityBase, SensorEntity):
         progress = self._progress_state()
         return progress["progress_percent"] if progress["active"] else 0.0
 
+    def _live_water_state(self, session: dict[str, object], now: datetime) -> dict[str, object]:
+        """mm appliqués par zone + réserve/surplus projetés EN TEMPS RÉEL."""
+        rate_getter = getattr(self.coordinator, "_get_zone_rate_mm_h", None)
+
+        def _rate(zone_id: str) -> float:
+            if callable(rate_getter):
+                try:
+                    return float(rate_getter(zone_id))
+                except (TypeError, ValueError):
+                    return 0.0
+            return 0.0
+
+        def _f(value: object) -> float | None:
+            try:
+                return float(value)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                return None
+
+        live = compute_live_session_water(session, now=now, rate_fn=_rate)
+        data = getattr(self.coordinator, "data", None)
+        data = data if isinstance(data, dict) else {}
+        reserve_stock = _f(data.get("reserve_stock_mm"))
+        reserve_utile = _f(data.get("reserve_utile_mm"))
+        reserve_max = _f(data.get("reserve_stock_max_mm"))
+
+        live_reserve_mm: float | None = None
+        live_surplus_mm: float | None = None
+        if reserve_stock is not None:
+            projected = reserve_stock + float(live["surface_mm"])
+            if reserve_max is not None and reserve_max > 0:
+                projected = min(projected, reserve_max)
+            live_reserve_mm = round(projected, 1)
+            if reserve_utile is not None:
+                live_surplus_mm = round(max(0.0, projected - reserve_utile), 1)
+
+        return {
+            "zone_mm_applied": live["zone_mm"],
+            "surface_mm_applied": live["surface_mm"],
+            "total_mm_applied": live["total_mm"],
+            "live_reserve_mm": live_reserve_mm,
+            "live_surplus_mm": live_surplus_mm,
+        }
+
     def _progress_state(self) -> dict[str, object]:
         session = self._current_session(self.coordinator)
         if session is None:
@@ -3327,6 +3374,7 @@ class GazonArrosageEnCoursSensor(GazonEntityBase, SensorEntity):
         progress_percent = 0.0
         if planned_total_seconds > 0:
             progress_percent = min(100.0, (elapsed_seconds / planned_total_seconds) * 100.0)
+        live_state = self._live_water_state(session, now)
         return {
             "active": True,
             "summary": summary,
@@ -3352,6 +3400,8 @@ class GazonArrosageEnCoursSensor(GazonEntityBase, SensorEntity):
             "last_activity_at": last_activity,
             "last_activity_at_utc": session.get("last_activity_at").isoformat() if isinstance(session.get("last_activity_at"), datetime) else None,
             "active_zones": active_zone_names,
+            "target_mm": session.get("target_mm"),
+            **live_state,
         }
 
     @property
@@ -3368,6 +3418,11 @@ class GazonArrosageEnCoursSensor(GazonEntityBase, SensorEntity):
                 "zone_count": 0,
                 "active_zones": [],
                 "remaining_session_seconds": 0.0,
+                "zone_mm_applied": {},
+                "surface_mm_applied": 0.0,
+                "total_mm_applied": 0.0,
+                "live_reserve_mm": None,
+                "live_surplus_mm": None,
             }
         return progress
 

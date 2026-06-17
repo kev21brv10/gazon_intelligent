@@ -125,6 +125,7 @@ _install_homeassistant_stubs()
 coordinator_mod = importlib.import_module("custom_components.gazon_intelligent.coordinator")
 watering_plan_mod = importlib.import_module("custom_components.gazon_intelligent.watering_plan")
 mower_adapter_mod = importlib.import_module("custom_components.gazon_intelligent.mower_adapter")
+water_mod = importlib.import_module("custom_components.gazon_intelligent.water")
 
 
 @dataclass
@@ -215,6 +216,26 @@ def _build_coordinator() -> object:
         "auto_irrigation_bootstrap_complete": True,
     }
     return coord
+
+
+def _ready_launch_snapshot(coordinator: object, **overrides: object) -> dict[str, object]:
+    """Snapshot qui passe toutes les gardes de `_should_launch_auto_irrigation`."""
+    snapshot = {
+        "objectif_mm": 8.0,
+        "arrosage_recommande": True,
+        "arrosage_auto_autorise": True,
+        "irrigation_execution_allowed": True,
+        "type_arrosage": "auto",
+        "fenetre_optimale": "matin",
+        "watering_target_date": coordinator._current_date().isoformat(),
+        "watering_window_start_minute": 0,
+        "watering_window_end_minute": 1440,
+        "watering_evening_start_minute": 1,
+        "watering_evening_end_minute": 1440,
+        "watering_evening_allowed": True,
+    }
+    snapshot.update(overrides)
+    return snapshot
 
 
 def _bind_irrigation_runtime_methods(target: object, *names: str) -> None:
@@ -490,6 +511,142 @@ class WateringSessionMonitoringTests(unittest.TestCase):
         assert payload is not None
         self.assertEqual(len(payload["zones"]), 1)
         self.assertEqual(payload["zones"][0]["zone"], "switch.zone_1")
+
+    def test_relaunch_cooldown_blocks_back_to_back_cycle(self) -> None:
+        # Un cycle auto vient de finir → pas de nouveau gros cycle tout de suite.
+        coordinator = _build_coordinator()
+        coordinator.history = []
+        snapshot = _ready_launch_snapshot(coordinator)
+        coordinator._runtime_state["last_auto_irrigation_completed_at"] = (
+            coordinator._current_utc_datetime() - timedelta(minutes=10)
+        )
+        should_launch, reason = coordinator._should_launch_auto_irrigation(snapshot)
+        self.assertFalse(should_launch)
+        self.assertEqual(reason, "relaunch_cooldown")
+
+    def test_relaunch_cooldown_clears_after_delay(self) -> None:
+        # Au-delà du cooldown (6 h), un nouveau cycle est de nouveau autorisé.
+        coordinator = _build_coordinator()
+        coordinator.history = []
+        snapshot = _ready_launch_snapshot(coordinator)
+        coordinator._runtime_state["last_auto_irrigation_completed_at"] = (
+            coordinator._current_utc_datetime() - timedelta(hours=8)
+        )
+        should_launch, reason = coordinator._should_launch_auto_irrigation(snapshot)
+        self.assertTrue(should_launch)
+        self.assertEqual(reason, "ready")
+
+    def test_relaunch_cooldown_blocks_evening_rerun(self) -> None:
+        # Anti-boucle : un rafraîchissement du soir qui vient de finir (10 min) NE doit PAS
+        # se relancer dans la fenêtre 18-20 h. Le cooldown de relance s'applique aussi au soir.
+        coordinator = _build_coordinator()
+        coordinator.history = []
+        snapshot = _ready_launch_snapshot(coordinator, fenetre_optimale="soir")
+        coordinator._runtime_state["last_auto_irrigation_completed_at"] = (
+            coordinator._current_utc_datetime() - timedelta(minutes=10)
+        )
+        should_launch, reason = coordinator._should_launch_auto_irrigation(snapshot)
+        self.assertFalse(should_launch)
+        self.assertEqual(reason, "relaunch_cooldown")
+
+    def test_evening_cooling_launches_after_morning_cycle(self) -> None:
+        # Le rafraîchissement du soir reste autorisé malgré l'eau du matin : l'écart
+        # matin→soir (> 6 h) dépasse le cooldown, et l'eau déjà appliquée ne le bloque pas
+        # (son but est de refroidir, pas de combler un déficit).
+        coordinator = _build_coordinator()
+        coordinator.history = [
+            {"type": "arrosage", "recorded_at": coordinator._current_date().isoformat(), "total_mm": 17.0},
+        ]
+        snapshot = _ready_launch_snapshot(coordinator, fenetre_optimale="soir", objectif_mm=4.0)
+        coordinator._runtime_state["last_auto_irrigation_completed_at"] = (
+            coordinator._current_utc_datetime() - timedelta(hours=8)
+        )
+        should_launch, reason = coordinator._should_launch_auto_irrigation(snapshot)
+        self.assertTrue(should_launch)
+        self.assertEqual(reason, "ready")
+
+    def test_relaunch_cooldown_exempts_semis_frequent(self) -> None:
+        # Sursemis : cycles fréquents (~90 min) → le cooldown 6 h NE doit PAS bloquer.
+        coordinator = _build_coordinator()
+        coordinator.history = []
+        coordinator._semis_cycle_progress = lambda snapshot: {
+            "cycles_remaining_today": 2,
+            "state": "ready",
+        }
+        snapshot = _ready_launch_snapshot(coordinator)
+        coordinator._runtime_state["last_auto_irrigation_completed_at"] = (
+            coordinator._current_utc_datetime() - timedelta(minutes=10)
+        )
+        should_launch, reason = coordinator._should_launch_auto_irrigation(snapshot)
+        self.assertTrue(should_launch)
+        self.assertEqual(reason, "ready")
+
+    def test_relaunch_cooldown_absent_timestamp_allows(self) -> None:
+        # Sans cycle précédent (timestamp None), aucun blocage de cooldown.
+        coordinator = _build_coordinator()
+        coordinator.history = []
+        snapshot = _ready_launch_snapshot(coordinator)
+        coordinator._runtime_state["last_auto_irrigation_completed_at"] = None
+        should_launch, reason = coordinator._should_launch_auto_irrigation(snapshot)
+        self.assertTrue(should_launch)
+        self.assertEqual(reason, "ready")
+
+    def test_live_session_water_runtime_in_progress(self) -> None:
+        # Cycle piloté : 2 passages terminés (3 mm chacun) + zone_1 active depuis 5 min à 12 mm/h.
+        now = datetime(2026, 6, 17, 4, 30, tzinfo=timezone.utc)
+        session = {
+            "status": "running",
+            "zones_done": [
+                {"zone": "switch.zone_1", "mm": 3.0},
+                {"zone": "switch.zone_2", "mm": 3.0},
+            ],
+            "active_zones": ["switch.zone_1"],
+            "last_activity_at": now - timedelta(minutes=5),
+        }
+        rates = {"switch.zone_1": 12.0, "switch.zone_2": 12.0}
+        result = water_mod.compute_live_session_water(
+            session, now=now, rate_fn=lambda z: rates.get(z, 0.0)
+        )
+        # zone_1 : 3.0 + 12*5/60 = 4.0 ; zone_2 : 3.0
+        self.assertEqual(result["zone_mm"]["switch.zone_1"], 4.0)
+        self.assertEqual(result["zone_mm"]["switch.zone_2"], 3.0)
+        self.assertEqual(result["surface_mm"], 3.5)  # moyenne (4.0 + 3.0) / 2
+        self.assertEqual(result["total_mm"], 7.0)
+
+    def test_live_session_water_passive_dict_zones(self) -> None:
+        # Moniteur passif : zone déjà créditée 2 mm + active depuis 5 min à 12 mm/h.
+        now = datetime(2026, 6, 17, 4, 30, tzinfo=timezone.utc)
+        session = {
+            "status": "running",
+            "zones": {"switch.zone_1": {"mm": 2.0}},
+            "active_zones": {"switch.zone_1": now - timedelta(minutes=5)},
+        }
+        result = water_mod.compute_live_session_water(
+            session, now=now, rate_fn=lambda z: 12.0
+        )
+        self.assertEqual(result["zone_mm"]["switch.zone_1"], 3.0)  # 2.0 + 1.0
+
+    def test_live_session_water_paused_ignores_in_progress(self) -> None:
+        # En pause : aucun segment en cours ne doit être ajouté.
+        now = datetime(2026, 6, 17, 4, 30, tzinfo=timezone.utc)
+        session = {
+            "status": "paused",
+            "zones_done": [{"zone": "switch.zone_1", "mm": 5.0}],
+            "active_zones": [],
+            "last_activity_at": now - timedelta(minutes=10),
+        }
+        result = water_mod.compute_live_session_water(
+            session, now=now, rate_fn=lambda z: 12.0
+        )
+        self.assertEqual(result["zone_mm"]["switch.zone_1"], 5.0)
+        self.assertEqual(result["surface_mm"], 5.0)
+
+    def test_live_session_water_handles_none_session(self) -> None:
+        now = datetime(2026, 6, 17, 4, 30, tzinfo=timezone.utc)
+        result = water_mod.compute_live_session_water(None, now=now, rate_fn=lambda z: 12.0)
+        self.assertEqual(result["zone_mm"], {})
+        self.assertEqual(result["surface_mm"], 0.0)
+        self.assertEqual(result["total_mm"], 0.0)
 
     def test_zone_session_merges_consecutive_zones(self) -> None:
         coordinator = _build_coordinator()

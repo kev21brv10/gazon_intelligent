@@ -2255,3 +2255,146 @@ class TestDepletionWateringModel(unittest.TestCase):
         )
         self.assertEqual(snapshot["phase_active"], "Sursemis")
         self.assertFalse(snapshot["use_depletion_logic"])
+
+
+class TestEveningCoolingWatering(unittest.TestCase):
+    """Rafraîchissement du soir en canicule extrême (cooling) malgré une réserve saine."""
+
+    @staticmethod
+    def _cooling_profile(now_hour=18, now_minute=30, sunset_minute=1290, **wb):
+        water_balance = dict(
+            bilan_hydrique_mm=-1.0,
+            deficit_jour=0.0,
+            deficit_3j=0.0,
+            deficit_7j=0.0,
+            arrosage_recent_7j=0.0,
+            arrosage_recent=0.0,
+            reserve_from_soil_ledger=True,
+            reserve_utile_mm=12.0,
+            reserve_actuelle_mm=9.6,
+            reserve_stock_mm=9.6,
+            reserve_stock_max_mm=24.0,
+            depletion_mm=2.4,
+            depletion_ratio=0.2,
+            mad_ratio=0.5,
+        )
+        water_balance.update(wb)
+        moment = datetime(2026, 7, 15, now_hour, now_minute, tzinfo=timezone.utc)
+        with patch.object(guidance, "_current_datetime", return_value=moment):
+            return guidance.compute_watering_profile(
+                phase_dominante="Normal",
+                sous_phase="Normal",
+                water_balance=water_balance,
+                today=date(2026, 7, 15),
+                pluie_24h=0.0,
+                pluie_demain=0.0,
+                pluie_j2=0.0,
+                pluie_3j=0.0,
+                pluie_probabilite_max_3j=0.0,
+                humidite=30.0,
+                temperature=36.0,
+                etp=5.0,
+                type_sol="limoneux",
+                weather_profile={"sunset_minute": sunset_minute},
+                history=[],
+            )
+
+    def test_cooling_applied_in_evening_with_healthy_reserve(self):
+        # 18h30, canicule extrême, air sec, coucher dans 3 h, réserve saine → petit cycle de
+        # rafraîchissement (EVENING_COOLING_MM), fenêtre "soir", pas de blocage.
+        profile = self._cooling_profile()
+        self.assertEqual(profile["heat_stress_level"], "extreme")
+        self.assertTrue(profile["watering_evening_allowed"])
+        self.assertEqual(profile["fenetre_optimale"], "soir")
+        self.assertEqual(profile["mm_final_recommande"], guidance.EVENING_COOLING_MM)
+        self.assertIsNone(profile["block_reason"])
+
+    def test_cooling_applied_on_canicule_evening(self):
+        # Le soir, la chaleur redescend souvent d'« extreme » à « canicule » : le cooling doit
+        # quand même se déclencher (sinon il ne partirait jamais le soir).
+        moment = datetime(2026, 7, 15, 18, 30, tzinfo=timezone.utc)
+        water_balance = dict(
+            bilan_hydrique_mm=-1.0,
+            deficit_3j=0.0,
+            deficit_7j=0.0,
+            arrosage_recent_7j=0.0,
+            reserve_from_soil_ledger=True,
+            reserve_utile_mm=12.0,
+            reserve_actuelle_mm=9.6,
+            reserve_stock_mm=9.6,
+            reserve_stock_max_mm=24.0,
+            depletion_mm=2.4,
+            depletion_ratio=0.2,
+            mad_ratio=0.5,
+        )
+        with patch.object(guidance, "_current_datetime", return_value=moment):
+            profile = guidance.compute_watering_profile(
+                phase_dominante="Normal",
+                sous_phase="Normal",
+                water_balance=water_balance,
+                today=date(2026, 7, 15),
+                pluie_24h=0.0,
+                pluie_demain=0.0,
+                pluie_j2=0.0,
+                pluie_3j=0.0,
+                pluie_probabilite_max_3j=0.0,
+                humidite=50.0,
+                temperature=31.0,
+                etp=4.0,
+                type_sol="limoneux",
+                weather_profile={"sunset_minute": 1290},
+                history=[],
+            )
+        self.assertEqual(profile["heat_stress_level"], "canicule")
+        self.assertEqual(profile["fenetre_optimale"], "soir")
+        self.assertEqual(profile["mm_final_recommande"], guidance.EVENING_COOLING_MM)
+
+    def test_no_cooling_in_afternoon(self):
+        # En après-midi (14h), hors fenêtre du soir → réserve saine, aucun arrosage.
+        profile = self._cooling_profile(now_hour=14, now_minute=0)
+        self.assertEqual(profile["mm_final_recommande"], 0.0)
+        self.assertNotEqual(profile["fenetre_optimale"], "soir")
+
+    def test_no_cooling_when_sunset_too_close(self):
+        # Coucher dans 60 min (< 90) → séchage insuffisant, pas de cooling.
+        profile = self._cooling_profile(sunset_minute=18 * 60 + 30 + 60)
+        self.assertEqual(profile["mm_final_recommande"], 0.0)
+        self.assertFalse(profile["watering_evening_allowed"])
+
+    def test_no_cooling_when_rain_incoming(self):
+        # Pluie imminente significative → pas de cooling (la pluie rafraîchit et mouille).
+        moment = datetime(2026, 7, 15, 18, 30, tzinfo=timezone.utc)
+        water_balance = dict(
+            bilan_hydrique_mm=-1.0,
+            deficit_3j=0.0,
+            deficit_7j=0.0,
+            arrosage_recent_7j=0.0,
+            reserve_from_soil_ledger=True,
+            reserve_utile_mm=12.0,
+            reserve_actuelle_mm=9.6,
+            reserve_stock_mm=9.6,
+            reserve_stock_max_mm=24.0,
+            depletion_mm=2.4,
+            depletion_ratio=0.2,
+            mad_ratio=0.5,
+        )
+        with patch.object(guidance, "_current_datetime", return_value=moment):
+            profile = guidance.compute_watering_profile(
+                phase_dominante="Normal",
+                sous_phase="Normal",
+                water_balance=water_balance,
+                today=date(2026, 7, 15),
+                pluie_24h=0.0,
+                pluie_demain=12.0,
+                pluie_j2=0.0,
+                pluie_3j=12.0,
+                pluie_probabilite_max_3j=90.0,
+                humidite=30.0,
+                temperature=36.0,
+                etp=5.0,
+                type_sol="limoneux",
+                weather_profile={"sunset_minute": 1290},
+                history=[],
+            )
+        self.assertEqual(profile["mm_final_recommande"], 0.0)
+        self.assertNotEqual(profile["fenetre_optimale"], "soir")

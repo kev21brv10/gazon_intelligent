@@ -220,6 +220,7 @@ def build_water_bundle(
         "heat_stress_level": watering_profile.get("heat_stress_level"),
         "heat_stress_phase": watering_profile.get("heat_stress_phase"),
         "raison_decision_base": watering_profile["raison_decision_base"],
+        "fenetre_optimale": watering_profile.get("fenetre_optimale"),
         "block_reason": watering_profile.get("block_reason"),
         "recent_watering_count_7j": watering_profile["recent_watering_count_7j"],
         "recent_watering_mm_7j": watering_profile["recent_watering_mm_7j"],
@@ -507,7 +508,12 @@ def _build_watering_bundle_base(
         "block_reason": water_bundle.get("block_reason"),
         "raison_decision": None,
         "niveau_action": risk_bundle["niveau_action"],
-        "fenetre_optimale": risk_bundle["fenetre_optimale"],
+        # La fenêtre vient du risk bundle SAUF quand le profil d'arrosage décide explicitement
+        # un cycle du soir (rafraîchissement de canicule) : seul le profil reçoit le coucher du
+        # soleil et applique les garde-fous séchage, donc c'est lui qui fait foi pour "soir".
+        "fenetre_optimale": (
+            "soir" if water_bundle.get("fenetre_optimale") == "soir" else risk_bundle["fenetre_optimale"]
+        ),
         "risque_gazon": risk_bundle["risque_gazon"],
         "prochaine_reevaluation": risk_bundle["prochaine_reevaluation"],
         "tonte_autorisee": mowing_bundle["tonte_autorisee"],

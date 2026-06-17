@@ -113,13 +113,44 @@ class TestPhaseLogic(unittest.TestCase):
 
         self.assertEqual(total, 4.0)
 
-    def test_compute_recent_watering_mm_uses_session_surface_depth(self) -> None:
+    def test_compute_recent_watering_mm_uses_canonical_surface_total(self) -> None:
+        # Régression : un cycle 3 passages × 2 zones enregistre une liste `zones` de 6
+        # entrées (une par passage×zone, ~1,7 mm chacune). La dose surface du cycle complet
+        # est `total_mm` = 5,2 mm — PAS la moyenne des 6 entrées (~1,7 = un seul passage).
+        # Le comptage doit créditer 5,2, sinon la réserve et le budget hebdo sont
+        # sous-crédités d'un facteur ≈ nombre de passages.
+        history = [
+            {
+                "type": "arrosage",
+                "date": "2026-03-17",
+                "objectif_mm": 5.2,
+                "total_mm": 5.2,
+                "zones_total_mm": 10.4,
+                "zones": [
+                    {"zone": "zone_1", "mm": 1.8},
+                    {"zone": "zone_2", "mm": 1.8},
+                    {"zone": "zone_1", "mm": 1.7},
+                    {"zone": "zone_2", "mm": 1.7},
+                    {"zone": "zone_1", "mm": 1.7},
+                    {"zone": "zone_2", "mm": 1.7},
+                ],
+            }
+        ]
+
+        total = decision.compute_recent_watering_mm(history, today=date(2026, 3, 17), days=2)
+
+        self.assertEqual(total, 5.2)
+
+    def test_compute_recent_watering_mm_single_pass_surface_depth(self) -> None:
+        # Arrosage simple multi-zones (1 passage, 3 zones) : `total_mm` = dose surface
+        # (moyenne par zone, chaque zone couvrant une part) = 1,2 mm, et non la somme (3,6).
         history = [
             {
                 "type": "arrosage",
                 "date": "2026-03-17",
                 "objectif_mm": 1.2,
-                "total_mm": 3.6,
+                "total_mm": 1.2,
+                "zones_total_mm": 3.6,
                 "zones": [
                     {"zone": "zone_1", "mm": 1.2},
                     {"zone": "zone_2", "mm": 1.1},
@@ -370,7 +401,8 @@ class TestHydricCoreAndMemory(unittest.TestCase):
                 "type": "arrosage",
                 "date": "2026-03-16",
                 "objectif_mm": 0.8,
-                "total_mm": 3.0,
+                "total_mm": 1.5,
+                "zones_total_mm": 3.0,
                 "zones": [
                     {"zone": "zone_1", "mm": 1.2},
                     {"zone": "zone_2", "mm": 1.8},
@@ -1631,6 +1663,32 @@ class TestObjectiveAndGuidance(unittest.TestCase):
             minutes_to_sunset=120,
         )
         self.assertTrue(allowed)
+
+    def test_evening_cooling_allowed_even_with_healthy_reserve(self) -> None:
+        # Canicule extrême + réserve SAINE (bilan positif) : le rafraîchissement du soir reste
+        # autorisé (son but est de refroidir, pas de combler un déficit). Avant, le garde-fou
+        # saison avril-septembre le bloquait dès que le bilan dépassait -3 mm.
+        allowed = guidance_module._evening_window_allowed(
+            temperature=36.0,
+            humidite=35.0,
+            water_balance={"bilan_hydrique_mm": 9.9, "deficit_3j": 0.0},
+            objectif_mm=0.0,
+            heat_stress_level="extreme",
+            minutes_to_sunset=180,
+        )
+        self.assertTrue(allowed)
+
+    def test_evening_non_extreme_still_blocked_in_season_when_reserve_healthy(self) -> None:
+        # Hors canicule, en saison de végétation, réserve saine → toujours bloqué (anti-maladies).
+        allowed = guidance_module._evening_window_allowed(
+            temperature=26.0,
+            humidite=45.0,
+            water_balance={"bilan_hydrique_mm": 9.9, "deficit_3j": 0.0},
+            objectif_mm=0.0,
+            heat_stress_level="fort",
+            minutes_to_sunset=180,
+        )
+        self.assertFalse(allowed)
 
     def test_evening_cooling_blocked_when_too_close_to_sunset(self) -> None:
         # Coucher dans 60 min (< 90) → pas d'arrosage du soir (séchage insuffisant).
