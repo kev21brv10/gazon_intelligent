@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.13.2
+Correctif : fin du double-comptage d'arrosage en fin de cycle auto (508 tests verts) :
+- **`coordinator.py`** : à la fin d'un cycle piloté, le OFF du **dernier passage** arrivait une fraction de seconde **après** la levée de la garde anti-doublon (course entre le `finally` qui décrémente la garde et la livraison de l'événement d'état). Le moniteur passif rattrapait ce OFF traînant, reconstruisait le passage via son `last_changed` et le **réenregistrait en `zone_session` doublon** — sur-créditant la réserve et le budget hebdomadaire (et faussant l'affichage). Le correctif 0.10.2 avait supprimé le doublon **entre** les passages ; celui-ci supprime le dernier doublon résiduel, **en fin de cycle**. Désormais tout OFF dont le segment a **démarré pendant la fenêtre gelée** (≤ instant de reprise du moniteur) est ignoré ; un arrosage manuel/externe postérieur reste tracé normalement. +2 tests anti-régression.
+
 ## 0.13.1
 Correctif : une pluie de trace ne bloque plus l'arrosage (506 tests verts) :
 - **`decision_watering.py`** : une 2ᵉ logique pluie (« rain floor », distincte de `_rain_signals`) réduisait l'arrosage **dès la moindre pluie prévue (> 0 mm, même 0,8 mm à J+2)**. Quand l'objectif était déjà plafonné (garde-fou hebdomadaire), la réduction le faisait passer **sous la dose minimale → blocage total « pluie prévue suffisante »**, laissant le sol à sec en pleine canicule. Désormais la réduction/le report ne s'applique que pour une **pluie réellement significative** (≥ 2 mm demain, ≥ 4 mm à J+2, ou ≥ 4 mm de cumul sur 3 jours). +1 test anti-régression.

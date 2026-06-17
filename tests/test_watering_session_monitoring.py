@@ -206,6 +206,7 @@ def _build_coordinator() -> object:
     coord._watering_session = None
     coord._unsub_watering_session_finalize = None
     coord._zone_tracking_suspended = 0
+    coord._zone_tracking_resumed_at = None
     coord._runtime_state = {
         "active_irrigation_session": None,
         "last_irrigation_execution": None,
@@ -428,6 +429,67 @@ class WateringSessionMonitoringTests(unittest.TestCase):
         self.assertTrue(should_finalize)
         asyncio.run(coordinator._async_finalize_watering_session(start + timedelta(seconds=20)))
         self.assertIsNone(coordinator._watering_session)
+
+    def test_trailing_off_after_auto_cycle_is_not_double_counted(self) -> None:
+        # Régression : le OFF du dernier passage d'un cycle auto arrive juste APRÈS la
+        # levée de la garde. Son segment a démarré pendant la fenêtre gelée → il doit
+        # être ignoré (sinon doublon `zone_session`).
+        coordinator = _build_coordinator()
+        coordinator.hass = _FakeHass(states=_FakeStates({}))
+        passage_start = datetime(2026, 6, 17, 2, 51, 52, tzinfo=timezone.utc)
+        cycle_end = datetime(2026, 6, 17, 2, 57, 42, tzinfo=timezone.utc)
+        # Le cycle piloté vient de finir : garde relâchée, instant de reprise mémorisé.
+        coordinator._zone_tracking_suspended = 0
+        coordinator._zone_tracking_resumed_at = cycle_end
+
+        event = types.SimpleNamespace(
+            data={
+                "entity_id": "switch.zone_1",
+                "old_state": _FakeState("on", passage_start),
+                "new_state": _FakeState("off", cycle_end + timedelta(milliseconds=200)),
+            }
+        )
+        coordinator._handle_zone_state_change(event)
+
+        # Aucune session passive fantôme ne doit avoir été créée.
+        self.assertIsNone(coordinator._watering_session)
+
+    def test_off_started_after_resume_is_tracked_normally(self) -> None:
+        # Un arrosage manuel/externe qui démarre APRÈS la reprise du moniteur reste tracé.
+        coordinator = _build_coordinator()
+        coordinator.hass = _FakeHass(states=_FakeStates({}))
+        cycle_end = datetime(2026, 6, 17, 2, 57, 42, tzinfo=timezone.utc)
+        coordinator._zone_tracking_suspended = 0
+        coordinator._zone_tracking_resumed_at = cycle_end
+
+        on_at = cycle_end + timedelta(minutes=5)
+        off_at = on_at + timedelta(minutes=4)
+        coordinator._handle_zone_state_change(
+            types.SimpleNamespace(
+                data={
+                    "entity_id": "switch.zone_1",
+                    "old_state": _FakeState("off", cycle_end),
+                    "new_state": _FakeState("on", on_at),
+                }
+            )
+        )
+        self.assertIsNotNone(coordinator._watering_session)
+
+        coordinator._handle_zone_state_change(
+            types.SimpleNamespace(
+                data={
+                    "entity_id": "switch.zone_1",
+                    "old_state": _FakeState("on", on_at),
+                    "new_state": _FakeState("off", off_at),
+                }
+            )
+        )
+
+        payload = coordinator._build_watering_session_payload()
+        self.assertIsNotNone(payload)
+        assert payload is not None
+        self.assertEqual(len(payload["zones"]), 1)
+        self.assertEqual(payload["zones"][0]["zone"], "switch.zone_1")
 
     def test_zone_session_merges_consecutive_zones(self) -> None:
         coordinator = _build_coordinator()

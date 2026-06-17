@@ -29,7 +29,7 @@ L'intégration construit une lecture métier exploitable dans Home Assistant:
 
 Elle est conçue pour rester lisible côté UI, tout en gardant assez de structure pour les automatisations, le debug et les dashboards avancés.
 
-## ✨ Ce que la version actuelle apporte (v0.13.1)
+## ✨ Ce que la version actuelle apporte (v0.13.2)
 
 - **Arrosage piloté par la réserve du sol (mode Normal)** : la pelouse établie n'est plus arrosée tant que la réserve utile reste au-dessus du **seuil d'épuisement (MAD 50 %)** ; une fois ce seuil atteint, une **recharge profonde** ramène la réserve au plein. Résultat : arrosages **plus espacés et plus profonds**, qui favorisent l'enracinement (léger stress bénéfique) — au lieu de petits apports fréquents. Borné par le garde-fou hebdomadaire ; repli automatique sur l'ancien modèle tant que le bilan sol interne n'est pas encore établi
 - **Phase semis préservée** : la recharge profonde reste **exclue du Sursemis** (inadaptée au semis), verrouillée par un test d'anti-régression
@@ -41,7 +41,8 @@ Elle est conçue pour rester lisible côté UI, tout en gardant assez de structu
 - **Affichage honnête du plafonnement (0.12.2)** : quand le garde-fou hebdomadaire bloque l'arrosage alors que le sol a réellement besoin, le capteur dit « Arrosage plafonné cette semaine » au lieu de « Aucun arrosage nécessaire »
 - **Gestion canicule (0.13.0)** : pluie « trace » ne bloque plus l'arrosage (cumul ≥ 4 mm requis) ; **survie** (petite dose le matin si réserve ≥ 90 % épuisée en canicule, malgré le garde-fou) ; **rafraîchissement du soir** possible en chaleur extrême uniquement si l'herbe peut sécher (≥ 90 min avant le coucher du soleil, air sec) — anti-maladies fongiques
 - **Correctif pluie de trace (0.13.1)** : une 2ᵉ logique pluie (« rain floor ») bloquait encore l'arrosage dès la moindre pluie prévue (> 0 mm) quand l'objectif était plafonné — corrigé : réduction/report seulement pour une pluie significative (≥ 2 mm demain / ≥ 4 mm sur 3 j)
-- **506 tests unitaires** verts
+- **Comptage fiable en fin de cycle (0.13.2)** : suppression du dernier double-comptage résiduel — le OFF du dernier passage d'un cycle auto n'est plus réenregistré en doublon `zone_session` (qui sur-créditait la réserve et le budget hebdomadaire)
+- **508 tests unitaires** verts
 
 *Versions précédentes (v0.10.0 · v0.9.5) : pilotage de l'arrosage par épuisement de la réserve (deplete-to-MAD) ; déclenchement enfin de l'arrosage automatique (`startup_guard`), déblocage du verrou de sécurité, capteur de diagnostic `arrosage_auto_blocage`.*
 
