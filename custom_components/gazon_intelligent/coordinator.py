@@ -249,6 +249,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._watering_session: dict[str, Any] | None = None
         self._unsub_watering_session_finalize: CALLBACK_TYPE | None = None
         self._zone_tracking_suspended = 0
+        self._zone_tracking_resumed_at: datetime | None = None
         self._irrigation_launch_lock = asyncio.Lock()
         self._latest_full_snapshot: dict[str, Any] | None = None
         self._runtime_state: dict[str, Any] = {
@@ -1656,10 +1657,37 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._track_watering_zone_on(entity_id, changed_at)
             return
 
+        fallback_start = (
+            old_state.last_changed if old_is_on and old_state is not None else None
+        )
+
+        # Anti-doublon de fin de cycle auto : le moniteur passif est gelé pendant tout le
+        # cycle piloté, mais le OFF du DERNIER passage arrive parfois une fraction de
+        # seconde APRÈS la levée de la garde (course entre le `finally` qui décrémente la
+        # garde et la livraison de l'événement d'état). Sans ce filtre, ce OFF traînant
+        # reconstruit le passage via son `last_changed` (antérieur à la reprise) et le
+        # réenregistre en `zone_session` doublon → sur-crédit de la réserve et du budget
+        # hebdo. On ignore donc tout OFF dont le segment a DÉMARRÉ pendant la fenêtre gelée
+        # (≤ instant de reprise) ; un arrosage manuel/externe postérieur démarre après la
+        # reprise et reste tracé normalement.
+        segment_start = fallback_start
+        session = self._watering_session
+        if session is not None:
+            tracked_start = session["active_zones"].get(entity_id)
+            if tracked_start is not None:
+                segment_start = tracked_start
+        resumed_at = self._zone_tracking_resumed_at
+        if (
+            segment_start is not None
+            and resumed_at is not None
+            and segment_start <= resumed_at
+        ):
+            return
+
         if self._track_watering_zone_off(
             entity_id,
             changed_at,
-            old_state.last_changed if old_is_on and old_state is not None else None,
+            fallback_start,
         ):
             self._schedule_watering_session_finalize()
 
@@ -3640,6 +3668,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # fenêtre de grâce (vannes déjà fermées, finalize en attente) ne bloque pas le
             # lancement auto — l'effacer ferait perdre son enregistrement.
             self._zone_tracking_suspended = max(0, self._zone_tracking_suspended - 1)
+            if self._zone_tracking_suspended == 0:
+                # Mémorise l'instant de reprise du moniteur passif : tout OFF dont le
+                # segment a démarré avant cet instant appartient au cycle qu'on vient de
+                # piloter (cf. _handle_zone_state_change) et ne doit pas être recompté.
+                self._zone_tracking_resumed_at = self._current_utc_datetime()
             self._auto_irrigation_task = None
             if not cancelled:
                 self._set_active_irrigation_session(None)
