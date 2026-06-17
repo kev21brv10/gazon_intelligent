@@ -46,6 +46,11 @@ EVENING_END_HOUR = 20
 # Marge de séchage : un arrosage du soir doit finir au moins ce nombre de minutes avant
 # le coucher du soleil, pour que l'herbe sèche avant la nuit (sinon risque fongique).
 EVENING_DRYING_MARGIN_MIN = 90
+# Dose du rafraîchissement du soir en canicule extrême : petit arrosage léger destiné à
+# faire baisser la température du gazon (PAS à recharger la réserve). Volontairement faible
+# pour sécher avant la nuit. Appliqué même réserve saine, sous garde-fous (cf.
+# _evening_window_allowed : séchage ≥ 90 min, humidité ≤ 60 %, pas de risque fongique).
+EVENING_COOLING_MM = 5.0
 NORMAL_WEEKLY_GUARDRAIL_MM_MIN = 20.0
 NORMAL_WEEKLY_GUARDRAIL_MM_MAX = 25.0
 NORMAL_MIN_USEFUL_SESSION_MM = 10.0
@@ -819,37 +824,39 @@ def _evening_window_allowed(
     fungal_risk_level: str | None = None,
     minutes_to_sunset: float | None = None,
 ) -> bool:
-    # Bloquer fenêtre soir avril-septembre sauf déficit critique
-    today = _current_date()
-    month = today.month
-    if month in {4, 5, 6, 7, 8, 9}:
-        CRITICAL_THRESHOLD = -3.0
-        bilan = _reference_hydric_balance_mm(water_balance)
-        if bilan > CRITICAL_THRESHOLD:
-            return False  # Pas de soir en saison de végétation sauf urgence
     temperature = temperature if temperature is not None else 0.0
     humidite = humidite if humidite is not None else 0.0
     bilan_hydrique_mm = _reference_hydric_balance_mm(water_balance)
     arrosage_recent = water_balance.get("arrosage_recent", 0.0)
     deficit_3j = water_balance.get("deficit_3j", 0.0)
 
-    # Blocage supplémentaire si risque fongique élevé
+    # Garde-fous universels (valent AUSSI pour le rafraîchissement de canicule) :
+    # 1) risque fongique élevé → jamais d'arrosage du soir.
     if fungal_risk_level in {"moderate", "high"}:
         return False
-    # Garde-fou séchage : jamais d'arrosage du soir à moins de 90 min du coucher du
-    # soleil — l'herbe doit pouvoir sécher avant la nuit, sinon risque de maladies
-    # fongiques (le séchage prime sur le rafraîchissement). Quand le coucher est inconnu
-    # (pas de capteur soleil), on ne s'appuie pas sur cette marge.
+    # 2) séchage : un arrosage du soir doit finir ≥ 90 min avant le coucher pour que
+    #    l'herbe sèche avant la nuit. Coucher inconnu (pas de capteur) → on ne s'appuie
+    #    pas sur cette marge ici (le cas extrême l'exige néanmoins, cf. ci-dessous).
     if minutes_to_sunset is not None and minutes_to_sunset < EVENING_DRYING_MARGIN_MIN:
         return False
-    if heat_stress_level == "extreme":
-        # Chaleur extrême : un petit arrosage de rafraîchissement le soir est utile pour
-        # faire baisser la température du gazon — autorisé UNIQUEMENT si l'herbe peut
-        # sécher (coucher du soleil connu + marge ≥ 90 min déjà vérifiée, et air assez
-        # sec). Sinon on s'abstient pour ne pas laisser le gazon humide la nuit.
+    # Vague de chaleur (CANICULE ou EXTRÊME) : un petit arrosage de rafraîchissement le soir
+    # fait baisser la température du gazon. Son objet est le refroidissement, pas la recharge —
+    # il est donc autorisé MÊME quand la réserve est saine (il court-circuite volontairement le
+    # garde-fou « pas de soir en saison de végétation »). On accepte « canicule » et pas
+    # seulement « extreme » car le soir la température redescend souvent d'un cran : exiger
+    # « extreme » au moment du soir ne se déclencherait quasiment jamais. Conditions de sûreté
+    # impératives : coucher du soleil connu (+ marge ≥ 90 min déjà vérifiée) et air assez sec,
+    # sinon on s'abstient pour ne pas laisser le gazon humide la nuit (dose fixée ailleurs).
+    if heat_stress_level in {"canicule", "extreme"}:
         if minutes_to_sunset is None or humidite > 60:
             return False
-        return objectif_mm > 0
+        return True
+    # Hors canicule : pas d'arrosage du soir en saison de végétation (avril-septembre) sauf
+    # déficit hydrique critique — priorité anti-maladies (gazon humide la nuit = risque).
+    today = _current_date()
+    if today.month in {4, 5, 6, 7, 8, 9}:
+        if bilan_hydrique_mm > -3.0:
+            return False
     if temperature < 24:
         return False
     if humidite > 65:
@@ -1699,6 +1706,29 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
                 _fill_cap = max(0.0, _reserve_max - _reserve_cur)
                 mm_cible = round(min(mm_cible, _fill_cap), 1)
                 mm_final = mm_cible
+    # Rafraîchissement du soir en canicule extrême : si aucun arrosage normal n'est prévu
+    # (réserve saine, ou cooldown 24 h / garde-fou hebdo) MAIS qu'il fait une chaleur
+    # extrême et que la fenêtre du soir est autorisée (garde-fous séchage/humidité/fongique
+    # déjà appliqués dans _evening_window_allowed), on applique un PETIT arrosage de cooling
+    # pour faire baisser la température du gazon. On ne court-circuite que les blocages
+    # « budget d'eau » (cooldown/hebdo/réserve pleine) : une vraie pluie ou un sol détrempé
+    # restent prioritaires (pas de cooling alors).
+    # On ne court-circuite que les blocages « budget d'eau » (réserve saine, cooldown 24 h,
+    # garde-fou hebdo). Une vraie pluie reste prioritaire (refroidit naturellement + mouille).
+    # La saturation du sol n'empêche PAS le cooling : c'est un arrosage léger d'évaporation
+    # (air sec ≤ 60 % et marge de séchage déjà garantis par _evening_window_allowed).
+    cooling_active = (
+        mm_final <= 0
+        and ctx.heat_stress_level in {"canicule", "extreme"}
+        and ctx.evening_allowed
+        and EVENING_START_HOUR * 60 <= ctx.now_minutes < EVENING_END_HOUR * 60
+        and not ctx.pluie_compensatrice
+        and not ctx.pluie_proche
+    )
+    if cooling_active:
+        mm_cible = EVENING_COOLING_MM
+        mm_final = EVENING_COOLING_MM
+        block_reason = None
     passages = 1
     if max_session_mm is not None and mm_final > max_session_mm:
         passages = max(passages, int(ceil(mm_final / max_session_mm)))
@@ -1724,7 +1754,11 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
         niveau_confiance=confidence_level,
         confidence_score=confidence_score,
         confidence_reasons=confidence_reasons,
-        raison_decision_base="Mode Normal: arrosage profond déclenché quand la réserve atteint le seuil d'épuisement (MAD).",
+        raison_decision_base=(
+            "Rafraîchissement du soir : petit arrosage de cooling en canicule extrême pour faire baisser la température du gazon."
+            if cooling_active
+            else "Mode Normal: arrosage profond déclenché quand la réserve atteint le seuil d'épuisement (MAD)."
+        ),
         block_reason=block_reason,
         fenetre_optimale=(
             # Canicule : si la fenêtre du soir est autorisée (chaleur extrême + l'herbe

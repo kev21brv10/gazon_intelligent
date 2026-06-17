@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.14.0
+Rafraîchissement du soir découplé du déficit : le cycle du soir refroidit le gazon même réserve saine (526 tests verts) :
+- **Rafraîchissement du soir (`guidance.py`)** : le cycle du soir vise désormais le **refroidissement**, pas la recharge. En **canicule ou chaleur extrême**, un petit arrosage (`EVENING_COOLING_MM = 5 mm`) part entre **18 h et 20 h même quand la réserve est saine** : il court-circuite volontairement le garde-fou « pas d'arrosage du soir en saison de végétation », le cooldown 24 h et le plafond hebdomadaire — mais **jamais** une vraie pluie. Avant, ce garde-fou saison était évalué **avant** la branche canicule, donc le rafraîchissement n'était jamais atteint dès que le bilan sol dépassait −3 mm (réserve saine = pas de cooling, même en pleine chaleur).
+- **Déclenchement sur canicule ET extrême** : le soir, la chaleur redescend souvent d'« extrême » à « canicule » — exiger « extrême » au moment du soir ne se serait quasiment jamais déclenché. Garde-fous anti-maladies **inchangés** : fin **≥ 90 min avant le coucher du soleil réel** (`sun.sun`), **air sec (humidité ≤ 60 %)**, **aucun risque fongique** ; la saturation du sol n'empêche pas ce léger arrosage d'évaporation.
+- **Anti-boucle (`coordinator.py`)** : la fenêtre du soir n'est **plus exemptée du cooldown de relance** (ce qui empêche le rafraîchissement de se relancer en boucle dans la fenêtre 18-20 h) ; comme l'écart matin→soir dépasse 6 h, le premier cycle du soir passe toujours. Le soir est en revanche **exempté** de la garde « eau déjà appliquée aujourd'hui » (son objet n'est pas de combler un déficit). Le snapshot relaie la fenêtre « soir » décidée par le profil d'arrosage (seul à recevoir le coucher du soleil).
+- **+7 tests** (rafraîchissement réserve saine, cas canicule, hors fenêtre, coucher trop proche, pluie imminente, anti-boucle de relance, lancement du soir après le cycle du matin).
+
+## 0.13.5
+Correctif majeur de comptage : la réserve et le budget ne sous-estiment plus les cycles multi-passages (518 tests verts) :
+- **`water.py` (`_watering_item_mm`)** : les mm d'un arrosage étaient calculés en faisant la **moyenne de la liste `zones`**. Or pour un cycle **multi-passages**, cette liste contient une entrée par **passage × zone** → la moyenne renvoyait la dose d'**un seul passage** au lieu du cumul du cycle (**sous-comptage ≈ ×nombre de passages**). Exemple réel : un cycle de **5,2 mm en 3 passages n'était crédité que ~1,7 mm**.
+- **Conséquences corrigées** : la **réserve hydrique restait coincée** (ne remontait jamais, affichée « Critique » à tort) et le **budget hebdomadaire était sous-estimé**. Désormais le comptage utilise en priorité le **total surface canonique** (`total_mm` / `session_total_mm`, déjà calculé correctement à l'enregistrement) ; la dérivation depuis `zones` n'est plus qu'un repli pour les records sans total. +2 tests de régression.
+
+## 0.13.4
+Cadence d'arrosage maîtrisée : fin des relances en boucle (516 tests verts) :
+- **Cooldown anti-relance** : après la fin d'un cycle d'arrosage **auto**, aucun nouveau gros cycle ne peut repartir avant **6 h** (`AUTO_IRRIGATION_RELAUNCH_COOLDOWN`). Corrige le **sur-arrosage** observé en canicule, où le déclencheur relançait un cycle ~10 s après la fin du précédent (la garde existante était purement **volumétrique** — elle se rouvrait dès que l'objectif recalculé remontait). La **fenêtre du soir** (petit rafraîchissement canicule) en est **exemptée** et garde sa propre logique.
+- **Fiable et persistant** : le cooldown s'appuie sur la **fin du dernier cycle (état runtime persisté)**, pas sur l'historique écrit en différé → correct même juste après la clôture du cycle, et conservé au redémarrage. La survie canicule respecte désormais ce cooldown. Nouveau motif de blocage `relaunch_cooldown`. +4 tests.
+
+## 0.13.3
+Suivi d'arrosage en temps réel, zone par zone (512 tests verts) :
+- **Comptage live** : pendant un cycle, le capteur `arrosage_en_cours` expose désormais `zone_mm_applied` (mm **par zone** : segments terminés + segment en cours = durée écoulée × débit), `surface_mm_applied`, `total_mm_applied`, `target_mm`, ainsi que la **réserve/surplus projetés** (`live_reserve_mm`, `live_surplus_mm`) intégrant l'eau en cours d'application. Logique isolée dans la fonction pure `compute_live_session_water` (`water.py`), testable hors Home Assistant.
+- **Affichage seulement** : aucun changement du comportement d'arrosage à ce stade — c'est la 1ʳᵉ étape (visibilité + vérification) avant de brancher ce crédit live dans les décisions (cooldown/réserve). +4 tests.
+
 ## 0.13.2
 Correctif : fin du double-comptage d'arrosage en fin de cycle auto (508 tests verts) :
 - **`coordinator.py`** : à la fin d'un cycle piloté, le OFF du **dernier passage** arrivait une fraction de seconde **après** la levée de la garde anti-doublon (course entre le `finally` qui décrémente la garde et la livraison de l'événement d'état). Le moniteur passif rattrapait ce OFF traînant, reconstruisait le passage via son `last_changed` et le **réenregistrait en `zone_session` doublon** — sur-créditant la réserve et le budget hebdomadaire (et faussant l'affichage). Le correctif 0.10.2 avait supprimé le doublon **entre** les passages ; celui-ci supprime le dernier doublon résiduel, **en fin de cycle**. Désormais tout OFF dont le segment a **démarré pendant la fenêtre gelée** (≤ instant de reprise du moniteur) est ignoré ; un arrosage manuel/externe postérieur reste tracé normalement. +2 tests anti-régression.
