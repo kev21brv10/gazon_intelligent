@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from math import ceil
 from typing import Any
@@ -14,8 +14,6 @@ from .seasonal_profile import get_seasonal_profile
 from .const import (
     OBJECTIVE_SCOPE_GLOBAL_SURFACE,
     OBJECTIVE_SCOPE_SURFACE_CYCLE,
-    WATERING_STAGE_ENRACINEMENT,
-    WATERING_STAGE_GERMINATION,
     WATERING_STAGE_LEVEE,
     WATERING_STAGE_NORMAL,
     WATERING_STRATEGY_ADULT_DEEP,
@@ -40,19 +38,22 @@ OPTIMAL_MORNING_END_HOUR = 8
 ACCEPTABLE_MORNING_END_HOUR = 10
 SEMIS_WINDOW_START_HOUR = 10
 SEMIS_WINDOW_END_HOUR = 17
-SEMIS_DAYTIME_ACCEPTABLE_END_HOUR = 18
 EVENING_START_HOUR = 18
 EVENING_END_HOUR = 20
 # Marge de séchage : un arrosage du soir doit finir au moins ce nombre de minutes avant
 # le coucher du soleil, pour que l'herbe sèche avant la nuit (sinon risque fongique).
+# NB : appliquée hors canicule. En canicule, le rafraîchissement vise le coucher du soleil
+# (cf. EVENING_COOLING_START_BEFORE_SUNSET_MIN) — choix assumé de Kévin : arroser au frais
+# (moins d'évaporation) plutôt que de garantir le séchage avant la nuit.
 EVENING_DRYING_MARGIN_MIN = 90
+# Rafraîchissement du soir (canicule) : démarre ce nombre de minutes AVANT le coucher du soleil
+# (au plus frais → moins d'évaporation). Remplace l'ancienne fenêtre fixe 18-20 h.
+EVENING_COOLING_START_BEFORE_SUNSET_MIN = 30
 # Dose du rafraîchissement du soir en canicule extrême : petit arrosage léger destiné à
 # faire baisser la température du gazon (PAS à recharger la réserve). Volontairement faible
 # pour sécher avant la nuit. Appliqué même réserve saine, sous garde-fous (cf.
 # _evening_window_allowed : séchage ≥ 90 min, humidité ≤ 60 %, pas de risque fongique).
-EVENING_COOLING_MM = 5.0
-NORMAL_WEEKLY_GUARDRAIL_MM_MIN = 20.0
-NORMAL_WEEKLY_GUARDRAIL_MM_MAX = 25.0
+EVENING_COOLING_MM = 3.0
 NORMAL_MIN_USEFUL_SESSION_MM = 10.0
 SATURATION_BILAN_HYDRIQUE_MM = 5.0
 MODE_MIN_WATERING_MM = {
@@ -203,6 +204,14 @@ def _latest_watering_datetime(history: list[dict[str, Any]]) -> datetime | None:
     latest: datetime | None = None
     for item in history:
         if not isinstance(item, dict) or item.get("type") != "arrosage":
+            continue
+        # Les petits arrosages TECHNIQUES (rafraîchissement du soir ~3 mm, incorporation
+        # post-application) sont indépendants de la recharge hydrique : ils ne doivent PAS armer
+        # le cooldown 24 h, sinon ils bloqueraient à tort la vraie recharge du lendemain matin.
+        if str(item.get("watering_cause") or "").strip().lower() in (
+            "rafraichissement_soir",
+            "post_application",
+        ):
             continue
         raw_value = item.get("recorded_at") or item.get("detected_at") or item.get("date")
         parsed = _parse_history_datetime(raw_value)
@@ -834,10 +843,15 @@ def _evening_window_allowed(
     # 1) risque fongique élevé → jamais d'arrosage du soir.
     if fungal_risk_level in {"moderate", "high"}:
         return False
-    # 2) séchage : un arrosage du soir doit finir ≥ 90 min avant le coucher pour que
-    #    l'herbe sèche avant la nuit. Coucher inconnu (pas de capteur) → on ne s'appuie
-    #    pas sur cette marge ici (le cas extrême l'exige néanmoins, cf. ci-dessous).
-    if minutes_to_sunset is not None and minutes_to_sunset < EVENING_DRYING_MARGIN_MIN:
+    # 2) séchage : HORS canicule, un arrosage du soir doit finir ≥ 90 min avant le coucher
+    #    pour que l'herbe sèche avant la nuit. EN canicule, le rafraîchissement vise justement
+    #    le coucher (−30 min) pour arroser au frais → on n'impose pas cette marge (choix assumé,
+    #    cf. EVENING_COOLING_START_BEFORE_SUNSET_MIN), la fenêtre du cooling gère le timing.
+    if (
+        heat_stress_level not in {"canicule", "extreme"}
+        and minutes_to_sunset is not None
+        and minutes_to_sunset < EVENING_DRYING_MARGIN_MIN
+    ):
         return False
     # Vague de chaleur (CANICULE ou EXTRÊME) : un petit arrosage de rafraîchissement le soir
     # fait baisser la température du gazon. Son objet est le refroidissement, pas la recharge —
@@ -866,10 +880,6 @@ def _evening_window_allowed(
     if bilan_hydrique_mm >= -0.3 and deficit_3j <= 0.8:
         return False
     return objectif_mm > 0
-
-
-def _season_label(today: date) -> str:
-    return str(get_seasonal_profile(today).get("season") or "shoulder")
 
 
 def _seasonal_profile_payload(today: date) -> dict[str, Any]:
@@ -1633,14 +1643,24 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
         float(ctx.water_balance.get("depletion_ratio") or 0.0) >= 0.9
         and ctx.heat_stress_level in {"canicule", "extreme"}
     )
+    # Quand le bilan sol interne (ledger, mis à jour en TEMPS RÉEL) est actif et indique que
+    # la réserve est sous le seuil d'épuisement (MAD), c'est LUI qui fait foi pour l'état du
+    # sol : on n'applique plus les blocages « sol déjà humide » / « humidité excessive »
+    # dérivés du `bilan_hydrique_mm` GLISSANT — celui-ci peut rester positif tout le lendemain
+    # d'un gros arrosage et bloquait alors à tort la recharge du matin alors que la réserve
+    # réelle est épuisée. La pluie réelle et l'humidité de l'AIR (≥ 85 %) restent prioritaires.
+    _ledger_reserve = bool(ctx.water_balance.get("reserve_from_soil_ledger"))
+    _depletion_ratio = float(ctx.water_balance.get("depletion_ratio") or 0.0)
+    _mad_ratio = float(ctx.water_balance.get("mad_ratio") or 0.5)
+    _ledger_demande_eau = _ledger_reserve and _depletion_ratio >= _mad_ratio
     block_reason = None
     if ctx.pluie_compensatrice or ctx.pluie_proche:
         block_reason = "pluie_prevue_suffisante"
     elif ctx.cooldown_24h_active and not _critical_depletion:
         block_reason = "cooldown_24h"
-    elif ctx.saturation_block:
+    elif ctx.saturation_block and not _ledger_demande_eau:
         block_reason = "sol_deja_humide"
-    elif ctx.humidite >= 85 or ctx.bilan_hydrique_mm > 0.5:
+    elif ctx.humidite >= 85 or (ctx.bilan_hydrique_mm > 0.5 and not _ledger_demande_eau):
         block_reason = "humidite_excessive"
     elif (
         ctx.recent_watering_count >= 3
@@ -1717,11 +1737,24 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
     # garde-fou hebdo). Une vraie pluie reste prioritaire (refroidit naturellement + mouille).
     # La saturation du sol n'empêche PAS le cooling : c'est un arrosage léger d'évaporation
     # (air sec ≤ 60 % et marge de séchage déjà garantis par _evening_window_allowed).
+    # Mémorise l'objectif AVANT le cooling : le cooling ne s'applique que si aucun arrosage
+    # normal n'est prévu à cet instant (réserve saine OU recharge plafonnée par le garde-fou
+    # hebdo — fréquent en canicule, et c'est justement là que le cooling devient utile).
+    mm_before_cooling = mm_final
+    # Fenêtre du rafraîchissement : démarre 30 min AVANT le coucher du soleil (au frais), au lieu
+    # de la fenêtre fixe 18-20 h (trop tôt = grosse évaporation en pleine chaleur). Nécessite que
+    # le coucher soit connu (capteur sun.sun → sunset_minute).
+    cooling_window = (
+        ctx.sunset_minute is not None
+        and (ctx.sunset_minute - EVENING_COOLING_START_BEFORE_SUNSET_MIN)
+        <= ctx.now_minutes
+        < ctx.sunset_minute
+    )
     cooling_active = (
-        mm_final <= 0
+        mm_before_cooling <= 0
         and ctx.heat_stress_level in {"canicule", "extreme"}
         and ctx.evening_allowed
-        and EVENING_START_HOUR * 60 <= ctx.now_minutes < EVENING_END_HOUR * 60
+        and cooling_window
         and not ctx.pluie_compensatrice
         and not ctx.pluie_proche
     )
@@ -1729,6 +1762,42 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
         mm_cible = EVENING_COOLING_MM
         mm_final = EVENING_COOLING_MM
         block_reason = None
+    # Anticipation (affichage) : le rafraîchissement du soir est PROBABLE quand il SERAIT
+    # réellement l'action du soir — mêmes conditions que `cooling_active` (vague de chaleur, vrai
+    # test du soir via `evening_allowed`, pas de pluie, aucun arrosage normal prévu), mais sans
+    # exiger d'être déjà dans la fenêtre 18-20 h (on l'annonce dès la journée). Recalculé à chaque
+    # refresh → se retire si l'air redevient humide ou si une recharge devient prévue.
+    evening_cooling_likely = bool(
+        mm_before_cooling <= 0
+        and ctx.heat_stress_level in {"canicule", "extreme"}
+        and ctx.evening_allowed
+        and not ctx.pluie_compensatrice
+        and not ctx.pluie_proche
+        and (ctx.sunset_minute is None or ctx.now_minutes < ctx.sunset_minute)
+    )
+    # Diagnostic : expose le raisonnement de la décision du soir pour pouvoir voir, depuis HA,
+    # POURQUOI le cooling se déclenche ou non (sans deviner). Purement informatif.
+    evening_cooling_debug = {
+        "evening_allowed": bool(ctx.evening_allowed),
+        "cooling_active": bool(cooling_active),
+        "mm_before_cooling": round(float(mm_before_cooling), 1),
+        "mm_final": round(float(mm_final), 1),
+        "heat_stress": ctx.heat_stress_level,
+        "humidite": ctx.humidite,
+        "minutes_to_sunset": (
+            ctx.sunset_minute - ctx.now_minutes if ctx.sunset_minute is not None else None
+        ),
+        "now_minutes": ctx.now_minutes,
+        "evening_window_minutes": (
+            [ctx.sunset_minute - EVENING_COOLING_START_BEFORE_SUNSET_MIN, ctx.sunset_minute]
+            if ctx.sunset_minute is not None
+            else None
+        ),
+        "pluie_block": bool(ctx.pluie_compensatrice or ctx.pluie_proche),
+        "depletion_ratio": round(_depletion_ratio, 3),
+        "mad_ratio": round(_mad_ratio, 2),
+        "block_reason": block_reason,
+    }
     passages = 1
     if max_session_mm is not None and mm_final > max_session_mm:
         passages = max(passages, int(ceil(mm_final / max_session_mm)))
@@ -1736,9 +1805,14 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
         passages = 2
     if ctx.recent_watering_count >= 2 and ctx.recent_watering_mm_7j >= ctx.guardrail_max_mm:
         passages = max(passages, 2)
+    if cooling_active:
+        # Rafraîchissement du soir : dose légère (3 mm) → AUCUN risque de ruissellement, donc
+        # pas de fractionnement. Un seul passage = relief rapide + fin plus tôt (meilleure
+        # marge de séchage avant la nuit). On annule la règle anti-ruissellement ci-dessus.
+        passages = 1
     pause_minutes = 25 if passages > 1 else 0
     confidence_score, confidence_level, confidence_reasons = _confidence(ctx, block_reason, mm_final)
-    return _build_profile_payload(
+    normal_payload = _build_profile_payload(
         deficit_mm_brut=ctx.deficit_mm_brut,
         deficit_mm_ajuste=ctx.deficit_mm_ajuste,
         mm_cible=mm_cible,
@@ -1792,6 +1866,19 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
         seasonal_profile=ctx.seasonal_profile_payload,
         cooldown_24h_hours=ctx.cooldown_24h_hours,
     )
+    normal_payload["evening_cooling"] = bool(cooling_active)
+    normal_payload["evening_cooling_likely"] = evening_cooling_likely
+    normal_payload["evening_cooling_debug"] = evening_cooling_debug
+    normal_payload["fenetre_optimale_profil"] = normal_payload.get("fenetre_optimale")
+    # Fenêtre du soir exposée au coordinateur : basée sur le coucher du soleil (-30 min → coucher)
+    # pour que le coordinateur autorise le lancement à ~coucher-30, au lieu de la fenêtre fixe
+    # 18-20 h (sinon il bloquerait « hors fenêtre »). Repli sur 18-20 h si le coucher est inconnu.
+    if ctx.sunset_minute is not None:
+        normal_payload["watering_evening_start_minute"] = (
+            ctx.sunset_minute - EVENING_COOLING_START_BEFORE_SUNSET_MIN
+        )
+        normal_payload["watering_evening_end_minute"] = ctx.sunset_minute
+    return normal_payload
 
 
 def _profile_for_agro_phases(ctx: _WateringCtx) -> dict[str, Any]:
@@ -2125,7 +2212,6 @@ def compute_action_guidance(
     now_hour = hour_of_day if hour_of_day is not None else now.hour
     now_minutes = now_hour * 60 + int(now.minute if hour_of_day is None else 0)
     vent = _to_float(advanced_context.get("vent"))
-    rosee = _to_float(advanced_context.get("rosee"))
     hauteur_gazon = _to_float(advanced_context.get("hauteur_gazon"))
     optimal_start_minute, optimal_end_minute, acceptable_end_minute, temperature_band = _morning_window_bounds(
         phase_dominante=phase_dominante,

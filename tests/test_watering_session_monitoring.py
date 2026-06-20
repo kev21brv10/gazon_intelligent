@@ -536,18 +536,91 @@ class WateringSessionMonitoringTests(unittest.TestCase):
         self.assertTrue(should_launch)
         self.assertEqual(reason, "ready")
 
-    def test_relaunch_cooldown_blocks_evening_rerun(self) -> None:
-        # Anti-boucle : un rafraîchissement du soir qui vient de finir (10 min) NE doit PAS
-        # se relancer dans la fenêtre 18-20 h. Le cooldown de relance s'applique aussi au soir.
+    def test_relaunch_cooldown_blocks_evening_recharge_rerun(self) -> None:
+        # Un arrosage du soir NON-rafraîchissement (recharge hydrique du soir) reste soumis au
+        # cooldown anti-relance : s'il vient de finir (10 min), pas de relance. (Le rafraîchissement
+        # canicule, lui, en est exempté — cf. tests dédiés ci-dessous.)
         coordinator = _build_coordinator()
         coordinator.history = []
-        snapshot = _ready_launch_snapshot(coordinator, fenetre_optimale="soir")
+        snapshot = _ready_launch_snapshot(
+            coordinator, fenetre_optimale="soir", watering_cause="hydrique"
+        )
         coordinator._runtime_state["last_auto_irrigation_completed_at"] = (
             coordinator._current_utc_datetime() - timedelta(minutes=10)
         )
         should_launch, reason = coordinator._should_launch_auto_irrigation(snapshot)
         self.assertFalse(should_launch)
         self.assertEqual(reason, "relaunch_cooldown")
+
+    def test_evening_cooling_exempt_from_relaunch_cooldown(self) -> None:
+        # Le rafraîchissement du soir (cause rafraichissement_soir) est EXEMPTÉ du cooldown anti-
+        # relance : même avec un arrosage normal qui vient de finir (10 min), il peut partir.
+        coordinator = _build_coordinator()
+        coordinator.history = []
+        snapshot = _ready_launch_snapshot(
+            coordinator, fenetre_optimale="soir", watering_cause="rafraichissement_soir"
+        )
+        coordinator._runtime_state["last_auto_irrigation_completed_at"] = (
+            coordinator._current_utc_datetime() - timedelta(minutes=10)
+        )
+        should_launch, reason = coordinator._should_launch_auto_irrigation(snapshot)
+        self.assertTrue(should_launch)
+        self.assertEqual(reason, "ready")
+
+    def test_evening_cooling_runs_once_per_evening(self) -> None:
+        # Garde anti-boucle : si un rafraîchissement du soir a déjà eu lieu aujourd'hui, il ne
+        # repart pas (même exempté du cooldown anti-relance).
+        coordinator = _build_coordinator()
+        coordinator.history = [
+            {
+                "type": "arrosage",
+                "recorded_at": coordinator._current_datetime().isoformat(),
+                "total_mm": 3.0,
+                "watering_cause": "rafraichissement_soir",
+            }
+        ]
+        snapshot = _ready_launch_snapshot(
+            coordinator, fenetre_optimale="soir", watering_cause="rafraichissement_soir"
+        )
+        should_launch, reason = coordinator._should_launch_auto_irrigation(snapshot)
+        self.assertFalse(should_launch)
+        self.assertEqual(reason, "evening_cooling_done")
+
+    def test_evening_window_uses_cooling_debug_over_stale_keys(self) -> None:
+        # La vraie fenêtre du soir (coucher-30→coucher) est portée de façon fiable par
+        # evening_cooling_debug ; les clés watering_evening_*_minute arrivent souvent au défaut
+        # figé 18-20 h (chemin advanced_context). Le coordinateur doit privilégier la fenêtre du
+        # debug, sinon il bloquerait à tort le lancement du cooling ~30 min avant le coucher.
+        coordinator = _build_coordinator()
+        coordinator.history = []
+        snapshot = _ready_launch_snapshot(
+            coordinator,
+            fenetre_optimale="soir",
+            watering_cause="rafraichissement_soir",
+            watering_evening_start_minute=0,
+            watering_evening_end_minute=1,  # fenêtre figée qui EXCLUT l'heure courante
+            evening_cooling_debug={"evening_window_minutes": [0, 1440]},  # vraie fenêtre : couvre tout
+        )
+        should_launch, reason = coordinator._should_launch_auto_irrigation(snapshot)
+        self.assertTrue(should_launch)
+        self.assertEqual(reason, "ready")
+
+    def test_evening_window_blocked_outside_cooling_debug_window(self) -> None:
+        # Hors de la vraie fenêtre du soir (debug), le lancement est refusé même si les clés figées
+        # seraient permissives — la fenêtre du debug fait foi dans les deux sens.
+        coordinator = _build_coordinator()
+        coordinator.history = []
+        snapshot = _ready_launch_snapshot(
+            coordinator,
+            fenetre_optimale="soir",
+            watering_cause="rafraichissement_soir",
+            watering_evening_start_minute=0,
+            watering_evening_end_minute=1440,  # figée permissive
+            evening_cooling_debug={"evening_window_minutes": [0, 1]},  # vraie fenêtre : EXCLUT l'heure
+        )
+        should_launch, reason = coordinator._should_launch_auto_irrigation(snapshot)
+        self.assertFalse(should_launch)
+        self.assertEqual(reason, "outside_evening_window")
 
     def test_evening_cooling_launches_after_morning_cycle(self) -> None:
         # Le rafraîchissement du soir reste autorisé malgré l'eau du matin : l'écart
@@ -2338,6 +2411,8 @@ class WateringSessionMonitoringTests(unittest.TestCase):
         session["current_passage"] = 2
         session["current_zone_index"] = 0
         session["paused_until"] = datetime.now(timezone.utc) + timedelta(minutes=25)
+        # La reprise au boot attend que la vanne soit disponible avant d'agir.
+        coordinator.hass.states.states["switch.zone_1"] = _FakeState("on", datetime.now(timezone.utc), {})
         coordinator._runtime_state["active_irrigation_session"] = session
 
         async def _run() -> None:
@@ -2361,6 +2436,51 @@ class WateringSessionMonitoringTests(unittest.TestCase):
         execution = coordinator._runtime_state["last_irrigation_execution"]
         self.assertEqual(execution["status"], "completed")
         self.assertIsNone(coordinator._runtime_state["active_irrigation_session"])
+
+    def test_restart_mid_zone_resumes_remaining_time(self) -> None:
+        # Zone interrompue en plein arrosage (vanne restée ouverte pendant le reboot) : au boot,
+        # on reprend cette MÊME zone pour son TEMPS RESTANT (durée 90 s, démarrée il y a 30 s →
+        # reste ~60 s), au lieu de la sauter.
+        plan = watering_plan_mod.build_watering_plan(
+            1.5, [("switch.zone_1", 60.0)], passages=1, pause_minutes=0
+        )
+        assert plan is not None
+        coordinator = _build_runtime_ready_coordinator(plan_attrs=plan.as_dict())
+        session = coordinator._build_active_irrigation_session(
+            plan=plan, source="auto_irrigation", strategy="plan"
+        )
+        session["status"] = "running"
+        session["current_passage"] = 1
+        session["current_zone_index"] = 0
+        session["current_zone"] = "switch.zone_1"
+        session["current_zone_started_at"] = datetime.now(timezone.utc) - timedelta(seconds=30)
+        coordinator.hass.states.states["switch.zone_1"] = _FakeState("on", datetime.now(timezone.utc), {})
+        coordinator._runtime_state["active_irrigation_session"] = session
+
+        sleeps: list[float] = []
+
+        async def _run() -> None:
+            original_sleep = coordinator_mod.asyncio.sleep
+
+            async def _noop_sleep(*args, **kwargs):
+                sleeps.append(float(args[0]) if args else 0.0)
+                return None
+
+            coordinator_mod.asyncio.sleep = _noop_sleep
+            try:
+                await coordinator._restore_active_irrigation_session()
+                task = coordinator._auto_irrigation_task
+                assert task is not None
+                await task
+            finally:
+                coordinator_mod.asyncio.sleep = original_sleep
+
+        asyncio.run(_run())
+
+        # La zone a été reprise pour ~60 s (temps restant), pas 90 s (durée pleine) ni sautée.
+        self.assertTrue(any(55.0 <= s <= 65.0 for s in sleeps), f"sleeps={sleeps}")
+        self.assertFalse(any(85.0 <= s <= 95.0 for s in sleeps), f"sleeps={sleeps}")
+        coordinator.async_record_watering.assert_awaited()
 
     def test_restart_restore_clears_finished_session_without_active_zone(self) -> None:
         plan = watering_plan_mod.build_watering_plan(

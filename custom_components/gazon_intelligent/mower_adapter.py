@@ -200,8 +200,6 @@ def _normalize_mower_status(
     lowered = str(raw_state or "").strip().lower()
     if lowered in _MOWER_STATE_ALIASES:
         return _MOWER_STATE_ALIASES[lowered]
-    if not lowered:
-        return "inconnu"
     return "inconnu"
 
 

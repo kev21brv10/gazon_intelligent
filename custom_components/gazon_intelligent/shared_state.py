@@ -31,10 +31,6 @@ def _normalize_shared_value(value: Any) -> Any:
     return value
 
 
-def _defined_config_value(value: Any) -> bool:
-    return _normalize_shared_value(value) is not None
-
-
 def resolve_effective_config(
     entry: Any,
     key: str,

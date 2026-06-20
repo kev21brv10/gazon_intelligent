@@ -1,12 +1,7 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date
 from typing import Any
-
-try:
-    from homeassistant.util import dt as dt_util
-except Exception:  # pragma: no cover - standalone fallback
-    dt_util = None
 
 _STRESS_LEVEL_THRESHOLDS = {
     "fort": {
@@ -374,18 +369,7 @@ def compute_internal_scores(
     temperature: float | None = None,
     etp: float | None = None,
 ) -> dict[str, int]:
-    # `today` reste présent pour compatibilité d'API legacy. Le scoring courant
-    # n'en dépend pas directement.
-    if today is None:
-        if dt_util is not None:
-            now_getter = getattr(dt_util, "now", None)
-            if callable(now_getter):
-                current = now_getter()
-                if isinstance(current, datetime):
-                    today = current.date()
-        if today is None:
-            today = datetime.now(timezone.utc).date()
-    _ = today
+    # `today` reste présent pour compatibilité d'API legacy ; le scoring courant n'en dépend pas.
     advanced_context = advanced_context or {}
     deficit_jour = water_balance.get("deficit_jour", 0.0)
     deficit_3j = water_balance.get("deficit_3j", 0.0)

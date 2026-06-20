@@ -238,70 +238,43 @@ def _temperature_evaluation(
     score_delta = 0
     delta = 0.0
 
-    if lower is not None and upper is not None:
-        if lower <= current <= upper:
-            score_delta = 10
-            reason = f"Température compatible ({current_label} °C, attendu {expected_label})"
-            band = "in_range"
+    too_cold = lower is not None and current < lower
+    too_hot = upper is not None and current > upper
+    if too_cold:
+        # Trop FROID : on ne peut pas réchauffer le moment d'application → pénalité croissante,
+        # et blocage si vraiment trop bas.
+        matched = False
+        delta = lower - current
+        if delta <= 2:
+            score_delta = -5
+            reason = f"Température un peu basse ({current_label} °C, attendu {expected_label})"
+            band = "slightly_out"
+        elif delta <= 5:
+            score_delta = -20
+            reason = f"Température hors plage ({current_label} °C, attendu {expected_label})"
+            band = "out_of_range"
         else:
-            matched = False
-            delta = lower - current if current < lower else current - upper
-            if delta <= 2:
-                score_delta = -5
-                reason = f"Température légèrement hors plage ({current_label} °C, attendu {expected_label})"
-                band = "slightly_out"
-            elif delta <= 5:
-                score_delta = -20
-                reason = f"Température hors plage ({current_label} °C, attendu {expected_label})"
-                band = "out_of_range"
-            else:
-                score_delta = -35
-                blocking = True
-                reason = f"Température très hors plage ({current_label} °C, attendu {expected_label})"
-                band = "blocked"
-    elif lower is not None:
-        if current >= lower:
-            score_delta = 10
-            reason = f"Température compatible ({current_label} °C, attendu {expected_label})"
-            band = "in_range"
-        else:
-            matched = False
-            delta = lower - current
-            if delta <= 2:
-                score_delta = -5
-                reason = f"Température légèrement hors plage ({current_label} °C, attendu {expected_label})"
-                band = "slightly_out"
-            elif delta <= 5:
-                score_delta = -20
-                reason = f"Température hors plage ({current_label} °C, attendu {expected_label})"
-                band = "out_of_range"
-            else:
-                score_delta = -35
-                blocking = True
-                reason = f"Température très hors plage ({current_label} °C, attendu {expected_label})"
-                band = "blocked"
+            score_delta = -35
+            blocking = True
+            reason = f"Température trop basse ({current_label} °C, attendu {expected_label})"
+            band = "blocked"
+    elif too_hot:
+        # Trop CHAUD en JOURNÉE : un produit s'applique tôt le matin (plus frais). On NE bloque
+        # donc PAS sur la température de l'après-midi (sinon les agents mouillants, faits pour
+        # l'été, seraient inapplicables toute la canicule). Conseil non bloquant + petite
+        # pénalité pour rappeler de viser le créneau frais du matin.
+        matched = False
+        delta = current - upper
+        score_delta = -5
+        reason = (
+            f"Température élevée en journée ({current_label} °C, attendu {expected_label}) "
+            "— à appliquer tôt le matin (plus frais)"
+        )
+        band = "morning_advised"
     else:
-        assert upper is not None
-        if current <= upper:
-            score_delta = 10
-            reason = f"Température compatible ({current_label} °C, attendu {expected_label})"
-            band = "in_range"
-        else:
-            matched = False
-            delta = current - upper
-            if delta <= 2:
-                score_delta = -5
-                reason = f"Température légèrement hors plage ({current_label} °C, attendu {expected_label})"
-                band = "slightly_out"
-            elif delta <= 5:
-                score_delta = -20
-                reason = f"Température hors plage ({current_label} °C, attendu {expected_label})"
-                band = "out_of_range"
-            else:
-                score_delta = -35
-                blocking = True
-                reason = f"Température très hors plage ({current_label} °C, attendu {expected_label})"
-                band = "blocked"
+        score_delta = 10
+        reason = f"Température compatible ({current_label} °C, attendu {expected_label})"
+        band = "in_range"
 
     return {
         "current": current,
@@ -350,7 +323,10 @@ def _opportunity_evaluation(application_state: dict[str, Any] | None) -> dict[st
     reserve_sol = None
     bilan_hydrique = None
     try:
-        reserve_sol = float(state.get("reserve_hydrique_sol_mm") or state.get("bilan_hydrique_mm"))
+        reserve_raw = state.get("reserve_hydrique_sol_mm")
+        if reserve_raw is None:
+            reserve_raw = state.get("bilan_hydrique_mm")
+        reserve_sol = float(reserve_raw)
     except (TypeError, ValueError):
         reserve_sol = None
     try:
@@ -549,10 +525,23 @@ def _evaluate_product_candidate(
     normalized_phase = _normalize_text(phase_active)
     normalized_phase_compatible = {_normalize_text(value) for value in phase_compatible}
     phase_match = not phase_compatible or normalized_phase in normalized_phase_compatible
+    # "Normal" est la phase d'entretien courant (aucune phase spéciale active) : un produit
+    # qui cible l'entretien n'est pas "hors phase". On le traite comme neutre (ni bonus de
+    # phase spéciale, ni pénalité) plutôt que de le pénaliser à tort. phase_match reste False
+    # pour ne pas le faire passer en "recommandé" (rien d'urgent en phase Normal, par design).
+    phase_normal_maintenance = (
+        bool(phase_compatible)
+        and not phase_match
+        and normalized_phase == "normal"
+        and _normalize_text("Entretien") in normalized_phase_compatible
+    )
     if phase_compatible:
         if phase_match:
             score += 25
             reasons.append(f"Phase compatible ({', '.join(phase_compatible[:3])})")
+        elif phase_normal_maintenance:
+            score += 2
+            reasons.append("Phase courante : entretien")
         else:
             score -= 12
             reasons.append(f"Phase cible ({', '.join(phase_compatible[:3])})")
@@ -661,6 +650,7 @@ def _evaluate_product_candidate(
         "next_reapplication_date": next_reapplication_date.isoformat() if next_reapplication_date else None,
         "due": due,
         "phase_match": phase_match,
+        "phase_normal_maintenance": phase_normal_maintenance,
         "month_match": month_match,
         "current_phase": phase_active,
         "current_month": today.month,
@@ -852,18 +842,27 @@ def _constraints_for_candidate(
     phase_compatible = candidate.get("phase_compatible") or []
     if phase_compatible:
         phase_label = ", ".join(str(value) for value in phase_compatible[:3])
+        phase_match = bool(candidate.get("phase_match"))
+        phase_normal_maintenance = bool(candidate.get("phase_normal_maintenance"))
+        phase_ok = phase_match or phase_normal_maintenance
+        if phase_match:
+            phase_constraint_label = f"Phase compatible ({phase_label})"
+        elif phase_normal_maintenance:
+            phase_constraint_label = "Phase courante : entretien"
+        else:
+            phase_constraint_label = f"Phase cible ({phase_label})"
         constraints.append(
             _constraint_entry(
                 code="phase_compatibility",
-                label=f"Phase compatible ({phase_label})" if candidate.get("phase_match") else f"Phase cible ({phase_label})",
+                label=phase_constraint_label,
                 value={
                     "expected": phase_compatible,
                     "current": current_phase if current_phase is not None else candidate.get("current_phase"),
-                    "matched": bool(candidate.get("phase_match")),
+                    "matched": phase_ok,
                 },
                 hint="La phase dominante du gazon influence la pertinence du produit.",
                 blocking=False,
-                met=bool(candidate.get("phase_match")),
+                met=phase_ok,
             )
         )
 
@@ -1417,7 +1416,7 @@ def build_intervention_recommendation(
         if best:
             best_type = str(best.get("product_type") or "").strip()
             best_usage = str(best.get("usage_mode") or "").strip()
-            if best_type == "Agent Mouillant" and best_usage == "preventif":
+            if _normalize_text(best_type) == "agent mouillant" and _normalize_text(best_usage) == "preventif":
                 if "humide" in reason_text.lower() or "arrosage" in reason_text.lower():
                     reason_text = f"Agent mouillant préventif: sol déjà humide ou arrosage bloqué. {reason_text}"
         ui = _ui_for_state(

@@ -2236,6 +2236,32 @@ class TestDepletionWateringModel(unittest.TestCase):
         )
         self.assertEqual(profile["mm_final_recommande"], 0.0)
 
+    def test_ledger_depleted_overrides_stale_bilan_block(self):
+        # Réserve réelle (ledger temps réel) épuisée (86 %) MAIS bilan glissant encore positif
+        # (lendemain d'un gros arrosage) → on NE bloque PLUS « sol déjà humide » : le ledger
+        # fait foi, la recharge du matin part.
+        profile = self._profile(
+            bilan_hydrique_mm=8.7,
+            reserve_actuelle_mm=1.7,
+            reserve_stock_mm=1.7,
+            depletion_mm=10.3,
+            depletion_ratio=0.858,
+        )
+        self.assertNotIn(profile.get("block_reason"), {"sol_deja_humide", "humidite_excessive"})
+        self.assertGreater(profile["mm_final_recommande"], 0.0)
+
+    def test_stale_bilan_still_blocks_when_ledger_full(self):
+        # Garde-fou inverse : si le ledger N'EST PAS épuisé (sous MAD) et le bilan est élevé
+        # (sol réellement gorgé) → on bloque toujours « sol déjà humide » (pas de sur-arrosage).
+        profile = self._profile(
+            bilan_hydrique_mm=8.7,
+            reserve_actuelle_mm=11.0,
+            reserve_stock_mm=11.0,
+            depletion_mm=1.0,
+            depletion_ratio=0.083,
+        )
+        self.assertEqual(profile.get("block_reason"), "sol_deja_humide")
+
     def test_depletion_not_applied_in_sursemis(self):
         # Anti-régression du bug d'origine : en Sursemis, même avec une réserve sol épuisée,
         # la dépletion ne s'applique pas (recharge profonde inadaptée au semis).
@@ -2261,7 +2287,7 @@ class TestEveningCoolingWatering(unittest.TestCase):
     """Rafraîchissement du soir en canicule extrême (cooling) malgré une réserve saine."""
 
     @staticmethod
-    def _cooling_profile(now_hour=18, now_minute=30, sunset_minute=1290, **wb):
+    def _cooling_profile(now_hour=21, now_minute=10, sunset_minute=1290, **wb):
         water_balance = dict(
             bilan_hydrique_mm=-1.0,
             deficit_jour=0.0,
@@ -2308,11 +2334,17 @@ class TestEveningCoolingWatering(unittest.TestCase):
         self.assertEqual(profile["fenetre_optimale"], "soir")
         self.assertEqual(profile["mm_final_recommande"], guidance.EVENING_COOLING_MM)
         self.assertIsNone(profile["block_reason"])
+        # Fenêtre soir exposée au coordinateur = basée sur le coucher (-30 → coucher), pas 18-20 h.
+        self.assertEqual(
+            profile["watering_evening_start_minute"],
+            1290 - guidance.EVENING_COOLING_START_BEFORE_SUNSET_MIN,
+        )
+        self.assertEqual(profile["watering_evening_end_minute"], 1290)
 
     def test_cooling_applied_on_canicule_evening(self):
         # Le soir, la chaleur redescend souvent d'« extreme » à « canicule » : le cooling doit
         # quand même se déclencher (sinon il ne partirait jamais le soir).
-        moment = datetime(2026, 7, 15, 18, 30, tzinfo=timezone.utc)
+        moment = datetime(2026, 7, 15, 21, 10, tzinfo=timezone.utc)
         water_balance = dict(
             bilan_hydrique_mm=-1.0,
             deficit_3j=0.0,
@@ -2355,15 +2387,52 @@ class TestEveningCoolingWatering(unittest.TestCase):
         self.assertEqual(profile["mm_final_recommande"], 0.0)
         self.assertNotEqual(profile["fenetre_optimale"], "soir")
 
-    def test_no_cooling_when_sunset_too_close(self):
-        # Coucher dans 60 min (< 90) → séchage insuffisant, pas de cooling.
-        profile = self._cooling_profile(sunset_minute=18 * 60 + 30 + 60)
+    def test_no_cooling_before_sunset_window(self):
+        # Nouvelle logique : le cooling démarre 30 min AVANT le coucher du soleil. Plus tôt dans
+        # la soirée (19h00, coucher 21h30 → hors de la fenêtre [21:00, 21:30]) → pas encore de
+        # cooling (on attend qu'il fasse plus frais, près du coucher).
+        profile = self._cooling_profile(now_hour=19, now_minute=0)
         self.assertEqual(profile["mm_final_recommande"], 0.0)
-        self.assertFalse(profile["watering_evening_allowed"])
+        self.assertNotEqual(profile["fenetre_optimale"], "soir")
+
+    def test_evening_cooling_runs_in_single_passage(self):
+        # Pipeline complet : le rafraîchissement du soir doit sortir en 1 SEUL passage (relief
+        # rapide), pas fractionné en 2 par decision_watering. Réserve sol saine → pas de recharge,
+        # donc c'est bien le cooling (3 mm) qui s'applique.
+        moment = datetime(2026, 7, 15, 21, 10, tzinfo=timezone.utc)  # dans [coucher-30, coucher]
+        with patch.object(guidance, "_current_datetime", return_value=moment):
+            snapshot = decision.build_decision_snapshot(
+                history=[],
+                today=date(2026, 7, 15),
+                hour_of_day=21,
+                temperature=38.0,
+                humidite=30.0,
+                pluie_24h=0.0,
+                pluie_demain=0.0,
+                type_sol="limoneux",
+                etp_capteur=5.0,
+                weather_profile={"sunset_minute": 1290},
+                soil_balance={
+                    "date": "2026-07-15",
+                    "reserve_mm": 22.0,
+                    "previous_reserve_mm": 22.0,
+                    "pluie_mm": 0.0,
+                    "arrosage_mm": 0.0,
+                    "etp_mm": 5.0,
+                    "delta_mm": -5.0,
+                    "type_sol": "limoneux",
+                    "reserve_max_mm": 24.0,
+                    "reserve_min_mm": 0.0,
+                    "ledger": [],
+                },
+            )
+        self.assertEqual(snapshot["fenetre_optimale"], "soir")
+        self.assertEqual(snapshot["objectif_mm"], guidance.EVENING_COOLING_MM)
+        self.assertEqual(snapshot["watering_passages"], 1)
 
     def test_no_cooling_when_rain_incoming(self):
         # Pluie imminente significative → pas de cooling (la pluie rafraîchit et mouille).
-        moment = datetime(2026, 7, 15, 18, 30, tzinfo=timezone.utc)
+        moment = datetime(2026, 7, 15, 21, 10, tzinfo=timezone.utc)
         water_balance = dict(
             bilan_hydrique_mm=-1.0,
             deficit_3j=0.0,
@@ -2398,3 +2467,67 @@ class TestEveningCoolingWatering(unittest.TestCase):
             )
         self.assertEqual(profile["mm_final_recommande"], 0.0)
         self.assertNotEqual(profile["fenetre_optimale"], "soir")
+
+
+class TestEveningCoolingCooldownExemption(unittest.TestCase):
+    def test_evening_cooling_does_not_arm_24h_cooldown(self) -> None:
+        # Une recharge normale du matin (>24 h) suivie d'un rafraîchissement du soir récent :
+        # le cooldown 24 h doit ignorer le rafraîchissement et pointer la recharge du matin.
+        history = [
+            {
+                "type": "arrosage",
+                "recorded_at": "2026-04-02T05:30:00+00:00",
+                "total_mm": 10.0,
+                "watering_cause": "hydrique",
+            },
+            {
+                "type": "arrosage",
+                "recorded_at": "2026-04-04T17:40:00+00:00",
+                "total_mm": 3.0,
+                "watering_cause": "rafraichissement_soir",
+            },
+        ]
+        latest = guidance._latest_watering_datetime(history)
+        self.assertIsNotNone(latest)
+        self.assertEqual(latest.date().isoformat(), "2026-04-02")
+
+    def test_post_application_does_not_arm_24h_cooldown(self) -> None:
+        # L'incorporation post-application (~5 mm) est un arrosage technique : elle ne doit pas
+        # armer le cooldown 24 h → le cooldown pointe la recharge du matin, pas l'incorporation.
+        history = [
+            {
+                "type": "arrosage",
+                "recorded_at": "2026-04-02T05:30:00+00:00",
+                "total_mm": 10.0,
+                "watering_cause": "hydrique",
+            },
+            {
+                "type": "arrosage",
+                "recorded_at": "2026-04-04T18:30:00+00:00",
+                "total_mm": 5.0,
+                "watering_cause": "post_application",
+            },
+        ]
+        latest = guidance._latest_watering_datetime(history)
+        self.assertIsNotNone(latest)
+        self.assertEqual(latest.date().isoformat(), "2026-04-02")
+
+    def test_normal_evening_watering_still_arms_cooldown(self) -> None:
+        # Garde-fou : un arrosage hydrique du soir (pas un rafraîchissement) reste pris en compte.
+        history = [
+            {
+                "type": "arrosage",
+                "recorded_at": "2026-04-02T05:30:00+00:00",
+                "total_mm": 10.0,
+                "watering_cause": "hydrique",
+            },
+            {
+                "type": "arrosage",
+                "recorded_at": "2026-04-04T17:40:00+00:00",
+                "total_mm": 8.0,
+                "watering_cause": "hydrique",
+            },
+        ]
+        latest = guidance._latest_watering_datetime(history)
+        self.assertIsNotNone(latest)
+        self.assertEqual(latest.date().isoformat(), "2026-04-04")

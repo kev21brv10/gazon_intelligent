@@ -540,7 +540,6 @@ def _resolve_mowing_block(
     if not isinstance(advanced_context, dict):
         advanced_context = {}
     rosee = advanced_context.get("rosee")
-    pluie_24h = float(context.pluie_24h or 0.0)
     if rosee is not None:
         try:
             if float(rosee) > 0:
@@ -855,7 +854,6 @@ def _project_next_mowing_date(
         return today_iso, context.today.strftime("%d/%m/%Y"), None
 
     anchor: datetime | None = None
-    reason_hint: str | None = None
 
     if reason_code in {"phase_sursemis", "phase_traitement", "phase_hivernage"}:
         phase_dominante = str(phase_bundle.get("phase_dominante") or "")
@@ -881,7 +879,6 @@ def _project_next_mowing_date(
                         tzinfo=timezone.utc,
                     )
                     anchor = phase_end_dt
-                    reason_hint = f"phase={phase_bundle['phase_dominante']}"
                 except ValueError:
                     anchor = None
     elif reason_code == "mowing_night":
@@ -924,7 +921,7 @@ def _project_next_mowing_date(
         anchor = _default_projection_anchor(context)
 
     ressuyage_hours = _estimate_mowing_ressuyage_hours(context, phase_bundle, water_bundle)
-    application_offset_hours, application_reasons = _mowing_projection_application_offset_hours(context)
+    application_offset_hours, _ = _mowing_projection_application_offset_hours(context)
     projected = (anchor or _default_projection_anchor(context)) + timedelta(
         hours=ressuyage_hours + application_offset_hours
     )
@@ -944,7 +941,7 @@ def _project_next_mowing_date(
             projected_date = max_short_projection
         return projected_date.isoformat(), projected_date.strftime("%d/%m/%Y"), None
 
-    forecast_offset_days, forecast_reasons = _mowing_projection_forecast_offset_days(context, phase_bundle)
+    forecast_offset_days, _ = _mowing_projection_forecast_offset_days(context, phase_bundle)
     if forecast_offset_days > 0:
         projected += timedelta(days=forecast_offset_days)
         projected = projected.replace(hour=6, minute=0, second=0, microsecond=0)
@@ -1395,13 +1392,6 @@ def build_mowing_bundle(
 ) -> dict[str, Any]:
     score_tonte = int(risk_bundle["scores"]["score_tonte"])
     score_stress = int(risk_bundle["scores"]["score_stress"])
-    stress_level = classify_stress_level(
-        score_hydrique=int(risk_bundle["scores"]["score_hydrique"]),
-        score_stress=score_stress,
-        water_balance=water_bundle["water_balance"],
-        temperature=context.temperature,
-        etp=water_bundle["etp"],
-    )
     phase_dominante = str(phase_bundle.get("phase_dominante") or "")
     sous_phase = str(phase_bundle.get("sous_phase") or "")
     if phase_dominante == "Sursemis" and sous_phase in {"Reprise", "Stabilisation"}:
@@ -1465,7 +1455,6 @@ def build_mowing_bundle(
     selected_reason = reason
     selected_reason_code = reason_code
 
-    mowing_window_blocked = mowing_window_state == "blocked"
     mowing_blocked_by_watering = False
     if post_application_active:
         reason = post_application_label

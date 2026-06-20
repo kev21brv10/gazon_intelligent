@@ -8,7 +8,13 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.util import dt as dt_util
 
 from .assistant import build_assistant_decision
-from .const import APPLICATION_INTERVENTIONS, DOMAIN, PLUIE_SOURCE_INDISPONIBLE, PLUIE_SOURCE_NON_DISPONIBLE
+from .const import (
+    APPLICATION_INTERVENTIONS,
+    BLOCK_REASON_DISPLAY_LABELS,
+    DOMAIN,
+    PLUIE_SOURCE_INDISPONIBLE,
+    PLUIE_SOURCE_NON_DISPONIBLE,
+)
 from .decision_models import TYPE_ARROSAGE_DISPLAY_LABELS
 from .entity_base import GazonEntityBase
 from .entity_ids import public_entity_id, resolve_entry_instance_slug
@@ -20,7 +26,6 @@ from .water import (
     _zone_session_total_mm,
     compute_live_session_water,
 )
-from .decision_risk import compute_fungal_risk as _sensor_compute_fungal_risk
 
 RECOMMENDATION_RUNTIME_PROBE = "constraints_probe_20260404_01"
 _APPLICATION_SUMMARY_PUBLIC_KEYS = (
@@ -395,7 +400,6 @@ def _public_conseil_principal(entity: GazonEntityBase) -> str | None:
     if isinstance(intervention_payload, dict) and intervention_payload:
         intervention_status = str(intervention_payload.get("status") or "").strip().lower()
         intervention_ready = bool(intervention_payload.get("ready_to_declare"))
-    post_status = normalize_post_application_status(entity._decision_value("application_post_watering_status"))
     mowing_block_reason_code = str(
         entity._decision_value("raison_blocage_code")
         or entity._decision_value("mowing_block_reason_code")
@@ -808,39 +812,7 @@ def _block_reason_display_label(value: object) -> str | None:
     normalized = str(value or "").strip().lower()
     if not normalized:
         return None
-    labels = {
-        "pluie_prevue_suffisante": "Pluie prévue suffisante",
-        "temperature_trop_basse": "Température trop basse",
-        "arrosage_recent": "Arrosage récent",
-        "sol_deja_humide": "Sol déjà humide",
-        "sol_non_adapte": "Sol non adapté",
-        "pluie_probabilite_elevee": "Pluie probable élevée",
-        "surface_non_seche": "Surface non sèche",
-        "cooldown_24h": "Cooldown 24 h",
-        "humidite_excessive": "Humidité excessive",
-        "humidite_elevee": "Humidité élevée",
-        "garde_fou_hebdomadaire": "Garde-fou hebdomadaire",
-        "mode_bloque": "Mode bloqué",
-        "pluie_active": "Pluie active",
-        "bloque": "Bloqué",
-        "mower_mowing": "Tondeuse en cours de tonte",
-        "mower_returning": "Tondeuse en retour station",
-        "mower_starting": "Tondeuse en démarrage",
-        "mower_zoning": "Tondeuse en changement de zone",
-        "mower_searching_zone": "Tondeuse en recherche de zone",
-        "mower_rain_delayed": "Pause pluie active",
-        "mower_escaped_digital_fence": "Tondeuse sortie du périmètre",
-        "mower_not_stowed": "Tondeuse non rangée",
-        "mower_unreliable": "Coordination tondeuse indisponible",
-        "post_application_active": "Post-produit actif",
-        "watering_in_progress": "Arrosage en cours",
-        "watering_cooldown": "Cooldown tonte après arrosage",
-        "application_foliaire": "Application foliaire en cours",
-        "temperature_trop_basse_germination": "Température trop basse (germination)",
-        "semis_cycle_daily_target_reached": "Objectif du jour atteint (semis)",
-        "semis_cycle_pending": "Cycle de semis en attente",
-    }
-    return labels.get(normalized, normalized.replace("_", " "))
+    return BLOCK_REASON_DISPLAY_LABELS.get(normalized, normalized.replace("_", " "))
 
 
 def _fallback_machine_unavailable_label_from_attrs(attrs: dict[str, object]) -> str | None:
@@ -1526,6 +1498,15 @@ class GazonObjectifMmSensor(GazonEntityBase, SensorEntity):
             "temperature_source",
             "etp",
             "depletion_ratio",
+            # Réserve AFFICHÉE (descente progressive selon le soleil) — affichage carte seul.
+            "et_elapsed_fraction",
+            "reserve_actuelle_affichee_mm",
+            "reserve_stock_affichee_mm",
+            "depletion_affichee_mm",
+            "depletion_ratio_affiche",
+            "evening_cooling_likely",
+            "evening_cooling_debug",
+            "fenetre_optimale_profil",
             "reserve_utile_mm",
             "reserve_actuelle_mm",
             "reserve_stock_mm",
@@ -3295,11 +3276,12 @@ class GazonArrosageEnCoursSensor(GazonEntityBase, SensorEntity):
                 return None
 
         live = compute_live_session_water(session, now=now, rate_fn=_rate)
-        data = getattr(self.coordinator, "data", None)
-        data = data if isinstance(data, dict) else {}
-        reserve_stock = _f(data.get("reserve_stock_mm"))
-        reserve_utile = _f(data.get("reserve_utile_mm"))
-        reserve_max = _f(data.get("reserve_stock_max_mm"))
+        # Réserve de base lue depuis le résultat métier (DecisionResult, via _decision_value), et
+        # NON depuis coordinator.data (qui ne porte pas ces clés → live_reserve/live_surplus
+        # restaient à None pendant l'arrosage). Base au démarrage + mm appliqués = réserve live.
+        reserve_stock = _f(self._decision_value("reserve_stock_mm"))
+        reserve_utile = _f(self._decision_value("reserve_utile_mm"))
+        reserve_max = _f(self._decision_value("reserve_stock_max_mm"))
 
         live_reserve_mm: float | None = None
         live_surplus_mm: float | None = None

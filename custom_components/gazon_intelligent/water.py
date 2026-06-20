@@ -861,6 +861,22 @@ def compute_water_balance(
         reserve_stock_max_mm=soil_balance_priority["reserve_stock_max_mm"],
     )
 
+    # --- Réserve AFFICHÉE (descente progressive) ---------------------------------------
+    # La réserve de décision (ci-dessus) projette déjà toute l'ET du jour (pour déclencher
+    # l'arrosage du matin AVANT la chaleur). Pour l'AFFICHAGE seulement, on rajoute l'ET pas
+    # encore évaporée aujourd'hui (selon la position du soleil) → la réserve descend
+    # progressivement dans la journée au lieu de chuter d'un coup à minuit. La DÉCISION
+    # n'utilise PAS ces champs (clés `*_affichee` / `*_affiche`).
+    _fraction_raw = _to_float(weather_profile.get("et_elapsed_fraction"))
+    et_elapsed_fraction = _bound(_fraction_raw if _fraction_raw is not None else 1.0, 0.0, 1.0)
+    et_restante_mm = max(0.0, etp_j * (1.0 - et_elapsed_fraction))
+    reserve_actuelle_affichee = _bound(reserve_metrics["reserve_actuelle_mm"] + et_restante_mm, 0.0, reserve_utile_mm)
+    reserve_stock_affichee = _bound(
+        reserve_metrics["reserve_stock_mm"] + et_restante_mm, 0.0, soil_balance_priority["reserve_stock_max_mm"]
+    )
+    depletion_affichee_mm = max(0.0, reserve_utile_mm - reserve_actuelle_affichee)
+    depletion_ratio_affiche = _bound(depletion_affichee_mm / reserve_utile_mm, 0.0, 1.0) if reserve_utile_mm > 0 else 0.0
+
     return {
         "et0_mm": _round_half_up_1(max(0.0, etp_j)),
         "bilan_hydrique_mm": bilan_hydrique_mm,
@@ -895,6 +911,12 @@ def compute_water_balance(
         "reserve_minimale_mm": _round_half_up_1(reserve_metrics["reserve_minimale_mm"]),
         "depletion_mm": _round_half_up_1(reserve_metrics["depletion_mm"]),
         "depletion_ratio": round(_bound(reserve_metrics["depletion_ratio"], 0.0, 1.0), 3),
+        # Champs d'AFFICHAGE (réserve à descente progressive) — non utilisés par la décision.
+        "et_elapsed_fraction": round(et_elapsed_fraction, 3),
+        "reserve_actuelle_affichee_mm": _round_half_up_1(reserve_actuelle_affichee),
+        "reserve_stock_affichee_mm": _round_half_up_1(reserve_stock_affichee),
+        "depletion_affichee_mm": _round_half_up_1(depletion_affichee_mm),
+        "depletion_ratio_affiche": round(depletion_ratio_affiche, 3),
         "soil_factor": _round_half_up_1(soil_factor),
         "soil_profile": advanced_context.get("soil_profile"),
         "soil_retention_factor": advanced_context.get("soil_retention_factor"),

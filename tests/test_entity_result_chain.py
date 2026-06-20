@@ -1774,6 +1774,45 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertIn("Démarré", progress_sensor.extra_state_attributes["detail"])
         self.assertTrue(progress_sensor.extra_state_attributes["summary"].startswith("Arrosage en cours"))
 
+    def test_watering_progress_sensor_computes_live_reserve_and_surplus(self) -> None:
+        # Régression : la réserve live doit venir du DecisionResult (coordinator.result, via
+        # _decision_value), PAS de coordinator.data — sinon live_reserve_mm / live_surplus_mm
+        # restaient à None pendant l'arrosage (le bug qu'on corrige).
+        result = _make_result()
+        result.reserve_stock_mm = 20.0
+        result.reserve_utile_mm = 12.0
+        result.reserve_stock_max_mm = 24.0
+        started_at = datetime(2026, 3, 21, 8, 0, tzinfo=timezone.utc)
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(), data={}, result=result, history=[], memory={}
+        )
+        coordinator._watering_session = {
+            "started_at": started_at,
+            "last_activity_at": started_at,
+            "last_inactive_at": None,
+            "zones": {
+                "switch.zone_1": {
+                    "order": 1,
+                    "zone": "switch.zone_1",
+                    "entity_id": "switch.zone_1",
+                    "rate_mm_h": 10.0,
+                    "duration_seconds": 180.0,
+                    "mm": 0.5,
+                    "started_at": started_at,
+                    "ended_at": None,
+                }
+            },
+            "active_zones": {"switch.zone_1": started_at},
+            "zone_order": 1,
+        }
+
+        attrs = sensor.GazonArrosageEnCoursSensor(coordinator).extra_state_attributes
+        # data est vide → l'ancienne logique (data.get) aurait donné None ; le fix lit le result.
+        self.assertIsNotNone(attrs["live_reserve_mm"])
+        self.assertIsNotNone(attrs["live_surplus_mm"])
+        self.assertGreaterEqual(attrs["live_reserve_mm"], 20.0)  # réserve de base + mm appliqués
+        self.assertGreaterEqual(attrs["live_surplus_mm"], 8.0)   # >= reserve_stock - reserve_utile
+
     def test_plan_sensor_distinguishes_single_zone_without_fractionation(self) -> None:
         coordinator = _FakeCoordinator(
             entry=_FakeEntry(),

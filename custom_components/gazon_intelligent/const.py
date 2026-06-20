@@ -149,16 +149,6 @@ IRRIGATION_REASON_KIND_POST_APPLICATION = "post_application"
 IRRIGATION_REASON_KIND_HYDRIC_NEED = "hydric_need"
 IRRIGATION_REASON_KIND_PHASE_SUPPORT = "phase_support"
 
-IRRIGATION_REASON_KINDS = (
-    IRRIGATION_REASON_KIND_NO_NEED,
-    IRRIGATION_REASON_KIND_WAITING,
-    IRRIGATION_REASON_KIND_BLOCKED,
-    IRRIGATION_REASON_KIND_BLOCKED_DUE_TO_CONDITIONS,
-    IRRIGATION_REASON_KIND_POST_APPLICATION,
-    IRRIGATION_REASON_KIND_HYDRIC_NEED,
-    IRRIGATION_REASON_KIND_PHASE_SUPPORT,
-)
-
 IRRIGATION_ACTION_LABEL_NONE = "Aucune action"
 IRRIGATION_ACTION_LABEL_WAIT = "Attendre"
 IRRIGATION_ACTION_LABEL_POST_APPLICATION = "Arrosage post-application"
@@ -178,3 +168,39 @@ MODES_GAZON = tuple(PHASE_DURATIONS_DAYS.keys())
 PLUIE_SOURCE_INDISPONIBLE = "indisponible"
 # Valeur publique exposée dans les attributs Home Assistant
 PLUIE_SOURCE_NON_DISPONIBLE = "non disponible"
+
+# Libellés lisibles des raisons de blocage (arrosage/tonte). Source UNIQUE partagée par
+# sensor.py et binary_sensor.py — auparavant dupliquée et divergente (binary_sensor en avait
+# une version incomplète → certains motifs s'affichaient en snake_case brut).
+BLOCK_REASON_DISPLAY_LABELS: dict[str, str] = {
+    "pluie_prevue_suffisante": "Pluie prévue suffisante",
+    "temperature_trop_basse": "Température trop basse",
+    "arrosage_recent": "Arrosage récent",
+    "sol_deja_humide": "Sol déjà humide",
+    "sol_non_adapte": "Sol non adapté",
+    "pluie_probabilite_elevee": "Pluie probable élevée",
+    "surface_non_seche": "Surface non sèche",
+    "cooldown_24h": "Cooldown 24 h",
+    "humidite_excessive": "Humidité excessive",
+    "humidite_elevee": "Humidité élevée",
+    "garde_fou_hebdomadaire": "Garde-fou hebdomadaire",
+    "mode_bloque": "Mode bloqué",
+    "pluie_active": "Pluie active",
+    "bloque": "Bloqué",
+    "mower_mowing": "Tondeuse en cours de tonte",
+    "mower_returning": "Tondeuse en retour station",
+    "mower_starting": "Tondeuse en démarrage",
+    "mower_zoning": "Tondeuse en changement de zone",
+    "mower_searching_zone": "Tondeuse en recherche de zone",
+    "mower_rain_delayed": "Pause pluie active",
+    "mower_escaped_digital_fence": "Tondeuse sortie du périmètre",
+    "mower_not_stowed": "Tondeuse non rangée",
+    "mower_unreliable": "Coordination tondeuse indisponible",
+    "post_application_active": "Post-produit actif",
+    "watering_in_progress": "Arrosage en cours",
+    "watering_cooldown": "Cooldown tonte après arrosage",
+    "application_foliaire": "Application foliaire en cours",
+    "temperature_trop_basse_germination": "Température trop basse (germination)",
+    "semis_cycle_daily_target_reached": "Objectif du jour atteint (semis)",
+    "semis_cycle_pending": "Cycle de semis en attente",
+}

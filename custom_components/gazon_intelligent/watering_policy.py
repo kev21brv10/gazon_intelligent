@@ -37,7 +37,6 @@ OVERRIDE_BEHAVIOR_BLOCK_WATERING = "block_watering"
 BLOCKING_BEHAVIOR_NONE = "none"
 BLOCKING_BEHAVIOR_BLOCK_OTHER_MODES = "block_other_modes"
 BLOCKING_BEHAVIOR_WEATHER_GUARD = "weather_guard"
-BLOCKING_BEHAVIOR_LIGHT_WEATHER_GUARD = "light_weather_guard"
 BLOCKING_BEHAVIOR_CONDITION_GUARD = "condition_guard"
 BLOCKING_BEHAVIOR_APPLICATION_TYPE_GUARD = "application_type_guard"
 BLOCKING_BEHAVIOR_BLOCKED_BY_DEFAULT = "blocked_by_default"
@@ -91,7 +90,6 @@ _VALID_BLOCKING_BEHAVIORS = frozenset(
         BLOCKING_BEHAVIOR_NONE,
         BLOCKING_BEHAVIOR_BLOCK_OTHER_MODES,
         BLOCKING_BEHAVIOR_WEATHER_GUARD,
-        BLOCKING_BEHAVIOR_LIGHT_WEATHER_GUARD,
         BLOCKING_BEHAVIOR_CONDITION_GUARD,
         BLOCKING_BEHAVIOR_APPLICATION_TYPE_GUARD,
         BLOCKING_BEHAVIOR_BLOCKED_BY_DEFAULT,
@@ -104,7 +102,6 @@ class WateringRange:
     min_mm: float
     max_mm: float
     optimal_mm: float | None = None
-    max_extreme_mm: float | None = None
 
 
 @dataclass(frozen=True)
@@ -121,8 +118,6 @@ class WateringExecution:
     min_session_mm: float | None = None
     max_session_mm: float | None = None
     objective: str | None = None
-    avoid_if_heavy_rain: bool = False
-    avoid_deep_watering: bool = False
 
 
 @dataclass(frozen=True)
@@ -271,10 +266,7 @@ WATERING_POLICIES: dict[str, WateringPolicy] = {
         priority=70,
         base_strategy="product_activation",
         event_target_mm=WateringRange(min_mm=5.0, max_mm=8.0, optimal_mm=5.0),
-        execution=WateringExecution(
-            preferred="single_pass",
-            avoid_if_heavy_rain=True,
-        ),
+        execution=WateringExecution(preferred="single_pass"),
         override_behavior=OVERRIDE_BEHAVIOR_TARGETED_OVERRIDE,
         blocking_behavior=BLOCKING_BEHAVIOR_WEATHER_GUARD,
     ),
@@ -284,21 +276,20 @@ WATERING_POLICIES: dict[str, WateringPolicy] = {
         priority=60,
         base_strategy="light_support",
         event_target_mm=WateringRange(min_mm=3.0, max_mm=7.0, optimal_mm=5.0),
-        execution=WateringExecution(
-            preferred="light_support",
-            avoid_deep_watering=True,
-        ),
+        execution=WateringExecution(preferred="light_support"),
         override_behavior=OVERRIDE_BEHAVIOR_TARGETED_OVERRIDE,
-        blocking_behavior=BLOCKING_BEHAVIOR_LIGHT_WEATHER_GUARD,
+        # Même garde météo que la Fertilisation : « bloquer » = ne pas arroser l'incorporation
+        # car la pluie s'en charge — valable aussi pour le biostimulant (s'incorpore très bien
+        # avec la pluie, fenêtre ~48 h). Pas de garde « light » distincte (ne se justifiait pas).
+        blocking_behavior=BLOCKING_BEHAVIOR_WEATHER_GUARD,
     ),
     MODE_AGENT_MOUILLANT: WateringPolicy(
         mode=MODE_AGENT_MOUILLANT,
         category=POLICY_CATEGORY_EVENT,
         priority=65,
         base_strategy="infiltration_support",
-        event_target_mm=WateringRange(min_mm=5.0, max_mm=12.0, max_extreme_mm=15.0),
+        event_target_mm=WateringRange(min_mm=5.0, max_mm=12.0),
         execution=WateringExecution(preferred="adaptive_soil_state"),
-        conditions={"allow_extreme_only_if_hydrophobic": True},
         override_behavior=OVERRIDE_BEHAVIOR_TARGETED_OVERRIDE,
         blocking_behavior=BLOCKING_BEHAVIOR_NONE,
     ),
@@ -488,13 +479,6 @@ def _dose_to_float(value: Any) -> float | None:
         return None
 
 
-def _normalize_dose_band(value: str | None) -> str:
-    text = str(value or "").strip().casefold()
-    if text in DOSE_POLICY_BANDS:
-        return text
-    return DOSE_BAND_BASELINE
-
-
 def _dose_candidate_band(dose_inputs: DoseInputs) -> DosePolicyBand:
     phase = str(dose_inputs.get("phase_dominante") or "").strip()
     temperature = _dose_to_float(dose_inputs.get("temperature"))
@@ -624,14 +608,6 @@ def _evaluate_weather_guard(weather: dict[str, Any]) -> BlockingEvaluation:
     return BlockingEvaluation(False, None)
 
 
-def _evaluate_light_weather_guard(weather: dict[str, Any]) -> BlockingEvaluation:
-    if weather.get("heavy_rain_expected"):
-        return BlockingEvaluation(True, "heavy_rain_expected")
-    if weather.get("rain_compensating"):
-        return BlockingEvaluation(True, "rain_compensating")
-    return BlockingEvaluation(False, None)
-
-
 def _evaluate_condition_guard(policy: WateringPolicy, weather: dict[str, Any], hydric_state: str | None) -> BlockingEvaluation:
     minimum_temperature = policy.conditions.get("temperature_min_c")
     if minimum_temperature is not None:
@@ -672,8 +648,6 @@ def _evaluate_blocking(
         return BlockingEvaluation(False, None)
     if behavior == BLOCKING_BEHAVIOR_WEATHER_GUARD:
         return _evaluate_weather_guard(weather)
-    if behavior == BLOCKING_BEHAVIOR_LIGHT_WEATHER_GUARD:
-        return _evaluate_light_weather_guard(weather)
     if behavior == BLOCKING_BEHAVIOR_CONDITION_GUARD:
         return _evaluate_condition_guard(policy, weather, hydric_state)
     if behavior == BLOCKING_BEHAVIOR_APPLICATION_TYPE_GUARD:
@@ -761,7 +735,6 @@ __all__ = [
     "BLOCKING_BEHAVIOR_BLOCKED_BY_DEFAULT",
     "BLOCKING_BEHAVIOR_BLOCK_OTHER_MODES",
     "BLOCKING_BEHAVIOR_CONDITION_GUARD",
-    "BLOCKING_BEHAVIOR_LIGHT_WEATHER_GUARD",
     "BLOCKING_BEHAVIOR_NONE",
     "BLOCKING_BEHAVIOR_WEATHER_GUARD",
     "BlockingEvaluation",

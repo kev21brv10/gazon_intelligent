@@ -3,7 +3,6 @@ from __future__ import annotations
 """Logique pure de risque et de fenêtre optimale."""
 
 from typing import Any
-import logging
 
 from .decision_models import DecisionContext
 from .guidance import _reference_hydric_balance_mm, compute_action_guidance, compute_next_reevaluation

@@ -140,11 +140,27 @@ class GazonMowerSettingNumber(GazonEntityBase, NumberEntity):
 class GazonMowerCuttingHeightNumber(RestoreEntity, GazonEntityBase, NumberEntity):
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.CONFIG
-    _attr_native_min_value = 0.0
-    _attr_native_max_value = 100.0
     _attr_native_step = 5.0
     _attr_native_unit_of_measurement = "mm"
     _attr_icon = "mdi:content-cut"
+
+    # Bornes DYNAMIQUES dérivées des réglages configurables « Hauteur min/max tondeuse » (cm → mm).
+    # Générique : chacun règle la plage de SA tondeuse (3-6 cm, 0,5-10 cm…) et le slider suit —
+    # aucune valeur codée en dur, donc une tondeuse 0-100 mm fonctionne aussi.
+    def _configured_bound_mm(self, config_key: str, default_cm: float) -> float:
+        value = self.coordinator._get_conf(config_key)
+        try:
+            return round(float(value) * 10.0, 1)
+        except (TypeError, ValueError):
+            return round(float(default_cm) * 10.0, 1)
+
+    @property
+    def native_min_value(self) -> float:
+        return self._configured_bound_mm(CONF_HAUTEUR_MIN_TONDEUSE_CM, DEFAULT_HAUTEUR_MIN_TONDEUSE_CM)
+
+    @property
+    def native_max_value(self) -> float:
+        return self._configured_bound_mm(CONF_HAUTEUR_MAX_TONDEUSE_CM, DEFAULT_HAUTEUR_MAX_TONDEUSE_CM)
 
     def __init__(self, coordinator) -> None:
         super().__init__(coordinator)
@@ -189,12 +205,12 @@ class GazonMowerCuttingHeightNumber(RestoreEntity, GazonEntityBase, NumberEntity
             numeric = None
         if numeric is not None and numeric > 0:
             rounded = self._round_to_cutting_height_step(numeric)
-            return max(self._attr_native_min_value, min(rounded, self._attr_native_max_value))
+            return max(self.native_min_value, min(rounded, self.native_max_value))
 
         restored = self._restored_native_value
         if restored is not None and restored > 0:
             rounded = self._round_to_cutting_height_step(restored)
-            return max(self._attr_native_min_value, min(rounded, self._attr_native_max_value))
+            return max(self.native_min_value, min(rounded, self.native_max_value))
 
         return self._default_value
 

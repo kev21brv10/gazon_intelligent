@@ -4,6 +4,7 @@ from homeassistant.components.binary_sensor import BinarySensorEntity
 
 from .const import (
     APPLICATION_INTERVENTIONS,
+    BLOCK_REASON_DISPLAY_LABELS,
     DOMAIN,
     IRRIGATION_ACTION_LABEL_AUTO,
     IRRIGATION_ACTION_LABEL_NONE,
@@ -119,41 +120,24 @@ def _block_reason_display_label(value: object) -> str | None:
     normalized = str(value or "").strip().lower()
     if not normalized:
         return None
-    labels = {
-        "pluie_prevue_suffisante": "Pluie prévue suffisante",
-        "temperature_trop_basse": "Température trop basse",
-        "arrosage_recent": "Arrosage récent",
-        "sol_deja_humide": "Sol déjà humide",
-        "sol_non_adapte": "Sol non adapté",
-        "pluie_probabilite_elevee": "Pluie probable élevée",
-        "surface_non_seche": "Surface non sèche",
-        "cooldown_24h": "Cooldown 24 h",
-        "humidite_excessive": "Humidité excessive",
-        "humidite_elevee": "Humidité élevée",
-        "garde_fou_hebdomadaire": "Garde-fou hebdomadaire",
-        "mode_bloque": "Mode bloqué",
-        "pluie_active": "Pluie active",
-        "bloque": "Bloqué",
-        "mower_mowing": "Tondeuse en cours de tonte",
-        "mower_returning": "Tondeuse en retour station",
-        "mower_starting": "Tondeuse en démarrage",
-        "mower_zoning": "Tondeuse en changement de zone",
-        "mower_searching_zone": "Tondeuse en recherche de zone",
-        "mower_rain_delayed": "Pause pluie active",
-        "mower_escaped_digital_fence": "Tondeuse sortie du périmètre",
-        "mower_not_stowed": "Tondeuse non rangée",
-        "mower_unreliable": "Coordination tondeuse indisponible",
-        "post_application_active": "Post-produit actif",
-        "watering_in_progress": "Arrosage en cours",
-        "watering_cooldown": "Cooldown tonte après arrosage",
-    }
-    return labels.get(normalized, normalized.replace("_", " "))
+    return BLOCK_REASON_DISPLAY_LABELS.get(normalized, normalized.replace("_", " "))
 
 
 def _fallback_machine_unavailable_label_from_attrs(attrs: dict[str, object]) -> str | None:
     operation_state = str(attrs.get("mower_operation_state") or attrs.get("tondeuse_statut") or "").strip().lower()
     operation_label = str(attrs.get("mower_operation_label") or attrs.get("tondeuse_statut_libelle") or "").strip()
     reason_code = str(attrs.get("mower_reason_code") or "").strip().lower()
+    error_code = str(
+        attrs.get("tondeuse_erreur") or attrs.get("mower_error") or attrs.get("tondeuse_erreur_code") or ""
+    ).strip().lower()
+    has_error_code = error_code not in {"", "no_error", "no error", "none", "ok", "aucune", "aucune_erreur", "aucune erreur"}
+    if operation_state in {"error", "erreur"} or reason_code == "error" or has_error_code:
+        message = (
+            str(attrs.get("mower_reason_label") or "").strip()
+            or str(attrs.get("tondeuse_erreur_libelle") or "").strip()
+            or "défaut signalé, vérifier le robot"
+        )
+        return f"Robot en erreur: {message}"
     if operation_state in {"mowing", "tonte", "tonte_en_cours", "edgecut"} or reason_code == "mower_mowing":
         return "Robot déjà en tonte: attendre la fin du cycle en cours."
     if operation_state in {"returning", "going_home", "homing", "retour_station"} or reason_code == "mower_returning":
@@ -569,7 +553,11 @@ class GazonApplicationArrosageAutoriseBinarySensor(GazonEntityBase, BinarySensor
     @property
     def is_on(self):
         state = self._application_state()
-        auto_irrigation_enabled = bool(state.get("auto_irrigation_enabled", True))
+        # Inconnu (clé absente OU présente à None) → on suppose l'auto activé : ce capteur dit si
+        # l'arrosage post-application est AUTORISÉ, il reste permissif tant que l'auto n'est pas
+        # explicitement désactivé. Traite absent et None pareil (sinon incohérence selon la source).
+        _auto_enabled = state.get("auto_irrigation_enabled")
+        auto_irrigation_enabled = True if _auto_enabled is None else bool(_auto_enabled)
         application_type = state.get("application_type")
         application_mode = str(state.get("application_irrigation_mode") or "").strip().lower()
         application_post_watering_status = normalize_post_application_status(

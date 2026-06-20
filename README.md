@@ -5,8 +5,8 @@
 </p>
 
 <p align="center">
-  <strong>Une intégration Home Assistant orientée décision métier pour le gazon.</strong><br>
-  Arrosage, tonte, phases, interventions produit et coordination optionnelle avec un robot tondeuse.
+  <strong>Une intégration Home Assistant qui transforme tes capteurs et la météo en décisions claires pour ton gazon.</strong><br>
+  Arrosage, tonte, phases, interventions produit, et coordination optionnelle avec un robot tondeuse.
 </p>
 
 <p align="center">
@@ -16,343 +16,184 @@
   <img src="https://img.shields.io/github/license/kev21brv10/gazon_intelligent" alt="License">
 </p>
 
-## 🌱 Pourquoi cette intégration
+---
 
-Gazon Intelligent ne se contente pas d'allumer des zones d'arrosage ou de remonter quelques capteurs.
+Gazon Intelligent ne se contente pas d'allumer des zones d'arrosage ou de remonter quelques capteurs. Il répond à **4 questions**, directement dans Home Assistant :
 
-L'intégration construit une lecture métier exploitable dans Home Assistant:
+- **Quoi faire maintenant ?** — arroser, tondre, appliquer un produit, ou attendre
+- **Pourquoi ?** — le motif est toujours lisible, jamais un blocage muet
+- **Quand reconsidérer ?** — la prochaine fenêtre d'arrosage / de tonte
+- **Dans quel contexte ?** — phase du gazon, réserve d'eau, météo, risque
 
-- que faut-il faire maintenant
-- pourquoi faut-il agir ou attendre
-- quand reconsidérer la tonte ou l'arrosage
-- quel contexte explique la décision
+## Sommaire
 
-Elle est conçue pour rester lisible côté UI, tout en gardant assez de structure pour les automatisations, le debug et les dashboards avancés.
+- [✨ Fonctionnalités](#-fonctionnalités)
+- [🧠 Le principe](#-le-principe)
+- [📦 Installation](#-installation)
+- [⚙️ Configuration](#-configuration)
+- [🚀 Prise en main](#-prise-en-main)
+- [🔎 Comment ça décide](#-comment-ça-décide)
+- [🎛️ Réglages et actions](#-réglages-et-actions)
+- [🛠️ Services](#-services)
+- [🧩 Carte Lovelace](#-carte-lovelace)
+- [🚫 Ce qu'elle ne fait pas](#-ce-quelle-ne-fait-pas)
+- [📝 Changelog](#-changelog)
+- [🧪 Développement](#-développement)
+- [📄 Licence](#-licence)
 
-## ✨ Ce que la version actuelle apporte (v0.14.0)
+## ✨ Fonctionnalités
 
-- **Arrosage piloté par la réserve du sol (mode Normal)** : la pelouse établie n'est plus arrosée tant que la réserve utile reste au-dessus du **seuil d'épuisement (MAD 50 %)** ; une fois ce seuil atteint, une **recharge profonde** ramène la réserve au plein. Résultat : arrosages **plus espacés et plus profonds**, qui favorisent l'enracinement (léger stress bénéfique) — au lieu de petits apports fréquents. Borné par le garde-fou hebdomadaire ; repli automatique sur l'ancien modèle tant que le bilan sol interne n'est pas encore établi
-- **Phase semis préservée** : la recharge profonde reste **exclue du Sursemis** (inadaptée au semis), verrouillée par un test d'anti-régression
-- **Capteur de blocage plus honnête (0.10.1)** : quand l'arrosage auto ne part pas à cause d'un blocage (cooldown, pluie prévue, sol humide, budget hebdo…), le capteur `arrosage_auto_blocage` affiche le **vrai motif** au lieu de « réserve suffisante »
-- **Comptage d'arrosage fiable (0.10.2)** : fin d'un double-comptage des cycles fractionnés qui sur-créditait la réserve et le budget hebdomadaire (et retardait l'arrosage suivant)
-- **Calibration manuelle de la réserve (0.11.0)** : nouveau service `recalibrate_reserve` pour fixer la réserve hydrique du sol à une valeur connue (recalage / calibration), persistant au redémarrage
-- **Audit complet & durcissement (0.12.0)** : sécurité runtime (plus de blocage d'arrosage après redémarrage en plein cycle ; reprise qui respecte le verrou de sécurité), arrosage qui peut outrepasser le cooldown en déplétion critique, reload auto sur changement de capteur, et nettoyage (code mort, attribut trompeur retiré)
-- **Cohérence carte ↔ intégration (0.12.1)** : exposition de `block_reason_label` sur `fenetre_optimale`, libellés de blocage complétés (foliaire / semis), et valeurs brutes de sélection produit sur l'entité `select` — pour que la carte Lovelace affiche les bonnes données
-- **Affichage honnête du plafonnement (0.12.2)** : quand le garde-fou hebdomadaire bloque l'arrosage alors que le sol a réellement besoin, le capteur dit « Arrosage plafonné cette semaine » au lieu de « Aucun arrosage nécessaire »
-- **Gestion canicule (0.13.0)** : pluie « trace » ne bloque plus l'arrosage (cumul ≥ 4 mm requis) ; **survie** (petite dose le matin si réserve ≥ 90 % épuisée en canicule, malgré le garde-fou) ; **rafraîchissement du soir** possible en chaleur extrême uniquement si l'herbe peut sécher (≥ 90 min avant le coucher du soleil, air sec) — anti-maladies fongiques
-- **Correctif pluie de trace (0.13.1)** : une 2ᵉ logique pluie (« rain floor ») bloquait encore l'arrosage dès la moindre pluie prévue (> 0 mm) quand l'objectif était plafonné — corrigé : réduction/report seulement pour une pluie significative (≥ 2 mm demain / ≥ 4 mm sur 3 j)
-- **Comptage fiable en fin de cycle (0.13.2)** : suppression du dernier double-comptage résiduel — le OFF du dernier passage d'un cycle auto n'est plus réenregistré en doublon `zone_session` (qui sur-créditait la réserve et le budget hebdomadaire)
-- **Suivi d'arrosage en temps réel (0.13.3)** : pendant un cycle, le capteur `arrosage_en_cours` expose les mm **par zone**, la dose surface, et la **réserve/surplus projetés** en intégrant l'eau en cours (affichage seulement, sans changer le comportement)
-- **Cadence maîtrisée (0.13.4)** : cooldown anti-relance (6 h) après un cycle auto → **fini les relances en boucle** en canicule ; la fenêtre du soir (petit rafraîchissement) reste exemptée
-- **Comptage multi-passages corrigé (0.13.5)** : les cycles fractionnés (plusieurs passages) n'étaient crédités qu'à hauteur d'**un seul passage** → réserve coincée et budget hebdo sous-estimés. Désormais la dose surface complète est comptée (réserve qui remonte correctement)
-- **Rafraîchissement du soir découplé du déficit (0.14.0)** : en **canicule ou chaleur extrême**, un petit arrosage de **5 mm** part le soir (18 h–20 h) pour **faire baisser la température du gazon même quand la réserve est saine** (le but est de rafraîchir, pas de recharger). Garde-fous anti-maladies conservés : fin **≥ 90 min avant le coucher du soleil**, **air sec (≤ 60 %)**, **pas de risque fongique**, et jamais sous la pluie. Anti-boucle de relance dans la fenêtre du soir
-- **518 tests unitaires** verts
+**💧 Arrosage intelligent (mode Normal)**
+- Piloté par la **réserve d'eau du sol** : on laisse la réserve descendre jusqu'au **seuil d'épuisement (MAD 50 %)**, puis on **recharge en profondeur** jusqu'au plein. Résultat : des arrosages **plus espacés et plus profonds** → meilleur enracinement, au lieu de petits apports fréquents.
+- Borné par un **garde-fou hebdomadaire** (jamais trop d'eau sur la semaine).
+- **Calcul ET0 réaliste sans capteur dédié** (FAO-56), tenant compte de la pluie, du vent, de l'humidité et de la rosée.
+- **Gestion canicule** : dose de **survie** le matin si la réserve est presque vide, et **rafraîchissement du soir** (petit arrosage de **3 mm, 30 min avant le coucher du soleil**) pour faire baisser la température du gazon même réserve pleine — sous garde-fous anti-maladies (air sec, pas de pluie).
+- **Comptage fiable** de l'eau réellement appliquée (anti double-comptage des cycles fractionnés) et **suivi en temps réel** pendant un cycle.
 
-*Versions précédentes (v0.10.0 · v0.9.5) : pilotage de l'arrosage par épuisement de la réserve (deplete-to-MAD) ; déclenchement enfin de l'arrosage automatique (`startup_guard`), déblocage du verrou de sécurité, capteur de diagnostic `arrosage_auto_blocage`.*
+**✂️ Tonte coordonnée**
+- **Autorisation métier** selon la phase, le risque, la météo et l'heure (fenêtre **10 h–22 h**, nuit bloquée).
+- **Fréquence cible** (~5/semaine) et **quota journalier** adaptés à la phase.
+- **Coordination robot tondeuse** (optionnelle, par pelouse) : pas de tonte sous la pluie ni pendant l'arrosage, hauteur de coupe synchronisable, et séparation nette entre « gazon autorisé » et « machine disponible ».
 
-*Versions antérieures (v0.9.4 · v0.9.3 · v0.9.2 · v0.9.1 · v0.9.0/v0.8.x) : libellé d'erreur tondeuse précis, arrosage post-application limité au jour même, ET0 réaliste sans capteur (FAO-56 + vent km/h→m/s), cohérence conseil/exécution sous pluie, objectif plafonné à la capacité du sol, coordination arrosage/tonte, support multi-pelouse.*
-- une instance par pelouse, avec support multi-gazon propre
-- une façade publique centrée sur `sensor.gazon_intelligent_assistant`
-- une projection claire de:
-  - `sensor.gazon_intelligent_prochain_arrosage`
-  - `sensor.gazon_intelligent_prochaine_tonte`
-  - `sensor.gazon_intelligent_prochaine_intervention`
-- une séparation explicite entre:
-  - état du gazon
-  - décision d'arrosage
-  - décision de tonte
-  - disponibilité machine
-  - action réellement possible
-- une coordination tondeuse activable ou désactivable par pelouse
-- une carte Lovelace dédiée en complément de l'intégration
+**🌱 Phases du gazon**
+- Suit la phase dominante (Normal, Sursemis, Traitement, Scarification, Hivernage…) et adapte l'arrosage **et** la tonte en conséquence.
 
-Pour le détail du contrat public des attributs exposés, voir:
+**🧪 Interventions produit**
+- Catalogue de produits (engrais, biostimulants, agent mouillant…), **scoring** selon phase / saison / météo, et recommandation de la prochaine application.
 
-- [docs/public-attribute-contract.md](docs/public-attribute-contract.md)
+**🧩 Et aussi**
+- **Multi-pelouse** : une instance par pelouse, proprement séparées.
+- **Façade lisible** centrée sur `sensor.gazon_intelligent_assistant`.
+- **Carte Lovelace dédiée** en complément.
 
-## 🧠 Philosophie
+> Contrat public détaillé des attributs exposés : [docs/public-attribute-contract.md](docs/public-attribute-contract.md).
 
-L'intégration sépare trois niveaux:
+## 🧠 Le principe
 
-1. **Le gazon**
-   - phase dominante
-   - sous-phase
-   - risque
-   - réserve hydrique
+L'intégration sépare **trois niveaux**, pour éviter les faux signaux :
 
-2. **La décision métier**
-   - tonte autorisée ou non
-   - arrosage utile ou non
-   - prochaine fenêtre
-   - blocage ou attente
+1. **Le gazon** — phase, sous-phase, risque, réserve hydrique
+2. **La décision** — arroser / tondre ou non, prochaine fenêtre, blocage ou attente
+3. **L'exécution** — machine disponible, coordination active, action réellement possible
 
-3. **L'exécution**
-   - machine disponible ou non
-   - coordination tondeuse active ou non
-   - action réellement possible
-
-Cette séparation évite les faux signaux du type:
-
-- gazon autorisé mais machine indisponible
-- machine prête mais tonte interdite par la phase
-- arrosage bloqué sans explication lisible
+Cette séparation évite les contradictions du type *« gazon autorisé mais machine indisponible »* ou *« arrosage bloqué sans explication »*.
 
 ## 📦 Installation
 
-### Via HACS
+### Via HACS (recommandé)
 
-1. Ouvre **HACS → Intégrations → Dépôts personnalisés**
-2. Ajoute `https://github.com/kev21brv10/gazon_intelligent`
-3. Choisis la catégorie **Intégration**
-4. Installe `Gazon Intelligent`
-5. Redémarre Home Assistant
-6. Va dans **Paramètres → Appareils et services**
-7. Ajoute l'intégration `Gazon Intelligent`
+1. **HACS → Intégrations → ⋮ → Dépôts personnalisés**
+2. Ajoute `https://github.com/kev21brv10/gazon_intelligent`, catégorie **Intégration**
+3. Installe **Gazon Intelligent**, puis **redémarre Home Assistant**
+4. **Paramètres → Appareils et services → Ajouter une intégration** → `Gazon Intelligent`
 
-### Installation manuelle
+### Manuelle
 
 1. Copie [`custom_components/gazon_intelligent`](custom_components/gazon_intelligent) dans `config/custom_components`
 2. Redémarre Home Assistant
 3. Ajoute l'intégration depuis **Paramètres → Appareils et services**
 
-## ✅ Compatibilité
-
-- Home Assistant `2026.3.2+`
-- installation recommandée via HACS
+> **Compatibilité** : Home Assistant `2026.3.2+`. Aucune configuration YAML n'est requise.
 
 ## ⚙️ Configuration
 
-Aucune configuration YAML n'est requise.
+Tout se fait depuis l'interface (config flow), **par pelouse**.
 
-### 1. Une configuration par pelouse
+**1. Pelouse** — `instance_slug` (pour séparer plusieurs gazons), zones `zone_1`…`zone_5` avec leurs débits `debit_zone_1`…`debit_zone_5`, et `type_sol`.
 
-Chaque instance demande:
+**2. Météo et capteurs** *(tous optionnels — l'intégration estime ce qui manque)* — `entite_meteo`, `capteur_pluie_24h`, `capteur_pluie_demain`, `capteur_temperature`, `capteur_etp`, `capteur_humidite`, `capteur_humidite_sol`, `capteur_vent`, `capteur_rosee`, `capteur_hauteur_gazon`, `capteur_retour_arrosage`.
 
-- `instance_slug`
-- `zone_1` à `zone_5`
-- `debit_zone_1` à `debit_zone_5`
-- `type_sol`
+**3. Robot tondeuse** *(optionnel, par pelouse)* — `entite_tondeuse`, `capteur_tondeuse_erreur`, `capteur_tondeuse_batterie`, `capteur_tondeuse_pluie`, `capteur_tondeuse_en_charge`, `capteur_tondeuse_prochain_depart`, `capteur_tondeuse_hauteur_coupe`, `hauteur_min_tondeuse_cm`, `hauteur_max_tondeuse_cm`.
 
-`instance_slug` permet de séparer proprement plusieurs pelouses dans Home Assistant.
+> Coordination désactivée → l'intégration calcule toujours la logique gazon, mais ne considère plus la machine comme pilotable.
 
-### 2. Météo et capteurs complémentaires
+## 🚀 Prise en main
 
-Tu peux ensuite renseigner:
+**Le point d'entrée** : `sensor.gazon_intelligent_assistant` — il résume l'action prioritaire (ou la raison d'attendre).
 
-- `entite_meteo`
-- `capteur_pluie_24h`
-- `capteur_pluie_demain`
-- `capteur_temperature`
-- `capteur_etp`
-- `capteur_humidite`
-- `capteur_humidite_sol`
-- `capteur_vent`
-- `capteur_rosee`
-- `capteur_hauteur_gazon`
-- `capteur_retour_arrosage`
+| Thème | Entités à lire en premier |
+|---|---|
+| **Arrosage** | `prochain_arrosage` · `fenetre_optimale` · `objectif_d_arrosage` · `plan_d_arrosage` · `binary_sensor…arrosage_recommande` · `…signal_irrigation` |
+| **Tonte** | `binary_sensor…tonte_autorisee` · `etat_de_tonte` · `prochaine_tonte` · `hauteur_de_tonte_conseillee` · `hauteur_gazon_estimee` *(estimée sans capteur)* |
+| **Phase & contexte** | `phase_dominante` · `sous_phase` · `risque_gazon` · `type_d_arrosage` |
+| **Produits** | `prochaine_intervention` · `catalogue_produits` · `niveau_de_pertinence` · `binary_sensor…signal_intervention` · `select…produit_d_intervention` |
 
-### 3. Robot tondeuse optionnel
+*(préfixe commun : `sensor.gazon_intelligent_…`)*
 
-La coordination tondeuse est indépendante et configurable par pelouse:
+Côté tonte, les attributs `gazon_permet_tonte`, `machine_permet_tonte`, `action_possible`, `mowing_block_reason_code` / `…_label` et `mowing_watering_coordination` *(none / discourage / block)* détaillent la décision.
 
-- `entite_tondeuse`
-- `capteur_tondeuse_erreur`
-- `capteur_tondeuse_batterie`
-- `capteur_tondeuse_pluie`
-- `capteur_tondeuse_en_charge`
-- `capteur_tondeuse_prochain_depart`
-- `capteur_tondeuse_hauteur_coupe`
-- `hauteur_min_tondeuse_cm`
-- `hauteur_max_tondeuse_cm`
-
-Si la coordination tondeuse est désactivée, l'intégration continue de calculer la logique gazon, mais ne considère plus la machine comme pilotable.
-
-## 📊 Les entités à lire en premier
-
-### Assistant
-
-- `sensor.gazon_intelligent_assistant`
-
-C'est le point d'entrée le plus utile.  
-Il résume l'action prioritaire ou la raison pour laquelle il faut attendre.
+## 🔎 Comment ça décide
 
 ### Arrosage
 
-- `sensor.gazon_intelligent_prochain_arrosage`
-- `sensor.gazon_intelligent_fenetre_optimale`
-- `sensor.gazon_intelligent_plan_d_arrosage`
-- `sensor.gazon_intelligent_objectif_d_arrosage`
-- `binary_sensor.gazon_intelligent_arrosage_recommande`
-- `binary_sensor.gazon_intelligent_signal_irrigation`
-- `binary_sensor.gazon_intelligent_arrosage_apres_application_autorise`
+`sensor.gazon_intelligent_prochain_arrosage` est la lecture la plus directe. Il affiche soit une **fenêtre utile avec objectif** (ex. *« demain matin, 8 mm »*), soit un **blocage avec son motif** (cooldown, pluie prévue, sol humide, garde-fou hebdo plafonné…), soit **« Non requis »** (réserve suffisante). Le motif n'est **jamais muet**.
 
 ### Tonte
 
-- `binary_sensor.gazon_intelligent_tonte_autorisee`
-- `sensor.gazon_intelligent_etat_de_tonte`
-- `sensor.gazon_intelligent_prochaine_tonte`
-- `sensor.gazon_intelligent_hauteur_de_tonte_conseillee`
-- `sensor.gazon_intelligent_hauteur_gazon_estimee` *(estimation sans capteur)*
+`binary_sensor.gazon_intelligent_tonte_autorisee` exprime l'autorisation **métier** ; l'action finale dépend aussi de la **machine** (prête ou non) et de la **coordination**.
 
-Attributs utiles côté tonte:
+**Fenêtre horaire** (créneaux où une nouvelle tonte peut partir, si la météo le permet) :
 
-- `gazon_permet_tonte`
-- `machine_permet_tonte`
-- `action_possible`
-- `mowing_block_reason_code`
-- `mowing_block_reason_label`
-- `mowing_watering_coordination` *(none / discourage / block)*
-- `mowing_watering_coordination_msg`
+- **idéale : 10 h – 12 h** · **acceptable : 17 h – 19 h**
+- permise mais déconseillée : 12 h – 17 h et 19 h – 22 h
+- **bloquée la nuit : 22 h → 10 h**
 
-### Phase et contexte
+La météo bloque à **toute heure** : pluie en cours/imminente, rosée présente, température < 8 °C ou trop élevée, vent fort.
 
-- `sensor.gazon_intelligent_phase_dominante`
-- `sensor.gazon_intelligent_sous_phase`
-- `sensor.gazon_intelligent_risque_gazon`
-- `sensor.gazon_intelligent_type_d_arrosage`
-
-### Interventions produit
-
-- `sensor.gazon_intelligent_prochaine_intervention`
-- `sensor.gazon_intelligent_catalogue_produits`
-- `sensor.gazon_intelligent_debug_intervention`
-- `sensor.gazon_intelligent_niveau_de_pertinence`
-- `binary_sensor.gazon_intelligent_signal_intervention`
-- `select.gazon_intelligent_produit_d_intervention`
-
-## 🔎 Comment lire la décision
-
-### Arrosage
-
-`sensor.gazon_intelligent_prochain_arrosage` est la lecture publique la plus directe.
-
-Exemples:
-
-- `Bloqué` + `Attendre après la pluie`
-- `Non requis` + `Aucun arrosage nécessaire`
-- fenêtre utile le matin avec objectif calculé
-
-### Tonte
-
-`binary_sensor.gazon_intelligent_tonte_autorisee` exprime l'autorisation métier.
-
-Mais l'action finale dépend aussi de la machine:
-
-- gazon autorisé
-- machine prête ou non
-- coordination active ou non
-
-`sensor.gazon_intelligent_prochaine_tonte` donne la prochaine reprise lisible.
+**Fréquence** : cible **4 à 6 tontes/semaine**, avec **2 tontes/jour** max en phase Normal (**1/jour** en phases sensibles). Une « tonte » = un **cycle complet** ; les retours en base pour recharge ne comptent pas. Avec coordination active, le robot est **rappelé** sous la pluie / pendant l'arrosage, puis **relancé** dès que les conditions repassent au vert.
 
 ### Phases sensibles
 
-Certaines phases dominent naturellement la lecture publique:
+`Sursemis`, `Traitement`, `Hivernage`, `Scarification` dominent la lecture publique — ex. *« Phase Sursemis : tonte interdite pendant l'installation du gazon. »*
 
-- `Sursemis`
-- `Traitement`
-- `Hivernage`
-- `Scarification`
+## 🎛️ Réglages et actions
 
-Exemple attendu:
+- **Boutons** — `arroser_maintenant` · `date_action_today` · `retour_mode_normal`
+- **Switches** — `arrosage_automatique_autorise` · `coordination_tondeuse`
+- **Selects** — `mode_du_gazon` · `produit_d_intervention`
+- **Numbers** —
+  - `debit_zone_1` à `debit_zone_5`
+  - `hauteur_min_tondeuse` / `hauteur_max_tondeuse` — plage de hauteur de **ta** tondeuse (en cm)
+  - `hauteur_coupe_tondeuse` — hauteur de coupe cible (en mm) ; ses **bornes suivent automatiquement** la plage min/max ci-dessus (ex. 3–6 cm → curseur 30–60 mm), pour coller à n'importe quelle tondeuse
+  - `delai_reprise_tonte_apres_arrosage`
 
-- `Phase Sursemis: tonte interdite pendant l'installation du gazon.`
+## 🛠️ Services
 
-## 🎛️ Entités de réglage et d'action
+| Domaine | Services *(préfixe `gazon_intelligent.`)* |
+|---|---|
+| **Métier** | `set_mode` · `reset_mode` · `set_date_action` |
+| **Arrosage** | `start_manual_irrigation` · `start_auto_irrigation` · `start_application_irrigation` · `declare_watering` · `recalibrate_reserve` |
+| **Tonte** | `declare_mowing` |
+| **Produits** | `declare_intervention` · `remove_last_application` · `register_product` · `remove_product` |
 
-### Boutons
+`recalibrate_reserve` recale la réserve hydrique du sol à une valeur connue (calibration manuelle, persistante au redémarrage).
 
-- `button.gazon_intelligent_arroser_maintenant`
-- `button.gazon_intelligent_date_action_today`
-- `button.gazon_intelligent_retour_mode_normal`
+## 🧩 Carte Lovelace
 
-### Switches
+Une carte dédiée — `lovelace-gazon-intelligent-card` — organise la façade publique en onglets : **synthèse · irrigation · tonte · gazon · produits · intervention · réglages**. Elle lit les entités publiques et les structure pour une lecture rapide ; elle ne remplace pas l'intégration.
 
-- `switch.gazon_intelligent_arrosage_automatique_autorise`
-- `switch.gazon_intelligent_coordination_tondeuse`
+## 🚫 Ce qu'elle ne fait pas
 
-### Selects
+- Elle ne remplace **pas** ton matériel d'arrosage.
+- Elle ne remplace **pas** les sécurités natives de ta tondeuse.
+- Elle ne garantit pas **seule** un déclenchement automatique sans automatisations autour.
 
-- `select.gazon_intelligent_mode_du_gazon`
-- `select.gazon_intelligent_produit_d_intervention`
+Son rôle : fournir une base métier **cohérente, lisible et exploitable**.
 
-### Numbers
+## 📝 Changelog
 
-- `number.gazon_intelligent_debit_zone_1` à `number.gazon_intelligent_debit_zone_5`
-- `number.gazon_intelligent_hauteur_min_tondeuse`
-- `number.gazon_intelligent_hauteur_max_tondeuse`
-- `number.gazon_intelligent_hauteur_coupe_tondeuse`
-- `number.gazon_intelligent_delai_reprise_tonte_apres_arrosage`
-
-## 🛠️ Services exposés
-
-### Pilotage métier
-
-- `gazon_intelligent.set_mode`
-- `gazon_intelligent.reset_mode`
-- `gazon_intelligent.set_date_action`
-
-### Irrigation
-
-- `gazon_intelligent.start_manual_irrigation`
-- `gazon_intelligent.start_auto_irrigation`
-- `gazon_intelligent.start_application_irrigation`
-- `gazon_intelligent.declare_watering`
-
-### Tonte
-
-- `gazon_intelligent.declare_mowing`
-
-### Interventions et produits
-
-- `gazon_intelligent.declare_intervention`
-- `gazon_intelligent.remove_last_application`
-- `gazon_intelligent.register_product`
-- `gazon_intelligent.remove_product`
-
-## 🧩 Carte Lovelace optionnelle
-
-Une carte dédiée existe pour exploiter la façade publique de l'intégration:
-
-- `lovelace-gazon-intelligent-card`
-
-Elle organise la lecture en onglets:
-
-- synthèse
-- irrigation
-- tonte
-- gazon
-- produits
-- intervention
-- réglages
-
-La carte ne remplace pas l'intégration.  
-Elle lit les entités publiques et les structure pour une lecture rapide dans Home Assistant.
-
-## 🚫 Ce que l'intégration ne prétend pas faire
-
-- elle ne remplace pas ton matériel d'arrosage
-- elle ne remplace pas les sécurités natives de ta tondeuse
-- elle ne garantit pas seule un déclenchement automatique sans automatisations autour
-
-Son rôle est de fournir une base métier cohérente, lisible et exploitable.
+L'historique complet des versions est dans **[CHANGELOG.md](CHANGELOG.md)**.
 
 ## 🧪 Développement
 
-Le dépôt inclut:
+Validation CI (GitHub Actions) à chaque push/PR : **Hassfest · Ruff · mypy · tests unitaires**. La logique métier vit surtout dans :
 
-- workflow de validation GitHub Actions
-- Hassfest
-- Ruff
-- mypy
-- tests unitaires
-
-La logique principale est concentrée autour de:
-
-- [`custom_components/gazon_intelligent/coordinator.py`](custom_components/gazon_intelligent/coordinator.py)
-- [`custom_components/gazon_intelligent/decision_watering.py`](custom_components/gazon_intelligent/decision_watering.py)
-- [`custom_components/gazon_intelligent/decision_mowing.py`](custom_components/gazon_intelligent/decision_mowing.py)
-- [`custom_components/gazon_intelligent/assistant.py`](custom_components/gazon_intelligent/assistant.py)
+- [`coordinator.py`](custom_components/gazon_intelligent/coordinator.py) — orchestration & état
+- [`decision_watering.py`](custom_components/gazon_intelligent/decision_watering.py) — décision d'arrosage
+- [`decision_mowing.py`](custom_components/gazon_intelligent/decision_mowing.py) — décision de tonte
+- [`guidance.py`](custom_components/gazon_intelligent/guidance.py) — profils d'arrosage (dose, fenêtres, canicule)
+- [`assistant.py`](custom_components/gazon_intelligent/assistant.py) — façade « assistant »
 
 ## 📄 Licence
 
-Projet publié sous licence MIT. Voir [`LICENSE`](https://github.com/kev21brv10/gazon_intelligent/blob/main/LICENSE).
+Projet publié sous licence **MIT** — voir [`LICENSE`](LICENSE).
