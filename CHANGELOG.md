@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.15.0
+Affinage canicule, corrections de bugs, grand nettoyage interne et README repensé (547 tests verts) :
+- **Rafraîchissement du soir affiné (`guidance.py`, `coordinator.py`, `decision_watering.py`)** : le cycle de refroidissement part désormais **30 min avant le coucher du soleil** (au plus frais → moins d'évaporation) au lieu de la fenêtre fixe 18-20 h, en **un seul passage**, dose **3 mm** (`EVENING_COOLING_MM`). En canicule, la marge de séchage de 90 min ne s'applique plus (le timing au coucher la remplace). Post-application et rafraîchissement du soir sont des **arrosages techniques exemptés des cooldowns**, avec garde « une seule fois par soir ». Correctif : la fenêtre du soir (coucher−30 → coucher) est désormais bien lue par le coordinateur via `evening_cooling_debug` (la clé `watering_evening_*_minute` se perdait dans la chaîne → blocage à tort vers 21 h).
+- **Suivi temps réel corrigé (`sensor.py`)** : `live_surplus_mm` / `live_reserve_mm` n'étaient plus alimentés pendant l'arrosage (mauvaise source de lecture) — corrigé.
+- **Corrections de bugs** :
+  - **`assistant.py`** : lisait une clé inexistante (`reason_decision` au lieu de `raison_decision`) → lignes mortes retirées (l'assistant utilisait déjà le bon texte de repli).
+  - **`intervention_recommendation.py`** : comparaison du type de produit fiabilisée (insensible à la casse, ex. « Agent Mouillant ») ; une réserve sol réellement **0 mm** n'est plus ignorée à tort au profit du bilan glissant (**+3 tests**).
+  - **`binary_sensor.py`** : défaut `auto_irrigation_enabled` rendu cohérent (inconnu = activé, plus de divergence absent/None).
+- **Libellés de blocage unifiés (`const.py`, `sensor.py`, `binary_sensor.py`)** : les libellés (`BLOCK_REASON_DISPLAY_LABELS`) sont désormais **partagés** par les deux plateformes — fini les divergences (joli d'un côté, brut `snake_case` de l'autre) ; ajout du libellé « Robot en erreur » côté binary_sensor.
+- **Hauteur de coupe générique (`number.py`)** : les bornes du `number` hauteur de coupe ne sont plus codées en dur (0-100 mm) mais **dérivées des réglages Hauteur min/max tondeuse** (ex. 3-6 cm → curseur 30-60 mm) → s'adapte à n'importe quelle tondeuse.
+- **Référentiel arrosage simplifié (`watering_policy.py`)** : le garde météo « light » du Biostimulant était une **copie exacte** de celui de la Fertilisation → fusionné (comportement inchangé) ; champs de garde-fous jamais câblés retirés.
+- **Grand nettoyage interne (audit complet)** : ~50 éléments de **code mort** retirés (imports/variables inutilisés, une feature « MAD » jamais branchée, doublons, branches no-op) — **sans changement de comportement**, vérifié par les tests. Rapport dans `AUDIT.md`.
+- **README repensé** : sommaire, section « Fonctionnalités » claire, fenêtre de tonte documentée, service `recalibrate_reserve` ajouté ; l'historique des versions vit maintenant dans ce `CHANGELOG.md`.
+
 ## 0.14.0
 Rafraîchissement du soir découplé du déficit : le cycle du soir refroidit le gazon même réserve saine (526 tests verts) :
 - **Rafraîchissement du soir (`guidance.py`)** : le cycle du soir vise désormais le **refroidissement**, pas la recharge. En **canicule ou chaleur extrême**, un petit arrosage (`EVENING_COOLING_MM = 5 mm`) part entre **18 h et 20 h même quand la réserve est saine** : il court-circuite volontairement le garde-fou « pas d'arrosage du soir en saison de végétation », le cooldown 24 h et le plafond hebdomadaire — mais **jamais** une vraie pluie. Avant, ce garde-fou saison était évalué **avant** la branche canicule, donc le rafraîchissement n'était jamais atteint dès que le bilan sol dépassait −3 mm (réserve saine = pas de cooling, même en pleine chaleur).

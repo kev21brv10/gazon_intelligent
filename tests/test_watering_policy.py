@@ -91,6 +91,25 @@ class WateringPolicyTests(unittest.TestCase):
         self.assertTrue(resolved.blocking.is_blocked)
         self.assertEqual(resolved.blocking.reason, "heavy_rain_expected")
 
+    def test_biostimulant_shares_fertilisation_weather_guard(self) -> None:
+        # Biostimulant et Fertilisation partagent le même garde météo : « bloquer » = ne PAS
+        # arroser l'incorporation, la pluie s'en charge (le biostimulant s'incorpore très bien
+        # avec la pluie). Une pluie compensatrice bloque donc l'arrosage technique des deux.
+        compensating = policy.resolve_watering_policy(
+            phase_dominante="Biostimulant",
+            weather={"rain_compensating": True},
+        )
+        self.assertEqual(compensating.selected_mode, "biostimulant")
+        self.assertTrue(compensating.blocking.is_blocked)
+        self.assertEqual(compensating.blocking.reason, "rain_compensating")
+
+        heavy = policy.resolve_watering_policy(
+            phase_dominante="Biostimulant",
+            weather={"heavy_rain_expected": True},
+        )
+        self.assertTrue(heavy.blocking.is_blocked)
+        self.assertEqual(heavy.blocking.reason, "heavy_rain_expected")
+
     def test_traitement_requires_known_application_type(self) -> None:
         resolved = policy.resolve_watering_policy(phase_dominante="Traitement")
 

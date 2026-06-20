@@ -53,25 +53,6 @@ _SUFFIX_VALUE_PRECISIONS: tuple[tuple[str, int], ...] = (
 )
 
 
-_PUBLIC_MOWING_FACADE_KEYS: tuple[str, ...] = (
-    "tonte_autorisee",
-    "tonte_statut",
-    "niveau_action",
-    "action_possible",
-    "mowing_blocked",
-    "next_mowing_date",
-    "next_mowing_display",
-    "raison_blocage_tonte",
-    "raison_blocage_code",
-    "mowing_block_reason_code",
-    "mowing_block_reason_label",
-    "mowing_window_reason",
-    "mowing_machine_unavailable_detail",
-    "mowing_machine_unavailable_label",
-    "assistant",
-)
-
-
 def _round_precision_for_key(key: str | None) -> int | None:
     if not key:
         return None

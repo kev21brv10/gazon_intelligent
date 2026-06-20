@@ -130,7 +130,6 @@ def _irrigation_block_reason(snapshot: dict[str, Any]) -> str:
 def _irrigation_reason(snapshot: dict[str, Any]) -> str:
     return _clean_text(
         snapshot.get("sursemis_reason")
-        or snapshot.get("reason_decision")
         or snapshot.get("conseil_principal")
         or snapshot.get("action_recommandee")
     )
@@ -216,8 +215,7 @@ def _resolve_critical_action(snapshot: dict[str, Any]) -> dict[str, Any] | None:
         )
 
     reason = _clean_text(
-        snapshot.get("reason_decision")
-        or snapshot.get("conseil_principal")
+        snapshot.get("conseil_principal")
         or snapshot.get("action_recommandee")
     )
     if not reason and isinstance(application_summary, dict):
@@ -343,7 +341,6 @@ def _resolve_mowing(snapshot: dict[str, Any]) -> dict[str, Any] | None:
 
     tonte_statut = _clean_text(snapshot.get("tonte_statut")).lower()
     block_reason = _clean_text(snapshot.get("raison_blocage_tonte"))
-    blocked_statuses = {"interdite", "deconseillee", "bloquee", "bloque"}
     actionable_statuses = {"autorisee", "autorisee_avec_precaution", "a_surveiller"}
 
     if soft_mowing_block:
@@ -412,8 +409,7 @@ def _resolve_passive_state(snapshot: dict[str, Any]) -> dict[str, Any] | None:
 
     if blocked_due_to_conditions:
         reason = _clean_text(
-            snapshot.get("reason_decision")
-            or snapshot.get("conseil_principal")
+            snapshot.get("conseil_principal")
             or snapshot.get("action_recommandee")
         )
         if block_reason:
@@ -422,8 +418,7 @@ def _resolve_passive_state(snapshot: dict[str, Any]) -> dict[str, Any] | None:
             reason = "Arrosage bloqué par conditions."
     else:
         reason = _clean_text(
-            snapshot.get("reason_decision")
-            or snapshot.get("conseil_principal")
+            snapshot.get("conseil_principal")
             or snapshot.get("action_recommandee")
         )
         if not reason:

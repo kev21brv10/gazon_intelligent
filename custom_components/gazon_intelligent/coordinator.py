@@ -53,11 +53,6 @@ from .const import (
     WATERING_SESSION_MIN_DURATION_SECONDS,
     WATERING_SESSION_MIN_SEGMENT_SECONDS,
     OBJECTIVE_SCOPE_SURFACE_CYCLE,
-    WATERING_STAGE_ENRACINEMENT,
-    WATERING_STAGE_GERMINATION,
-    WATERING_STAGE_LEVEE,
-    WATERING_STAGE_NORMAL,
-    WATERING_STRATEGY_ADULT_DEEP,
     WATERING_STRATEGY_SEMIS_FREQUENT,
     PLUIE_SOURCE_INDISPONIBLE,
     PLUIE_SOURCE_NON_DISPONIBLE,
@@ -527,6 +522,8 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # Transmis à la guidance (via weather_profile) pour le garde-fou « séchage
             # avant la nuit » de l'arrosage du soir en canicule.
             weather_profile["sunset_minute"] = sunset_minute
+        # Fraction d'ET du jour déjà écoulée (affichage de la réserve : descente progressive).
+        weather_profile["et_elapsed_fraction"] = self._et_elapsed_fraction(sun_context)
         pluie_24h_sensor = self._validate_sensor_value(pluie_24h_sensor, "pluie")
         pluie_demain_sensor = self._validate_sensor_value(pluie_demain_sensor, "pluie")
         pluie_24h, pluie_24h_source, pluie_demain, pluie_demain_source = self._resolve_precipitation_inputs(
@@ -811,19 +808,6 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 return None
         return value
 
-    def _check_sensor_stuck(self, key: str, value: float | None) -> bool:
-        """Détecte un capteur figé (3 dernières valeurs identiques et non-None)."""
-        if not hasattr(self, "_sensor_history"):
-            self._sensor_history: dict[str, list] = {}
-        history = self._sensor_history.setdefault(key, [])
-        if value is not None:
-            history.append(value)
-        if len(history) > 5:
-            history.pop(0)
-        if len(history) >= 3 and all(v == history[-1] for v in history[-3:]) and history[-1] is not None:
-            return True
-        return False
-
     def _get_float_state(self, entity_id: str | None) -> float | None:
         """Retourne l'état float d'une entité Home Assistant."""
         if not entity_id:
@@ -1083,7 +1067,6 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _build_runtime_context(self) -> dict[str, Any]:
         semis_progress = self._semis_cycle_progress()
         return {
-            "mad_dynamic_enabled": True,
             "active_irrigation_session": self._get_active_irrigation_session(),
             "last_irrigation_execution": self._runtime_state.get("last_irrigation_execution"),
             "mowing_cooldown_after_watering_minutes": self.mowing_cooldown_after_watering_minutes,
@@ -1266,9 +1249,16 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _sunset_minute_from_context(self, sun_context: dict[str, Any]) -> int | None:
         """Minute locale (depuis minuit) du prochain coucher du soleil, ou None."""
+        return self._sun_event_minute_from_context(sun_context, "sun_next_setting")
+
+    def _sunrise_minute_from_context(self, sun_context: dict[str, Any]) -> int | None:
+        """Minute locale (depuis minuit) du prochain lever du soleil, ou None."""
+        return self._sun_event_minute_from_context(sun_context, "sun_next_rising")
+
+    def _sun_event_minute_from_context(self, sun_context: dict[str, Any], key: str) -> int | None:
         if not isinstance(sun_context, dict):
             return None
-        raw = sun_context.get("sun_next_setting")
+        raw = sun_context.get(key)
         if not raw:
             return None
         try:
@@ -1279,6 +1269,24 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return local.hour * 60 + local.minute
         except (TypeError, ValueError):
             return None
+
+    def _et_elapsed_fraction(self, sun_context: dict[str, Any]) -> float:
+        """Fraction de l'évapotranspiration du jour déjà écoulée, d'après le soleil.
+
+        L'ET se produit le jour : 0 avant le lever, monte linéairement jusqu'à 1 au
+        coucher, reste à 1 la nuit. Sert UNIQUEMENT à l'AFFICHAGE de la réserve (descente
+        progressive). Soleil inconnu → 1.0 (repli = comportement historique, sans risque)."""
+        sunrise = self._sunrise_minute_from_context(sun_context)
+        sunset = self._sunset_minute_from_context(sun_context)
+        if sunrise is None or sunset is None or sunset <= sunrise:
+            return 1.0
+        now = self._current_datetime()
+        now_minute = now.hour * 60 + now.minute
+        if now_minute <= sunrise:
+            return 0.0
+        if now_minute >= sunset:
+            return 1.0
+        return max(0.0, min(1.0, (now_minute - sunrise) / (sunset - sunrise)))
 
     def _estimate_rosee(
         self,
@@ -2049,7 +2057,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not isinstance(payload, dict):
             return None
         session = dict(payload)
-        for key in ("started_at", "paused_until", "last_update", "ended_at"):
+        for key in ("started_at", "paused_until", "last_update", "ended_at", "current_zone_started_at"):
             if key in session:
                 session[key] = self._parse_datetime_value(session.get(key))
         return session
@@ -2206,7 +2214,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     @staticmethod
     def _normalize_watering_cause(value: Any, *, source: str | None = None) -> str:
         raw_cause = str(value or "").strip().lower()
-        if raw_cause in {"hydrique", "post_application"}:
+        if raw_cause in {"hydrique", "post_application", "rafraichissement_soir"}:
             return raw_cause
         raw_source = str(source or "").strip().lower()
         if raw_source in {"application_technique", "application_technique_auto", "manual_application"}:
@@ -2279,6 +2287,30 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             seeding_transition_ready=seeding_transition_ready,
             seeding_block_reason=seeding_block_reason,
         )
+
+    def _evening_cooling_done_today(self) -> bool:
+        """True si un rafraîchissement du soir a déjà été enregistré aujourd'hui.
+
+        Garde anti-boucle : comme le rafraîchissement est exempté du cooldown anti-relance, on
+        s'assure qu'il ne part qu'UNE fois par soir (sinon il pourrait se relancer dans sa fenêtre)."""
+        history = getattr(self, "history", None)
+        if not isinstance(history, list):
+            return False
+        today = self._current_date()
+        for item in reversed(history):
+            if not isinstance(item, dict) or item.get("type") != "arrosage":
+                continue
+            if str(item.get("watering_cause") or "").strip().lower() != "rafraichissement_soir":
+                continue
+            recorded = item.get("recorded_at") or item.get("detected_at") or item.get("date")
+            recorded_dt = self._parse_datetime_value(recorded)
+            if recorded_dt is not None:
+                if recorded_dt.date() == today:
+                    return True
+                continue
+            if str(recorded or "").strip().startswith(today.isoformat()):
+                return True
+        return False
 
     def _recent_watering_block_active(self, objective_mm: float | None = None) -> bool:
         objective = float(objective_mm or 0.0)
@@ -2410,17 +2442,24 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if post_application_auto_ready:
             return True, "post_application_ready"
 
-        # Cooldown anti-relance : après un cycle auto terminé, on n'autorise pas un nouveau
-        # cycle avant AUTO_IRRIGATION_RELAUNCH_COOLDOWN (cause des relances en boucle en
-        # canicule, où le déclencheur repartait ~10 s après la fin du cycle). S'applique AUSSI
-        # à la fenêtre du soir : c'est ce qui empêche le rafraîchissement de canicule de se
-        # relancer en boucle dans la fenêtre 18-20 h (l'écart matin→soir étant toujours > 6 h,
-        # ce cooldown ne bloque jamais le PREMIER cycle du soir). EXEMPTÉ : le Sursemis
-        # (`semis_progress`), qui arrose volontairement plusieurs fois par jour (cycles ~90 min)
-        # et a sa propre cadence (`semis_cycle_pending`).
-        # Basé sur la fin du dernier cycle (état runtime persisté), pas sur l'historique
+        # Rafraîchissement du soir (canicule) = petit arrosage TECHNIQUE → EXEMPTÉ du cooldown
+        # anti-relance (sinon une recharge normale récente le bloquerait, cf. demande Kévin).
+        # Garde anti-boucle dédiée à la place : il ne part qu'UNE fois par soir (déjà enregistré
+        # en `rafraichissement_soir` aujourd'hui → on ne relance pas). Avec la fenêtre étroite
+        # coucher-30→coucher, ça suffit à empêcher toute boucle.
+        is_evening_cooling = (
+            str(snapshot.get("watering_cause") or "").strip().lower() == "rafraichissement_soir"
+        )
+        if is_evening_cooling:
+            if self._evening_cooling_done_today():
+                return False, "evening_cooling_done"
+        # Cooldown anti-relance (recharge normale uniquement) : après un cycle auto terminé, on
+        # n'autorise pas un nouveau cycle avant AUTO_IRRIGATION_RELAUNCH_COOLDOWN (cause des
+        # relances en boucle en canicule, où le déclencheur repartait ~10 s après la fin du cycle).
+        # EXEMPTÉ aussi : le Sursemis (`semis_progress`), qui arrose volontairement plusieurs fois
+        # par jour. Basé sur la fin du dernier cycle (état runtime persisté), pas sur l'historique
         # écrit en différé — donc fiable même juste après la clôture du cycle.
-        if semis_progress is None:
+        elif semis_progress is None:
             last_completed = self._parse_datetime_value(
                 self._runtime_state.get("last_auto_irrigation_completed_at")
             )
@@ -2435,11 +2474,30 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         window_end = int(snapshot.get("watering_window_end_minute") or 0)
         evening_start = int(snapshot.get("watering_evening_start_minute") or 1080)
         evening_end = int(snapshot.get("watering_evening_end_minute") or 1260)
-        evening_allowed = bool(snapshot.get("watering_evening_allowed"))
+        # Fenêtre réelle du rafraîchissement du soir = coucher-30 → coucher (calculée par la
+        # décision). Les clés `watering_evening_*_minute` transitent par `advanced_context`
+        # (decision.py) qui ne les porte pas → elles arrivent ici à None et retombent sur le défaut
+        # figé 18-20 h, ce qui bloquerait à tort le lancement du cooling à ~coucher-30 (~21 h en
+        # canicule). On lit donc la fenêtre fiable exposée par la décision via `evening_cooling_debug`
+        # (mappée 1:1 depuis le profil, sans chemin concurrent). Repli sur les clés/défaut sinon.
+        cooling_debug = snapshot.get("evening_cooling_debug")
+        if isinstance(cooling_debug, dict):
+            cooling_window = cooling_debug.get("evening_window_minutes")
+            if (
+                isinstance(cooling_window, (list, tuple))
+                and len(cooling_window) == 2
+                and cooling_window[0] is not None
+                and cooling_window[1] is not None
+            ):
+                evening_start = int(cooling_window[0])
+                evening_end = int(cooling_window[1])
 
         if fenetre == "soir":
-            if not evening_allowed:
-                return False, "evening_disabled"
+            # La fenêtre « soir » n'est posée par la décision QUE si le vrai test du soir est
+            # passé (coucher connu + marge ≥ 90 min + air ≤ 60 % + pas de risque fongique, dans
+            # `_evening_window_allowed`). On ne re-vérifie donc pas `watering_evening_allowed`
+            # ici (ce flag transite par un autre chemin, peu fiable, et bloquait à tort le
+            # lancement) : « soir » fait foi. On contrôle seulement le créneau horaire.
             if not (evening_start <= current_minutes < evening_end):
                 return False, "outside_evening_window"
         elif not (window_start <= current_minutes < window_end):
@@ -3470,6 +3528,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             start_passage = max(1, int(runtime_session.get("current_passage") or 1))
             start_zone_index = max(0, int(runtime_session.get("current_zone_index") or 0))
+            # Reprise après redémarrage : temps restant à appliquer à la 1ʳᵉ zone reprise
+            # (calculé dans _resume_active_irrigation_session, vanne restée ouverte incluse).
+            resume_remaining_s = runtime_session.pop("resume_zone_remaining_s", None)
             for passage in range(start_passage, plan.passage_count + 1):
                 runtime_session["status"] = "running"
                 runtime_session["current_passage"] = passage
@@ -3477,12 +3538,21 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     start_zone_index = 0
                 for zone_index, zone in enumerate(plan.zones[start_zone_index:], start=start_zone_index):
                     zone_segment = plan.zone_for_passage(zone_index, passage)
-                    if zone_segment.duration_s <= 0:
+                    sleep_duration_s = float(zone_segment.duration_s)
+                    if resume_remaining_s is not None and passage == start_passage and zone_index == start_zone_index:
+                        # On ne ré-arrose que le temps restant de la zone interrompue.
+                        try:
+                            sleep_duration_s = max(0.0, float(resume_remaining_s))
+                        except (TypeError, ValueError):
+                            sleep_duration_s = float(zone_segment.duration_s)
+                        resume_remaining_s = None
+                    if zone_segment.duration_s <= 0 or sleep_duration_s <= 0:
                         continue
                     runtime_session["current_zone_index"] = zone_index
                     runtime_session["current_zone"] = zone.zone
+                    runtime_session["current_zone_started_at"] = self._current_utc_datetime()
                     runtime_session["active_zones"] = [zone.zone]
-                    runtime_session["last_update"] = self._current_utc_datetime()
+                    runtime_session["last_update"] = runtime_session["current_zone_started_at"]
                     runtime_session["last_activity_at"] = runtime_session["last_update"]
                     await self._persist_runtime_state()
                     self._emit_irrigation_event(
@@ -3519,7 +3589,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         raise HomeAssistantError(message) from err
 
                     try:
-                        await asyncio.sleep(zone_segment.duration_s)
+                        await asyncio.sleep(sleep_duration_s)
                     finally:
                         await self._safe_turn_off_zone(zone.zone, runtime_session)
 
@@ -3540,6 +3610,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     ]
                     runtime_session["active_zones"] = []
                     runtime_session["current_zone"] = None
+                    runtime_session["current_zone_started_at"] = None
                     runtime_session["current_zone_index"] = zone_index + 1
                     runtime_session["last_update"] = self._current_utc_datetime()
                     runtime_session["last_activity_at"] = runtime_session["last_update"]
@@ -3719,11 +3790,46 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._set_active_irrigation_session(None)
                 await self._persist_runtime_state()
 
+    async def _wait_for_zones_available(
+        self, zone_ids: list[str | None], timeout_s: float = 60.0, poll_s: float = 1.0
+    ) -> bool:
+        """Attend que les vannes (switch) soient disponibles avant d'agir.
+
+        Après un redémarrage de HA, les entités restent 'unavailable' quelques secondes : agir
+        trop tôt enverrait les commandes dans le vide. Renvoie True dès que toutes sont
+        disponibles, False si le délai est dépassé (l'appareil ne répond pas)."""
+        ids = [str(z) for z in (zone_ids or []) if z]
+        if not ids:
+            return True
+        waited = 0.0
+        while waited < timeout_s:
+            ready = True
+            for zid in ids:
+                state = self.hass.states.get(zid)
+                if state is None or str(state.state).lower() in {"unavailable", "unknown"}:
+                    ready = False
+                    break
+            if ready:
+                return True
+            await asyncio.sleep(poll_s)
+            waited += poll_s
+        return False
+
     async def _resume_active_irrigation_session(self, session: dict[str, Any]) -> None:
         plan = normalize_existing_plan(session.get("plan"))
         if plan is None:
             session["status"] = "failed"
             session["last_error"] = "Plan persistant invalide."
+            self._persist_execution_snapshot(session, status="failed", error=session["last_error"])
+            self._set_active_irrigation_session(None)
+            await self._persist_runtime_state()
+            return
+
+        # Attendre que l'appareil d'arrosage (vannes) soit disponible avant toute action :
+        # au boot, la vanne est restée ouverte mais l'entité HA est 'unavailable' un instant.
+        if not await self._wait_for_zones_available([getattr(z, "zone", None) for z in (plan.zones or [])]):
+            session["status"] = "failed"
+            session["last_error"] = "device_unavailable_on_resume"
             self._persist_execution_snapshot(session, status="failed", error=session["last_error"])
             self._set_active_irrigation_session(None)
             await self._persist_runtime_state()
@@ -3739,24 +3845,46 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             session["paused_until"] = None
         elif session.get("status") == "running" and session.get("current_zone"):
             current_zone = str(session.get("current_zone"))
+            zone_index = int(session.get("current_zone_index") or 0)
+            passage = int(session.get("current_passage") or 1)
+            # La vanne est restée ouverte pendant le redémarrage : le temps écoulé depuis le
+            # démarrage de la zone compte comme de l'arrosage. On reprend donc la zone pour son
+            # TEMPS RESTANT (durée cible − temps déjà écoulé), au lieu de la sauter.
+            started = session.get("current_zone_started_at")
             try:
-                await self._safe_turn_off_zone(current_zone, session)
-            except HomeAssistantError:
-                return
-            session.setdefault("zones_failed", []).append(
-                {
-                    "passage": session.get("current_passage"),
-                    "zone_index": session.get("current_zone_index"),
-                    "zone": current_zone,
-                    "status": "aborted",
-                    "error": "restart_recovery",
-                }
-            )
-            session["status"] = "recovery_required"
-            session["active_zones"] = []
-            session["current_zone"] = None
-            session["current_zone_index"] = int(session.get("current_zone_index") or 0) + 1
-            session["last_error"] = "restart_recovery"
+                target_s = float(plan.zone_for_passage(zone_index, passage).duration_s)
+            except Exception:  # pragma: no cover - plan dégradé
+                target_s = 0.0
+            remaining_s = target_s
+            if isinstance(started, datetime) and target_s > 0:
+                elapsed = (self._current_utc_datetime() - started).total_seconds()
+                remaining_s = target_s - max(0.0, elapsed)
+            if remaining_s > WATERING_SESSION_MIN_SEGMENT_SECONDS:
+                # Il reste de l'eau à mettre → on reprend la MÊME zone pour le temps restant.
+                session["resume_zone_remaining_s"] = remaining_s
+                session["status"] = "running"
+            else:
+                # La zone a reçu sa dose (voire plus) pendant l'indisponibilité → on la ferme
+                # proprement et on passe à la suivante.
+                try:
+                    await self._safe_turn_off_zone(current_zone, session)
+                except HomeAssistantError:
+                    return
+                session.setdefault("zones_failed", []).append(
+                    {
+                        "passage": passage,
+                        "zone_index": zone_index,
+                        "zone": current_zone,
+                        "status": "completed_during_downtime",
+                        "error": "restart_recovery",
+                    }
+                )
+                session["status"] = "recovery_required"
+                session["active_zones"] = []
+                session["current_zone"] = None
+                session["current_zone_started_at"] = None
+                session["current_zone_index"] = zone_index + 1
+                session["last_error"] = "restart_recovery"
 
         session["last_update"] = self._current_utc_datetime()
         session["last_activity_at"] = session["last_update"]

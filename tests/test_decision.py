@@ -300,6 +300,35 @@ class TestHydricCoreAndMemory(unittest.TestCase):
         self.assertEqual(balance["reserve_stock_max_mm"], 24.0)
         self.assertEqual(balance["reserve_surplus_mm"], 2.0)
 
+    def test_display_reserve_descends_progressively_with_sun(self) -> None:
+        # Réserve de décision épuisée (2,2/12) mais ET du jour pas encore évaporée (la nuit,
+        # fraction 0) → la réserve AFFICHÉE rajoute l'ET restante (descente progressive),
+        # alors que la réserve de DÉCISION (reserve_stock_mm / depletion_ratio) reste figée.
+        common = dict(
+            history=[],
+            today=date(2026, 7, 15),
+            etp=8.2,
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            pluie_j2=0.0,
+            type_sol="limoneux",
+            soil_balance={"reserve_mm": 2.2, "reserve_max_mm": 24.0},
+        )
+        night = decision.compute_water_balance(**common, weather_profile={"et_elapsed_fraction": 0.0})
+        # Décision inchangée.
+        self.assertEqual(night["reserve_stock_mm"], 2.2)
+        self.assertEqual(night["depletion_ratio"], 0.817)
+        # Affichage : réserve remontée de ~8,2 mm (ET pas encore évaporée) → plus de « soif ».
+        self.assertAlmostEqual(night["reserve_actuelle_affichee_mm"], 10.4, places=1)
+        self.assertLess(night["depletion_ratio_affiche"], night["depletion_ratio"])
+        self.assertLess(night["depletion_ratio_affiche"], 0.5)  # sous le seuil MAD → pas soif
+        # En fin de journée (fraction 1), l'affichage rejoint la décision.
+        evening = decision.compute_water_balance(**common, weather_profile={"et_elapsed_fraction": 1.0})
+        self.assertAlmostEqual(
+            evening["reserve_actuelle_affichee_mm"], evening["reserve_actuelle_mm"], places=1
+        )
+        self.assertAlmostEqual(evening["depletion_ratio_affiche"], evening["depletion_ratio"], places=2)
+
     def test_build_decision_snapshot_uses_persistent_soil_balance(self) -> None:
         snapshot = make_snapshot(
             today=date(2026, 3, 17),
@@ -697,6 +726,37 @@ class TestDecisionSnapshotWatering(unittest.TestCase):
         self.assertEqual(snapshot["decision_resume"]["type_arrosage"], "application_technique_auto")
         self.assertEqual(snapshot["decision_resume"]["moment"], "maintenant")
         self.assertEqual(snapshot["application_irrigation_mode"], "auto")
+
+    def test_build_decision_snapshot_post_application_caps_passages_and_short_pause(self) -> None:
+        # Canicule (temp 34, air sec, ETP élevé) : le fractionnement anti-ruissellement voudrait
+        # 3 passages pour 5 mm. En post-application on plafonne à 2 passages avec une pause de 5 min
+        # (incorporation produit, pas un déficit ; l'agent mouillant réduit déjà le ruissellement).
+        snapshot = make_snapshot(
+            history=[
+                {
+                    "type": "Agent Mouillant",
+                    "date": "2026-07-15",
+                    "declared_at": "2026-07-15T08:00:00+00:00",
+                    "produit": "H2Pro TriSmart",
+                    "application_type": "sol",
+                    "application_requires_watering_after": True,
+                    "application_post_watering_mm": 5.0,
+                    "application_irrigation_block_hours": 0.0,
+                    "application_irrigation_delay_minutes": 0.0,
+                    "application_irrigation_mode": "auto",
+                }
+            ],
+            today=date(2026, 7, 15),
+            hour_of_day=8,
+            temperature=34,
+            humidite=25,
+            etp_capteur=6.0,
+        )
+
+        self.assertEqual(snapshot["watering_cause"], "post_application")
+        self.assertEqual(snapshot["type_arrosage"], "application_technique_auto")
+        self.assertLessEqual(snapshot["watering_passages"], 2)
+        self.assertEqual(snapshot["watering_pause_minutes"], 5)
 
     def test_build_decision_snapshot_sol_application_manual_mode_requires_button(self) -> None:
         snapshot = make_snapshot(
@@ -1690,14 +1750,28 @@ class TestObjectiveAndGuidance(unittest.TestCase):
         )
         self.assertFalse(allowed)
 
-    def test_evening_cooling_blocked_when_too_close_to_sunset(self) -> None:
-        # Coucher dans 60 min (< 90) → pas d'arrosage du soir (séchage insuffisant).
+    def test_evening_window_allowed_close_to_sunset_in_canicule(self) -> None:
+        # Nouvelle logique : en canicule, le rafraîchissement vise le coucher (-30 min) → être
+        # proche du coucher n'est PLUS bloquant (la marge de séchage de 90 min ne vaut qu'hors
+        # canicule, choix assumé : arroser au frais).
         allowed = guidance_module._evening_window_allowed(
             temperature=36.0,
             humidite=30.0,
             water_balance={"bilan_hydrique_mm": -10.0, "deficit_3j": 9.0},
             objectif_mm=4.0,
             heat_stress_level="extreme",
+            minutes_to_sunset=30,
+        )
+        self.assertTrue(allowed)
+
+    def test_evening_window_blocked_too_close_to_sunset_outside_canicule(self) -> None:
+        # Hors canicule, la marge de séchage de 90 min reste impérative.
+        allowed = guidance_module._evening_window_allowed(
+            temperature=26.0,
+            humidite=30.0,
+            water_balance={"bilan_hydrique_mm": -10.0, "deficit_3j": 9.0},
+            objectif_mm=4.0,
+            heat_stress_level="normal",
             minutes_to_sunset=60,
         )
         self.assertFalse(allowed)

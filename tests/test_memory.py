@@ -594,6 +594,56 @@ class MemoryCatalogTests(unittest.TestCase):
             4,
         )
 
+    def test_build_intervention_recommendation_normal_phase_is_neutral_for_maintenance_product(self) -> None:
+        recommendation = intervention.build_intervention_recommendation(
+            today=date(2026, 6, 18),
+            phase_active="Normal",
+            phase_source="absence_phase",
+            sous_phase="Normal",
+            selected_product_id=None,
+            selected_product_name=None,
+            temperature=22.0,
+            forecast_temperature_today=22.0,
+            temperature_source="capteur",
+            products={
+                "h2pro_trismart": {
+                    "id": "h2pro_trismart",
+                    "nom": "H2Pro TriSmart",
+                    "type": "Agent Mouillant",
+                    "usage_mode": "preventif",
+                    "max_applications_per_year": 8,
+                    "reapplication_after_days": 28,
+                    "phase_compatible": ["Croissance", "Entretien"],
+                    "application_months": [3, 4, 5, 6, 7, 8, 9, 10],
+                    "temperature_min": 10,
+                    "temperature_max": 30,
+                }
+            },
+            history=[
+                {
+                    "type": "Agent Mouillant",
+                    "date": "2026-04-30",
+                    "produit_id": "h2pro_trismart",
+                    "produit": "H2Pro TriSmart",
+                    "reapplication_after_days": 28,
+                    "produit_catalogue": {"id": "h2pro_trismart", "nom": "H2Pro TriSmart"},
+                }
+            ],
+            application_state={},
+        )
+
+        # En phase Normal, un produit d'entretien n'est pas "hors phase" : la contrainte de
+        # phase est neutre (met=True, libellé "Phase courante"), sans pénalité, mais le produit
+        # ne passe pas "recommandé" pour autant (phase_match reste False → reste "à préparer").
+        self.assertFalse(recommendation["product"]["phase_match"])
+        self.assertNotEqual(recommendation["status"], "recommended")
+        phase_constraint = next(
+            item for item in recommendation["constraints"] if item.get("code") == "phase_compatibility"
+        )
+        self.assertTrue(phase_constraint["met"])
+        self.assertIn("courante", phase_constraint["label"].lower())
+        self.assertTrue(recommendation["context"]["current_phase_is_default_normal"])
+
     def test_build_intervention_recommendation_keeps_low_score_candidate_in_preparation(self) -> None:
         recommendation = intervention.build_intervention_recommendation(
             today=date(2026, 4, 10),
@@ -883,7 +933,8 @@ class MemoryCatalogTests(unittest.TestCase):
         self.assertIn(preventif["status"], {"preparation", "recommended"})
         self.assertIn(curatif["status"], {"preparation", "recommended"})
 
-    def test_build_intervention_recommendation_blocks_when_temperature_is_far_out_of_range(self) -> None:
+    def test_build_intervention_recommendation_blocks_when_temperature_far_too_cold(self) -> None:
+        # Trop FROID (2 °C, attendu ≥ 8 °C) : on ne peut pas réchauffer → blocage maintenu.
         recommendation = intervention.build_intervention_recommendation(
             today=date(2026, 4, 10),
             phase_active="Sursemis",
@@ -891,8 +942,8 @@ class MemoryCatalogTests(unittest.TestCase):
             sous_phase="Reprise",
             selected_product_id=None,
             selected_product_name=None,
-            temperature=35.0,
-            forecast_temperature_today=35.0,
+            temperature=2.0,
+            forecast_temperature_today=2.0,
             temperature_source="capteur",
             products={
                 "humuslight": {
@@ -931,6 +982,50 @@ class MemoryCatalogTests(unittest.TestCase):
         )
         self.assertTrue(
             any(item.get("code") == "temperature_out_of_range" for item in recommendation["missing_requirements"])
+        )
+
+    def test_build_intervention_recommendation_hot_day_advises_morning_not_blocked(self) -> None:
+        # Trop CHAUD en journée (35 °C, max 28) : un produit s'applique tôt le matin → on NE
+        # bloque PAS (sinon inapplicable tout l'été), on conseille le créneau frais du matin.
+        recommendation = intervention.build_intervention_recommendation(
+            today=date(2026, 4, 10),
+            phase_active="Sursemis",
+            phase_source="historique_actif",
+            sous_phase="Reprise",
+            selected_product_id=None,
+            selected_product_name=None,
+            temperature=35.0,
+            forecast_temperature_today=35.0,
+            temperature_source="capteur",
+            products={
+                "humuslight": {
+                    "id": "humuslight",
+                    "nom": "Humuslight",
+                    "type": "Biostimulant",
+                    "usage_mode": "preventif",
+                    "max_applications_per_year": 2,
+                    "reapplication_after_days": 25,
+                    "phase_compatible": ["Sursemis", "Croissance", "Entretien"],
+                    "application_months": [3, 4, 5, 9, 10],
+                    "temperature_min": 8,
+                    "temperature_max": 28,
+                }
+            },
+            history=[],
+            application_state={},
+        )
+
+        self.assertNotEqual(recommendation["status"], "blocked")
+        # La contrainte température existe mais n'est PAS bloquante.
+        temp_constraint = next(
+            (item for item in recommendation["constraints"] if item.get("code") == "temperature_range"),
+            None,
+        )
+        self.assertIsNotNone(temp_constraint)
+        self.assertFalse(temp_constraint.get("blocking"))
+        self.assertNotIn(
+            "temperature_out_of_range",
+            [item.get("code") for item in recommendation.get("missing_requirements", [])],
         )
 
     def test_build_intervention_recommendation_blocks_when_annual_limit_is_reached(self) -> None:

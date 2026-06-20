@@ -3,8 +3,8 @@ from __future__ import annotations
 """Objets typés pour le moteur de décision."""
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
-from typing import Any, Literal, TypedDict
+from datetime import date, timedelta
+from typing import Any, TypedDict
 
 from homeassistant.util import dt as dt_util
 
@@ -75,15 +75,6 @@ POSSIBLE_WATERING_STAGE_VALUES: tuple[str, ...] = (
     WATERING_STAGE_ENRACINEMENT,
 )
 
-MAD_BAND_VALUES: tuple[str, ...] = (
-    "baseline",
-    "normal",
-    "hot",
-    "canicule",
-    "sursemis",
-    "hivernage",
-)
-
 DOSE_BAND_VALUES: tuple[str, ...] = (
     "baseline",
     "spring",
@@ -152,10 +143,8 @@ def normalize_watering_contract(
         POSSIBLE_TYPE_ARROSAGE_VALUES,
         _DECISION_RESULT_DEFAULTS["type_arrosage"],
     )
-    normalized_conseille = normalized_type
-    if normalized_conseille not in POSSIBLE_TYPE_ARROSAGE_VALUES:
-        normalized_conseille = normalized_type
-    return normalized_type, normalized_conseille
+    # Le conseil suit toujours le type (façade non contradictoire) : pas de branche divergente.
+    return normalized_type, normalized_type
 
 
 @dataclass
@@ -280,47 +269,6 @@ class DecisionContext:
         )
 
 
-class MadInputs(TypedDict, total=False):
-    temperature: float | None
-    forecast_temperature_today: float | None
-    et0_mm: float | None
-    etc_mm: float | None
-    phase_dominante: str | None
-    sous_phase: str | None
-    vent: float | None
-    humidite_sol: float | None
-    type_sol: str | None
-    weather_condition: str | None
-    weather_precipitation_probability: float | None
-    reserve_stock_mm: float | None
-    reserve_utile_mm: float | None
-    depletion_ratio: float | None
-    soil_balance_reserve_mm: float | None
-    soil_balance_delta_mm: float | None
-    heat_stress_level: str | None
-    heat_stress_phase: str | None
-    previous_band: str | None
-    previous_ratio: float | None
-    previous_reason: str | None
-    premium_comfort: bool | None
-    dynamic_enabled: bool
-
-
-class MadPolicyPayload(TypedDict, total=False):
-    enabled: bool
-    source: str
-    mad_ratio_base: float
-    mad_ratio_effective: float
-    mad_band: str
-    mad_reason: str
-    mad_inputs: MadInputs
-    candidate_band: str
-    candidate_ratio: float
-    hysteresis_state: dict[str, Any] | None
-    threshold_mm: float | None
-    threshold_label: str | None
-
-
 class DoseInputs(TypedDict, total=False):
     temperature: float | None
     forecast_temperature_today: float | None
@@ -370,26 +318,6 @@ class DosePolicyPayload(TypedDict, total=False):
     candidate_band: str
     candidate_mm: float
     candidate_reason: str
-
-
-@dataclass
-class MadHysteresisState:
-    """Mémoire minimale pour stabiliser les futures transitions MAD."""
-
-    last_band: str | None = None
-    last_ratio: float | None = None
-    last_reason: str | None = None
-    locked_until: datetime | None = None
-    last_updated_at: datetime | None = None
-
-    def as_payload(self) -> dict[str, Any]:
-        return {
-            "last_band": self.last_band,
-            "last_ratio": self.last_ratio,
-            "last_reason": self.last_reason,
-            "locked_until": self.locked_until.isoformat() if self.locked_until else None,
-            "last_updated_at": self.last_updated_at.isoformat() if self.last_updated_at else None,
-        }
 
 
 @dataclass

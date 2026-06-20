@@ -13,8 +13,6 @@ from .const import (
     DEFAULT_AUTO_IRRIGATION_ENABLED,
     OBJECTIVE_SCOPE_GLOBAL_SURFACE,
     OBJECTIVE_SCOPE_SURFACE_CYCLE,
-    WATERING_STAGE_ENRACINEMENT,
-    WATERING_STAGE_GERMINATION,
     WATERING_STAGE_LEVEE,
     WATERING_STAGE_NORMAL,
     WATERING_STRATEGY_ADULT_DEEP,
@@ -33,6 +31,12 @@ from .water import compute_advanced_context, compute_etp, compute_water_balance
 from .watering_policy import get_watering_policy
 
 _LOGGER = logging.getLogger(__name__)
+# Arrosage post-application (incorporation du produit) : le but est d'incorporer, pas de combler
+# un déficit hydrique. L'agent mouillant réduit lui-même le ruissellement, donc le fractionnement
+# anti-ruissellement agressif (jusqu'à 3 passages, pause 25 min) est inadapté ici. On plafonne à
+# 2 passages avec une pause courte de 5 min — d'autant que les zones s'enchaînent déjà une par une.
+POST_APPLICATION_MAX_PASSAGES = 2
+POST_APPLICATION_PAUSE_MINUTES = 5
 # La logique de dépletion (recharge profonde par épuisement de la réserve utile) est
 # active UNIQUEMENT en phase Normal (pelouse établie), dans _profile_for_normal
 # (guidance.py) : arrosage déclenché au seuil MAD, recharge vers la réserve utile,
@@ -221,6 +225,10 @@ def build_water_bundle(
         "heat_stress_phase": watering_profile.get("heat_stress_phase"),
         "raison_decision_base": watering_profile["raison_decision_base"],
         "fenetre_optimale": watering_profile.get("fenetre_optimale"),
+        "fenetre_optimale_profil": watering_profile.get("fenetre_optimale_profil"),
+        "evening_cooling": watering_profile.get("evening_cooling"),
+        "evening_cooling_likely": watering_profile.get("evening_cooling_likely"),
+        "evening_cooling_debug": watering_profile.get("evening_cooling_debug"),
         "block_reason": watering_profile.get("block_reason"),
         "recent_watering_count_7j": watering_profile["recent_watering_count_7j"],
         "recent_watering_mm_7j": watering_profile["recent_watering_mm_7j"],
@@ -269,14 +277,6 @@ def build_water_bundle(
         "watering_evening_allowed": watering_profile.get("watering_evening_allowed"),
         **hydric_observability,
     }
-
-
-def _passage_spacing_text(passages: int) -> str:
-    if passages <= 1:
-        return "en un passage"
-    if passages == 2:
-        return "en 2 passages courts espacés de 20 à 30 min"
-    return f"en {passages} passages courts espacés de 20 à 30 min"
 
 
 def _watering_needed_text() -> str:
@@ -381,12 +381,6 @@ def _watering_style_text(
     if passages == 2:
         return "en 2 passages courts espacés de 20 à 30 min"
     return "en 3 passages courts espacés de 20 à 30 min"
-
-
-def _watering_amount_text(mm: float) -> str:
-    if mm <= 0:
-        return "Aucun arrosage nécessaire."
-    return f"{mm:.1f} mm"
 
 
 def _hydric_summary_text(deficit_brut_mm: float, deficit_mm_ajuste: float, final_mm: float) -> str:
@@ -495,7 +489,7 @@ def _build_watering_bundle_base(
         "action_a_eviter": None,
         "arrosage_recommande": False,
         "arrosage_auto_autorise": False,
-        "watering_cause": "hydrique",
+        "watering_cause": "rafraichissement_soir" if water_bundle.get("evening_cooling") else "hydrique",
         "type_arrosage": "aucune_action",
         "arrosage_conseille": "aucune_action",
         "fractionnement": water_bundle.get("fractionnement"),
@@ -901,15 +895,18 @@ def _resolve_pending_sol_application_override(state: dict[str, Any]) -> dict[str
         )
 
     objectif_mm = round(max(0.5, state["application_post_watering_remaining_mm"] or 0.0), 1)
-    passages = _soil_fractionation_passages(
-        state["phase_dominante"],
-        state["sous_phase"],
-        state["soil_style"],
-        objectif_mm,
-        state["stress_level"],
-        temperature=state["temperature"],
-        humidite=state["humidite"],
-        etp=state["etp"],
+    passages = min(
+        POST_APPLICATION_MAX_PASSAGES,
+        _soil_fractionation_passages(
+            state["phase_dominante"],
+            state["sous_phase"],
+            state["soil_style"],
+            objectif_mm,
+            state["stress_level"],
+            temperature=state["temperature"],
+            humidite=state["humidite"],
+            etp=state["etp"],
+        ),
     )
     style_text = _watering_style_text(
         state["phase_dominante"], state["soil_style"], objectif_mm, state["stress_level"], passages
@@ -992,7 +989,7 @@ def _resolve_pending_sol_application_override(state: dict[str, Any]) -> dict[str
             risque_gazon=state["risque_gazon"],
         ),
         watering_passages=passages,
-        watering_pause_minutes=_watering_pause_minutes(passages),
+        watering_pause_minutes=POST_APPLICATION_PAUSE_MINUTES if passages > 1 else 0,
     )
 
 
@@ -1245,7 +1242,6 @@ def _resolve_sursemis_override(state: dict[str, Any]) -> dict[str, Any] | None:
 
     if sursemis_allowed and surface_cycle_mm > 0:
         objectif_mm = surface_cycle_mm
-        arrosage_recommande = True
         type_arrosage = "manuel_frequent"
         conseil_principal = (
             f"Sursemis {watering_stage}: maintiens la surface humide avec une stratégie {watering_strategy}."
@@ -1257,7 +1253,6 @@ def _resolve_sursemis_override(state: dict[str, Any]) -> dict[str, Any] | None:
         action_a_eviter = "Lancer un gros cycle profond ou saturer le sol."
     else:
         objectif_mm = 0.0
-        arrosage_recommande = False
         type_arrosage = "bloque" if sursemis_block_reason else "aucune_action"
         conseil_principal = sursemis_reason or "Sursemis: cycle de surface reporté."
         action_recommandee = "Surveille l'humidité et réévalue au prochain créneau."
@@ -1396,16 +1391,22 @@ def build_watering_bundle(
         "watering_window_acceptable_end_minute"
     ) or risk_bundle.get("watering_window_acceptable_end_minute")
     niveau_action = risk_bundle["niveau_action"]
-    fenetre_optimale = risk_bundle["fenetre_optimale"]
+    # La fenêtre vient du risk bundle SAUF quand le profil d'arrosage décide explicitement un
+    # cycle du soir (rafraîchissement canicule) : seul le profil reçoit le coucher du soleil et
+    # applique le vrai test du soir, donc c'est lui qui fait foi pour « soir ». Sans ce pont, le
+    # risk bundle (qui n'a pas le coucher → jamais « soir » en canicule) masque le cooling et le
+    # coordinateur ne le lance jamais.
+    fenetre_optimale = (
+        "soir"
+        if water_bundle.get("fenetre_optimale") == "soir"
+        else risk_bundle["fenetre_optimale"]
+    )
     risque_gazon = risk_bundle["risque_gazon"]
     prochaine_reevaluation = risk_bundle["prochaine_reevaluation"]
-    score_tonte = mowing_bundle["score_tonte"]
     score_stress = mowing_bundle["score_stress"]
-    tonte_ok = mowing_bundle["tonte_autorisee"]
     tonte_reason = mowing_bundle["tonte_reason"]
 
     now_hour = context.hour_of_day if context.hour_of_day is not None else 0
-    arrosage_recent = water_balance.get("arrosage_recent", 0.0)
     deficit_3j = water_balance.get("deficit_3j", 0.0)
     deficit_7j = water_balance.get("deficit_7j", 0.0)
     bilan_hydrique_mm = _reference_hydric_balance_mm(water_balance)
@@ -1483,7 +1484,6 @@ def build_watering_bundle(
             or application_label
         )
     application_block_until = application_state.get("application_block_until")
-    application_post_watering_ready_at = application_state.get("application_post_watering_ready_at")
     besoin_eau = (
         bilan_hydrique_mm <= -0.2
         or deficit_3j > 0.8
@@ -1526,6 +1526,13 @@ def build_watering_bundle(
         "etp": etp,
         "stress_level": stress_level,
         "fenetre_optimale": fenetre_optimale,
+        # Autorisation du soir : on prend la valeur du profil (qui reçoit le coucher du soleil
+        # et fait le vrai test) si elle existe, sinon le risk bundle. Sans ça, le coordinateur
+        # voyait False (risk bundle sans coucher) et bloquait le lancement du cooling.
+        "watering_evening_allowed": bool(
+            water_bundle.get("watering_evening_allowed")
+            or risk_bundle.get("watering_evening_allowed")
+        ),
         "fenetre_texte": fenetre_texte,
         "niveau_action": niveau_action,
         "risque_gazon": risque_gazon,
@@ -1781,17 +1788,24 @@ def build_watering_bundle(
                 action_a_eviter = "Arroser en pleine journée ou multiplier les petits cycles."
 
     if objectif_mm > 0:
-        watering_passages = _soil_fractionation_passages(
-            phase_dominante,
-            sous_phase,
-            soil_style,
-            objectif_mm,
-            stress_level,
-            temperature=temperature,
-            humidite=humidite,
-            etp=etp,
-        )
-        watering_pause_minutes = _watering_pause_minutes(watering_passages)
+        if water_bundle.get("evening_cooling"):
+            # Rafraîchissement du soir : dose légère (~3 mm) pour un relief RAPIDE → un SEUL passage,
+            # sans pause. Pas de fractionnement anti-ruissellement (inutile pour si peu d'eau), sinon
+            # le cooling s'étalerait sur ~1 h au lieu de finir vite après le coucher.
+            watering_passages = 1
+            watering_pause_minutes = 0
+        else:
+            watering_passages = _soil_fractionation_passages(
+                phase_dominante,
+                sous_phase,
+                soil_style,
+                objectif_mm,
+                stress_level,
+                temperature=temperature,
+                humidite=humidite,
+                etp=etp,
+            )
+            watering_pause_minutes = _watering_pause_minutes(watering_passages)
     else:
         watering_passages = 1
         watering_pause_minutes = 0

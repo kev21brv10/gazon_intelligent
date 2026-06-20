@@ -845,8 +845,6 @@ def compute_next_reapplication_date(
     if delay is None:
         return None
     next_date = start + timedelta(days=max(delay, 0))
-    if next_date < today:
-        return next_date.isoformat()
     return next_date.isoformat()
 
 
