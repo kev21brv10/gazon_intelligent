@@ -47,7 +47,7 @@ Gazon Intelligent ne se contente pas d'allumer des zones d'arrosage ou de remont
 - Piloté par la **réserve d'eau du sol** : on laisse la réserve descendre jusqu'au **seuil d'épuisement (MAD 50 %)**, puis on **recharge en profondeur** jusqu'au plein. Résultat : des arrosages **plus espacés et plus profonds** → meilleur enracinement, au lieu de petits apports fréquents.
 - Borné par un **garde-fou hebdomadaire** (jamais trop d'eau sur la semaine).
 - **Calcul ET0 réaliste sans capteur dédié** (FAO-56), tenant compte de la pluie, du vent, de l'humidité et de la rosée.
-- **Gestion canicule** : dose de **survie** le matin si la réserve est presque vide, et **rafraîchissement du soir** (petit arrosage de **3 mm, 30 min avant le coucher du soleil**) pour faire baisser la température du gazon même réserve pleine — sous garde-fous anti-maladies (air sec, pas de pluie).
+- **Gestion des fortes chaleurs** : dose de **secours** le matin si la réserve est presque vide **et qu'il fait réellement chaud (≥ 32 °C)**, et **rafraîchissement du soir** (petit arrosage de **3 mm, 30 min avant le coucher du soleil, dès 32 °C**) pour faire baisser la température du gazon même réserve pleine — sous garde-fous anti-maladies (air sec, pas de pluie).
 - **Comptage fiable** de l'eau réellement appliquée (anti double-comptage des cycles fractionnés) et **suivi en temps réel** pendant un cycle.
 
 **✂️ Tonte coordonnée**
@@ -140,7 +140,7 @@ Côté tonte, les attributs `gazon_permet_tonte`, `machine_permet_tonte`, `actio
 
 La météo bloque à **toute heure** : pluie en cours/imminente, rosée présente, température < 8 °C ou trop élevée, vent fort.
 
-**Fréquence** : cible **4 à 6 tontes/semaine**, avec **2 tontes/jour** max en phase Normal (**1/jour** en phases sensibles). Une « tonte » = un **cycle complet** ; les retours en base pour recharge ne comptent pas. Avec coordination active, le robot est **rappelé** sous la pluie / pendant l'arrosage, puis **relancé** dès que les conditions repassent au vert.
+**Fréquence** : cible **saisonnière** (jusqu'à 4-6 tontes/semaine en pleine pousse, 2-4 en été, et **0 en hivernage**) — la valeur du moment est lisible sur `mowing_frequency_label`. Avec **2 tontes/jour** max en phase Normal (**1/jour** en phases sensibles). Une « tonte » = un **cycle complet** ; les retours en base pour recharge ne comptent pas. Avec coordination active, le robot est **rappelé** sous la pluie / pendant l'arrosage, puis **relancé** dès que les conditions repassent au vert.
 
 ### Phases sensibles
 
@@ -149,7 +149,7 @@ La météo bloque à **toute heure** : pluie en cours/imminente, rosée présent
 ## 🎛️ Réglages et actions
 
 - **Boutons** — `arroser_maintenant` · `date_action_today` · `retour_mode_normal`
-- **Switches** — `arrosage_automatique_autorise` · `coordination_tondeuse`
+- **Switches** — `arrosage_automatique_autorise` · `coordination_tondeuse` · `rafraichissement_soir`
 - **Selects** — `mode_du_gazon` · `produit_d_intervention`
 - **Numbers** —
   - `debit_zone_1` à `debit_zone_5`
@@ -191,7 +191,7 @@ Validation CI (GitHub Actions) à chaque push/PR : **Hassfest · Ruff · mypy ·
 - [`coordinator.py`](custom_components/gazon_intelligent/coordinator.py) — orchestration & état
 - [`decision_watering.py`](custom_components/gazon_intelligent/decision_watering.py) — décision d'arrosage
 - [`decision_mowing.py`](custom_components/gazon_intelligent/decision_mowing.py) — décision de tonte
-- [`guidance.py`](custom_components/gazon_intelligent/guidance.py) — profils d'arrosage (dose, fenêtres, canicule)
+- [`guidance.py`](custom_components/gazon_intelligent/guidance.py) — profils d'arrosage (dose, fenêtres, fortes chaleurs)
 - [`assistant.py`](custom_components/gazon_intelligent/assistant.py) — façade « assistant »
 
 ## 📄 Licence

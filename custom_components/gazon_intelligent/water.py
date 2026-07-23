@@ -14,6 +14,9 @@ except Exception:  # pragma: no cover - standalone fallback
     dt_util = None
 
 
+# JUMEAU : soil_balance.SOIL_RESERVE_BASE_MM — même réserve utile du sol par type de sol.
+# Les deux modules sont volontairement découplés (pas d'import croisé), on garde donc les deux
+# tables identiques à la main (cf. tests/test_soil_balance.py::TestSoilReserveTwins).
 _SOIL_RESERVE_UTILE_MM: dict[str, float] = {
     "sableux": 8.0,
     "limoneux": 12.0,
@@ -48,6 +51,14 @@ def _to_float(value: Any) -> float | None:
 
 
 def _round_half_up_1(value: float) -> float:
+    # int(x * 10 + 0.5) arrondit vers +inf pour les positifs mais TRONQUE vers zéro pour les
+    # négatifs (-0.99 → -0.9 au lieu de -1.0), soit une erreur de 0,1 mm systématiquement
+    # optimiste sur les bilans déficitaires. On applique donc la règle sur la valeur absolue
+    # puis on restaure le signe.
+    # JUMEAU : soil_balance._round_half_up_1 — garder les deux identiques
+    # (cf. tests/test_soil_balance.py::TestRoundHalfUpTwins).
+    if value < 0:
+        return -float(int(abs(value) * 10.0 + 0.5)) / 10.0
     return float(int(value * 10.0 + 0.5)) / 10.0
 
 
@@ -381,15 +392,52 @@ def build_watering_session_summary(
     return session
 
 
+# Arrosages TECHNIQUES (rafraîchissement du soir en canicule, incorporation post-application) :
+# ils rafraîchissent / incorporent un produit mais NE rechargent PAS la réserve hydrique. Ils
+# sont donc exclus du total d'eau récente → ni comptés dans la recharge de réserve, ni dans le
+# garde-fou hebdomadaire (sinon ce petit arrosage de cooling grignote le budget destiné à la
+# vraie recharge, et la réserve paraît plus pleine qu'en réalité — cause d'un gazon qui sèche en
+# canicule). Même principe que l'exclusion déjà appliquée au cooldown 24 h (cf. guidance.py).
+_TECHNICAL_WATERING_CAUSES = ("rafraichissement_soir", "post_application")
+
+
+def _is_technical_watering(item: dict[str, Any]) -> bool:
+    return str(item.get("watering_cause") or "").strip().lower() in _TECHNICAL_WATERING_CAUSES
+
+
+# Sources d'arrosage NON pilotées par l'intégration : sessions détectées en passif quand des
+# vannes s'ouvrent HORS cycle intégré (Assist/voix, raccourci, toggle manuel dashboard, Node-RED…).
+# Le moniteur passif est gelé pendant les cycles de l'intégration, donc `zone_session` ne double
+# jamais un cycle piloté : c'est bien de l'arrosage externe.
+#
+# Choix explicite (Kévin, 25/06/2026) : ces sessions externes sont TOTALEMENT ignorées par la
+# DÉCISION — ni budget hebdomadaire, ni cooldown 24 h (cf. guidance._latest_watering_datetime),
+# ni crédit de la réserve sol (cf. gazon_brain). L'intégration pilote son auto-arrosage
+# indépendamment de ce qu'on fait à la main. Contrepartie ASSUMÉE (pas de capteur de sol) : le
+# robot croit le sol sec après un arrosage manuel et peut arroser PAR-DESSUS (double arrosage).
+# Seul l'AFFICHAGE « dernière session détectée » garde une trace de ces arrosages (informatif).
+_EXTERNAL_WATERING_SOURCES = ("zone_session",)
+
+
+def _is_external_watering(item: dict[str, Any]) -> bool:
+    return str(item.get("source") or "").strip().lower() in _EXTERNAL_WATERING_SOURCES
+
+
 def compute_recent_watering_mm(
     history: list[dict[str, Any]],
     today: date | None = None,
     days: int = 2,
-    allowed_zone_ids: Any = None,
+    include_external: bool = True,
 ) -> float:
     today = today or _current_date()
     total = 0.0
-    for item in _iter_recent_watering_items(history, today=today, days=days, allowed_zone_ids=allowed_zone_ids):
+    for item in _iter_recent_watering_items(
+        history,
+        today=today,
+        days=days,
+        include_technical=False,
+        include_external=include_external,
+    ):
         mm = _watering_item_mm(item)
         if mm is not None:
             total += float(mm)
@@ -400,12 +448,15 @@ def _iter_recent_watering_items(
     history: list[dict[str, Any]],
     today: date,
     days: int,
-    allowed_zone_ids: Any = None,
+    include_technical: bool = True,
+    include_external: bool = True,
 ):
     for item in history:
         if not isinstance(item, dict) or item.get("type") != "arrosage":
             continue
-        if not _watering_item_matches_zones(item, allowed_zone_ids):
+        if not include_technical and _is_technical_watering(item):
+            continue
+        if not include_external and _is_external_watering(item):
             continue
         raw_date = item.get("date")
         if not raw_date:
@@ -426,10 +477,15 @@ def compute_recent_watering_count(
     history: list[dict[str, Any]],
     today: date | None = None,
     days: int = 7,
-    allowed_zone_ids: Any = None,
+    include_external: bool = True,
 ) -> int:
     today = today or _current_date()
-    return sum(1 for _ in _iter_recent_watering_items(history, today=today, days=days, allowed_zone_ids=allowed_zone_ids))
+    return sum(
+        1
+        for _ in _iter_recent_watering_items(
+            history, today=today, days=days, include_external=include_external
+        )
+    )
 
 
 def _effective_rain_mm(
@@ -451,13 +507,16 @@ def _recent_watering_windows(
     recent_watering_mm_override: float | None,
     retour_arrosage: float | None,
 ) -> dict[str, float]:
+    # Garde-fou hebdo & modèle déficit : ne compter QUE les arrosages pilotés par l'intégration
+    # (on exclut les sessions externes `zone_session`). Le crédit de la réserve sol passe par un
+    # autre chemin (gazon_brain) et reste, lui, alimenté par tout l'arrosage réel.
     arrosage_recent_7j = (
         recent_watering_mm_override
         if recent_watering_mm_override is not None
-        else compute_recent_watering_mm(history, today=today, days=7)
+        else compute_recent_watering_mm(history, today=today, days=7, include_external=False)
     )
-    arrosage_recent_jour = compute_recent_watering_mm(history, today=today, days=1)
-    arrosage_recent_3j = compute_recent_watering_mm(history, today=today, days=3)
+    arrosage_recent_jour = compute_recent_watering_mm(history, today=today, days=1, include_external=False)
+    arrosage_recent_3j = compute_recent_watering_mm(history, today=today, days=3, include_external=False)
     if retour_arrosage is not None:
         retour = float(retour_arrosage)
         arrosage_recent_jour = max(arrosage_recent_jour, retour)
@@ -677,6 +736,8 @@ def compute_etp(
     etp_capteur: float | None,
     temperature_reference_hydrique: float | None = None,
     weather_profile: dict[str, Any] | None = None,
+    humidite: float | None = None,
+    vent: float | None = None,
 ) -> float | None:
     """Estimation ET0 par Penman-Monteith simplifié (FAO-56) sans capteur dédié.
 
@@ -703,8 +764,10 @@ def compute_etp(
         return None
     temperature = float(temperature)
 
-    humidity = weather_profile.get("weather_humidity")
-    wind = weather_profile.get("weather_wind_speed")
+    # Priorité aux capteurs mesurés configurés (ex. Netatmo) → repli sur l'entité météo
+    # (weather_profile) → repli sur les valeurs par défaut plus bas. Demandé par Kévin.
+    humidity = humidite if humidite is not None else weather_profile.get("weather_humidity")
+    wind = vent if vent is not None else weather_profile.get("weather_wind_speed")
     cloud = weather_profile.get("weather_cloud_coverage")
     uv_index = weather_profile.get("weather_uv_index")
     dew_point = weather_profile.get("weather_dew_point")
@@ -761,7 +824,10 @@ def compute_etp(
     # Les entités météo HA fournissent le vent en km/h par défaut ; l'utiliser tel
     # quel comme des m/s surestimait fortement le terme aérodynamique de l'ET0.
     if wind is not None:
-        wind_unit = str(weather_profile.get("weather_wind_speed_unit") or "").strip().lower()
+        # Vent issu d'un capteur mesuré → on suppose km/h (unité standard des capteurs de
+        # vent HA, ex. Netatmo) ; sinon on lit l'unité fournie par l'entité météo.
+        wind_unit_raw = "km/h" if vent is not None else weather_profile.get("weather_wind_speed_unit")
+        wind_unit = str(wind_unit_raw or "").strip().lower()
         wind_ms = float(wind)
         if wind_unit in ("mph", "mi/h"):
             wind_ms *= 0.44704
@@ -861,19 +927,18 @@ def compute_water_balance(
         reserve_stock_max_mm=soil_balance_priority["reserve_stock_max_mm"],
     )
 
-    # --- Réserve AFFICHÉE (descente progressive) ---------------------------------------
-    # La réserve de décision (ci-dessus) projette déjà toute l'ET du jour (pour déclencher
-    # l'arrosage du matin AVANT la chaleur). Pour l'AFFICHAGE seulement, on rajoute l'ET pas
-    # encore évaporée aujourd'hui (selon la position du soleil) → la réserve descend
-    # progressivement dans la journée au lieu de chuter d'un coup à minuit. La DÉCISION
-    # n'utilise PAS ces champs (clés `*_affichee` / `*_affiche`).
+    # --- Réserve AFFICHÉE = réserve de DÉCISION (anti-incohérence) ----------------------
+    # Choix Kévin (25/06/2026) : la jauge de la carte affiche EXACTEMENT la réserve sur
+    # laquelle l'intégration DÉCIDE d'arroser. L'ancien « lissage » (réserve de décision + ET
+    # du jour, plafonné au plein utile) gonflait la jauge à « plein » le matin alors que la
+    # décision pouvait être « a soif » → la carte contredisait le cerveau (cas vécu : décision
+    # 2,2 mm « soif » mais affichage 10,4 mm « pas soif »). On affiche donc la vraie réserve de
+    # décision : elle évolue déjà au fil de la journée → la jauge bouge sans jamais mentir. Le
+    # cas « recalage manuel » donne le même résultat (la valeur ancrée EST la réserve de décision).
     _fraction_raw = _to_float(weather_profile.get("et_elapsed_fraction"))
-    et_elapsed_fraction = _bound(_fraction_raw if _fraction_raw is not None else 1.0, 0.0, 1.0)
-    et_restante_mm = max(0.0, etp_j * (1.0 - et_elapsed_fraction))
-    reserve_actuelle_affichee = _bound(reserve_metrics["reserve_actuelle_mm"] + et_restante_mm, 0.0, reserve_utile_mm)
-    reserve_stock_affichee = _bound(
-        reserve_metrics["reserve_stock_mm"] + et_restante_mm, 0.0, soil_balance_priority["reserve_stock_max_mm"]
-    )
+    et_elapsed_fraction = _bound(_fraction_raw if _fraction_raw is not None else 1.0, 0.0, 1.0)  # exposé (diagnostic)
+    reserve_actuelle_affichee = reserve_metrics["reserve_actuelle_mm"]
+    reserve_stock_affichee = reserve_metrics["reserve_stock_mm"]
     depletion_affichee_mm = max(0.0, reserve_utile_mm - reserve_actuelle_affichee)
     depletion_ratio_affiche = _bound(depletion_affichee_mm / reserve_utile_mm, 0.0, 1.0) if reserve_utile_mm > 0 else 0.0
 

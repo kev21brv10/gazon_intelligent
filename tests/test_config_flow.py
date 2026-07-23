@@ -65,7 +65,7 @@ def _install_stubs() -> None:
     if not hasattr(voluptuous, "In"):
         voluptuous.In = lambda *args, **kwargs: ("In", args, kwargs)
 
-    homeassistant = ensure_module("homeassistant")
+    ensure_module("homeassistant")  # effet de bord seul, comme les lignes suivantes
     ensure_module("homeassistant.config_entries")
     ensure_module("homeassistant.helpers")
     util_mod = ensure_module("homeassistant.util")
@@ -365,3 +365,72 @@ class ConfigFlowTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OptionsFlowPreservesZonesTests(unittest.TestCase):
+    """L'options flow (« Configurer ») n'affiche QUE les capteurs, mais il appliquait
+    `_normalize_optional_clears` avec le tuple complet, qui contient les zones : chaque validation
+    injectait `zone_2..zone_5 = None` dans entry.options. Les clés existant alors — à None — le
+    repli `opts.get(k, data.get(k))` du coordinateur ne se déclenchait plus et les zones 2 à 5
+    cessaient silencieusement d'être arrosées, sans erreur ni notification, de façon persistante.
+    """
+
+    ZONE_KEYS = ("zone_2", "zone_3", "zone_4", "zone_5")
+
+    def _run_options_flow(self, *, entry_data, entry_options, user_input):
+        entry = types.SimpleNamespace(data=entry_data, options=entry_options)
+        flow = config_flow_mod.GazonOptionsFlow(entry)
+        captured = {}
+
+        def _create_entry(title, data):
+            captured["data"] = data
+            return {"type": "create_entry", "data": data}
+
+        flow.async_create_entry = _create_entry
+        asyncio.run(flow.async_step_user(user_input))
+        return captured["data"]
+
+    def test_les_zones_ne_sont_pas_effacees_par_le_formulaire_capteurs(self) -> None:
+        merged = self._run_options_flow(
+            entry_data={
+                "zone_1": "switch.z1", "zone_2": "switch.z2",
+                "zone_3": "switch.z3", "zone_4": "switch.z4", "zone_5": "switch.z5",
+            },
+            entry_options={},
+            user_input={"capteur_temperature": "sensor.temp"},
+        )
+        for key in self.ZONE_KEYS:
+            with self.subTest(zone=key):
+                self.assertIsNone(
+                    merged.get(key),
+                    "aucune clé de zone ne doit être écrite dans les options",
+                )
+                self.assertNotIn(key, merged)
+
+    def test_un_capteur_vide_reste_bien_efface(self) -> None:
+        # Le mécanisme d'effacement doit continuer de fonctionner pour les CAPTEURS.
+        merged = self._run_options_flow(
+            entry_data={"zone_1": "switch.z1"},
+            entry_options={"capteur_vent": "sensor.ancien_vent"},
+            user_input={"capteur_temperature": "sensor.temp"},
+        )
+        self.assertIsNone(merged.get("capteur_vent"))
+        self.assertEqual(merged.get("capteur_temperature"), "sensor.temp")
+
+    def test_des_options_deja_polluees_sont_nettoyees(self) -> None:
+        # Installation déjà touchée par l'ancien comportement : le passage suivant répare.
+        merged = self._run_options_flow(
+            entry_data={"zone_1": "switch.z1", "zone_2": "switch.z2"},
+            entry_options={"zone_2": None, "zone_3": None},
+            user_input={"capteur_temperature": "sensor.temp"},
+        )
+        for key in ("zone_2", "zone_3"):
+            with self.subTest(zone=key):
+                self.assertNotIn(key, merged)
+
+    def test_les_zones_sont_absentes_du_tuple_des_options(self) -> None:
+        for key in self.ZONE_KEYS:
+            with self.subTest(zone=key):
+                self.assertNotIn(key, config_flow_mod._OPTIONS_CLEARABLE_KEYS)
+                # …mais restent effaçables par le flow « Reconfigurer », qui les affiche.
+                self.assertIn(key, config_flow_mod._OPTIONAL_CLEARABLE_KEYS)

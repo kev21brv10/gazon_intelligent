@@ -130,3 +130,46 @@ class MowerCoordinationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+from custom_components.gazon_intelligent import mower_coordination as _mc
+
+
+class MowingBeatsChargingTests(unittest.TestCase):
+    """Le test « en charge » passait AVANT le test de tonte. Au démarrage d'une session, le
+    capteur binaire « en charge » reste à True quelques minutes (latence observée jusqu'à 8 min
+    le 18/07) alors que l'état brut de l'appareil dit déjà `mowing` : la tondeuse était alors
+    classée « à la station », la coordination anti-collision silencieusement neutralisée, et
+    l'arrosage pouvait partir sur une tondeuse en pleine tonte."""
+
+    def _state(self, **ctx):
+        base = {"tondeuse_connectee": True}
+        base.update(ctx)
+        return _mc._operation_state(base)
+
+    def test_letat_brut_mowing_prime_sur_le_capteur_de_charge(self) -> None:
+        self.assertEqual(
+            self._state(tondeuse_etat_brut="mowing", tondeuse_en_charge=True),
+            "tonte",
+        )
+
+    def test_tonte_detectee_sans_capteur_de_charge(self) -> None:
+        self.assertEqual(self._state(tondeuse_etat_brut="mowing"), "tonte")
+
+    def test_a_la_station_reste_en_charge(self) -> None:
+        self.assertEqual(
+            self._state(tondeuse_etat_brut="docked", tondeuse_en_charge=True),
+            "charging",
+        )
+
+    def test_charge_declaree_par_letat_brut(self) -> None:
+        self.assertEqual(self._state(tondeuse_etat_brut="charging"), "charging")
+
+    def test_statut_tonte_en_cours_reste_reconnu(self) -> None:
+        self.assertEqual(self._state(tondeuse_statut="tonte_en_cours"), "tonte")
+
+    def test_deconnectee_reste_inconnue(self) -> None:
+        self.assertEqual(
+            _mc._operation_state({"tondeuse_connectee": False, "tondeuse_etat_brut": "mowing"}),
+            "unknown",
+        )

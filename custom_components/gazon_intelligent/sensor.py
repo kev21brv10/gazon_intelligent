@@ -22,10 +22,33 @@ from .intervention_recommendation import build_intervention_recommendation, publ
 from .memory import build_application_summary, compute_application_state, normalize_post_application_status
 from .watering_plan import build_watering_plan
 from .water import (
+    _is_technical_watering,
     _zone_session_surface_mm,
     _zone_session_total_mm,
     compute_live_session_water,
 )
+
+
+def _session_surface_mm(session: dict[str, object]) -> float | None:
+    """Surface réelle (mm) d'une session d'arrosage.
+
+    Privilégie la valeur canonique de l'intégration (`session_total_mm`/`total_mm` = surface
+    uniforme déjà calculée). Recalculer depuis la liste `zones` est FAUX pour un cycle piloté
+    multi-passages (N zones × M passages : la moyenne divise par N×M au lieu de N → « dernier
+    arrosage » sous-évalué, ex. 1,7 mm au lieu de 5). On ne recalcule depuis les zones qu'en
+    dernier recours (sessions sans total canonique).
+    """
+    if not isinstance(session, dict):
+        return None
+    for key in ("session_total_mm", "total_mm", "objectif_mm", "objective_mm"):
+        value = session.get(key)
+        try:
+            if value is not None:
+                return float(value)
+        except (TypeError, ValueError):
+            continue
+    zones = session.get("zones")
+    return _zone_session_surface_mm(zones if isinstance(zones, list) else None)
 
 RECOMMENDATION_RUNTIME_PROBE = "constraints_probe_20260404_01"
 _APPLICATION_SUMMARY_PUBLIC_KEYS = (
@@ -554,6 +577,10 @@ def _watering_cause_value(entity: GazonEntityBase, raw_value: object | None = No
 
 
 def _hydric_balance_level(balance_mm: float | None, deficit_3j: float | None, deficit_7j: float | None) -> str | None:
+    # `balance_mm` est un bilan SIGNÉ (0 = à la cible/seuil MAD, négatif = déficit), normalisé par
+    # `_objective_display_balance` (réserve recentrée sur le seuil d'épuisement). Les 5 niveaux,
+    # « fort déficit » compris, sont donc atteignables. Ne PAS lui passer la réserve brute (≥ 0) :
+    # les branches négatives redeviendraient inertes.
     if balance_mm is None and deficit_3j is None and deficit_7j is None:
         return None
     balance_mm = float(balance_mm or 0.0)
@@ -763,10 +790,27 @@ def _harmonized_hydric_labels(
 
 
 def _objective_display_balance(attrs: dict[str, object]) -> float | None:
-    # Use soil reserve for agronomic labels; fall back to daily balance when reserve is absent.
-    reference = attrs.get("reserve_hydrique_sol_mm")
-    if reference in (None, "", [], {}):
-        reference = attrs.get("bilan_hydrique_mm")
+    # Bilan SIGNÉ pour classer le niveau hydrique (`_hydric_balance_level`, seuils signés : 0 = à la
+    # cible, négatif = déficit). La réserve sol brute est TOUJOURS ≥ 0 ; on la recentre sur le seuil
+    # d'épuisement MAD (`reserve_minimale_mm`, sous lequel l'arrosage se déclenche) → réserve au seuil
+    # = 0 (limite), au-dessus = positif, en-dessous = négatif. Ainsi tous les niveaux (dont « fort
+    # déficit ») redeviennent atteignables ET cohérents avec le déclencheur d'arrosage — sinon une
+    # réserve pile au seuil pouvait s'afficher « excédentaire ». Replis : bilan journalier signé quand
+    # la réserve est absente (ledger vide) ; réserve brute si le seuil MAD manque (tout premier cycle).
+    reserve = attrs.get("reserve_hydrique_sol_mm")
+    if reserve not in (None, "", [], {}):
+        try:
+            reserve_val = float(reserve)
+        except (TypeError, ValueError):
+            reserve_val = None
+        if reserve_val is not None:
+            seuil = attrs.get("reserve_minimale_mm")
+            try:
+                seuil_val = float(seuil) if seuil not in (None, "", [], {}) else None
+            except (TypeError, ValueError):
+                seuil_val = None
+            return reserve_val - seuil_val if seuil_val is not None else reserve_val
+    reference = attrs.get("bilan_hydrique_mm")
     try:
         return float(reference) if reference is not None else None
     except (TypeError, ValueError):
@@ -813,6 +857,25 @@ def _block_reason_display_label(value: object) -> str | None:
     if not normalized:
         return None
     return BLOCK_REASON_DISPLAY_LABELS.get(normalized, normalized.replace("_", " "))
+
+
+# Libellé d'affichage HONNÊTE du niveau de stress. La clé interne `heat_stress_level` est un score
+# COMPOSITE de stress hydrique (temp + ET0 + humidité + vent + pluie + déficit), pas une mesure de
+# canicule — d'où des libellés « stress hydrique » plutôt que « canicule » pour l'affichage. Clé
+# interne inchangée (utilisée dans la logique). Seul mapping d'affichage, pas de doublon d'état.
+_HEAT_STRESS_DISPLAY_LABELS: dict[str, str] = {
+    "normal": "Normal",
+    "vigilance": "Vigilance",
+    "canicule": "Stress hydrique élevé",
+    "extreme": "Stress hydrique sévère",
+}
+
+
+def _heat_stress_display_label(value: object) -> str | None:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return None
+    return _HEAT_STRESS_DISPLAY_LABELS.get(normalized)
 
 
 def _fallback_machine_unavailable_label_from_attrs(attrs: dict[str, object]) -> str | None:
@@ -950,6 +1013,57 @@ def _compact_application_summary(summary: object) -> dict[str, object] | None:
     return compact or None
 
 
+def _skip_history_entries(history: object, n: int = 5) -> list[dict[str, object]]:
+    if not isinstance(history, list):
+        return []
+    result: list[dict[str, object]] = []
+    for item in reversed(history):
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") != "decision_skip":
+            continue
+        entry: dict[str, object] = {"reason": item.get("reason"), "date": item.get("date")}
+        for key in ("fenetre", "objectif_mm", "raison_decision", "recorded_at"):
+            if item.get(key) not in (None, ""):
+                entry[key] = item[key]
+        result.append(entry)
+        if len(result) >= n:
+            break
+    return result
+
+
+def _watering_history_entries(history: object, n: int = 7) -> list[dict[str, object]]:
+    """Return the last n arrosage entries for the history card display."""
+    if not isinstance(history, list):
+        return []
+    result: list[dict[str, object]] = []
+    for item in reversed(history):
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") != "arrosage":
+            continue
+        entry: dict[str, object] = {
+            "date": item.get("date"),
+            "recorded_at": item.get("recorded_at"),
+            "source": item.get("source"),
+        }
+        for key in ("watering_cause", "surface_mm", "total_mm", "zone_count"):
+            if item.get(key) not in (None, ""):
+                entry[key] = item[key]
+        zones = item.get("zones")
+        if isinstance(zones, list) and zones:
+            zone_keys = ("order", "entity_id", "zone", "duration_min", "mm")
+            entry["zones"] = [
+                {k: z.get(k) for k in zone_keys if z.get(k) is not None}
+                for z in zones
+                if isinstance(z, dict)
+            ]
+        result.append(entry)
+        if len(result) >= n:
+            break
+    return result
+
+
 def _application_history_entries(history: object) -> list[dict[str, object]]:
     if not isinstance(history, list):
         return []
@@ -1081,11 +1195,11 @@ _AUTO_IRRIGATION_BLOCK_INFO: dict[str, tuple[str, bool, str, str]] = {
         "On est hors de la fenêtre d'arrosage du soir.",
         "Aucune action.",
     ),
-    "evening_disabled": (
-        "Soir désactivé",
+    "evening_cooling_done": (
+        "Rafraîchissement déjà fait",
         False,
-        "L'arrosage du soir n'est pas autorisé.",
-        "Active l'arrosage du soir si tu le souhaites.",
+        "Le rafraîchissement du soir a déjà eu lieu aujourd'hui.",
+        "Aucune action : la fenêtre du soir est close jusqu'à demain.",
     ),
     "watering_in_progress": (
         "Arrosage en cours",
@@ -1154,6 +1268,12 @@ _AUTO_IRRIGATION_BLOCK_INFO: dict[str, tuple[str, bool, str, str]] = {
         False,
         "Le budget d'arrosage de la semaine est atteint : on plafonne pour éviter le sur-arrosage.",
         "Aucune action : le budget se reconstitue au fil des jours.",
+    ),
+    "relaunch_cooldown": (
+        "Repos post-cycle",
+        False,
+        "Un cycle d'arrosage vient de se terminer : un délai de 6 h est respecté avant de pouvoir en relancer un autre.",
+        "Aucune action : se débloque automatiquement après le délai.",
     ),
 }
 
@@ -1233,6 +1353,14 @@ class GazonArrosageAutoBlocageSensor(GazonEntityBase, SensorEntity):
                 "safety_lock_actif": safety_lock,
             }
         _label, blocked, pourquoi, comment = info
+        if reason == "garde_fou_hebdomadaire":
+            heat_stress = str(self._decision_value("heat_stress_level") or "")
+            if heat_stress in {"canicule", "extreme"}:
+                comment = (
+                    "Le budget hebdomadaire est atteint. En cas de stress hydrique sévère ET de "
+                    "forte chaleur réelle (≥ 32 °C), un arrosage de secours se déclenchera quand "
+                    "même si la réserve tombe sous le seuil critique (déplétion réelle ≥ 90 %)."
+                )
         return {
             "bloque": blocked,
             "code": reason,
@@ -2026,21 +2154,30 @@ class GazonDernierArrosageDetecteSensor(GazonEntityBase, SensorEntity):
         for item in reversed(history):
             if not isinstance(item, dict):
                 continue
-            if item.get("type") != "arrosage" or item.get("source") != "zone_session":
+            if item.get("type") != "arrosage":
+                continue
+            # DERNIER arrosage RÉEL (piloté par l'intégration OU externe), pas seulement les
+            # détections passives `zone_session` : sinon un cycle auto/manuel n'apparaît jamais et
+            # la carte reste figée sur la dernière session externe (cas vécu : 22,5 mm du 22/06 au
+            # lieu des 5 mm pilotés du 24/06). On exclut juste les arrosages TECHNIQUES
+            # (rafraîchissement du soir, post-application) qui ne sont pas une vraie recharge.
+            if _is_technical_watering(item):
                 continue
             zones = item.get("zones")
             if not allowed_zone_ids:
                 return item
-            if not isinstance(zones, list):
-                continue
-            item_zone_ids = {
-                str(zone.get("entity_id") or zone.get("zone") or "").strip()
-                for zone in zones
-                if isinstance(zone, dict)
-            }
-            item_zone_ids.discard("")
-            if item_zone_ids & allowed_zone_ids:
-                return item
+            # Les cycles pilotés n'ont pas toujours le détail `zones` dans l'historique (juste
+            # total_mm) : on les accepte. On ne filtre par zones que si ce détail est présent.
+            if isinstance(zones, list) and zones:
+                item_zone_ids = {
+                    str(zone.get("entity_id") or zone.get("zone") or "").strip()
+                    for zone in zones
+                    if isinstance(zone, dict)
+                }
+                item_zone_ids.discard("")
+                if item_zone_ids and not (item_zone_ids & allowed_zone_ids):
+                    continue
+            return item
         return None
 
     @staticmethod
@@ -2075,17 +2212,8 @@ class GazonDernierArrosageDetecteSensor(GazonEntityBase, SensorEntity):
                 if zone_detail:
                     zone_details.append(zone_detail)
 
-        surface_mm = _zone_session_surface_mm(zones if isinstance(zones, list) else None)
+        surface_mm = _session_surface_mm(session)
         zones_total_mm = _zone_session_total_mm(zones if isinstance(zones, list) else None)
-        if surface_mm is None:
-            for key in ("total_mm", "session_total_mm", "objectif_mm", "objective_mm"):
-                value = session.get(key)
-                try:
-                    if value is not None:
-                        surface_mm = float(value)
-                        break
-                except (TypeError, ValueError):
-                    continue
         if surface_mm is None:
             surface_mm = 0.0
 
@@ -2144,31 +2272,34 @@ class GazonDernierArrosageDetecteSensor(GazonEntityBase, SensorEntity):
         session = self._latest_zone_session()
         if not session:
             return 0.0
-        surface_mm = _zone_session_surface_mm(session.get("zones") if isinstance(session.get("zones"), list) else None)
-        if surface_mm is not None:
-            return surface_mm
-        for key in ("total_mm", "session_total_mm", "objectif_mm", "objective_mm"):
-            value = session.get(key)
-            if value is None:
-                continue
-            try:
-                return float(value)
-            except (TypeError, ValueError):
-                continue
-        return 0.0
+        surface_mm = _session_surface_mm(session)
+        return surface_mm if surface_mm is not None else 0.0
 
     @property
     def extra_state_attributes(self):
         session = self._latest_zone_session()
+        skips = _skip_history_entries(getattr(self.coordinator, "history", None))
         if not session:
-            return {
+            attrs: dict[str, object] = {
                 "source": "none",
                 "zone_count": 0,
                 "surface_mm": 0.0,
                 "total_mm": 0.0,
                 "summary": "Aucun arrosage détecté",
             }
-        return self._zone_session_attributes(session)
+            if skips:
+                attrs["derniers_refus"] = skips
+            watering_entries = _watering_history_entries(getattr(self.coordinator, "history", None))
+            if watering_entries:
+                attrs["derniers_arrosages"] = watering_entries
+            return attrs
+        result = self._zone_session_attributes(session) or {}
+        if skips:
+            result["derniers_refus"] = skips
+        watering_entries = _watering_history_entries(getattr(self.coordinator, "history", None))
+        if watering_entries:
+            result["derniers_arrosages"] = watering_entries
+        return result
 
 
 class GazonDernierArrosageTotalZonesSensor(GazonDernierArrosageDetecteSensor):
@@ -2423,7 +2554,6 @@ class GazonDerniereActionUtilisateurSensor(GazonEntityBase, SensorEntity):
             for key, value in summary.items()
             if value not in (None, "", [], {})
         }
-        attrs.pop("state", None)
         return attrs or None
 
     @staticmethod
@@ -3977,6 +4107,17 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
         return _clean_public_attrs(attrs)
 
     def _base_watering_attributes(self) -> dict[str, object] | None:
+        # Ajoute UN libellé d'affichage honnête (`stress_hydrique`) dérivé du niveau brut, là où
+        # celui-ci est déjà exposé — source unique, pas de doublon. La carte Lovelace peut pointer
+        # dessus au lieu de la clé technique `heat_stress_level`/`heat_stress_phase` (inchangées).
+        attrs = self._base_watering_attributes_raw()
+        if isinstance(attrs, dict):
+            stress_label = _heat_stress_display_label(attrs.get("heat_stress_level"))
+            if stress_label is not None:
+                attrs["stress_hydrique"] = stress_label
+        return attrs
+
+    def _base_watering_attributes_raw(self) -> dict[str, object] | None:
         attrs = self._attrs_from_result(
             "watering_cause",
             "next_action_date",

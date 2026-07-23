@@ -7,7 +7,6 @@ from typing import Any
 from homeassistant.util import dt as dt_util
 
 from .const import (
-    APPLICATION_INTERVENTIONS,
     DEFAULT_AUTO_IRRIGATION_ENABLED,
     DEFAULT_MOWER_COORDINATION_ENABLED,
     DEFAULT_MODE,
@@ -19,6 +18,7 @@ from .decision_models import DecisionResult
 from .intervention_recommendation import build_intervention_recommendation
 from .memory import (
     APPLICATION_DEFAULTS,
+    _is_application_relevant_item,
     _normalize_user_action_summary,
     compute_memory,
     normalize_product_id,
@@ -292,26 +292,8 @@ class GazonBrain:
         return None
 
     def _is_application_history_item(self, item: dict[str, Any]) -> bool:
-        if not isinstance(item, dict):
-            return False
-        item_type = item.get("type")
-        if item_type in APPLICATION_INTERVENTIONS:
-            return True
-        return any(
-            item.get(key) not in (None, "", [], {})
-            for key in (
-                "application_type",
-                "application_requires_watering_after",
-                "application_post_watering_mm",
-                "application_irrigation_block_hours",
-                "application_irrigation_delay_minutes",
-                "application_irrigation_mode",
-                "application_label_notes",
-                "produit",
-                "dose",
-                "reapplication_after_days",
-            )
-        )
+        # Délègue à la fonction de référence de memory.py (dédup : ce corps était une copie).
+        return _is_application_relevant_item(item)
 
     def _sync_mode_from_history(self) -> None:
         latest = self._latest_intervention_history_item()
@@ -603,7 +585,11 @@ class GazonBrain:
             "source": source,
             "recorded_at": datetime.now(timezone.utc).isoformat(),
         }
-        if watering_cause in {"hydrique", "post_application"}:
+        # Inclure `rafraichissement_soir` (cooling du soir) est ESSENTIEL : sans lui, l'étiquette
+        # technique était DROPPÉE ici à l'écriture de l'historique → cause `None` → le cooling
+        # passait pour un arrosage normal et armait le cooldown 24 h + créditait la réserve à tort
+        # (bug constaté 25-26/06 : cooling 22h06 → cooldown armé, recharge du lendemain bloquée).
+        if watering_cause in {"hydrique", "post_application", "rafraichissement_soir"}:
             payload["watering_cause"] = str(watering_cause)
         if mm_scope not in (None, ""):
             payload["mm_scope"] = str(mm_scope)
@@ -665,6 +651,32 @@ class GazonBrain:
         elif total_mm is not None:
             payload["total_mm"] = float(total_mm)
             payload["session_total_mm"] = float(total_mm)
+        self._append_history(payload)
+        return payload
+
+    def record_skip(
+        self,
+        reason: str,
+        fenetre: str | None = None,
+        objectif_mm: float | None = None,
+        raison_decision: str | None = None,
+        date_action: date | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "type": "decision_skip",
+            "date": (date_action or dt_util.now().date()).isoformat(),
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+            "reason": reason,
+        }
+        if fenetre not in (None, ""):
+            payload["fenetre"] = str(fenetre)
+        if objectif_mm is not None:
+            try:
+                payload["objectif_mm"] = float(objectif_mm)
+            except (TypeError, ValueError):
+                pass
+        if raison_decision not in (None, ""):
+            payload["raison_decision"] = str(raison_decision)
         self._append_history(payload)
         return payload
 
@@ -811,12 +823,31 @@ class GazonBrain:
             etp_capteur=etp_capteur,
             temperature_reference_hydrique=temperature_reference_hydrique,
             weather_profile=weather_profile,
+            humidite=humidite,
+            vent=vent,
         )
-        arrosage_reel_jour = compute_recent_watering_mm(self.history, today=today, days=0)
+        # Choix explicite (Kévin, 25/06/2026) : les arrosages EXTERNES (`zone_session` :
+        # manuel, Assist, Node-RED…) sont TOTALEMENT ignorés, y compris pour la jauge du sol —
+        # l'intégration pilote son auto-arrosage indépendamment de ce qu'on fait à la main.
+        # Contrepartie ASSUMÉE (pas de capteur de sol) : le robot croit le sol sec après un
+        # arrosage manuel et peut arroser PAR-DESSUS (double arrosage). Le crédit réserve ne
+        # retient donc que les arrosages pilotés par l'intégration.
+        arrosage_reel_jour = compute_recent_watering_mm(self.history, today=today, days=0, include_external=False)
+        # LE LEDGER EST UNE COMPTABILITÉ DE MESURES, PAS DE PRÉVISIONS.
+        # `pluie_24h` est une valeur RÉSOLUE : elle bascule silencieusement sur la prévision météo
+        # quand le capteur de pluie est indisponible. Créditer la réserve avec de la pluie
+        # ANNONCÉE mais jamais tombée provoque un sous-arrosage durable — et le capteur ici est la
+        # station Netatmo d'un voisin, hors de tout contrôle, qui peut disparaître à tout moment.
+        # On passe None quand ce n'est pas une mesure : `update_soil_balance` conserve alors la
+        # pluie déjà comptabilisée pour la journée au lieu de l'effacer.
+        # Test par PRÉFIXE et non par égalité : la source s'écrit "capteur" côté coordinateur mais
+        # "capteur_pluie_24h" ailleurs. Les valeurs non mesurées sont "meteo_forecast" et
+        # "non disponible" — tout ce qui commence par "capteur" est une lecture réelle.
+        pluie_mesuree = pluie_24h if str(pluie_source or "").startswith("capteur") else None
         self.soil_balance = update_soil_balance(
             self.soil_balance,
             today=today,
-            pluie_mm=pluie_24h,
+            pluie_mm=pluie_mesuree,
             arrosage_mm=arrosage_reel_jour,
             etp_mm=etp,
             type_sol=type_sol,

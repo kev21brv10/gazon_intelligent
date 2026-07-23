@@ -222,11 +222,25 @@ def _build_decision_extra(
 ) -> dict[str, Any]:
     watering_target_date = watering_bundle.get("watering_target_date")
     next_action_display = _display_date_from_iso(str(watering_target_date) if watering_target_date else None)
-    reason_blocage_tonte = (
-        (mowing_bundle.get("tonte_reason") or watering_bundle.get("tonte_reason"))
-        if not watering_bundle.get("tonte_autorisee", mowing_bundle.get("tonte_autorisee", True))
-        else None
-    )
+    # Motif de blocage de tonte. Piège corrigé : quand le blocage vient du bundle ARROSAGE
+    # (override applicatif/foliaire pose tonte_autorisee=False) alors que le bundle TONTE, lui,
+    # autorise encore, `mowing_bundle["tonte_reason"]` vaut le motif POSITIF « Fenêtre tonte
+    # acceptable. » — on affichait donc une tonte « interdite » avec un message positif
+    # contradictoire. On distingue désormais l'origine du blocage.
+    watering_blocks = not watering_bundle.get("tonte_autorisee", mowing_bundle.get("tonte_autorisee", True))
+    mowing_blocks = not mowing_bundle.get("tonte_autorisee", True)
+    if not watering_blocks:
+        reason_blocage_tonte = None
+    elif mowing_blocks:
+        reason_blocage_tonte = mowing_bundle.get("tonte_reason")
+    else:
+        # Blocage d'origine arrosage/application : le bundle tonte n'a pas de motif négatif, on
+        # surface le conseil d'arrosage (fenêtre de protection) au lieu d'un message positif.
+        reason_blocage_tonte = (
+            watering_bundle.get("tonte_reason")
+            or watering_bundle.get("conseil_principal")
+            or mowing_bundle.get("tonte_reason")
+        )
     advanced_context = water_bundle.get("advanced_context") or {}
     water_balance = water_bundle.get("water_balance") or {}
     dose_policy = water_bundle.get("dose_policy") or {}

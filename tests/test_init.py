@@ -391,3 +391,89 @@ class InitModuleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TargetSelectorOrderTests(unittest.TestCase):
+    """Le sélecteur « cible » de l'UI Home Assistant envoie TOUJOURS une liste. Or `vol.Any`
+    retient le PREMIER validateur qui ne lève pas, et `vol.Coerce(str)` réussit sur n'importe
+    quoi : placée après lui, la variante liste était du code mort et `["sensor.x"]` devenait la
+    chaîne `"['sensor.x']"`. Le résolveur échouait alors sur « L'entité cible est introuvable » —
+    ce qui a fait échouer un arrosage manuel programmé en production.
+
+    Vérifié avec le vrai voluptuous : ancien ordre -> "['sensor.x']" ; nouvel ordre -> ['sensor.x'].
+    Ici le stub réduit `Any(*v)` au tuple des validateurs et `Coerce(str)` à `str`, ce qui permet
+    d'épingler l'ORDRE, seul élément en cause.
+    """
+
+    def setUp(self) -> None:
+        self.module = _load_init_module()
+
+    def test_la_variante_liste_precede_la_coercition_en_chaine(self) -> None:
+        validators = list(self.module._target_selector_value())
+        index_liste = next(
+            i for i, v in enumerate(validators) if isinstance(v, list)
+        )
+        index_chaine = next(
+            i for i, v in enumerate(validators) if v is str
+        )
+        self.assertLess(
+            index_liste,
+            index_chaine,
+            "la variante liste doit précéder Coerce(str), sinon elle est inatteignable",
+        )
+
+    def test_les_trois_variantes_sont_presentes(self) -> None:
+        validators = list(self.module._target_selector_value())
+        self.assertIn(None, validators)
+        self.assertTrue(any(isinstance(v, list) for v in validators))
+        self.assertIn(str, validators)
+
+
+class SingleTargetValueTests(unittest.TestCase):
+    """`_single_target_value` normalise la cible, qu'elle arrive en chaîne ou en liste."""
+
+    def setUp(self) -> None:
+        self.module = _load_init_module()
+
+    def test_chaine(self) -> None:
+        self.assertEqual(self.module._single_target_value("sensor.a"), "sensor.a")
+
+    def test_liste_dun_element(self) -> None:
+        self.assertEqual(self.module._single_target_value(["sensor.a"]), "sensor.a")
+
+    def test_liste_de_plusieurs_elements_est_ambigue(self) -> None:
+        self.assertIsNone(self.module._single_target_value(["sensor.a", "sensor.b"]))
+
+    def test_valeurs_vides(self) -> None:
+        for valeur in (None, "", "   ", [], [""], ["  "]):
+            with self.subTest(valeur=valeur):
+                self.assertIsNone(self.module._single_target_value(valeur))
+
+
+class CallHasExplicitTargetTests(unittest.TestCase):
+    """Une cible fournie en liste — le cas normal depuis l'UI — était jugée absente, donc en
+    multi-instances l'appel échouait sur « Plusieurs gazons existent… »."""
+
+    def setUp(self) -> None:
+        self.module = _load_init_module()
+
+    def _call(self, data):
+        return types.SimpleNamespace(data=data)
+
+    def test_entity_id_en_liste_est_une_cible_explicite(self) -> None:
+        self.assertTrue(self.module._call_has_explicit_target(self._call({"entity_id": ["sensor.a"]})))
+
+    def test_entity_id_en_chaine_est_une_cible_explicite(self) -> None:
+        self.assertTrue(self.module._call_has_explicit_target(self._call({"entity_id": "sensor.a"})))
+
+    def test_device_id_et_area_id_sont_pris_en_compte(self) -> None:
+        for cle in ("device_id", "area_id"):
+            for valeur in ("abc123", ["abc123"]):
+                with self.subTest(cle=cle, valeur=valeur):
+                    self.assertTrue(
+                        self.module._call_has_explicit_target(self._call({cle: valeur}))
+                    )
+
+    def test_absence_de_cible(self) -> None:
+        self.assertFalse(self.module._call_has_explicit_target(self._call({})))
+        self.assertFalse(self.module._call_has_explicit_target(self._call({"entity_id": None})))

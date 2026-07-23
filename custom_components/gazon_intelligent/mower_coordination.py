@@ -67,11 +67,18 @@ def _operation_state(context: dict[str, Any]) -> str:
 
     if not connected:
         return "unknown"
+    # L'ÉTAT BRUT DE L'APPAREIL FAIT FOI SUR LA TONTE, avant tout test de charge. Une tondeuse qui
+    # tond ne peut pas être en charge : quand le capteur « en charge » reste à True au démarrage
+    # d'une session (latence de rafraîchissement observée jusqu'à 8 min), tester la charge d'abord
+    # la classait « à la station » et neutralisait silencieusement la coordination anti-collision —
+    # l'arrosage pouvait donc partir sur une tondeuse en pleine tonte.
+    if raw_state in _MOWING_RAW_STATES:
+        return "tonte"
     if charging or raw_state == "charging" or status == "en_charge":
         return "charging"
     if raw_state in _STARTING_RAW_STATES:
         return "starting"
-    if raw_state in _MOWING_RAW_STATES or status == "tonte_en_cours":
+    if status == "tonte_en_cours":
         return "tonte"
     if raw_state in _RETURNING_RAW_STATES or status == "retour_station":
         return "transit"
@@ -85,7 +92,12 @@ def _operation_state(context: dict[str, Any]) -> str:
         return "rain_delayed"
     if raw_state in _PAUSED_RAW_STATES or status == "pause":
         return "paused"
-    if status in {"erreur", "pluie"}:
+    # La pluie N'EST PAS une erreur. Fusionnés dans le même test, une pluie ordinaire — tondeuse
+    # rentrée à la station, batterie pleine donc pas « en charge » — affichait « Robot en erreur :
+    # Pluie ou délai pluie actif. », une fausse alarme pour un fonctionnement parfaitement normal.
+    if status == "pluie":
+        return "rain_delayed"
+    if status == "erreur":
         return "error"
     if status == "au_repos":
         return "idle"

@@ -37,23 +37,6 @@
           "type_sol": "Bodentyp (erforderlich)"
         }
       },
-      "reconfigure": {
-        "title": "Grundlegende Einstellungen",
-        "description": "Aktualisiere hier die Zonen, die Durchflüsse und den Bodentyp.",
-        "data": {
-          "zone_1": "Zone 1",
-          "zone_2": "Zone 2",
-          "zone_3": "Zone 3",
-          "zone_4": "Zone 4",
-          "zone_5": "Zone 5",
-          "debit_zone_1": "Durchfluss Zone 1 (mm/h, 0 wenn ungenutzt)",
-          "debit_zone_2": "Durchfluss Zone 2 (mm/h, 0 wenn ungenutzt)",
-          "debit_zone_3": "Durchfluss Zone 3 (mm/h, 0 wenn ungenutzt)",
-          "debit_zone_4": "Durchfluss Zone 4 (mm/h, 0 wenn ungenutzt)",
-          "debit_zone_5": "Durchfluss Zone 5 (mm/h, 0 wenn ungenutzt)",
-          "type_sol": "Bodentyp (erforderlich)"
-        }
-      },
       "sensors": {
         "title": "Hauptwetter und Zusatzsensoren",
         "description": "Trage hier ein Haupt-Wetterobjekt und danach zusätzliche Sensoren ein, falls du sie hast. Das Wetter hat Priorität, und vorhandene Sensoren überschreiben oder ergänzen fehlende Werte.",
@@ -65,6 +48,13 @@
           "capteur_etp": "ETP des Tages (optional, automatische Berechnung wenn leer)",
           "capteur_humidite": "Lokale Feuchtigkeit (optional, wird zuerst genutzt, wenn vorhanden)",
           "capteur_hauteur_gazon": "Rasenhöhe (empfohlen, wenn verfügbar)",
+          "entite_tondeuse": "Mähroboter (optional)",
+          "capteur_tondeuse_erreur": "Mäher-Fehlersensor (optional)",
+          "capteur_tondeuse_batterie": "Mäher-Akkusensor (optional)",
+          "capteur_tondeuse_pluie": "Mäher-Regensensor (optional)",
+          "capteur_tondeuse_en_charge": "Mäher-Ladesensor (optional)",
+          "capteur_tondeuse_prochain_depart": "Mäher-Sensor für nächsten Start (optional)",
+          "capteur_tondeuse_hauteur_coupe": "Mäher-Schnitthöhe (optional)",
           "hauteur_min_tondeuse_cm": "Minimale Mäherhöhe (cm)",
           "hauteur_max_tondeuse_cm": "Maximale Mäherhöhe (cm)",
           "capteur_retour_arrosage": "Rücklaufbewässerung (optional, automatisch oder aus der Zonenhistorie geschätzt)",
@@ -75,7 +65,8 @@
       }
     },
     "error": {
-      "invalid_instance_slug": "Ungültige Rasenkennung."
+      "invalid_instance_slug": "Ungültige Rasenkennung.",
+      "entity_not_found": "Entität in Home Assistant nicht gefunden."
     },
     "abort": {
       "already_configured": "Gazon Intelligent ist bereits konfiguriert."
@@ -94,6 +85,13 @@
           "capteur_etp": "ETP des Tages (optional, automatische Berechnung wenn leer)",
           "capteur_humidite": "Lokale Feuchtigkeit (optional, wird zuerst genutzt, wenn vorhanden)",
           "capteur_hauteur_gazon": "Rasenhöhe (empfohlen, wenn verfügbar)",
+          "entite_tondeuse": "Mähroboter (optional)",
+          "capteur_tondeuse_erreur": "Mäher-Fehlersensor (optional)",
+          "capteur_tondeuse_batterie": "Mäher-Akkusensor (optional)",
+          "capteur_tondeuse_pluie": "Mäher-Regensensor (optional)",
+          "capteur_tondeuse_en_charge": "Mäher-Ladesensor (optional)",
+          "capteur_tondeuse_prochain_depart": "Mäher-Sensor für nächsten Start (optional)",
+          "capteur_tondeuse_hauteur_coupe": "Mäher-Schnitthöhe (optional)",
           "hauteur_min_tondeuse_cm": "Minimale Mäherhöhe (cm)",
           "hauteur_max_tondeuse_cm": "Maximale Mäherhöhe (cm)",
           "capteur_retour_arrosage": "Rücklaufbewässerung (optional, automatisch oder aus der Zonenhistorie geschätzt)",
@@ -307,6 +305,22 @@
         "note": {
           "name": "Notiz (optional)",
           "description": "Freier Kommentar."
+        },
+        "usage_mode": {
+          "name": "Anwendungsmodus",
+          "description": "Einsatzkontext des Produkts."
+        },
+        "max_applications_per_year": {
+          "name": "Max. Anwendungen pro Jahr",
+          "description": "Höchstzahl der pro Jahr zulässigen Anwendungen."
+        },
+        "temperature_min": {
+          "name": "Mindesttemperatur (°C)",
+          "description": "Darunter wird das Produkt nicht empfohlen."
+        },
+        "temperature_max": {
+          "name": "Höchsttemperatur (°C)",
+          "description": "Darüber wird das Produkt nicht empfohlen."
         }
       }
     },
@@ -331,6 +345,10 @@
         "date_action": {
           "name": "Mähdatum (optional)",
           "description": "Datum im Format TT/MM/JJJJ oder JJJJ-MM-TT. Wenn leer, wird heute verwendet."
+        },
+        "hauteur_coupe_mm": {
+          "name": "Schnitthöhe (mm)",
+          "description": "Für diesen Mähvorgang verwendete Schnitthöhe, in Millimetern."
         }
       }
     },
@@ -347,12 +365,25 @@
           "description": "Ausgebrachte Wassermenge in mm."
         }
       }
+    },
+    "recalibrate_reserve": {
+      "name": "Bodenspeicher neu kalibrieren",
+      "description": "Setzt den Wasserspeicher des Bodens auf einen bekannten Wert. Der Wert bleibt bis zum Folgetag fixiert: Regen, Bewässerung und Verdunstung werden für heute nicht mehr gezählt. Am besten abends und außerhalb von Regen aufrufen.",
+      "fields": {
+        "reserve_mm": {
+          "name": "Bodenspeicher (mm)",
+          "description": "Gemessener oder geschätzter Wasserspeicher des Bodens, in Millimetern."
+        }
+      }
     }
   },
   "entity": {
     "switch": {
       "auto_irrigation_enabled": {
         "name": "Automatische Bewässerung erlaubt"
+      },
+      "evening_cooling_enabled": {
+        "name": "Abendliche Abkühlung erlaubt"
       }
     }
   }

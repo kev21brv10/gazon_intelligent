@@ -81,12 +81,6 @@ class WateringPlan:
         return sum(zone.duration_s for zone in self.zones)
 
     @property
-    def per_passage_duration_s(self) -> int:
-        if self.passage_count <= 1:
-            return self.watering_duration_s
-        return sum(self.zone_for_passage(index, 1).duration_s for index in range(len(self.zones)))
-
-    @property
     def total_duration_s(self) -> int:
         total = self.watering_duration_s
         if self.passage_count > 1:

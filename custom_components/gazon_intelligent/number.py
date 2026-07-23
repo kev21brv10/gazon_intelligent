@@ -154,13 +154,25 @@ class GazonMowerCuttingHeightNumber(RestoreEntity, GazonEntityBase, NumberEntity
         except (TypeError, ValueError):
             return round(float(default_cm) * 10.0, 1)
 
+    def _cutting_height_bounds_mm(self) -> tuple[float, float]:
+        """Bornes de hauteur de coupe, toujours ordonnées.
+
+        Rien n'empêche de saisir une hauteur mini supérieure à la maxi en configuration. Sans
+        remise en ordre, Home Assistant recevait un intervalle inversé (min > max) : le curseur
+        devenait inutilisable et le bornage des valeurs restaurées ne pouvait plus converger.
+        Le moteur de décision permute déjà ces bornes de son côté ; on s'aligne dessus.
+        """
+        first = self._configured_bound_mm(CONF_HAUTEUR_MIN_TONDEUSE_CM, DEFAULT_HAUTEUR_MIN_TONDEUSE_CM)
+        second = self._configured_bound_mm(CONF_HAUTEUR_MAX_TONDEUSE_CM, DEFAULT_HAUTEUR_MAX_TONDEUSE_CM)
+        return (first, second) if first <= second else (second, first)
+
     @property
     def native_min_value(self) -> float:
-        return self._configured_bound_mm(CONF_HAUTEUR_MIN_TONDEUSE_CM, DEFAULT_HAUTEUR_MIN_TONDEUSE_CM)
+        return self._cutting_height_bounds_mm()[0]
 
     @property
     def native_max_value(self) -> float:
-        return self._configured_bound_mm(CONF_HAUTEUR_MAX_TONDEUSE_CM, DEFAULT_HAUTEUR_MAX_TONDEUSE_CM)
+        return self._cutting_height_bounds_mm()[1]
 
     def __init__(self, coordinator) -> None:
         super().__init__(coordinator)
@@ -212,7 +224,11 @@ class GazonMowerCuttingHeightNumber(RestoreEntity, GazonEntityBase, NumberEntity
             rounded = self._round_to_cutting_height_step(restored)
             return max(self.native_min_value, min(rounded, self.native_max_value))
 
-        return self._default_value
+        # Le repli échappait au bornage appliqué aux deux branches ci-dessus : avec des bornes
+        # resserrées (ex. 30-45 mm), Home Assistant recevait 50 mm, valeur hors intervalle.
+        if self._default_value is None:
+            return None
+        return max(self.native_min_value, min(self._default_value, self.native_max_value))
 
     async def async_set_native_value(self, value: float) -> None:
         await self.coordinator.async_update_config({self._config_key: self._round_to_cutting_height_step(value)})

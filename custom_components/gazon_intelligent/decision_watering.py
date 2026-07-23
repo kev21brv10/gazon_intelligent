@@ -11,6 +11,7 @@ from .const import (
     APPLICATION_TYPE_FOLIAIRE,
     APPLICATION_TYPE_SOL,
     DEFAULT_AUTO_IRRIGATION_ENABLED,
+    DEFAULT_EVENING_COOLING_ENABLED,
     OBJECTIVE_SCOPE_GLOBAL_SURFACE,
     OBJECTIVE_SCOPE_SURFACE_CYCLE,
     WATERING_STAGE_LEVEE,
@@ -19,6 +20,7 @@ from .const import (
     WATERING_STRATEGY_SEMIS_FREQUENT,
 )
 from .decision_models import DecisionContext, normalize_watering_contract
+from .decision_risk import compute_fungal_risk
 from .guidance import (
     _confidence_assessment,
     _reference_hydric_balance_mm,
@@ -105,6 +107,8 @@ def build_water_bundle(
         etp_capteur=context.etp_capteur,
         temperature_reference_hydrique=context.temperature_reference_hydrique,
         weather_profile=context.weather_profile,
+        humidite=context.humidite,
+        vent=context.vent,
     )
     water_balance = compute_water_balance(
         history=context.history,
@@ -168,6 +172,21 @@ def build_water_bundle(
         pluie_3j=context.pluie_3j,
         pluie_probabilite_max_3j=context.pluie_probabilite_max_3j,
         application_type=application_state.get("application_type"),
+        forecast_temperature_today=context.forecast_temperature_today,
+        evening_cooling_enabled=bool(
+            memory.get("evening_cooling_enabled", DEFAULT_EVENING_COOLING_ENABLED)
+        ),
+        # Le risque fongique est recalculé ici plutôt que repris du bundle « risque » : celui-ci
+        # est construit APRÈS le bundle « eau » dans le pipeline, il n'existe donc pas encore.
+        # `compute_fungal_risk` ne dépend que d'entrées primitives, le calcul est sans effet de bord.
+        fungal_risk_level=compute_fungal_risk(
+            temperature=context.temperature,
+            humidite=context.humidite,
+            rosee=context.rosee,
+            pluie_24h=context.pluie_24h,
+            pluie_demain=context.pluie_demain,
+            hour_of_day=context.hour_of_day if context.hour_of_day is not None else 12,
+        ).get("fungal_risk_level"),
     )
     hydric_observability = {
         "weekly_guardrail_mm_min": watering_profile.get("weekly_guardrail_mm_min"),
@@ -484,6 +503,11 @@ def _build_watering_bundle_base(
         "mm_requested": water_bundle.get("mm_requested"),
         "mm_applied": water_bundle.get("mm_applied"),
         "mm_detected": water_bundle.get("mm_detected"),
+        # Bilan hydrique de référence. `_apply_irrigation_execution_contract` s'en sert pour lever
+        # le drapeau « bloqué ALORS QUE le déficit est critique » : il le cherchait dans le payload
+        # sans que rien ne l'y place jamais, si bien qu'il lisait 0.0 et que l'alerte ne se
+        # déclenchait jamais en production, quel que soit le déficit réel.
+        "bilan_hydrique_mm": _reference_hydric_balance_mm(water_bundle.get("water_balance") or {}),
         "conseil_principal": None,
         "action_recommandee": None,
         "action_a_eviter": None,
@@ -1489,7 +1513,12 @@ def build_watering_bundle(
         or deficit_3j > 0.8
         or deficit_7j > 1.5
     )
-    recommande = objectif_mm > 0 and besoin_eau
+    # Le rafraîchissement du soir est EXEMPTÉ du garde « besoin d'eau ». Son objet est de faire
+    # baisser la température du gazon, pas de recharger la réserve : guidance.py l'autorise donc
+    # explicitement réserve saine (découplage introduit en 0.14.0). Sans cette exemption, exiger
+    # `besoin_eau` le ré-accouplait au déficit et ramenait les 3 mm de cooling à 0 précisément
+    # dans le cas prévu — canicule après une semaine bien arrosée.
+    recommande = objectif_mm > 0 and (besoin_eau or bool(water_bundle.get("evening_cooling")))
     auto_ok = auto_irrigation_enabled and phase_dominante in {
         "Normal",
         "Fertilisation",
@@ -1605,7 +1634,7 @@ def build_watering_bundle(
         conseil_principal = "Fertilisation active: arrose légèrement, de préférence le matin."
         action_recommandee = f"Applique {objectif_mm:.1f} mm {style_text} pour activer l'apport."
         action_a_eviter = "Tondre sur sol humide."
-        type_arrosage = "auto"
+        type_arrosage = "auto" if auto_ok else "personnalise"
         arrosage_recommande = True
         arrosage_auto_autorise = auto_ok
         arrosage_conseille = "auto" if phase_dominante == "Normal" else "personnalise"
@@ -1626,7 +1655,7 @@ def build_watering_bundle(
         conseil_principal = "Scarification: garde une humidité stable sans détremper."
         action_recommandee = f"Applique {objectif_mm:.1f} mm {style_text}."
         action_a_eviter = "Saturer le sol."
-        type_arrosage = "auto"
+        type_arrosage = "auto" if auto_ok else "personnalise"
         arrosage_recommande = True
         arrosage_auto_autorise = auto_ok
         arrosage_conseille = "personnalise"
@@ -1647,7 +1676,7 @@ def build_watering_bundle(
         conseil_principal = "Agent mouillant: fais pénétrer l'eau plus en profondeur."
         action_recommandee = f"Applique {objectif_mm:.1f} mm {style_text}."
         action_a_eviter = "Arroser trop vite."
-        type_arrosage = "auto"
+        type_arrosage = "auto" if auto_ok else "personnalise"
         arrosage_recommande = True
         arrosage_auto_autorise = auto_ok
         arrosage_conseille = "personnalise"
@@ -1668,7 +1697,7 @@ def build_watering_bundle(
         conseil_principal = "Biostimulant: garde un niveau hydrique modéré."
         action_recommandee = f"Applique {objectif_mm:.1f} mm {style_text}."
         action_a_eviter = "Détremper le sol."
-        type_arrosage = "auto"
+        type_arrosage = "auto" if auto_ok else "personnalise"
         arrosage_recommande = True
         arrosage_auto_autorise = auto_ok
         arrosage_conseille = "personnalise"
@@ -1794,6 +1823,13 @@ def build_watering_bundle(
             # le cooling s'étalerait sur ~1 h au lieu de finir vite après le coucher.
             watering_passages = 1
             watering_pause_minutes = 0
+        elif phase_dominante == "Normal":
+            # Phase Normal = arrosage profond adulte : les passages sont déjà calibrés par
+            # guidance.py pour les grands volumes (anti-ruissellement adapté, pas la logique
+            # petites-doses de _soil_fractionation_passages qui plafonne à 1.5 mm/passage en
+            # canicule et donne 3 passages de 4 mm → le sol re-sèche entre les passages).
+            watering_passages = max(1, int(water_bundle.get("watering_passages") or 1))
+            watering_pause_minutes = 25 if watering_passages > 1 else 0
         else:
             watering_passages = _soil_fractionation_passages(
                 phase_dominante,
@@ -1855,7 +1891,14 @@ def build_watering_bundle(
     if heat_stress_level != "normal":
         raison_parts.append(f"Stress thermique={heat_stress_level}; matin renforcé, soirée plus restrictive.")
     if heat_stress_phase_value not in (None, "normal"):
-        raison_parts.append(f"Phase canicule={heat_stress_phase_value}")
+        # Durée de l'épisode de stress (distinct du niveau ci-dessus). Libellé honnête : la clé
+        # interne "canicule_courte/prolongee" décrit surtout la DURÉE, pas une vraie canicule.
+        _duree_stress = {
+            "canicule_courte": "courte",
+            "canicule_prolongee": "prolongée",
+            "sortie_de_canicule": "en sortie",
+        }.get(str(heat_stress_phase_value), str(heat_stress_phase_value))
+        raison_parts.append(f"Durée du stress: {_duree_stress}")
     reserve_available_ratio = float(water_balance.get("reserve_available_ratio") or 0.0)
     if arrosage_recommande and reserve_available_ratio >= 1.0:
         raison_parts.append(

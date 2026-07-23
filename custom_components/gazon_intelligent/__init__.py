@@ -43,10 +43,18 @@ _ERR_NO_INSTANCE = "Aucune instance de Gazon Intelligent n'est configurée."
 _ERR_AMBIGUOUS_INSTANCE = "Plusieurs instances de Gazon Intelligent existent. Fournissez une cible explicite."
 _ERR_INVALID_DATE = "La date doit être au format JJ/MM/AAAA ou YYYY-MM-DD."
 def _target_selector_value() -> vol.Any:
+    # ORDRE CRITIQUE : la variante liste DOIT précéder `vol.Coerce(str)`.
+    # `vol.Any` retient le premier validateur qui ne lève pas, et `Coerce(str)` réussit sur
+    # n'importe quoi — `str(["sensor.x"])` vaut `"['sensor.x']"`. Placée après, la variante liste
+    # était donc du code mort, et toute cible passée en liste (ce que fait le sélecteur « cible »
+    # de l'UI Home Assistant, et Node-RED) devenait une chaîne de repr Python : le résolveur
+    # échouait ensuite avec « L'entité cible ['sensor.x'] est introuvable ».
+    # Dans ce sens, une chaîne simple reste correctement traitée : voluptuous rejette une `str`
+    # contre un schéma-liste (« expected a list »), elle retombe donc bien sur `Coerce(str)`.
     return vol.Any(
         None,
-        vol.Coerce(str),
         [vol.Coerce(str)],
+        vol.Coerce(str),
     )
 
 
@@ -133,10 +141,28 @@ def _coordinator_from_entity_id(hass: HomeAssistant, entity_id: str) -> GazonInt
     return coordinator
 
 
+def _single_target_value(raw: Any) -> str | None:
+    """Rend la cible unique portée par `raw`, qu'elle soit une chaîne ou une liste d'un élément.
+
+    Home Assistant fusionne le bloc `target:` dans `service_data` AVANT validation, et son
+    sélecteur de cible envoie TOUJOURS une liste. Ne traiter que le cas `str` revenait à ignorer
+    la forme la plus courante : la cible était jugée absente et, en multi-instances, l'appel
+    échouait sur « Plusieurs gazons existent… » alors qu'une cible était bien fournie.
+    """
+    if isinstance(raw, str):
+        return raw.strip() or None
+    if isinstance(raw, (list, tuple, set)):
+        values = [str(item).strip() for item in raw if str(item).strip()]
+        if len(values) == 1:
+            return values[0]
+    return None
+
+
 def _call_has_explicit_target(call: ServiceCall) -> bool:
-    target_entity_id = call.data.get("entity_id")
-    if isinstance(target_entity_id, str) and target_entity_id.strip():
-        return True
+    # `entity_id`, `device_id` et `area_id` sont les trois clés que HA fusionne depuis `target:`.
+    for key in ("entity_id", "device_id", "area_id"):
+        if _single_target_value(call.data.get(key)):
+            return True
 
     target = getattr(call, "target", None)
     if target is None:
@@ -194,9 +220,11 @@ async def _async_start_runtime_monitoring(coordinator: GazonIntelligentCoordinat
 
 
 async def _coordinator_from_call(call: ServiceCall) -> GazonIntelligentCoordinator:
-    target_entity_id = call.data.get("entity_id")
-    if isinstance(target_entity_id, str) and target_entity_id.strip():
-        return _coordinator_from_entity_id(call.hass, target_entity_id.strip())
+    # Accepte la chaîne comme la liste d'un élément : le sélecteur « cible » de l'UI Home Assistant
+    # envoie toujours une liste (cf. _single_target_value).
+    target_entity_id = _single_target_value(call.data.get("entity_id"))
+    if target_entity_id:
+        return _coordinator_from_entity_id(call.hass, target_entity_id)
 
     if async_extract_config_entry_ids is not None:
         target_config_entry_ids = await async_extract_config_entry_ids(call)

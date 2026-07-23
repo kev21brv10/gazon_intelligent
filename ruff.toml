@@ -2,4 +2,13 @@ target-version = "py313"
 line-length = 100
 
 [lint]
-select = ["E9", "F63", "F7", "F82"]
+# Famille pyflakes complète (F) + erreurs de syntaxe/runtime (E9), au lieu du sous-ensemble
+# E9,F63,F7,F82 d'origine. Mesuré avant activation : le paquet custom_components passe SANS
+# aucune correction ; les 8 défauts relevés étaient tous dans tests/ et sont corrigés.
+# Ce que l'ancien select laissait passer, et que celui-ci arrête :
+#   F401 imports morts · F841 variables mortes · F601 clé de dict répétée
+#   F811 REDÉFINITION — deux méthodes de test portaient le même nom, donc deux cas de test
+#        ne s'exécutaient jamais sans que rien ne le signale.
+# E501 (longueur de ligne) reste volontairement hors périmètre : `line-length` ci-dessus ne
+# sert qu'au formateur, activer E501 imposerait une réécriture massive sans gain de sûreté.
+select = ["E9", "F"]

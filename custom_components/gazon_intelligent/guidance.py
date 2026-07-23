@@ -21,7 +21,7 @@ from .const import (
 )
 from .decision_models import normalize_watering_contract
 from .watering_policy import resolve_semis_stage_program, resolve_watering_policy
-from .water import compute_recent_watering_count
+from .water import _is_external_watering, compute_recent_watering_count
 
 # Règles agronomiques soutenues par les sources:
 # - arroser tôt le matin;
@@ -33,7 +33,7 @@ from .water import compute_recent_watering_count
 # - fenêtre optimale stricte au matin;
 # - fenêtre acceptable étendue jusqu'à 10h si le contexte reste favorable;
 # - soirée réservée au rattrapage exceptionnel, jamais juste avant la nuit.
-OPTIMAL_MORNING_START_HOUR = 4
+OPTIMAL_MORNING_START_HOUR = 3.75  # 03h45 — fenêtre ouverte 15 min avant 04h pour éviter le bord d'heure
 OPTIMAL_MORNING_END_HOUR = 8
 ACCEPTABLE_MORNING_END_HOUR = 10
 SEMIS_WINDOW_START_HOUR = 10
@@ -54,6 +54,18 @@ EVENING_COOLING_START_BEFORE_SUNSET_MIN = 30
 # pour sécher avant la nuit. Appliqué même réserve saine, sous garde-fous (cf.
 # _evening_window_allowed : séchage ≥ 90 min, humidité ≤ 60 %, pas de risque fongique).
 EVENING_COOLING_MM = 3.0
+# Température réelle minimale (°C) au moment du coucher du soleil pour activer le
+# rafraîchissement du soir. Protège contre le faux-positif : le score de stress peut atteindre
+# "canicule"/"extreme" par un ET0 élevé ou une humidité faible même si la température mesurée
+# en fin de journée est modérée (< 30 °C) — dans ce cas le refroidissement du gazon est
+# agronomiquement inutile.
+EVENING_COOLING_MIN_TEMP = 32.0
+# Température réelle minimale (°C) pour armer la « survie canicule » (le seul override qui
+# outrepasse le budget hebdomadaire). Même garde-fou que le rafraîchissement du soir : le score de
+# stress composite peut atteindre "extreme" dès 30 °C par un ET0 élevé + air sec + déficit, sans
+# qu'il s'agisse d'une vraie canicule. Un arrosage de secours qui court-circuite le budget doit être
+# réservé à une chaleur RÉELLE, pas à une journée d'été sèche et normale (30 °C ≠ canicule).
+SURVIE_CANICULE_MIN_TEMP = 32.0
 NORMAL_MIN_USEFUL_SESSION_MM = 10.0
 SATURATION_BILAN_HYDRIQUE_MM = 5.0
 MODE_MIN_WATERING_MM = {
@@ -213,6 +225,11 @@ def _latest_watering_datetime(history: list[dict[str, Any]]) -> datetime | None:
             "post_application",
         ):
             continue
+        # Choix explicite (Kévin, 25/06/2026) : les arrosages EXTERNES (`zone_session`) sont
+        # totalement ignorés → ils n'arment PAS non plus le cooldown 24 h (l'intégration pilote
+        # son auto-arrosage indépendamment des arrosages manuels/Assist/Node-RED).
+        if _is_external_watering(item):
+            continue
         raw_value = item.get("recorded_at") or item.get("detected_at") or item.get("date")
         parsed = _parse_history_datetime(raw_value)
         if parsed is None:
@@ -356,8 +373,6 @@ def _sursemis_micro_apport_decision(
     temperature: float,
     humidite: float,
     humidite_sol: float | None,
-    reserve_stock_mm: float | None,
-    reserve_actuelle_mm: float | None,
     vent: float | None,
     soil_profile: str,
 ) -> dict[str, Any]:
@@ -394,13 +409,6 @@ def _sursemis_micro_apport_decision(
         if allowed
         else "pluie récente ou prévue, stratégie semis_frequent reportée."
     )
-    # Guard germination basse température
-    WATERING_STAGE_GERMINATION_KEY = "Germination"
-    WATERING_STAGE_LEVEE_KEY = "Levée"
-    if sous_phase in {WATERING_STAGE_GERMINATION_KEY, WATERING_STAGE_LEVEE_KEY} and temperature <= 8.0:
-        allowed = False
-        block_reason = "temperature_trop_basse_germination"
-        reason = "Germination bloquée: température trop basse pour la levée."
     if not allowed:
         block_reason = "pluie_prevue_suffisante"
         if temperature <= temperature_min:
@@ -415,6 +423,15 @@ def _sursemis_micro_apport_decision(
         elif pluie_24h >= pluie_24h_max or pluie_demain >= pluie_demain_max:
             block_reason = "pluie_prevue_suffisante"
             reason = "pluie récente ou prévue, stratégie semis_frequent reportée."
+
+    # Garde germination basse température — placé APRÈS le bloc générique pour avoir le dernier
+    # mot. Posé avant, il fixait bien `block_reason = "temperature_trop_basse_germination"`, mais
+    # son propre `allowed = False` déclenchait aussitôt le bloc ci-dessus qui écrasait le motif par
+    # le générique « temperature_trop_basse » : le diagnostic spécifique n'atteignait jamais l'UI.
+    if sous_phase in {"Germination", "Levée"} and temperature <= 8.0:
+        allowed = False
+        block_reason = "temperature_trop_basse_germination"
+        reason = "Germination bloquée: température trop basse pour la levée."
 
     cycle_mm = stage_program.surface_cycle_mm_optimal
     daily_cycles_target = max(stage_program.daily_cycles_min, min(stage_program.daily_cycles_max, stage_program.daily_cycles_min))
@@ -725,8 +742,6 @@ def _morning_window_bounds(phase_dominante: str, temperature: float | None) -> t
     optimal_start = OPTIMAL_MORNING_START_HOUR * 60
     optimal_end = OPTIMAL_MORNING_END_HOUR * 60
     acceptable_end = ACCEPTABLE_MORNING_END_HOUR * 60
-    if phase_dominante == "Sursemis" and band == "hot":
-        acceptable_end = ACCEPTABLE_MORNING_END_HOUR * 60
     return optimal_start, optimal_end, acceptable_end, band
 
 
@@ -901,22 +916,22 @@ def _heat_stress_phase(
     etp: float | None,
     pluie_demain: float,
     pluie_3j: float,
-    recent_watering_count: int,
-    recent_watering_mm_7j: float,
 ) -> str:
     if heat_stress_level == "normal":
         return "normal"
     if pluie_demain >= 4.0 or pluie_3j >= 6.0:
         return "sortie_de_canicule"
     if heat_stress_level == "extreme":
-        if temperature is not None and temperature >= 34 and (etp or 0.0) >= 5.0:
-            if recent_watering_count <= 1 or recent_watering_mm_7j < 6.0:
-                return "canicule_prolongee"
+        # Stress extrême + ET0 élevée = canicule prolongée quelle que soit la quantité
+        # déjà arrosée — pénaliser un jardin correctement arrosé serait contre-productif.
+        # Seuil 32 °C (non 34) : "extreme" peut se déclencher dès 32 °C via le score
+        # combiné (ET0 ≥ 5, humidité sèche, pas de pluie) — exiger 34 bloquerait ces cas.
+        if temperature is not None and temperature >= 32 and (etp or 0.0) >= 5.0:
+            return "canicule_prolongee"
         return "canicule_courte"
     if heat_stress_level == "canicule":
         if temperature is not None and temperature >= 31 and (etp or 0.0) >= 4.0:
-            if recent_watering_count <= 2 and recent_watering_mm_7j < 10.0:
-                return "canicule_prolongee"
+            return "canicule_prolongee"
         return "canicule_courte"
     if temperature is not None and temperature >= 30 and (etp or 0.0) >= 4.0:
         return "canicule_courte"
@@ -949,18 +964,25 @@ def _dynamic_weekly_guardrail(
     elif phase_dominante in {"Fertilisation", "Biostimulant"}:
         maximum = min(22.0, maximum)
 
+    # Plafond hebdo normal : 28 mm. MAIS en canicule l'ETc grimpe à ~7-8 mm/j (~50 mm/sem) :
+    # un plafond figé à 28 étrangle l'arrosage SOUS la demande → déficit chronique → gazon qui
+    # sèche en pleine chaleur (cause racine constatée 06/2026 : recharge bridée à 5 mm de survie
+    # alors que la réserve était à 0). On laisse donc le budget suivre la demande en canicule.
+    ceiling = 28.0
     if heat_stress_phase == "canicule_prolongee":
-        minimum += 2.0
-        maximum += 3.0
+        minimum = max(minimum + 2.0, 28.0)
+        maximum = max(maximum + 3.0, 48.0)  # ≈ demande ETc en canicule soutenue
+        ceiling = 50.0
     elif heat_stress_phase == "canicule_courte":
-        minimum += 1.0
-        maximum += 1.5
+        minimum = max(minimum + 1.0, 24.0)
+        maximum = max(maximum + 1.5, 42.0)
+        ceiling = 44.0
     elif heat_stress_phase == "sortie_de_canicule":
         minimum = max(15.0, minimum - 1.0)
         maximum = max(minimum + 4.0, maximum - 0.5)
 
-    minimum = round(_clamp(minimum, 12.0, 28.0), 1)
-    maximum = round(_clamp(maximum, minimum + 4.0, 28.0), 1)
+    minimum = round(_clamp(minimum, 12.0, ceiling), 1)
+    maximum = round(_clamp(maximum, minimum + 4.0, ceiling), 1)
     return (
         minimum,
         maximum,
@@ -1109,8 +1131,9 @@ class _WateringCtx:
     sous_phase_age_days: int | None
     sous_phase_progression: float | None
     hauteur_gazon: float | None
-    transition_ready: bool
     application_type: str | None
+    evening_cooling_enabled: bool
+    fungal_risk_level: str | None
     # computed — shared preamble
     now_hour: int
     now_minutes: int
@@ -1167,14 +1190,18 @@ def _build_watering_ctx(
     sous_phase_age_days: int | None,
     sous_phase_progression: float | None,
     hauteur_gazon: float | None,
-    transition_ready: bool,
     application_type: str | None,
+    forecast_temperature_today: float | None = None,
+    evening_cooling_enabled: bool = True,
+    fungal_risk_level: str | None = None,
 ) -> _WateringCtx:
     pluie_probabilite_24h_raw = _to_float(weather_profile.get("weather_precipitation_probability"))
     pluie_probabilite_24h = pluie_probabilite_24h_raw if pluie_probabilite_24h_raw is not None else 0.0
     vent = _to_float(weather_profile.get("weather_wind_speed"))
     soil_profile = (type_sol or "limoneux").strip().lower()
-    recent_watering_count = compute_recent_watering_count(history, today=today, days=7) if history else 0
+    # Garde-fou hebdo : on ne compte que les arrosages pilotés par l'intégration (pas les sessions
+    # externes `zone_session`), cohérent avec le budget mm exclu côté water.py.
+    recent_watering_count = compute_recent_watering_count(history, today=today, days=7, include_external=False) if history else 0
     latest_watering_dt = _latest_watering_datetime(history) if history else None
     now = _current_datetime()
     cooldown_24h_hours: float | None = None
@@ -1201,14 +1228,18 @@ def _build_watering_ctx(
     elif humidite >= 75:
         humidite_penalty = deficit_mm_brut * 0.1
     deficit_mm_ajuste = max(0.0, deficit_mm_brut - pluie_support - historique_support - humidite_penalty)
+    # Utiliser la prévision du maximum journalier si elle dépasse la température actuelle :
+    # à l'aube (04h-06h) la temp réelle peut être ≤25°C alors que le pic prévu est >35°C.
+    # Sans ce max(), le score thermique reste "vigilance" → garde_fou bloque → arrosage décalé
+    # en pleine chaleur. La prévision est fournie par le coordinator via forecast_temperature_today.
+    _temp_for_stress = max(temperature, forecast_temperature_today or 0.0)
     heat_stress_level = _heat_stress_level(
-        temperature=temperature, etp=etp, humidite=humidite,
+        temperature=_temp_for_stress, etp=etp, humidite=humidite,
         weather_profile=weather_profile, deficit_mm_brut=deficit_mm_brut,
     )
     heat_stress_phase = _heat_stress_phase(
-        heat_stress_level=heat_stress_level, temperature=temperature, etp=etp,
+        heat_stress_level=heat_stress_level, temperature=_temp_for_stress, etp=etp,
         pluie_demain=pluie_demain, pluie_3j=pluie_3j,
-        recent_watering_count=recent_watering_count, recent_watering_mm_7j=recent_watering_mm_7j,
     )
     guardrail_min_mm, guardrail_max_mm, guardrail_reason = _dynamic_weekly_guardrail(
         today=today, phase_dominante=phase_dominante,
@@ -1240,8 +1271,9 @@ def _build_watering_ctx(
         sous_phase_age_days=sous_phase_age_days,
         sous_phase_progression=sous_phase_progression,
         hauteur_gazon=hauteur_gazon,
-        transition_ready=transition_ready,
         application_type=application_type,
+        evening_cooling_enabled=evening_cooling_enabled,
+        fungal_risk_level=fungal_risk_level,
         now_hour=now.hour,
         now_minutes=now.hour * 60 + now.minute,
         sunset_minute=_to_int_or_none(weather_profile.get("sunset_minute")),
@@ -1293,6 +1325,11 @@ def _fill_post_preamble(ctx: _WateringCtx) -> None:
         objectif_mm=ctx.deficit_mm_brut,
         heat_stress_level=ctx.heat_stress_level,
         minutes_to_sunset=_minutes_to_sunset,
+        # Le garde anti-fongique de `_evening_window_allowed` n'était jamais alimenté : le
+        # paramètre gardait sa valeur par défaut None, si bien qu'un risque de maladie élevé
+        # n'a jamais empêché un arrosage du soir — alors que gazon humide toute la nuit est
+        # précisément le facteur déclenchant.
+        fungal_risk_level=ctx.fungal_risk_level,
     )
 
 
@@ -1391,8 +1428,6 @@ def _profile_for_sursemis(ctx: _WateringCtx) -> dict[str, Any]:
             if ctx.water_balance.get("humidite_sol") is not None
             else None
         ),
-        reserve_stock_mm=_to_float(ctx.water_balance.get("reserve_stock_mm")),
-        reserve_actuelle_mm=_to_float(ctx.water_balance.get("reserve_actuelle_mm")),
         vent=ctx.vent,
         soil_profile=ctx.soil_profile,
     )
@@ -1617,6 +1652,10 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
     normal_execution = resolved_policy.policy.execution
     weekly_min_mm = normal_weekly_range.min_mm if normal_weekly_range is not None else ctx.guardrail_min_mm
     weekly_max_mm = normal_weekly_range.max_mm if normal_weekly_range is not None else ctx.guardrail_max_mm
+    # En canicule, le garde-fou hebdo dynamique (ETc-aware, cf. _dynamic_weekly_guardrail) doit
+    # pouvoir DÉPASSER la plage hebdo "normale" de la politique. Sinon le plafond normal (30 mm)
+    # ré-écrase la dose de canicule (~45 mm/sem de besoin) et le gazon sèche malgré la chaleur.
+    weekly_max_mm = max(weekly_max_mm, ctx.guardrail_max_mm)
     min_session_mm = normal_execution.min_session_mm if normal_execution is not None else NORMAL_MIN_USEFUL_SESSION_MM
     max_session_mm = normal_execution.max_session_mm if normal_execution is not None else None
     rain_adjustment = min(ctx.pluie_support * 0.7, 5.0)
@@ -1630,18 +1669,43 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
             weekly_max_mm,
         ), 1,
     )
-    # Déplétion critique : réserve très basse (≥ 80 % épuisée). Dans ce cas seulement, on
-    # autorise l'arrosage à outrepasser le cooldown 24 h — respecter le délai laisserait le
-    # gazon en stress sévère. Les autres blocages (pluie, sol détrempé) restent prioritaires.
-    _critical_depletion = float(ctx.water_balance.get("depletion_ratio") or 0.0) >= 0.8
-    # Survie canicule : réserve quasi épuisée (≥ 90 %) ET stress thermique canicule/extrême.
-    # Dans ce seul cas, on autorise un petit cycle de survie même si le garde-fou
-    # hebdomadaire est atteint — laisser le sol à 0 en pleine canicule dépasse le « stress
-    # bénéfique » et grille le gazon. Les blocages pluie réelle / sol détrempé restent
-    # prioritaires (on n'arrose pas s'il pleut vraiment ou si le sol est déjà gorgé).
+    # Déplétion RÉELLE (et non anticipée) pour les seuls OVERRIDES D'URGENCE ci-dessous. Le ledger
+    # débite tout l'ET0 du jour dès minuit → `depletion_ratio` sature dès 00h01 (« falaise de
+    # minuit ») alors qu'aucune évapotranspiration n'a encore eu lieu. Déclencher une URGENCE
+    # (outrepasser le cooldown ou le garde-fou hebdo) sur cette déplétion anticipée revenait à
+    # armer une fausse urgence nocturne. On ne compte donc, pour l'urgence, que l'ET RÉELLEMENT
+    # écoulée (`et_elapsed_fraction`, 0 au lever → 1 au coucher) : `depletion_réelle = depletion −
+    # ET0·(1−fraction)`. Le pilotage NORMAL (mm_cible) reste anticipatif — il continue de planifier
+    # l'arrosage du matin. Appliqué au seul chemin ledger (source de la falaise) ; repli sûr :
+    # fraction/soleil inconnu → 1.0 → déplétion anticipée = comportement historique.
+    _depletion_ratio_anticipe = float(ctx.water_balance.get("depletion_ratio") or 0.0)
+    _reserve_utile_urgence = float(ctx.water_balance.get("reserve_utile_mm") or 0.0)
+    if bool(ctx.water_balance.get("reserve_from_soil_ledger")) and _reserve_utile_urgence > 0:
+        _frac_raw = ctx.water_balance.get("et_elapsed_fraction")
+        _et_elapsed = float(_frac_raw) if _frac_raw is not None else 1.0
+        _et0_day = float(ctx.water_balance.get("et0_mm") or 0.0)
+        _depletion_mm_reel = max(
+            0.0,
+            float(ctx.water_balance.get("depletion_mm") or 0.0) - _et0_day * max(0.0, 1.0 - _et_elapsed),
+        )
+        _depletion_ratio_urgence = min(1.0, _depletion_mm_reel / _reserve_utile_urgence)
+    else:
+        _depletion_ratio_urgence = _depletion_ratio_anticipe
+    # Déplétion critique : réserve très basse (≥ 80 % RÉELLEMENT épuisée). Dans ce cas seulement, on
+    # autorise l'arrosage à outrepasser le cooldown 24 h — respecter le délai laisserait le gazon en
+    # stress sévère. Les autres blocages (pluie, sol détrempé) restent prioritaires.
+    _critical_depletion = _depletion_ratio_urgence >= 0.8
+    # Survie canicule : réserve quasi épuisée (≥ 90 % RÉELLEMENT) ET vraie chaleur. Dans ce seul cas,
+    # on autorise un petit cycle de survie même si le garde-fou hebdomadaire est atteint — laisser le
+    # sol à 0 en pleine chaleur dépasse le « stress bénéfique » et grille le gazon. Double garde pour
+    # ne PAS armer cet override (le seul qui court-circuite le budget) sur une journée d'été sèche mais
+    # normale : le score de stress composite peut dire "extreme" dès 30 °C (ET0 + air sec + déficit),
+    # donc on exige EN PLUS une température réelle ≥ SURVIE_CANICULE_MIN_TEMP. Blocages pluie réelle /
+    # sol détrempé restent prioritaires.
     _survie_canicule = (
-        float(ctx.water_balance.get("depletion_ratio") or 0.0) >= 0.9
+        _depletion_ratio_urgence >= 0.9
         and ctx.heat_stress_level in {"canicule", "extreme"}
+        and (ctx.temperature or 0.0) >= SURVIE_CANICULE_MIN_TEMP
     )
     # Quand le bilan sol interne (ledger, mis à jour en TEMPS RÉEL) est actif et indique que
     # la réserve est sous le seuil d'épuisement (MAD), c'est LUI qui fait foi pour l'état du
@@ -1692,8 +1756,13 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
                 mm_cible = min(mm_cible, max_session_mm)
             weekly_room = max(0.0, guardrail_max_effective - ctx.recent_watering_mm_7j)
             if _survie_canicule:
-                # Garantit une dose de survie minimale même si le budget hebdo est épuisé.
-                weekly_room = max(weekly_room, min_session_mm)
+                # Réserve à 0 en canicule : garantir la recharge complète (depletion_mm)
+                # même si le budget hebdo est épuisé — laisser le sol à sec en pleine
+                # canicule extrême dépasse le simple « stress bénéfique ». Sinon le
+                # garde-fou bloque à min_session_mm (5 mm) alors qu'ET0 ≈ 8-9 mm/j et
+                # qu'aucune dose inférieure ne permet de sortir du plancher à 0.
+                _survie_floor = depletion_mm if depletion_ratio >= 1.0 else min_session_mm
+                weekly_room = max(weekly_room, _survie_floor)
             mm_cible = round(min(mm_cible, weekly_room), 1)
         if block_reason is not None:
             mm_cible = 0.0
@@ -1726,21 +1795,16 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
                 _fill_cap = max(0.0, _reserve_max - _reserve_cur)
                 mm_cible = round(min(mm_cible, _fill_cap), 1)
                 mm_final = mm_cible
-    # Rafraîchissement du soir en canicule extrême : si aucun arrosage normal n'est prévu
-    # (réserve saine, ou cooldown 24 h / garde-fou hebdo) MAIS qu'il fait une chaleur
-    # extrême et que la fenêtre du soir est autorisée (garde-fous séchage/humidité/fongique
-    # déjà appliqués dans _evening_window_allowed), on applique un PETIT arrosage de cooling
-    # pour faire baisser la température du gazon. On ne court-circuite que les blocages
-    # « budget d'eau » (cooldown/hebdo/réserve pleine) : une vraie pluie ou un sol détrempé
-    # restent prioritaires (pas de cooling alors).
-    # On ne court-circuite que les blocages « budget d'eau » (réserve saine, cooldown 24 h,
-    # garde-fou hebdo). Une vraie pluie reste prioritaire (refroidit naturellement + mouille).
-    # La saturation du sol n'empêche PAS le cooling : c'est un arrosage léger d'évaporation
-    # (air sec ≤ 60 % et marge de séchage déjà garantis par _evening_window_allowed).
-    # Mémorise l'objectif AVANT le cooling : le cooling ne s'applique que si aucun arrosage
-    # normal n'est prévu à cet instant (réserve saine OU recharge plafonnée par le garde-fou
-    # hebdo — fréquent en canicule, et c'est justement là que le cooling devient utile).
-    mm_before_cooling = mm_final
+    # Rafraîchissement du soir en canicule : LE SOIR = TOUJOURS COOLING, JAMAIS DE RECHARGE.
+    # Dans la fenêtre du soir (canicule, air sec + marge de séchage déjà garantis par
+    # _evening_window_allowed), on applique un PETIT arrosage de cooling (3 mm) pour faire baisser
+    # la température du gazon — MÊME si une recharge de déficit était prévue à cet instant. Toute
+    # vraie recharge (hydrique) est alors REPORTÉE à la fenêtre du matin (au frais), où elle arme
+    # le cooldown 24 h. Conséquence voulue : un arrosage du soir n'arme JAMAIS le cooldown et ne
+    # bloque donc plus la recharge du lendemain matin (fin du cercle soir→cooldown→matin bloqué).
+    # On ne court-circuite que les blocages « budget d'eau » (réserve saine, cooldown, garde-fou
+    # hebdo) ; une vraie pluie ou un sol détrempé restent prioritaires (pas de cooling alors).
+    mm_before_cooling = mm_final  # dose de recharge qui aurait été appliquée (reportée au matin)
     # Fenêtre du rafraîchissement : démarre 30 min AVANT le coucher du soleil (au frais), au lieu
     # de la fenêtre fixe 18-20 h (trop tôt = grosse évaporation en pleine chaleur). Nécessite que
     # le coucher soit connu (capteur sun.sun → sunset_minute).
@@ -1751,12 +1815,21 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
         < ctx.sunset_minute
     )
     cooling_active = (
-        mm_before_cooling <= 0
+        ctx.evening_cooling_enabled
         and ctx.heat_stress_level in {"canicule", "extreme"}
+        and ctx.temperature >= EVENING_COOLING_MIN_TEMP
         and ctx.evening_allowed
         and cooling_window
         and not ctx.pluie_compensatrice
         and not ctx.pluie_proche
+        # SOL DÉTREMPÉ = PAS DE COOLING. Sans ce garde, le `block_reason = None` ci-dessous
+        # effacerait aussi « sol_deja_humide » : on arroserait un sol déjà saturé (gros orage la
+        # veille) et le gazon passerait la nuit trempé pour rien. Les seuls blocages que le
+        # rafraîchissement court-circuite légitimement sont ceux de BUDGET d'eau (cooldown 24 h,
+        # garde-fou hebdo, réserve saine) : ils protègent la recharge, or 3 mm de cooling ne
+        # rechargent rien. La variante « air humide » de humidite_excessive est déjà écartée en
+        # amont — _evening_window_allowed refuse la fenêtre du soir dès humidité > 60 %.
+        and not ctx.saturation_block
     )
     if cooling_active:
         mm_cible = EVENING_COOLING_MM
@@ -1768,16 +1841,19 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
     # exiger d'être déjà dans la fenêtre 18-20 h (on l'annonce dès la journée). Recalculé à chaque
     # refresh → se retire si l'air redevient humide ou si une recharge devient prévue.
     evening_cooling_likely = bool(
-        mm_before_cooling <= 0
+        ctx.evening_cooling_enabled
         and ctx.heat_stress_level in {"canicule", "extreme"}
+        and ctx.temperature >= EVENING_COOLING_MIN_TEMP
         and ctx.evening_allowed
         and not ctx.pluie_compensatrice
         and not ctx.pluie_proche
+        and not ctx.saturation_block  # même garde que cooling_active : sol détrempé = pas de soir
         and (ctx.sunset_minute is None or ctx.now_minutes < ctx.sunset_minute)
     )
     # Diagnostic : expose le raisonnement de la décision du soir pour pouvoir voir, depuis HA,
     # POURQUOI le cooling se déclenche ou non (sans deviner). Purement informatif.
     evening_cooling_debug = {
+        "enabled": bool(ctx.evening_cooling_enabled),
         "evening_allowed": bool(ctx.evening_allowed),
         "cooling_active": bool(cooling_active),
         "mm_before_cooling": round(float(mm_before_cooling), 1),
@@ -1793,6 +1869,8 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
             if ctx.sunset_minute is not None
             else None
         ),
+        "temperature": round(ctx.temperature, 1),
+        "temperature_min_cooling": EVENING_COOLING_MIN_TEMP,
         "pluie_block": bool(ctx.pluie_compensatrice or ctx.pluie_proche),
         "depletion_ratio": round(_depletion_ratio, 3),
         "mad_ratio": round(_mad_ratio, 2),
@@ -1801,7 +1879,7 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
     passages = 1
     if max_session_mm is not None and mm_final > max_session_mm:
         passages = max(passages, int(ceil(mm_final / max_session_mm)))
-    elif mm_final > 12.0:
+    elif mm_final > 6.0:
         passages = 2
     if ctx.recent_watering_count >= 2 and ctx.recent_watering_mm_7j >= ctx.guardrail_max_mm:
         passages = max(passages, 2)
@@ -1829,22 +1907,22 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
         confidence_score=confidence_score,
         confidence_reasons=confidence_reasons,
         raison_decision_base=(
-            "Rafraîchissement du soir : petit arrosage de cooling en canicule extrême pour faire baisser la température du gazon."
+            "Rafraîchissement du soir : petit arrosage de cooling par forte chaleur pour faire baisser la température du gazon."
             if cooling_active
             else "Mode Normal: arrosage profond déclenché quand la réserve atteint le seuil d'épuisement (MAD)."
         ),
         block_reason=block_reason,
         fenetre_optimale=(
-            # Canicule : si la fenêtre du soir est autorisée (chaleur extrême + l'herbe
-            # peut sécher avant la nuit) et qu'on est effectivement le soir, on propose un
-            # petit arrosage de rafraîchissement plutôt que d'attendre le lendemain matin.
+            # LE SOIR = UNIQUEMENT LE RAFRAÎCHISSEMENT (3 mm), JAMAIS UNE RECHARGE.
+            # On exige `cooling_active` et non le simple `evening_allowed` : en canicule,
+            # _evening_window_allowed LÈVE volontairement la marge de séchage de 90 min en
+            # supposant la petite dose de cooling. Si le cooling ne s'active pas (température
+            # mesurée < EVENING_COOLING_MIN_TEMP, switch désactivé, pluie), `mm_final` vaut la
+            # dose de RECHARGE complète : la proposer le soir arroserait lourdement à la tombée
+            # de la nuit sans marge de séchage → risque fongique. Dans ce cas la recharge est
+            # reportée à la fenêtre du matin (au frais), conformément au contrat du module.
             "soir"
-            if (
-                mm_final > 0
-                and ctx.evening_allowed
-                and ctx.now_minutes >= ctx.acceptable_end_minute
-                and ctx.now_minutes >= EVENING_START_HOUR * 60
-            )
+            if cooling_active
             else "maintenant"
             if ctx.morning_start_minute <= ctx.now_minutes < ctx.acceptable_end_minute
             else "ce_matin"
@@ -1873,7 +1951,18 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
     # Fenêtre du soir exposée au coordinateur : basée sur le coucher du soleil (-30 min → coucher)
     # pour que le coordinateur autorise le lancement à ~coucher-30, au lieu de la fenêtre fixe
     # 18-20 h (sinon il bloquerait « hors fenêtre »). Repli sur 18-20 h si le coucher est inconnu.
-    if ctx.sunset_minute is not None:
+    # EN CANICULE, LE SOIR N'EST SÛR QUE POUR LE COOLING. `_evening_window_allowed` renvoie True
+    # dans la branche canicule en LEVANT la marge de séchage de 90 min, parce qu'elle suppose la
+    # petite dose de 3 mm. Si le rafraîchissement n'est finalement pas plausible (température
+    # mesurée < EVENING_COOLING_MIN_TEMP, switch coupé, pluie), il faut retirer l'autorisation :
+    # sinon le coordinateur lancerait la dose de RECHARGE dans la fenêtre du soir, sans séchage
+    # avant la nuit → risque fongique. Hors canicule, la branche « soir » impose déjà la marge de
+    # 90 min : on conserve sa décision telle quelle.
+    if ctx.heat_stress_level in {"canicule", "extreme"} and not evening_cooling_likely:
+        normal_payload["watering_evening_allowed"] = False
+    # Fenêtre exposée au coordinateur : basée sur le coucher du soleil (-30 min → coucher) quand un
+    # rafraîchissement est plausible, au lieu de la fenêtre fixe 18-20 h.
+    if ctx.sunset_minute is not None and evening_cooling_likely:
         normal_payload["watering_evening_start_minute"] = (
             ctx.sunset_minute - EVENING_COOLING_START_BEFORE_SUNSET_MIN
         )
@@ -1925,7 +2014,18 @@ def _profile_for_agro_phases(ctx: _WateringCtx) -> dict[str, Any]:
     else:
         passages = 1 if mm_final <= 4.0 else 2
     pause_minutes = 25 if passages > 1 else 0
-    fenetre_optimale = "soir" if ctx.evening_allowed and ctx.temperature >= 24 and ctx.now_hour < EVENING_END_HOUR else "ce_matin"
+    # « soir » UNIQUEMENT dans le créneau du soir. La borne basse `EVENING_START_HOUR <=` était
+    # absente ici (contrairement à la version canonique de compute_action_guidance) : de 00h00 à
+    # 17h59, `now_hour < EVENING_END_HOUR` restait vrai, donc en phase produit avec T ≥ 24 la
+    # fenêtre s'annonçait « soir » toute la journée — ce qui court-circuitait le garde
+    # anti-réarrosage (coordinator : `fenetre != "soir"`) dès le matin, pas seulement le soir.
+    fenetre_optimale = (
+        "soir"
+        if ctx.evening_allowed
+        and ctx.temperature >= 24
+        and EVENING_START_HOUR <= ctx.now_hour < EVENING_END_HOUR
+        else "ce_matin"
+    )
     confidence_score, confidence_level, confidence_reasons = _confidence(ctx, block_reason, mm_final)
     return _build_profile_payload(
         deficit_mm_brut=ctx.deficit_mm_brut,
@@ -1999,7 +2099,9 @@ def _profile_for_generic(ctx: _WateringCtx) -> dict[str, Any]:
         raison_decision_base=f"Phase {ctx.phase_dominante}: arrosage maîtrisé.",
         block_reason=block_reason,
         fenetre_optimale="soir"
-        if ctx.evening_allowed and ctx.temperature >= 24 and ctx.now_hour < EVENING_END_HOUR
+        if ctx.evening_allowed
+        and ctx.temperature >= 24
+        and EVENING_START_HOUR <= ctx.now_hour < EVENING_END_HOUR
         else ("ce_matin" if mm_final > 0 else "attendre"),
         niveau_action="a_faire" if mm_final > 0 else "surveiller",
         risque_gazon="faible",
@@ -2038,8 +2140,10 @@ def compute_watering_profile(
     sous_phase_age_days: int | None = None,
     sous_phase_progression: float | None = None,
     hauteur_gazon: float | None = None,
-    transition_ready: bool = False,
     application_type: str | None = None,
+    forecast_temperature_today: float | None = None,
+    evening_cooling_enabled: bool = True,
+    fungal_risk_level: str | None = None,
 ) -> dict[str, Any]:
     today = today or _current_date()
     weather_profile = weather_profile or {}
@@ -2063,8 +2167,10 @@ def compute_watering_profile(
         sous_phase_age_days=sous_phase_age_days,
         sous_phase_progression=sous_phase_progression,
         hauteur_gazon=hauteur_gazon,
-        transition_ready=transition_ready,
         application_type=application_type,
+        forecast_temperature_today=forecast_temperature_today,
+        evening_cooling_enabled=evening_cooling_enabled,
+        fungal_risk_level=fungal_risk_level,
     )
     if phase_dominante == "Hivernage":
         resolved_policy = _resolve_phase_policy(
@@ -2184,6 +2290,8 @@ def compute_action_guidance(
     sous_phase_age_days: int | None = None,
     sous_phase_progression: float | None = None,
     hauteur_gazon: float | None = None,
+    minutes_to_sunset: float | None = None,
+    fungal_risk_level: str | None = None,
 ) -> dict[str, Any]:
     advanced_context = advanced_context or {}
     pluie_24h = pluie_24h or 0.0
@@ -2228,22 +2336,26 @@ def compute_action_guidance(
         },
         deficit_mm_brut=max(0.0, max(-bilan_hydrique_mm, deficit_3j, deficit_7j)),
     )
-    recent_watering_mm_7j = float(water_balance.get("arrosage_recent_7j", 0.0) or 0.0)
     heat_stress_phase = _heat_stress_phase(
         heat_stress_level=heat_stress_level,
         temperature=temperature,
         etp=etp,
         pluie_demain=pluie_demain,
         pluie_3j=pluie_3j,
-        recent_watering_count=int(water_balance.get("arrosage_recent_count_7j", 0) or 0),
-        recent_watering_mm_7j=recent_watering_mm_7j,
     )
+    # Mêmes garde-fous universels que le chemin principal (_build_watering_ctx) : marge de séchage
+    # (minutes_to_sunset) et blocage anti-fongique (fungal_risk_level). Sans eux, ce second calcul
+    # de `evening_allowed` — qui alimente le libellé « soir » et, via lui, le court-circuit du garde
+    # anti-réarrosage du coordinateur — pouvait autoriser le soir même par risque fongique élevé ou
+    # sans marge de séchage suffisante. Alignés sur l'appel de la ligne 1325.
     evening_allowed = _evening_window_allowed(
         temperature=temperature,
         humidite=humidite,
         water_balance=water_balance,
         objectif_mm=objectif_mm,
         heat_stress_level=heat_stress_level,
+        minutes_to_sunset=minutes_to_sunset,
+        fungal_risk_level=fungal_risk_level,
     )
 
     if phase_dominante in {"Traitement", "Hivernage"}:

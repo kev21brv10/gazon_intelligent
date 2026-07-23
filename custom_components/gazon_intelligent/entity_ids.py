@@ -72,6 +72,7 @@ PUBLIC_ENTITY_KEYS: dict[str, tuple[str, str]] = {
     "arrosage_apres_application_autorise": ("binary_sensor", f"{DOMAIN}_arrosage_apres_application_autorise"),
     "arrosage_automatique": ("switch", f"{DOMAIN}_arrosage_automatique_autorise"),
     "coordination_tondeuse": ("switch", f"{DOMAIN}_coordination_tondeuse"),
+    "rafraichissement_soir": ("switch", f"{DOMAIN}_rafraichissement_soir"),
     "arroser_maintenant": ("button", f"{DOMAIN}_arroser_maintenant"),
 }
 

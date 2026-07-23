@@ -23,6 +23,7 @@ from .const import (
     DEFAULT_APPLICATION_IRRIGATION_MODE,
     DEFAULT_APPLICATION_POST_WATERING_MM,
     DEFAULT_AUTO_IRRIGATION_ENABLED,
+    DEFAULT_EVENING_COOLING_ENABLED,
     DEFAULT_MOWER_COORDINATION_ENABLED,
     POST_APPLICATION_STATUS_ALIASES,
     POST_APPLICATION_STATUS_INDISPONIBLE,
@@ -293,6 +294,11 @@ def _application_type_for_item(item: dict[str, Any]) -> str | None:
 
 
 def _is_application_relevant_item(item: dict[str, Any]) -> bool:
+    # Garde de robustesse : l'historique peut contenir un élément non-dict (ex. `.storage`
+    # corrompue). Sans lui, `.get` lèverait une AttributeError. Fonction de référence unique —
+    # gazon_brain délègue ici (elle avait un DOUBLON qui, lui, portait déjà ce garde).
+    if not isinstance(item, dict):
+        return False
     item_type = str(item.get("type") or "")
     if item_type in APPLICATION_INTERVENTIONS:
         return True
@@ -1005,6 +1011,19 @@ def compute_memory(
             )
             if previous_memory
             else DEFAULT_MOWER_COORDINATION_ENABLED
+        ),
+        # compute_memory RECONSTRUIT la mémoire à chaque cycle (toutes les 2 min) : tout réglage
+        # utilisateur absent de ce dict est PERDU, et l'entité repart sur sa valeur par défaut.
+        # Sans cette ligne, couper le rafraîchissement du soir ne tenait pas : le switch se
+        # rallumait tout seul au refresh suivant. Toute nouvelle option persistée doit être
+        # reconduite ici (cf. tests/test_memory.py::PersistedSettingsSurviveComputeMemoryTests).
+        "evening_cooling_enabled": bool(
+            previous_memory.get(
+                "evening_cooling_enabled",
+                DEFAULT_EVENING_COOLING_ENABLED,
+            )
+            if previous_memory
+            else DEFAULT_EVENING_COOLING_ENABLED
         ),
         "feedback_observation": feedback_observation,
         "prochaine_reapplication": compute_next_reapplication_date(history, today=today),

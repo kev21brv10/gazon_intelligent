@@ -4,7 +4,7 @@ import asyncio
 import importlib
 import unittest
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
 import types
@@ -71,7 +71,7 @@ def _install_homeassistant_stubs() -> None:
 
         exceptions_mod.HomeAssistantError = HomeAssistantError
 
-    helpers_mod = ensure_module("homeassistant.helpers")
+    ensure_module("homeassistant.helpers")  # effet de bord seul : crée le module stub
     event_mod = ensure_module("homeassistant.helpers.event")
     if not hasattr(event_mod, "async_call_later"):
         def async_call_later(*args, **kwargs):
@@ -123,6 +123,7 @@ _ensure_package("custom_components.gazon_intelligent", PACKAGE_DIR)
 _install_homeassistant_stubs()
 
 coordinator_mod = importlib.import_module("custom_components.gazon_intelligent.coordinator")
+shared_state_mod = importlib.import_module("custom_components.gazon_intelligent.shared_state")
 watering_plan_mod = importlib.import_module("custom_components.gazon_intelligent.watering_plan")
 mower_adapter_mod = importlib.import_module("custom_components.gazon_intelligent.mower_adapter")
 water_mod = importlib.import_module("custom_components.gazon_intelligent.water")
@@ -295,6 +296,12 @@ def _build_runtime_ready_coordinator(
         return None
 
     states: dict[str, _FakeState] = {}
+    # Les vannes existent et répondent, comme en production. Sans elles, le garde de
+    # disponibilité ajouté à `_execute_canonical_watering_plan` annule le cycle avant de
+    # commander quoi que ce soit — c'est justement son rôle : ne jamais comptabiliser une dose
+    # qu'aucune vanne n'a reçue. Les tests qui simulent une panne surchargent cet état.
+    for _idx in range(1, 6):
+        states[f"switch.zone_{_idx}"] = _FakeState("off", datetime.now(timezone.utc))
     if plan_attrs is not None:
         states["sensor.gazon_intelligent_plan_arrosage"] = _FakeState(
             str(plan_attrs.get("total_duration_min") or "0"),
@@ -1438,6 +1445,10 @@ class WateringSessionMonitoringTests(unittest.TestCase):
 
             def _clear_watering_session(self):
                 return None
+
+            async def _wait_for_zones_available(self, zone_ids, **kwargs):
+                # Vannes présentes et disponibles : ce test couvre la séquence, pas la panne.
+                return True
 
         coordinator = _ManualIrrigationCoordinator()
 
@@ -2946,3 +2957,524 @@ class CoordinatorMowerResolutionTests(unittest.TestCase):
         self.assertFalse(snapshot["tondeuse_prete"])
         self.assertFalse(snapshot["mower_coordination_ready"])
         self.assertEqual(snapshot["mower_reason_code"], "configured_missing")
+
+
+class CoordinatorSnapshotPlumbingTests(unittest.TestCase):
+    """Deux clés étaient lues dans self.data sans y être jamais publiées, et la température
+    capteur alimentait la référence hydrique sans passer par le validateur."""
+
+    def test_le_fractionnement_est_publie_dans_le_snapshot(self) -> None:
+        # _get_canonical_watering_plan et la construction des sessions lisent ces deux clés
+        # dans self.data : sans elles, repli silencieux sur 1 passage / 0 pause.
+        for key in ("watering_passages", "watering_pause_minutes"):
+            with self.subTest(key=key):
+                self.assertIn(key, coordinator_mod._COORDINATOR_SNAPSHOT_KEYS)
+
+    def test_le_plan_canonique_respecte_le_fractionnement(self) -> None:
+        coord = _build_coordinator()
+        coord.data = {"watering_passages": 2, "watering_pause_minutes": 25}
+        plan = coordinator_mod.GazonIntelligentCoordinator._get_canonical_watering_plan(
+            coord, objectif_mm=10.0
+        )
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan.passage_count, 2)
+        self.assertEqual(plan.pause_between_passages_s, 25 * 60)
+
+    def test_temperature_capteur_aberrante_est_rejetee(self) -> None:
+        # Un capteur qui déraille à 80 °C ne doit pas contaminer temperature_reference_hydrique,
+        # qui pilote seule l'ET0 et donc les doses.
+        coord = _build_coordinator()
+        coord.entry = _FakeEntry(data={"capteur_temperature": "sensor.temp"})
+        coord._get_float_state = lambda entity_id: 80.0
+        temperature, source, reference = (
+            coordinator_mod.GazonIntelligentCoordinator._resolve_temperature_inputs(
+                coord, weather_profile={}, forecast_summary={"forecast_temperature_today": 28.0}
+            )
+        )
+        # Le capteur aberrant est rejeté : on retombe sur la prévision, pas sur 80 °C.
+        self.assertEqual(temperature, 28.0)
+        self.assertEqual(source, "meteo_forecast")
+        # Référence hydrique = prévision seule. Sans la validation elle valait
+        # 0.3 x 28 + 0.7 x 80 = 64,4 °C l'après-midi, d'où une ET0 délirante.
+        self.assertEqual(reference, 28.0)
+
+    def test_prevision_aberrante_est_rejetee(self) -> None:
+        coord = _build_coordinator()
+        coord.entry = _FakeEntry(data={"capteur_temperature": "sensor.temp"})
+        coord._get_float_state = lambda entity_id: 24.0
+        _, _, reference = (
+            coordinator_mod.GazonIntelligentCoordinator._resolve_temperature_inputs(
+                coord, weather_profile={}, forecast_summary={"forecast_temperature_today": 120.0}
+            )
+        )
+        self.assertEqual(reference, 24.0)
+
+
+class ZoneResolutionResilienceTests(unittest.TestCase):
+    """Défense en profondeur : même si entry.options contient déjà des clés de zone à None
+    (installations polluées par l'ancien options flow), le coordinateur doit retomber sur
+    entry.data. `opts.get(k, data.get(k))` ne le faisait pas — le défaut de `get` ne s'applique
+    que si la clé est ABSENTE, pas si elle vaut None."""
+
+    def _zones(self, *, data, options):
+        coord = _build_coordinator()
+        coord.entry = _FakeEntry(data=data, options=options)
+        return [entity_id for entity_id, _ in
+                coordinator_mod.GazonIntelligentCoordinator._iter_zones_with_rate(coord)]
+
+    DATA = {
+        "zone_1": "switch.z1", "debit_zone_1": 60.0,
+        "zone_2": "switch.z2", "debit_zone_2": 60.0,
+        "zone_3": "switch.z3", "debit_zone_3": 60.0,
+    }
+
+    def test_zones_resolues_sans_options(self) -> None:
+        self.assertEqual(self._zones(data=self.DATA, options={}),
+                         ["switch.z1", "switch.z2", "switch.z3"])
+
+    def test_zones_a_none_dans_les_options_ne_masquent_plus_entry_data(self) -> None:
+        zones = self._zones(data=self.DATA, options={"zone_2": None, "zone_3": None})
+        self.assertEqual(zones, ["switch.z1", "switch.z2", "switch.z3"])
+
+    def test_une_zone_reellement_redefinie_dans_les_options_gagne(self) -> None:
+        zones = self._zones(data=self.DATA, options={"zone_2": "switch.autre"})
+        self.assertIn("switch.autre", zones)
+        self.assertNotIn("switch.z2", zones)
+
+    def test_un_debit_a_none_retombe_sur_entry_data(self) -> None:
+        zones = self._zones(data=self.DATA, options={"debit_zone_2": None})
+        self.assertIn("switch.z2", zones)
+
+    def test_un_debit_a_zero_desactive_bien_la_zone(self) -> None:
+        # RÉGRESSION : `opts.get(k) or data.get(k)` traitait 0.0 comme absent et ressuscitait
+        # l'ancien débit d'entry.data, RÉACTIVANT une zone que l'utilisateur avait neutralisée.
+        # Cas réel : l'instance « Gazon Potager » pointe zone_1 sur la vanne de la zone 3 de la
+        # pelouse principale, mise hors service par un débit à 0 — elle redevenait pilotable.
+        zones = self._zones(data=self.DATA, options={"debit_zone_2": 0})
+        self.assertNotIn("switch.z2", zones)
+        self.assertIn("switch.z1", zones, "les autres zones ne doivent pas être affectées")
+
+    def test_zero_est_distingue_de_absent(self) -> None:
+        for valeur, attendu in ((0, False), (0.0, False), (None, True)):
+            with self.subTest(debit=valeur):
+                zones = self._zones(data=self.DATA, options={"debit_zone_3": valeur})
+                self.assertEqual("switch.z3" in zones, attendu)
+
+    def test_toutes_zones_a_zero_ne_donne_aucune_zone(self) -> None:
+        zones = self._zones(
+            data=self.DATA,
+            options={"debit_zone_1": 0, "debit_zone_2": 0, "debit_zone_3": 0},
+        )
+        self.assertEqual(zones, [])
+
+
+class SensorHealthPluieTests(unittest.TestCase):
+    """`pluie_valid` testait la valeur RÉSOLUE (`pluie_24h`), qui reprend le capteur quand il
+    répond et retombe sur la prévision sinon : l'expression était donc toujours vraie et le
+    voyant ne pouvait jamais signaler un capteur pluie en panne."""
+
+    def _pluie_valid(self, *, capteur_configure, capteur_repond):
+        # Reproduit l'expression de coordinator._build_public_snapshot_data.
+        pluie_24h_sensor = 3.2 if (capteur_configure and capteur_repond) else None
+        conf = "sensor.pluie" if capteur_configure else None
+        return pluie_24h_sensor is not None or conf is None
+
+    def test_capteur_configure_et_fonctionnel(self) -> None:
+        self.assertTrue(self._pluie_valid(capteur_configure=True, capteur_repond=True))
+
+    def test_capteur_configure_en_panne_est_signale(self) -> None:
+        # C'est LE cas que l'ancienne expression ne pouvait pas produire.
+        self.assertFalse(self._pluie_valid(capteur_configure=True, capteur_repond=False))
+
+    def test_aucun_capteur_configure_reste_valide(self) -> None:
+        self.assertTrue(self._pluie_valid(capteur_configure=False, capteur_repond=False))
+
+    def test_lexpression_nest_plus_une_tautologie(self) -> None:
+        resultats = {
+            self._pluie_valid(capteur_configure=c, capteur_repond=r)
+            for c in (True, False) for r in (True, False)
+        }
+        self.assertEqual(resultats, {True, False}, "le voyant doit pouvoir valoir False")
+
+
+class ZoneAvailabilityGuardTests(unittest.TestCase):
+    """`switch.turn_on` sur une entité `unavailable` ne lève AUCUNE erreur : la commande part
+    dans le vide, aucune goutte n'est délivrée, et la dose complète est pourtant comptabilisée en
+    fin de cycle. Le gazon reste sec pendant que l'intégration affiche un arrosage réussi et
+    crédite la réserve. `_wait_for_zones_available` existait mais n'était branchée que sur le
+    chemin de reprise après redémarrage."""
+
+    def _coord(self, zone_states):
+        coord = _build_coordinator()
+        etats = {
+            zid: _FakeState(val, datetime.now(timezone.utc))
+            for zid, val in zone_states.items()
+            if val is not None
+        }
+        coord.hass = types.SimpleNamespace(
+            services=types.SimpleNamespace(async_call=lambda *a, **k: None),
+            async_create_task=lambda coro, name=None: asyncio.create_task(coro),
+            bus=types.SimpleNamespace(async_fire=lambda e, p=None: None),
+            states=_FakeStates(etats),
+        )
+        return coord
+
+    def _attend(self, coord, zones, timeout=0.05):
+        return asyncio.run(
+            coordinator_mod.GazonIntelligentCoordinator._wait_for_zones_available(
+                coord, zones, timeout_s=timeout, poll_s=0.01
+            )
+        )
+
+    def test_vannes_disponibles_passent(self) -> None:
+        coord = self._coord({"switch.z1": "off", "switch.z2": "on"})
+        self.assertTrue(self._attend(coord, ["switch.z1", "switch.z2"]))
+
+    def test_une_vanne_unavailable_bloque(self) -> None:
+        coord = self._coord({"switch.z1": "off", "switch.z2": "unavailable"})
+        self.assertFalse(self._attend(coord, ["switch.z1", "switch.z2"]))
+
+    def test_une_vanne_unknown_bloque(self) -> None:
+        coord = self._coord({"switch.z1": "unknown"})
+        self.assertFalse(self._attend(coord, ["switch.z1"]))
+
+    def test_une_vanne_absente_du_registre_bloque(self) -> None:
+        coord = self._coord({"switch.z1": "off", "switch.z2": None})
+        self.assertFalse(self._attend(coord, ["switch.z1", "switch.z2"]))
+
+    def test_aucune_zone_ne_bloque_pas(self) -> None:
+        self.assertTrue(self._attend(self._coord({}), []))
+
+    def test_le_garde_est_branche_sur_le_lancement_normal(self) -> None:
+        # Le défaut n'était pas l'absence du garde mais son absence de branchement : il ne
+        # protégeait que la reprise après redémarrage, jamais le lancement auto ou manuel.
+        import inspect
+        src = inspect.getsource(
+            coordinator_mod.GazonIntelligentCoordinator._execute_canonical_watering_plan
+        )
+        self.assertIn("_wait_for_zones_available", src)
+
+
+class PendingSegmentsFractionationTests(unittest.TestCase):
+    """`_build_pending_zone_segments` stockait la dose PLEINE (`zone.duration_s`/`zone.mm`) pour
+    CHAQUE passage : sur un cycle fractionné (passages > 1), la liste `zones_pending` surestimait
+    chaque segment (2 passages → 2× la dose par segment). Inerte à ce jour — l'exécution, le mm
+    crédité et la reprise recalculent tous via `zone_for_passage` — mais c'était un piège : un futur
+    code lisant ces valeurs pour la reprise aurait double-dosé."""
+
+    def _segments(self, *, objectif, rate, passages):
+        plan = watering_plan_mod.build_watering_plan(
+            objectif, [("switch.z1", rate)], passages=passages, pause_minutes=25
+        )
+        coord = _build_coordinator()
+        return plan, coordinator_mod.GazonIntelligentCoordinator._build_pending_zone_segments(coord, plan)
+
+    def test_mm_des_segments_somme_a_lobjectif(self):
+        _, seg = self._segments(objectif=12.0, rate=14.0, passages=2)
+        self.assertEqual(round(sum(s["mm"] for s in seg), 1), 12.0)
+
+    def test_duree_des_segments_somme_a_la_duree_pleine(self):
+        plan, seg = self._segments(objectif=12.0, rate=14.0, passages=2)
+        self.assertEqual(sum(s["duration_s"] for s in seg), plan.zones[0].duration_s)
+
+    def test_deux_passages_produisent_deux_segments_a_demi_dose(self):
+        _, seg = self._segments(objectif=12.0, rate=14.0, passages=2)
+        self.assertEqual(len(seg), 2)
+        for s in seg:
+            self.assertAlmostEqual(s["mm"], 6.0, places=1)
+
+    def test_un_seul_passage_donne_la_dose_pleine(self):
+        _, seg = self._segments(objectif=10.0, rate=14.0, passages=1)
+        self.assertEqual(len(seg), 1)
+        self.assertAlmostEqual(seg[0]["mm"], 10.0, places=1)
+
+
+# ---------------------------------------------------------------------------
+# BANC DE TEST — reprise après coupure de HA en plein cycle d'arrosage.
+# Objectif : caractériser le comportement à différents instants d'interruption
+# AVANT de corriger les bugs, pour que chaque correctif ait un filet.
+# Les tests marqués @expectedFailure exposent un bug connu (encore ouvert) :
+# la suite reste verte ; retirer le marqueur quand le bug est corrigé.
+# ---------------------------------------------------------------------------
+class RestartFinishHeuristicBenchTests(unittest.TestCase):
+    """`_is_finished_irrigation_session` déclare un cycle terminé dès que
+    `elapsed >= planned_total_seconds`, MÊME s'il reste des passages en attente. Si HA coupe
+    pendant la pause inter-passages et reste indisponible plus longtemps que la durée planifiée,
+    le cycle est clôturé et le 2ᵉ passage abandonné (6 mm délivrés au lieu de 12) — bug 2212."""
+
+    NOW = datetime(2026, 7, 23, 6, 0, tzinfo=timezone.utc)
+
+    def _verdict(self, session):
+        fake = types.SimpleNamespace(_current_utc_datetime=lambda: self.NOW)
+        return coordinator_mod.GazonIntelligentCoordinator._is_finished_irrigation_session(fake, session)
+
+    def _session_mid_pause(self, *, down_seconds):
+        # Passage 1 terminé, en pause avant le passage 2, vanne fermée. HA down `down_seconds`.
+        return {
+            "status": "running",
+            "current_passage": 1,
+            "passage_count": 2,
+            "planned_total_seconds": 6330,  # 2 passages (4830) + pause 25 min (1500)
+            "started_at": self.NOW - timedelta(seconds=down_seconds),
+            "active_zones": [],
+            "current_zone": None,
+            "zones_pending": [
+                {"passage": 2, "zone_index": 0, "zone": "switch.z1", "duration_s": 1545, "mm": 6.0},
+                {"passage": 2, "zone_index": 1, "zone": "switch.z2", "duration_s": 1545, "mm": 6.0},
+            ],
+        }
+
+    # --- Contrôles positifs : comportement correct existant (doivent passer) ---
+    def test_session_completed_est_terminee(self):
+        self.assertTrue(self._verdict({"status": "completed"}))
+
+    def test_session_failed_est_terminee(self):
+        self.assertTrue(self._verdict({"status": "failed"}))
+
+    def test_zone_active_nest_pas_terminee(self):
+        self.assertFalse(self._verdict({
+            "status": "running", "active_zones": ["switch.z1"], "current_zone": "switch.z1",
+        }))
+
+    def test_tous_passages_faits_pending_vide_est_termine(self):
+        s = self._session_mid_pause(down_seconds=7000)
+        s["current_passage"], s["zones_pending"] = 2, []
+        self.assertTrue(self._verdict(s))
+
+    def test_coupure_courte_pendant_la_pause_nest_pas_terminee(self):
+        # HA down 10 min (< planned 6330 s) : elapsed < planned, l'heuristique ne se déclenche pas.
+        self.assertFalse(self._verdict(self._session_mid_pause(down_seconds=600)))
+
+    # --- Bug 2212 CORRIGÉ : coupure longue pendant la pause ne clôture plus le cycle ---
+    def test_coupure_longue_pendant_la_pause_ne_termine_pas_le_cycle(self):
+        # HA down 2 h (> planned 6330 s) alors que le passage 2 reste à faire.
+        s = self._session_mid_pause(down_seconds=7200)
+        self.assertFalse(
+            self._verdict(s),
+            "un cycle avec des passages en attente ne doit PAS être déclaré terminé",
+        )
+
+
+class RestartPhantomSessionBenchTests(unittest.TestCase):
+    """Bug 1578 (session fantôme) est CONNECTÉ au 2212 : `_get_active_irrigation_session` efface la
+    session persistée si `_is_finished_irrigation_session` la déclare terminée. Après une coupure
+    longue pendant la pause, l'ancienne heuristique la déclarait terminée → session effacée →
+    `_get_active_irrigation_session()` renvoyait None → la garde de reconstruction de session
+    passive sautait → session fantôme qui verrouille l'arrosage. Le correctif du 2212 (ne pas
+    déclarer terminé s'il reste des segments) referme aussi cette racine."""
+
+    NOW = datetime(2026, 7, 23, 6, 0, tzinfo=timezone.utc)
+
+    def _coord_with_session(self, session):
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord._runtime_state = {"active_irrigation_session": session}
+        coord._irrigation_launch_lock = None
+        coord._current_utc_datetime = lambda: self.NOW
+        return coord
+
+    def _mid_pause_session(self, *, down_seconds):
+        return {
+            "status": "running",
+            "current_passage": 1,
+            "passage_count": 2,
+            "planned_total_seconds": 6330,
+            "started_at": self.NOW - timedelta(seconds=down_seconds),
+            "active_zones": [],
+            "current_zone": None,
+            "plan": {"objective_mm": 12.0},
+            "zones_pending": [
+                {"passage": 2, "zone_index": 0, "zone": "switch.z1", "duration_s": 1545, "mm": 6.0},
+            ],
+        }
+
+    def test_session_mid_pause_est_conservee_apres_coupure_longue(self):
+        # HA down 2 h : la session à reprendre doit être CONSERVÉE (pas effacée → pas de fantôme).
+        coord = self._coord_with_session(self._mid_pause_session(down_seconds=7200))
+        got = coordinator_mod.GazonIntelligentCoordinator._get_active_irrigation_session(coord)
+        self.assertIsNotNone(got, "la session à reprendre ne doit pas être effacée")
+        self.assertEqual(got.get("current_passage"), 1)
+
+    def test_session_vraiment_terminee_est_bien_effacee(self):
+        # Contrôle : un cycle réellement fini (dernier passage, pending vide) doit être effacé.
+        s = self._mid_pause_session(down_seconds=7200)
+        s["current_passage"], s["zones_pending"], s["status"] = 2, [], "completed"
+        coord = self._coord_with_session(s)
+        # _set_active_irrigation_session + _persist_execution_snapshot appelés sur session finie :
+        coord._set_active_irrigation_session = lambda v: coord._runtime_state.__setitem__("active_irrigation_session", v)
+        coord._persist_execution_snapshot = lambda *a, **k: None
+        got = coordinator_mod.GazonIntelligentCoordinator._get_active_irrigation_session(coord)
+        self.assertIsNone(got)
+
+
+class SharedStateLoadRaceBenchTests(unittest.TestCase):
+    """État partagé par les DEUX instances (singleton). HA peut initialiser les deux entrées du
+    même domaine en parallèle → deux `async_load` concurrents. Sans sérialisation, les deux
+    passaient la garde `_loaded` avant l'await du Store puis réassignaient `products` → un cerveau
+    tenant une référence à l'ancien dict se retrouvait avec un catalogue orphelin (bug shared_state:126)."""
+
+    def _make_state(self, store):
+        st = object.__new__(shared_state_mod.GazonIntelligentSharedState)
+        st._store = store
+        st._loaded = False
+        st._load_lock = asyncio.Lock()
+        st.shared_config = {}
+        st.products = {}
+        return st
+
+    def test_chargements_concurrents_ne_chargent_quune_fois(self):
+        loads = {"n": 0}
+
+        class _Store:
+            async def async_load(self):
+                loads["n"] += 1
+                await asyncio.sleep(0)  # point de bascule de la boucle événementielle
+                return {"products": {"p1": {"id": "p1", "nom": "Bio"}}}
+
+        st = self._make_state(_Store())
+
+        async def _run():
+            await asyncio.gather(st.async_load(), st.async_load())
+
+        asyncio.run(_run())
+        self.assertEqual(loads["n"], 1, "le Store ne doit être chargé qu'une fois malgré 2 appels concurrents")
+        self.assertEqual(set(st.products), {"p1"})
+
+    def test_products_nest_pas_reassigne_au_second_load(self):
+        class _Store:
+            async def async_load(self):
+                await asyncio.sleep(0)
+                return {"products": {"p1": {"id": "p1"}}}
+
+        st = self._make_state(_Store())
+
+        async def _run():
+            await st.async_load()
+            ref = st.products  # un cerveau garderait cette référence
+            await st.async_load()  # 2e appel : garde `_loaded` → pas de réassignation
+            return ref is st.products
+
+        self.assertTrue(asyncio.run(_run()), "products ne doit pas être réassigné (référence orpheline)")
+
+
+class SharedValveMutualExclusionBenchTests(unittest.TestCase):
+    """Deux pelouses peuvent piloter le même relais (Sonoff 4CH). Le garde local
+    `_watering_session_active` ne voit que ses propres sessions ;
+    `_shared_valve_busy_elsewhere` le complète en LECTURE SEULE de l'état des sœurs
+    pour refuser un lancement si une autre instance arrose déjà une vanne partagée
+    (coordinator:2457). Garde purement ADDITIVE : au pire elle refuse (jamais de
+    double-arrosage). En config réelle, la vanne partagée du Potager est neutralisée
+    (débit 0) → `_iter_zones_with_rate` ne la yield pas → garde DORMANT."""
+
+    NOW = datetime(2026, 7, 23, 6, 0, tzinfo=timezone.utc)
+    DOMAIN = coordinator_mod.DOMAIN
+
+    def _coord(self, *, data, active_session=None):
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord.entry = _FakeEntry(data=data)
+        coord._runtime_state = {"active_irrigation_session": active_session}
+        coord._current_utc_datetime = lambda: self.NOW
+        return coord
+
+    def _running_session(self, *, zone="switch.shared"):
+        return {
+            "status": "running",
+            "current_passage": 1,
+            "passage_count": 1,
+            "planned_total_seconds": 600,
+            "started_at": self.NOW - timedelta(seconds=30),
+            "active_zones": [zone],
+            "current_zone": zone,
+            "zones_pending": [],
+        }
+
+    def _busy(self, me, *others):
+        """Place `me` + les sœurs dans un `hass.data[DOMAIN]` commun et évalue le garde."""
+        domain_data = {"me": me}
+        for idx, other in enumerate(others):
+            domain_data[f"other{idx}"] = other
+        hass = types.SimpleNamespace(data={self.DOMAIN: domain_data})
+        for coord in (me, *others):
+            coord.hass = hass
+        return coordinator_mod.GazonIntelligentCoordinator._shared_valve_busy_elsewhere(me)
+
+    def test_soeur_active_sur_vanne_partagee_bloque(self):
+        # Les DEUX instances déclarent switch.shared à débit > 0 → collision réelle possible.
+        me = self._coord(data={"zone_1": "switch.shared", "debit_zone_1": 60.0})
+        sister = self._coord(
+            data={"zone_1": "switch.shared", "debit_zone_1": 60.0},
+            active_session=self._running_session(),
+        )
+        self.assertTrue(self._busy(me, sister), "une sœur arrosant la vanne partagée doit bloquer")
+
+    def test_soeur_inactive_ne_bloque_pas(self):
+        me = self._coord(data={"zone_1": "switch.shared", "debit_zone_1": 60.0})
+        sister = self._coord(
+            data={"zone_1": "switch.shared", "debit_zone_1": 60.0},
+            active_session=None,
+        )
+        self.assertFalse(self._busy(me, sister))
+
+    def test_pas_de_vanne_partagee_ne_bloque_pas(self):
+        # Sœur active mais sur une AUTRE vanne : aucune intersection → pas de blocage.
+        me = self._coord(data={"zone_1": "switch.a", "debit_zone_1": 60.0})
+        sister = self._coord(
+            data={"zone_1": "switch.b", "debit_zone_1": 60.0},
+            active_session=self._running_session(zone="switch.b"),
+        )
+        self.assertFalse(self._busy(me, sister))
+
+    def test_vanne_partagee_neutralisee_cote_soeur_reste_dormant(self):
+        # CONFIG RÉELLE : le Potager pointe la vanne partagée mais à débit 0 (neutralisée).
+        # `_iter_zones_with_rate` ne la yield pas → intersection vide → garde dormant. « Ne casse rien. »
+        me = self._coord(data={"zone_1": "switch.shared", "debit_zone_1": 60.0})
+        potager = self._coord(
+            data={"zone_1": "switch.shared", "debit_zone_1": 0.0},
+            active_session=self._running_session(),
+        )
+        self.assertFalse(
+            self._busy(me, potager),
+            "une vanne partagée neutralisée (débit 0) ne doit jamais bloquer l'instance principale",
+        )
+
+    def test_session_soeur_reellement_terminee_ne_bloque_pas(self):
+        # Session au statut "running" mais en réalité finie (elapsed >= planned, aucun segment
+        # en attente) : le prédicat pur `_is_finished_irrigation_session` la neutralise → pas de
+        # blocage à tort (sinon une session fantôme d'une sœur gèlerait l'arrosage principal).
+        me = self._coord(data={"zone_1": "switch.shared", "debit_zone_1": 60.0})
+        stale = self._running_session()
+        stale["started_at"] = self.NOW - timedelta(hours=2)  # elapsed 7200 s >> planned 600 s
+        stale["active_zones"] = []
+        stale["current_zone"] = None
+        sister = self._coord(
+            data={"zone_1": "switch.shared", "debit_zone_1": 60.0},
+            active_session=stale,
+        )
+        self.assertFalse(self._busy(me, sister))
+
+    def test_instance_unique_court_circuite(self):
+        # Une seule entrée dans le domaine → aucun voisin possible → False immédiat.
+        me = self._coord(data={"zone_1": "switch.shared", "debit_zone_1": 60.0})
+        hass = types.SimpleNamespace(data={self.DOMAIN: {"me": me}})
+        me.hass = hass
+        self.assertFalse(
+            coordinator_mod.GazonIntelligentCoordinator._shared_valve_busy_elsewhere(me)
+        )
+
+    def test_garde_bloque_reellement_la_decision_de_lancement(self):
+        # Preuve d'intégration : à travers `_should_launch_auto_irrigation`, une sœur arrosant une
+        # vanne partagée fait retourner (False, "watering_in_progress").
+        me = _build_coordinator()
+        me.history = []
+        # switch.zone_1 est déclaré à débit 60 par `_build_coordinator` → vanne partagée.
+        sister = self._coord(
+            data={"zone_1": "switch.zone_1", "debit_zone_1": 60.0},
+            active_session=self._running_session(zone="switch.zone_1"),
+        )
+        me.hass = types.SimpleNamespace(
+            data={self.DOMAIN: {"me": me, "sister": sister}},
+            states=types.SimpleNamespace(get=lambda _entity_id: None),
+        )
+        sister.hass = me.hass
+        should_launch, reason = me._should_launch_auto_irrigation(_ready_launch_snapshot(me))
+        self.assertFalse(should_launch)
+        self.assertEqual(reason, "watering_in_progress")

@@ -79,3 +79,50 @@ class OpportunityEvaluationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProductDetailsRawRecordTests(unittest.TestCase):
+    """`_selection_details` est appelé avant que les candidats évalués n'existent : il passe donc
+    l'enregistrement BRUT du catalogue (`id`/`nom`/`type`/`application_months`) à
+    `_product_details`, qui n'attendait que la forme évaluée (`product_id`/`product_name`/…).
+    Toutes les clés étaient absentes et le bloc « selection » se vidait précisément quand le
+    produit sélectionné EXISTE au catalogue."""
+
+    RAW = {
+        "id": "humuslight",
+        "nom": "Humuslight",
+        "type": "Biostimulant",
+        "application_months": [3, 4, 5],
+    }
+    EVALUATED = {
+        "product_id": "humuslight",
+        "product_name": "Humuslight",
+        "product_type": "Biostimulant",
+        "months": [3, 4, 5],
+        "due": True,
+    }
+
+    def test_enregistrement_brut_est_correctement_lu(self):
+        details = intervention._product_details(self.RAW)
+        self.assertEqual(details["id"], "humuslight")
+        self.assertEqual(details["name"], "Humuslight")
+        self.assertEqual(details["type"], "Biostimulant")
+        self.assertEqual(details["months"], [3, 4, 5])
+
+    def test_candidat_evalue_reste_supporte(self):
+        details = intervention._product_details(self.EVALUATED)
+        self.assertEqual(details["id"], "humuslight")
+        self.assertEqual(details["name"], "Humuslight")
+        self.assertEqual(details["type"], "Biostimulant")
+        self.assertTrue(details["due"])
+
+    def test_selection_nest_plus_videe_quand_le_produit_existe(self):
+        selection = intervention._selection_details(
+            selected_product_id="humuslight",
+            selected_product_name=None,
+            selected_candidate=self.RAW,
+            ready=True,
+        )
+        self.assertEqual(selection["id"], "humuslight")
+        self.assertEqual(selection["name"], "Humuslight")
+        self.assertEqual(selection["type"], "Biostimulant")

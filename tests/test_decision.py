@@ -163,6 +163,87 @@ class TestPhaseLogic(unittest.TestCase):
 
         self.assertEqual(total, 1.2)
 
+    def test_compute_recent_watering_mm_excludes_technical_cooling(self) -> None:
+        # Régression : le rafraîchissement du soir (canicule) et l'incorporation post-application
+        # sont des arrosages TECHNIQUES — ils ne rechargent pas la réserve, donc ne doivent PAS
+        # compter dans l'eau récente (ni réserve, ni garde-fou hebdo). Sinon le cooling grignote
+        # le budget ET gonfle la réserve → gazon qui sèche en canicule alors que tout paraît plein.
+        history = [
+            {"type": "arrosage", "date": "2026-03-17", "objectif_mm": 5.0},  # vraie recharge
+            {"type": "arrosage", "date": "2026-03-17", "objectif_mm": 3.0, "watering_cause": "rafraichissement_soir"},
+            {"type": "arrosage", "date": "2026-03-16", "objectif_mm": 2.0, "watering_cause": "post_application"},
+        ]
+
+        total = decision.compute_recent_watering_mm(history, today=date(2026, 3, 17), days=7)
+
+        self.assertEqual(total, 5.0)  # seul l'arrosage de vraie recharge est compté
+
+    def test_compute_recent_watering_mm_can_exclude_external_sessions(self) -> None:
+        # Régression (garde-fou hebdo) : une session EXTERNE (`zone_session` = vannes ouvertes
+        # hors intégration : Assist/voix, raccourci, toggle manuel) ne doit pas gonfler le budget
+        # hebdo. include_external=False l'exclut ; par défaut (True) elle reste comptée (rétro-compat).
+        history = [
+            {"type": "arrosage", "date": "2026-03-17", "objectif_mm": 5.0, "source": "auto_irrigation"},
+            {"type": "arrosage", "date": "2026-03-17", "objectif_mm": 22.5, "source": "zone_session"},
+        ]
+        # Budget hebdo (exclut l'externe) → seule la recharge pilotée par l'intégration compte.
+        self.assertEqual(
+            decision.compute_recent_watering_mm(history, today=date(2026, 3, 17), days=7, include_external=False),
+            5.0,
+        )
+        # Par défaut → tout compte (rétro-compat préservée).
+        self.assertEqual(
+            decision.compute_recent_watering_mm(history, today=date(2026, 3, 17), days=7),
+            27.5,
+        )
+
+    def test_compute_recent_watering_count_can_exclude_external_sessions(self) -> None:
+        # Le COMPTE hebdo doit aussi pouvoir ignorer les sessions externes (cohérence garde-fou).
+        history = [
+            {"type": "arrosage", "date": "2026-03-17", "objectif_mm": 5.0, "source": "auto_irrigation"},
+            {"type": "arrosage", "date": "2026-03-17", "objectif_mm": 22.5, "source": "zone_session"},
+        ]
+        self.assertEqual(
+            water.compute_recent_watering_count(history, today=date(2026, 3, 17), days=7, include_external=False), 1
+        )
+        self.assertEqual(water.compute_recent_watering_count(history, today=date(2026, 3, 17), days=7), 2)
+
+    def test_latest_watering_datetime_ignores_external_sessions(self) -> None:
+        # Choix Kévin (25/06/2026) : un arrosage EXTERNE (`zone_session`) n'arme PAS le cooldown 24 h.
+        # _latest_watering_datetime (l'ancre du cooldown) doit donc ignorer l'externe et renvoyer la
+        # dernière session PILOTÉE par l'intégration, même si une session externe est plus récente.
+        piloted_at = datetime(2026, 3, 16, 6, 0, tzinfo=timezone.utc)
+        external_at = datetime(2026, 3, 17, 23, 51, tzinfo=timezone.utc)
+        history = [
+            {"type": "arrosage", "recorded_at": piloted_at.isoformat(), "total_mm": 5.0, "source": "auto_irrigation"},
+            {"type": "arrosage", "recorded_at": external_at.isoformat(), "total_mm": 5.8, "source": "zone_session"},
+        ]
+        latest = guidance_module._latest_watering_datetime(history)
+        self.assertIsNotNone(latest)
+        self.assertEqual(latest.date(), date(2026, 3, 16))  # l'auto du 16, pas l'externe du 17
+
+    def test_latest_watering_datetime_external_only_returns_none(self) -> None:
+        # Si la SEULE session est externe → aucune ancre de cooldown (l'externe n'arme pas le cooldown).
+        history = [
+            {
+                "type": "arrosage",
+                "recorded_at": datetime(2026, 3, 17, 23, 51, tzinfo=timezone.utc).isoformat(),
+                "total_mm": 5.8,
+                "source": "zone_session",
+            },
+        ]
+        self.assertIsNone(guidance_module._latest_watering_datetime(history))
+
+    def test_compute_recent_watering_count_still_counts_technical_events(self) -> None:
+        # Le COMPTE d'arrosages (fréquence) reste inchangé : un cooling reste un événement
+        # d'arrosage. Seul le total en mm (réserve + budget) exclut les arrosages techniques.
+        history = [
+            {"type": "arrosage", "date": "2026-03-17", "objectif_mm": 5.0},
+            {"type": "arrosage", "date": "2026-03-17", "objectif_mm": 3.0, "watering_cause": "rafraichissement_soir"},
+        ]
+
+        self.assertEqual(water.compute_recent_watering_count(history, today=date(2026, 3, 17), days=7), 2)
+
     def test_compute_recent_watering_count_shares_recent_filtering_rules(self) -> None:
         history = [
             {"type": "arrosage", "date": "2026-03-17", "objectif_mm": 2.5},
@@ -300,10 +381,10 @@ class TestHydricCoreAndMemory(unittest.TestCase):
         self.assertEqual(balance["reserve_stock_max_mm"], 24.0)
         self.assertEqual(balance["reserve_surplus_mm"], 2.0)
 
-    def test_display_reserve_descends_progressively_with_sun(self) -> None:
-        # Réserve de décision épuisée (2,2/12) mais ET du jour pas encore évaporée (la nuit,
-        # fraction 0) → la réserve AFFICHÉE rajoute l'ET restante (descente progressive),
-        # alors que la réserve de DÉCISION (reserve_stock_mm / depletion_ratio) reste figée.
+    def test_display_reserve_matches_decision_when_depleted(self) -> None:
+        # Anti-incohérence (choix 25/06/2026) : la réserve AFFICHÉE = la réserve de DÉCISION,
+        # quelle que soit l'heure. Avant, l'affichage rajoutait l'ET du jour et montrait « pas
+        # soif » (10,4) alors que la décision était « a soif » (2,2) → carte ≠ cerveau. Corrigé.
         common = dict(
             history=[],
             today=date(2026, 7, 15),
@@ -314,20 +395,73 @@ class TestHydricCoreAndMemory(unittest.TestCase):
             type_sol="limoneux",
             soil_balance={"reserve_mm": 2.2, "reserve_max_mm": 24.0},
         )
-        night = decision.compute_water_balance(**common, weather_profile={"et_elapsed_fraction": 0.0})
-        # Décision inchangée.
-        self.assertEqual(night["reserve_stock_mm"], 2.2)
-        self.assertEqual(night["depletion_ratio"], 0.817)
-        # Affichage : réserve remontée de ~8,2 mm (ET pas encore évaporée) → plus de « soif ».
-        self.assertAlmostEqual(night["reserve_actuelle_affichee_mm"], 10.4, places=1)
-        self.assertLess(night["depletion_ratio_affiche"], night["depletion_ratio"])
-        self.assertLess(night["depletion_ratio_affiche"], 0.5)  # sous le seuil MAD → pas soif
-        # En fin de journée (fraction 1), l'affichage rejoint la décision.
-        evening = decision.compute_water_balance(**common, weather_profile={"et_elapsed_fraction": 1.0})
-        self.assertAlmostEqual(
-            evening["reserve_actuelle_affichee_mm"], evening["reserve_actuelle_mm"], places=1
+        for frac in (0.0, 0.5, 1.0):
+            wb = decision.compute_water_balance(**common, weather_profile={"et_elapsed_fraction": frac})
+            self.assertAlmostEqual(wb["reserve_actuelle_affichee_mm"], wb["reserve_actuelle_mm"], places=2)
+            self.assertAlmostEqual(wb["depletion_ratio_affiche"], wb["depletion_ratio"], places=3)
+        # Réserve très basse → l'affichage montre BIEN « soif » (≥ seuil MAD), comme la décision.
+        wb = decision.compute_water_balance(**common, weather_profile={"et_elapsed_fraction": 0.0})
+        self.assertEqual(wb["reserve_stock_mm"], 2.2)
+        self.assertGreater(wb["depletion_ratio_affiche"], 0.5)
+
+    def test_display_reserve_matches_decision_when_well_supplied(self) -> None:
+        # Sol bien pourvu (décision 9/12) : l'affichage colle à la décision à toute heure (fini
+        # le « plein » trompeur du matin). La jauge bouge avec la vraie réserve, sans mentir.
+        common = dict(
+            history=[],
+            today=date(2026, 7, 15),
+            etp=7.0,
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            pluie_j2=0.0,
+            type_sol="limoneux",
+            soil_balance={"reserve_mm": 9.0, "reserve_max_mm": 24.0},
         )
-        self.assertAlmostEqual(evening["depletion_ratio_affiche"], evening["depletion_ratio"], places=2)
+        for frac in (0.0, 0.5, 1.0):
+            wb = decision.compute_water_balance(**common, weather_profile={"et_elapsed_fraction": frac})
+            self.assertAlmostEqual(wb["reserve_actuelle_affichee_mm"], wb["reserve_actuelle_mm"], places=2)
+            self.assertAlmostEqual(wb["reserve_actuelle_affichee_mm"], 9.0, places=1)
+            self.assertAlmostEqual(wb["depletion_ratio_affiche"], wb["depletion_ratio"], places=3)
+
+    def test_display_reserve_frozen_when_recalibrated_today(self) -> None:
+        # Régression carte : après un recalage manuel (service recalibrate_reserve) la réserve du jour
+        # est ANCRÉE — l'ET du jour n'est PAS projetée dessus. L'affichage doit montrer la valeur
+        # recalée TELLE QUELLE, sans reconstruction « + ET du matin » (sinon recalage à 4 → carte à 12).
+        today = date(2026, 7, 15)
+        base = dict(
+            history=[],
+            today=today,
+            etp=8.0,
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            pluie_j2=0.0,
+            type_sol="limoneux",
+        )
+        anchored = decision.compute_water_balance(
+            **base,
+            soil_balance={
+                "reserve_mm": 4.0,
+                "reserve_max_mm": 24.0,
+                "ledger": [{"date": today.isoformat(), "reserve_mm": 4.0, "manual_anchor": True}],
+            },
+            weather_profile={"et_elapsed_fraction": 0.5},
+        )
+        # Cœur du correctif : même en milieu de journée, l'affichage est figé sur la décision.
+        self.assertAlmostEqual(anchored["reserve_actuelle_affichee_mm"], anchored["reserve_actuelle_mm"], places=2)
+        self.assertAlmostEqual(anchored["depletion_ratio_affiche"], anchored["depletion_ratio"], places=2)
+        # Depuis l'anti-incohérence (25/06/2026) : avec OU sans recalage, l'affichage colle à la
+        # décision. Même réserve (4,0) sans recalage → même affichage que la version ancrée.
+        not_anchored = decision.compute_water_balance(
+            **base,
+            soil_balance={"reserve_mm": 4.0, "reserve_max_mm": 24.0},
+            weather_profile={"et_elapsed_fraction": 0.5},
+        )
+        self.assertAlmostEqual(
+            not_anchored["reserve_actuelle_affichee_mm"], not_anchored["reserve_actuelle_mm"], places=2
+        )
+        self.assertAlmostEqual(
+            not_anchored["reserve_actuelle_affichee_mm"], anchored["reserve_actuelle_affichee_mm"], places=2
+        )
 
     def test_build_decision_snapshot_uses_persistent_soil_balance(self) -> None:
         snapshot = make_snapshot(
@@ -351,7 +485,11 @@ class TestHydricCoreAndMemory(unittest.TestCase):
         )
 
         self.assertEqual(snapshot["reserve_hydrique_sol_mm"], 14.0)
-        self.assertAlmostEqual(snapshot["bilan_hydrique_mm"], -2.9, places=1)
+        # Le bilan brut vaut exactement -3.0 (ETP 3.0, ni pluie ni arrosage sur l'horizon jour).
+        # L'attendu était -2.9 : il figeait le bug de troncature de water._round_half_up_1, qui
+        # ramenait les négatifs VERS zéro (int(-30.0 + 0.5) = -29 → -2.9). Une fois l'arrondi
+        # aligné sur celui de soil_balance, la valeur correcte est -3.0.
+        self.assertAlmostEqual(snapshot["bilan_hydrique_mm"], -3.0, places=1)
         self.assertEqual(snapshot["bilan_hydrique_precedent_mm"], 11.0)
         self.assertEqual(snapshot["type_sol"], "limoneux")
         self.assertEqual(snapshot["soil_balance"]["reserve_mm"], 14.0)
@@ -1877,6 +2015,74 @@ class TestObjectiveAndGuidance(unittest.TestCase):
         )
 
         self.assertEqual(passages, 3)
+
+
+class TestAuditMinorFixes(unittest.TestCase):
+    """Tests de non-régression des correctifs mineurs (audit 0.16.x)."""
+
+    def test_phase_produit_type_arrosage_suit_auto_ok(self) -> None:
+        # [17] Les branches phase produit (Scarification/Fertilisation/Agent Mouillant/Biostimulant)
+        # figeaient type_arrosage="auto" ; elles doivent suivre auto_ok comme la branche générique
+        # → "personnalise" quand l'arrosage auto est désactivé (config par défaut). Cas reproductible :
+        # phase Scarification active, arrosage post-application NON requis (sinon chemin technique),
+        # déficit réel → une des 4 branches identiques est exercée.
+        snapshot = make_snapshot(
+            history=[{"type": "Scarification", "date": "2026-03-16", "application_requires_watering_after": False}],
+            today=date(2026, 3, 17),
+            hour_of_day=8,
+            temperature=28,
+            humidite=30,
+            etp_capteur=7.0,
+        )
+        self.assertEqual(snapshot["phase_active"], "Scarification")
+        self.assertEqual(snapshot["watering_cause"], "hydrique")  # pas le chemin post-application
+        self.assertTrue(snapshot["arrosage_recommande"])
+        self.assertFalse(snapshot["arrosage_auto_autorise"])  # auto désactivé par défaut
+        self.assertEqual(snapshot["type_arrosage"], "personnalise")  # et non "auto" figé
+
+    def test_upcoming_watering_coordination_suit_heure_reelle(self) -> None:
+        # [20] Le message affichait "ce matin" dès que la fenêtre était passée, y compris le soir.
+        # Le moment doit suivre l'heure réelle (la fenêtre du soir de canicule existe aussi).
+        water_bundle = {"arrosage_recommande": True, "watering_window_start_minute": 60}
+        soir = decision_mowing.DecisionContext(history=[], today=date(2026, 7, 23), hour_of_day=20)
+        niveau, message_soir = decision_mowing._upcoming_watering_coordination(soir, water_bundle)
+        self.assertEqual(niveau, "discourage")
+        self.assertIn("ce soir", message_soir)
+        self.assertNotIn("ce matin", message_soir)
+        matin = decision_mowing.DecisionContext(history=[], today=date(2026, 7, 23), hour_of_day=8)
+        _, message_matin = decision_mowing._upcoming_watering_coordination(matin, water_bundle)
+        self.assertIn("ce matin", message_matin)
+
+    def test_raison_blocage_tonte_pas_de_motif_positif_si_blocage_arrosage(self) -> None:
+        # [21] Application foliaire en phase Fertilisation : l'arrosage bloque la tonte alors que la
+        # phase, elle, l'autorise. raison_blocage_tonte ne doit PAS afficher le motif POSITIF de
+        # tonte ("Fenêtre tonte acceptable.") sur une tonte "interdite".
+        now = FIXED_HA_NOW_UTC
+        snapshot = make_snapshot(
+            history=[
+                {
+                    "type": "Fertilisation",
+                    "date": now.date().isoformat(),
+                    "declared_at": (now - timedelta(hours=2)).isoformat(),
+                    "produit": "Foliaire X",
+                    "application_type": "foliaire",
+                    "application_requires_watering_after": False,
+                    "application_post_watering_mm": 0.0,
+                    "application_irrigation_block_hours": 24.0,
+                    "application_irrigation_delay_minutes": 0.0,
+                    "application_irrigation_mode": "suggestion",
+                }
+            ],
+            today=now.date(),
+            hour_of_day=10,
+            temperature=18,
+            humidite=50,
+            etp_capteur=2.0,
+        )
+        self.assertEqual(snapshot["application_type"], "foliaire")
+        self.assertEqual(snapshot["tonte_statut"], "interdite")
+        self.assertNotEqual(snapshot.get("raison_blocage_tonte"), "Fenêtre tonte acceptable.")
+        self.assertTrue(snapshot.get("raison_blocage_tonte"))
 
 
 if __name__ == "__main__":

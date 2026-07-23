@@ -185,14 +185,6 @@ Attributs canoniques:
 - `depletion_ratio`
 - `hydric_state`
 
-Alias legacy conservés:
-
-- `reserve_utile_max_mm`
-- `reserve_utile_actuelle_mm`
-- `reserve_totale_sol_mm`
-- `reserve_totale_sol_max_mm`
-- `surplus_hydrique_mm`
-
 ### `sensor.*_etat_hydrique`
 
 Rôle canonique:
@@ -212,14 +204,6 @@ Attributs canoniques:
 - `depletion_ratio`
 - `hydric_state`
 
-Alias legacy conservés:
-
-- `reserve_utile_max_mm`
-- `reserve_utile_actuelle_mm`
-- `reserve_totale_sol_mm`
-- `reserve_totale_sol_max_mm`
-- `surplus_hydrique_mm`
-
 ### `sensor.*_objectif_d_arrosage`
 
 Rôle canonique:
@@ -233,7 +217,6 @@ Attributs canoniques:
 - `phase_dominante`
 - `sous_phase`
 - `bilan_hydrique_mm`
-- `bilan_hydrique_journalier_mm`
 - `deficit_3j`
 - `deficit_7j`
 - `pluie_demain`
@@ -262,13 +245,8 @@ Attributs canoniques:
 - `hydric_balance_level`
 - `hydric_strategy`
 
-Alias legacy conservés:
+Alias legacy encore exposé:
 
-- `reserve_utile_max_mm`
-- `reserve_utile_actuelle_mm`
-- `reserve_totale_sol_mm`
-- `reserve_totale_sol_max_mm`
-- `surplus_hydrique_mm`
 - `reserve_hydrique_sol_mm`
 
 ### `sensor.*_sous_phase`
@@ -487,13 +465,16 @@ Exemples:
 
 Ces alias sont conservés pour compatibilité historique et pour des dashboards existants.
 
+> **Supprimés du code.** `reserve_utile_actuelle_mm`, `reserve_utile_max_mm`,
+> `reserve_totale_sol_mm`, `reserve_totale_sol_max_mm` et `surplus_hydrique_mm` étaient
+> documentés ici comme conservés, alors qu'aucune entité ne les expose plus. Ils ont été
+> retirés de ce contrat : utilisez directement les attributs canoniques
+> (`reserve_actuelle_mm`, `reserve_utile_mm`, `reserve_stock_mm`, `reserve_stock_max_mm`,
+> `reserve_surplus_mm`). Même chose pour `bilan_hydrique_journalier_mm`, décrit comme
+> canonique sur `sensor.*_objectif_d_arrosage` sans jamais être publié.
+
 | Alias legacy | Canonique |
 |---|---|
-| `reserve_utile_actuelle_mm` | `reserve_actuelle_mm` |
-| `reserve_utile_max_mm` | `reserve_utile_mm` |
-| `reserve_totale_sol_mm` | `reserve_stock_mm` |
-| `reserve_totale_sol_max_mm` | `reserve_stock_max_mm` |
-| `surplus_hydrique_mm` | `reserve_surplus_mm` |
 | `reserve_hydrique_sol_mm` | contexte ancien, proche de `bilan_hydrique_mm` ou lecture hydrique legacy selon l'entité |
 
 Règle cible:
@@ -529,16 +510,6 @@ Règle cible:
 
 ### Hydrique
 
-- `reserve_utile_actuelle_mm`
-  - canonique: `reserve_actuelle_mm`
-- `reserve_utile_max_mm`
-  - canonique: `reserve_utile_mm`
-- `reserve_totale_sol_mm`
-  - canonique: `reserve_stock_mm`
-- `reserve_totale_sol_max_mm`
-  - canonique: `reserve_stock_max_mm`
-- `surplus_hydrique_mm`
-  - canonique: `reserve_surplus_mm`
 - `reserve_hydrique_sol_mm`
   - canonique proche: attribut legacy hydrique, à documenter au cas par cas selon l'entité
 
@@ -547,11 +518,6 @@ Règle cible:
 Ces attributs ne doivent **pas** être supprimés maintenant, mais sont de bons candidats à une dépréciation progressive:
 
 - `mowing_block_reason`
-- `reserve_utile_actuelle_mm`
-- `reserve_utile_max_mm`
-- `reserve_totale_sol_mm`
-- `reserve_totale_sol_max_mm`
-- `surplus_hydrique_mm`
 - `reserve_hydrique_sol_mm`
 
 Les couples suivants peuvent aussi être visés plus tard, **uniquement** après migration documentée:

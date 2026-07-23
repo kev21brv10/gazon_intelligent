@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import voluptuous as vol
 
 from homeassistant import config_entries
@@ -101,6 +103,18 @@ _OPTIONAL_ENTITY_KEYS = (
     CONF_CAPTEUR_TONDEUSE_HAUTEUR_COUPE,
 )
 
+# Clés effaçables par l'OPTIONS FLOW (formulaire « Configurer » = capteurs uniquement).
+# Les zones en sont EXCLUES : ce formulaire ne les affiche pas, or `_normalize_optional_clears`
+# y injectait `zone_2..zone_5 = None` dans entry.options à chaque validation. Les clés existant
+# alors — à None — le repli `opts.get(k, data.get(k))` du coordinateur ne se déclenchait jamais
+# et les zones 2 à 5 cessaient silencieusement d'être arrosées, sans erreur ni notification.
+# Le flow « Reconfigurer », lui, affiche bien les champs zones : il garde le tuple complet.
+_OPTIONS_CLEARABLE_KEYS = tuple(
+    key
+    for key in _OPTIONAL_CLEARABLE_KEYS
+    if key not in (CONF_ZONE_2, CONF_ZONE_3, CONF_ZONE_4, CONF_ZONE_5)
+)
+
 
 def _normalize_optional_clears(
     payload: dict | None,
@@ -153,7 +167,11 @@ def _build_instance_title(instance_slug: str | None) -> str:
 
 def _build_base_fields(current: dict | None, *, include_instance_slug: bool = False) -> dict:
     current = current or {}
-    fields = {}
+    # Annotation explicite : un dict de schéma voluptuous est hétérogène par nature (marqueurs
+    # Required/Optional en clés, validateurs str / EntitySelector / vol.All / vol.In en valeurs).
+    # Sans elle, mypy infère le type depuis la PREMIÈRE entrée insérée — `dict[Required, type[str]]`
+    # quand include_instance_slug est vrai — puis rejette toutes les suivantes.
+    fields: dict[Any, Any] = {}
     if include_instance_slug:
         fields[vol.Required(CONF_INSTANCE_SLUG, default=_d(current.get(CONF_INSTANCE_SLUG)))] = str
     fields.update({
@@ -376,7 +394,15 @@ class GazonOptionsFlow(config_entries.OptionsFlow):
     async def async_step_user(self, user_input=None):
         current = {**self.entry.data, **self.entry.options}
         if user_input is not None:
-            merged = {**self.entry.options, **_normalize_optional_clears(dict(user_input))}
+            merged = {
+                **self.entry.options,
+                **_normalize_optional_clears(dict(user_input), _OPTIONS_CLEARABLE_KEYS),
+            }
+            # Nettoyage des entrées déjà polluées par l'ancien comportement : une clé de zone
+            # laissée à None dans les options masque la valeur réelle d'entry.data.
+            for zone_key in (CONF_ZONE_2, CONF_ZONE_3, CONF_ZONE_4, CONF_ZONE_5):
+                if merged.get(zone_key) is None:
+                    merged.pop(zone_key, None)
             return self.async_create_entry(title="", data=merged)
 
         return self.async_show_form(

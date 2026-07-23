@@ -743,11 +743,20 @@ def _product_details(candidate: dict[str, Any] | None) -> dict[str, Any]:
         next_reapplication_display = parsed_next_date.strftime("%d/%m/%Y")
     elif next_reapplication_date:
         next_reapplication_display = str(next_reapplication_date)
+    # Deux formes arrivent ici : le candidat ÉVALUÉ (`product_id` / `product_name` /
+    # `product_type` / `months`) et l'enregistrement BRUT du catalogue (`id` / `nom` / `type` /
+    # `application_months`), que `_selected_product_candidate` renvoie tel quel. `_selection_details`
+    # est appelé avant que les candidats évalués n'existent : sans ce repli, toutes les clés
+    # étaient absentes et le bloc « selection » se vidait précisément quand le produit
+    # sélectionné EXISTE au catalogue — l'inverse du comportement attendu.
+    raw_months = candidate.get("months")
+    if raw_months is None:
+        raw_months = normalize_application_months(candidate.get("application_months"))
     return {
-        "id": candidate.get("product_id"),
-        "name": candidate.get("product_name"),
-        "type": candidate.get("product_type"),
-        "months": candidate.get("months") or [],
+        "id": candidate.get("product_id") or candidate.get("id"),
+        "name": candidate.get("product_name") or candidate.get("nom"),
+        "type": candidate.get("product_type") or candidate.get("type"),
+        "months": raw_months or [],
         "months_label": candidate.get("months_label"),
         "phase_compatible": candidate.get("phase_compatible") or [],
         "latest_application_date": candidate.get("latest_application_date"),
