@@ -1,4 +1,9 @@
 # Development dependencies for local testing
-mypy>=1.11
-pytest>=8.0
-ruff>=0.11
+#
+# Bornes hautes volontaires : la CI réinstalle ces outils à chaque exécution. Sans borne, une
+# nouvelle version majeure fait virer la CI au rouge sans le moindre commit — c'est arrivé avec
+# mypy 2.x, qui a mis au jour 10 erreurs de typage dans config_flow.py sur un dépôt pourtant vert.
+# Relever une borne doit être un geste délibéré, accompagné de la vérification qui va avec.
+mypy>=1.11,<3
+pytest>=8.0,<9
+ruff>=0.11,<1

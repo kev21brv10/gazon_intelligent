@@ -37,23 +37,6 @@
           "type_sol": "Soil type (required)"
         }
       },
-      "reconfigure": {
-        "title": "Base settings",
-        "description": "Update the zones, flow rates and soil type here.",
-        "data": {
-          "zone_1": "Zone 1",
-          "zone_2": "Zone 2",
-          "zone_3": "Zone 3",
-          "zone_4": "Zone 4",
-          "zone_5": "Zone 5",
-          "debit_zone_1": "Zone 1 flow (mm/h, 0 if unused)",
-          "debit_zone_2": "Zone 2 flow (mm/h, 0 if unused)",
-          "debit_zone_3": "Zone 3 flow (mm/h, 0 if unused)",
-          "debit_zone_4": "Zone 4 flow (mm/h, 0 if unused)",
-          "debit_zone_5": "Zone 5 flow (mm/h, 0 if unused)",
-          "type_sol": "Soil type (required)"
-        }
-      },
       "sensors": {
         "title": "Primary weather and complementary sensors",
         "description": "Fill in one primary weather entity, then any complementary sensors if you have them. Weather stays the priority, and provided sensors override or complete missing values.",
@@ -65,6 +48,13 @@
           "capteur_etp": "Daily ETP (optional, automatic if not provided)",
           "capteur_humidite": "Local humidity (optional, used first if provided)",
           "capteur_hauteur_gazon": "Grass height (recommended if available)",
+          "entite_tondeuse": "Robotic mower (optional)",
+          "capteur_tondeuse_erreur": "Mower error sensor (optional)",
+          "capteur_tondeuse_batterie": "Mower battery sensor (optional)",
+          "capteur_tondeuse_pluie": "Mower rain sensor (optional)",
+          "capteur_tondeuse_en_charge": "Mower charging sensor (optional)",
+          "capteur_tondeuse_prochain_depart": "Mower next start sensor (optional)",
+          "capteur_tondeuse_hauteur_coupe": "Mower cutting height (optional)",
           "hauteur_min_tondeuse_cm": "Minimum mower height (cm)",
           "hauteur_max_tondeuse_cm": "Maximum mower height (cm)",
           "capteur_retour_arrosage": "Watering return (optional, automatic or estimated from zone history)",
@@ -75,7 +65,8 @@
       }
     },
     "error": {
-      "invalid_instance_slug": "Invalid lawn identifier."
+      "invalid_instance_slug": "Invalid lawn identifier.",
+      "entity_not_found": "Entity not found in Home Assistant."
     },
     "abort": {
       "already_configured": "Gazon Intelligent is already configured."
@@ -94,6 +85,13 @@
           "capteur_etp": "Daily ETP (optional, automatic if not provided)",
           "capteur_humidite": "Local humidity (optional, used first if provided)",
           "capteur_hauteur_gazon": "Grass height (recommended if available)",
+          "entite_tondeuse": "Robotic mower (optional)",
+          "capteur_tondeuse_erreur": "Mower error sensor (optional)",
+          "capteur_tondeuse_batterie": "Mower battery sensor (optional)",
+          "capteur_tondeuse_pluie": "Mower rain sensor (optional)",
+          "capteur_tondeuse_en_charge": "Mower charging sensor (optional)",
+          "capteur_tondeuse_prochain_depart": "Mower next start sensor (optional)",
+          "capteur_tondeuse_hauteur_coupe": "Mower cutting height (optional)",
           "hauteur_min_tondeuse_cm": "Minimum mower height (cm)",
           "hauteur_max_tondeuse_cm": "Maximum mower height (cm)",
           "capteur_retour_arrosage": "Watering return (optional, automatic or estimated from zone history)",
@@ -307,6 +305,22 @@
         "note": {
           "name": "Note (optional)",
           "description": "Free comment."
+        },
+        "usage_mode": {
+          "name": "Usage mode",
+          "description": "Context in which the product is used."
+        },
+        "max_applications_per_year": {
+          "name": "Max applications per year",
+          "description": "Maximum number of applications allowed per year."
+        },
+        "temperature_min": {
+          "name": "Minimum temperature (°C)",
+          "description": "Below this, the product is not recommended."
+        },
+        "temperature_max": {
+          "name": "Maximum temperature (°C)",
+          "description": "Above this, the product is not recommended."
         }
       }
     },
@@ -331,6 +345,10 @@
         "date_action": {
           "name": "Mowing date (optional)",
           "description": "Date in DD/MM/YYYY or YYYY-MM-DD format. If empty, today is used."
+        },
+        "hauteur_coupe_mm": {
+          "name": "Cutting height (mm)",
+          "description": "Cutting height used for this mow, in millimetres."
         }
       }
     },
@@ -347,12 +365,25 @@
           "description": "Amount of water applied in mm."
         }
       }
+    },
+    "recalibrate_reserve": {
+      "name": "Recalibrate soil reserve",
+      "description": "Sets the soil water reserve to a known value. The value stays frozen until the next day: rain, watering and evapotranspiration are no longer counted for today. Best called in the evening, outside a rain event.",
+      "fields": {
+        "reserve_mm": {
+          "name": "Soil reserve (mm)",
+          "description": "Measured or estimated soil water reserve, in millimetres."
+        }
+      }
     }
   },
   "entity": {
     "switch": {
       "auto_irrigation_enabled": {
         "name": "Automatic watering allowed"
+      },
+      "evening_cooling_enabled": {
+        "name": "Evening cooling allowed"
       }
     }
   }

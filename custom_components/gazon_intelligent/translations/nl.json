@@ -37,23 +37,6 @@
           "type_sol": "Bodemtype (verplicht)"
         }
       },
-      "reconfigure": {
-        "title": "Basisinstellingen",
-        "description": "Werk hier de zones, doorstroming en het bodemtype bij.",
-        "data": {
-          "zone_1": "Zone 1",
-          "zone_2": "Zone 2",
-          "zone_3": "Zone 3",
-          "zone_4": "Zone 4",
-          "zone_5": "Zone 5",
-          "debit_zone_1": "Doorstroom zone 1 (mm/h, 0 indien niet gebruikt)",
-          "debit_zone_2": "Doorstroom zone 2 (mm/h, 0 indien ongebruikt)",
-          "debit_zone_3": "Doorstroom zone 3 (mm/h, 0 indien ongebruikt)",
-          "debit_zone_4": "Doorstroom zone 4 (mm/h, 0 indien ongebruikt)",
-          "debit_zone_5": "Doorstroom zone 5 (mm/h, 0 indien ongebruikt)",
-          "type_sol": "Bodemtype (verplicht)"
-        }
-      },
       "sensors": {
         "title": "Hoofdweer en aanvullende sensoren",
         "description": "Vul hier één hoofdweerentiteit in en daarna aanvullende sensoren als je die hebt. Weer heeft prioriteit en aanwezige sensoren overschrijven of vullen ontbrekende waarden aan.",
@@ -65,6 +48,13 @@
           "capteur_etp": "Dagelijkse ETP (optioneel, automatische berekening als niet ingevuld)",
           "capteur_humidite": "Lokale vochtigheid (optioneel, wordt eerst gebruikt indien aanwezig)",
           "capteur_hauteur_gazon": "Grashoogte (aanbevolen als beschikbaar)",
+          "entite_tondeuse": "Robotmaaier (optioneel)",
+          "capteur_tondeuse_erreur": "Foutsensor maaier (optioneel)",
+          "capteur_tondeuse_batterie": "Accusensor maaier (optioneel)",
+          "capteur_tondeuse_pluie": "Regensensor maaier (optioneel)",
+          "capteur_tondeuse_en_charge": "Laadsensor maaier (optioneel)",
+          "capteur_tondeuse_prochain_depart": "Sensor volgende start maaier (optioneel)",
+          "capteur_tondeuse_hauteur_coupe": "Maaihoogte maaier (optioneel)",
           "hauteur_min_tondeuse_cm": "Minimale maaihoogte (cm)",
           "hauteur_max_tondeuse_cm": "Maximale maaihoogte (cm)",
           "capteur_retour_arrosage": "Terugkeer van besproeiing (optioneel, automatisch of geschat uit zonegeschiedenis)",
@@ -75,7 +65,8 @@
       }
     },
     "error": {
-      "invalid_instance_slug": "Ongeldige grasperceel-ID."
+      "invalid_instance_slug": "Ongeldige grasperceel-ID.",
+      "entity_not_found": "Entiteit niet gevonden in Home Assistant."
     },
     "abort": {
       "already_configured": "Gazon Intelligent is al geconfigureerd."
@@ -94,6 +85,13 @@
           "capteur_etp": "Dagelijkse ETP (optioneel, automatische berekening als niet ingevuld)",
           "capteur_humidite": "Lokale vochtigheid (optioneel, wordt eerst gebruikt indien aanwezig)",
           "capteur_hauteur_gazon": "Grashoogte (aanbevolen als beschikbaar)",
+          "entite_tondeuse": "Robotmaaier (optioneel)",
+          "capteur_tondeuse_erreur": "Foutsensor maaier (optioneel)",
+          "capteur_tondeuse_batterie": "Accusensor maaier (optioneel)",
+          "capteur_tondeuse_pluie": "Regensensor maaier (optioneel)",
+          "capteur_tondeuse_en_charge": "Laadsensor maaier (optioneel)",
+          "capteur_tondeuse_prochain_depart": "Sensor volgende start maaier (optioneel)",
+          "capteur_tondeuse_hauteur_coupe": "Maaihoogte maaier (optioneel)",
           "hauteur_min_tondeuse_cm": "Minimale maaihoogte (cm)",
           "hauteur_max_tondeuse_cm": "Maximale maaihoogte (cm)",
           "capteur_retour_arrosage": "Terugkeer van besproeiing (optioneel, automatisch of geschat uit zonegeschiedenis)",
@@ -307,6 +305,22 @@
         "note": {
           "name": "Opmerking (optioneel)",
           "description": "Vrije opmerking."
+        },
+        "usage_mode": {
+          "name": "Gebruiksmodus",
+          "description": "Context waarin het product wordt gebruikt."
+        },
+        "max_applications_per_year": {
+          "name": "Max. toepassingen per jaar",
+          "description": "Maximaal toegestaan aantal toepassingen per jaar."
+        },
+        "temperature_min": {
+          "name": "Minimumtemperatuur (°C)",
+          "description": "Daaronder wordt het product niet aanbevolen."
+        },
+        "temperature_max": {
+          "name": "Maximumtemperatuur (°C)",
+          "description": "Daarboven wordt het product niet aanbevolen."
         }
       }
     },
@@ -331,6 +345,10 @@
         "date_action": {
           "name": "Maaidatum (optioneel)",
           "description": "Datum in DD/MM/JJJJ- of JJJJ-MM-DD-formaat. Als leeg, wordt vandaag gebruikt."
+        },
+        "hauteur_coupe_mm": {
+          "name": "Maaihoogte (mm)",
+          "description": "Maaihoogte gebruikt voor deze maaibeurt, in millimeter."
         }
       }
     },
@@ -347,12 +365,25 @@
           "description": "Toegepaste hoeveelheid water in mm."
         }
       }
+    },
+    "recalibrate_reserve": {
+      "name": "Bodemreserve herijken",
+      "description": "Zet de waterreserve van de bodem op een bekende waarde. De waarde blijft tot de volgende dag vastgezet: regen, beregening en verdamping tellen vandaag niet meer mee. Bij voorkeur 's avonds aanroepen, buiten een regenbui.",
+      "fields": {
+        "reserve_mm": {
+          "name": "Bodemreserve (mm)",
+          "description": "Gemeten of geschatte waterreserve van de bodem, in millimeter."
+        }
+      }
     }
   },
   "entity": {
     "switch": {
       "auto_irrigation_enabled": {
         "name": "Automatische irrigatie toegestaan"
+      },
+      "evening_cooling_enabled": {
+        "name": "Avondverkoeling toegestaan"
       }
     }
   }

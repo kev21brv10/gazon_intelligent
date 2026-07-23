@@ -38,7 +38,11 @@ _HYDRIC_RAIN_MALUS = {
 _HYDRIC_WATERING_MALUS = (
     (8.0, -14.0),
     (4.0, -8.0),
-    (0.0, -3.0),
+    # 0.1 et non 0.0 : `_threshold_score` compare avec `>=`, donc un palier à 0.0 se déclenche
+    # même SANS arrosage récent. Avant le refactor 0.7.0 (8b226ff) la règle était
+    # `elif arrosage_recent > 0`, strictement positive ; la conversion en table l'a muée en `>= 0`.
+    # 0.1 est la plus petite valeur non nulle possible (water.py arrondit à 1 décimale).
+    (0.1, -3.0),
 )
 
 _HYDRIC_PHASE_BONUS = {
@@ -110,7 +114,10 @@ _TONTE_HUMIDITY_WEIGHTS = (
 
 _TONTE_WATERING_WEIGHTS = (
     (3.0, 12.0),
-    (0.0, 6.0),
+    # 0.1 et non 0.0, même régression que _HYDRIC_WATERING_MALUS : sans cela le score de tonte
+    # portait +6 en permanence dès que le cumul d'arrosage 7 j était nul — typiquement en période
+    # pluvieuse ou fraîche, quand on n'arrose pas du tout.
+    (0.1, 6.0),
 )
 
 _TONTE_PHASE_BONUS = {
@@ -158,13 +165,21 @@ def _apply_grouped_metric_thresholds(
 def _apply_comparison_rules(
     value: float, rules: tuple[tuple[str, float, float], ...]
 ) -> float:
-    score = 0.0
+    """Applique la PREMIÈRE règle satisfaite, comme `_threshold_score`.
+
+    Les tables sont écrites en cascade, du palier le plus sévère au moins sévère
+    (`<=35 → 18`, puis `<=45 → 10`). Cumuler les deltas faisait donc payer DEUX paliers à la fois :
+    une humidité de 30 % déclenchait `<=35` ET `<=45`, soit 28 au lieu de 18 (+10) ; au-dessus de
+    90 %, `>=90` ET `>=82` donnaient 16 au lieu de 10 (+6). Le score de stress était ainsi gonflé
+    en permanence par temps sec — les après-midi d'été ordinaires — comme par nuit humide.
+    Les deux directions s'excluant mutuellement, un simple « premier match gagne » suffit.
+    """
     for operator, threshold, delta in rules:
         if operator == "<=" and value <= threshold:
-            score += delta
-        elif operator == ">=" and value >= threshold:
-            score += delta
-    return score
+            return delta
+        if operator == ">=" and value >= threshold:
+            return delta
+    return 0.0
 
 
 def _compute_stress_forecast_relief(

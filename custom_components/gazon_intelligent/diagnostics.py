@@ -156,9 +156,19 @@ _DIAGNOSTICS_REDACT_KEYS: set[str] = {
     "capteur_retour_arrosage",
     "capteur_rosee",
     "capteur_temperature",
+    # Entités de la tondeuse : elles étaient les seules entity_id de configuration à échapper au
+    # caviardage. Un rapport de diagnostic joint à une issue GitHub ou posté sur un forum exposait
+    # donc les 7 identifiants du robot, au même titre que les capteurs météo déjà protégés.
+    "capteur_tondeuse_batterie",
+    "capteur_tondeuse_en_charge",
+    "capteur_tondeuse_erreur",
+    "capteur_tondeuse_hauteur_coupe",
+    "capteur_tondeuse_pluie",
+    "capteur_tondeuse_prochain_depart",
     "capteur_vent",
     "email",
     "entite_meteo",
+    "entite_tondeuse",
     "entity_id",
     "entry_id",
     "feedback_observation",

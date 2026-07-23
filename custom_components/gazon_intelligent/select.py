@@ -159,7 +159,18 @@ class GazonInterventionProductSelect(GazonEntityBase, SelectEntity):
         }
 
     def _has_selection_placeholder(self) -> bool:
-        return bool(self._catalogue()) and self._resolved_selected_product_id() is None
+        catalogue = self._catalogue()
+        if not catalogue:
+            return False
+        # Catalogue à un seul produit : `_resolved_selected_product_id` le sélectionne d'office,
+        # donc « aucun produit » serait aussitôt re-résolu vers ce produit — option trompeuse.
+        if len(catalogue) == 1:
+            return False
+        # Au-delà, l'option doit rester proposée MÊME quand un produit est sélectionné : c'est le
+        # seul moyen de désélectionner depuis Home Assistant. Elle n'était exposée que tant que
+        # rien n'était choisi, donc elle disparaissait dès le premier choix et la désélection
+        # devenait inatteignable — alors qu'async_select_option sait parfaitement la traiter.
+        return True
 
     @property
     def options(self):

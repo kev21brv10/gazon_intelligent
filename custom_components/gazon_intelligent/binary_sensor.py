@@ -666,9 +666,10 @@ class GazonSignalIrrigationBinarySensor(GazonEntityBase, BinarySensorEntity):
                 summary_map["blocked"] = f"Irrigation bloquée : {block_label}"
         if reason_kind == IRRIGATION_REASON_KIND_BLOCKED_DUE_TO_CONDITIONS:
             block_label = _block_reason_display_label(self._decision_value("block_reason"))
-            if watering_cause == "post_application" and block_label:
-                summary_map["blocked_due_to_conditions"] = f"Arrosage bloqué par conditions : {block_label}"
-            elif block_label:
+            # Contrairement au cas « blocked » ci-dessus, le motif post-application ne change PAS le
+            # texte ici : les deux branches d'origine (`post_application and block_label` / `block_label`)
+            # produisaient la MÊME chaîne. Simplifié en un seul test — comportement identique.
+            if block_label:
                 summary_map["blocked_due_to_conditions"] = f"Arrosage bloqué par conditions : {block_label}"
         action_label = (
             IRRIGATION_ACTION_LABEL_WAIT if trigger_kind == "waiting" else _irrigation_action_label(self, reason_kind)

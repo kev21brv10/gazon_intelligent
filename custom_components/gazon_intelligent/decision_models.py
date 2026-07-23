@@ -3,7 +3,7 @@ from __future__ import annotations
 """Objets typés pour le moteur de décision."""
 
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date
 from typing import Any, TypedDict
 
 from homeassistant.util import dt as dt_util
@@ -179,8 +179,6 @@ class DecisionContext:
     soil_balance: dict[str, Any] | None = None
     memory: dict[str, Any] | None = None
     config: dict[str, Any] = field(default_factory=dict)
-    weather_today: dict[str, Any] = field(default_factory=dict)
-    weather_tomorrow: dict[str, Any] = field(default_factory=dict)
     sun_context: dict[str, Any] = field(default_factory=dict)
     mower_context: dict[str, Any] = field(default_factory=dict)
     runtime_context: dict[str, Any] = field(default_factory=dict)
@@ -221,17 +219,6 @@ class DecisionContext:
     ) -> "DecisionContext":
         today = today or dt_util.now().date()
         weather_profile = weather_profile or {}
-        weather_today = {
-            "date": today.isoformat(),
-            "temperature": temperature,
-            "pluie_24h": pluie_24h,
-            "humidite": humidite,
-            "etp_capteur": etp_capteur,
-        }
-        weather_tomorrow = {
-            "date": (today + timedelta(days=1)).isoformat(),
-            "pluie_demain": pluie_demain,
-        }
         return cls(
             history=[item for item in history if isinstance(item, dict)],
             today=today,
@@ -261,8 +248,6 @@ class DecisionContext:
             soil_balance=soil_balance,
             memory=memory,
             config={"type_sol": type_sol},
-            weather_today=weather_today,
-            weather_tomorrow=weather_tomorrow,
             sun_context=sun_context or {},
             mower_context=mower_context or {},
             runtime_context=runtime_context or {},
@@ -287,7 +272,6 @@ class DoseInputs(TypedDict, total=False):
     reserve_stock_mm: float | None
     reserve_stock_max_mm: float | None
     reserve_utile_mm: float | None
-    reserve_utile_max_mm: float | None
     reserve_surplus_mm: float | None
     depletion_ratio: float | None
     soil_balance_reserve_mm: float | None
@@ -450,15 +434,6 @@ class DecisionResult:
     @property
     def objectif_mm(self) -> float:
         """Alias de compatibilité pour l'ancien snapshot."""
-        return self.objectif_arrosage
-
-    @property
-    def mm_a_appliquer(self) -> float | None:
-        """Alias lisible pour le moteur d'arrosage refondu."""
-        if self.mm_final is not None:
-            return self.mm_final
-        if self.mm_final_recommande is not None:
-            return self.mm_final_recommande
         return self.objectif_arrosage
 
     @property

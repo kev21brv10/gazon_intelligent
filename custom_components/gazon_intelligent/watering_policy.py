@@ -520,7 +520,6 @@ def _dose_candidate_band(dose_inputs: DoseInputs) -> DosePolicyBand:
 def resolve_dose_policy(
     dose_inputs: DoseInputs | None = None,
     *,
-    previous_state: dict[str, Any] | None = None,
     dynamic_enabled: bool = False,
 ) -> DosePolicyPayload:
     """Résout une politique de dose sans toucher au calcul objectif.
@@ -553,8 +552,6 @@ def resolve_dose_policy(
         "candidate_mm": round(candidate_band.target_mm, 1),
         "candidate_reason": candidate_band.reason,
     }
-    if previous_state is not None:
-        payload["source"] = "dynamic" if enabled else "legacy"
     return payload
 
 
@@ -590,10 +587,6 @@ def _validate_policy_registry() -> None:
 
 
 _validate_policy_registry()
-
-
-def list_watering_policies() -> tuple[WateringPolicy, ...]:
-    return tuple(sorted(WATERING_POLICIES.values(), key=lambda item: (-item.priority, item.mode)))
 
 
 def get_watering_policy(mode: str | None) -> WateringPolicy:
@@ -755,7 +748,6 @@ __all__ = [
     "WateringPolicy",
     "WateringRange",
     "get_watering_policy",
-    "list_watering_policies",
     "resolve_dose_policy",
     "resolve_semis_stage_program",
     "resolve_watering_policy",

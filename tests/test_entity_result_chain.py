@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from dataclasses import dataclass
 import asyncio
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 import sys
 import types
@@ -394,7 +394,12 @@ class DecisionResultChainTests(unittest.TestCase):
 
         product_select = select.GazonInterventionProductSelect(coordinator)
 
-        self.assertEqual(product_select.options, ["Bio Boost", "Engrais Printemps"])
+        # « Aucun produit sélectionné » doit rester proposé alors même qu'un produit est
+        # sélectionné : sans lui, la désélection est inatteignable depuis Home Assistant.
+        self.assertEqual(
+            product_select.options,
+            ["Aucun produit sélectionné", "Bio Boost", "Engrais Printemps"],
+        )
         self.assertEqual(product_select.current_option, "Engrais Printemps")
         self.assertEqual(product_select.extra_state_attributes["selected_product_id"], "engrais-printemps")
         self.assertEqual(product_select.extra_state_attributes["selected_product_name"], "Engrais Printemps")
@@ -1138,6 +1143,45 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(attrs["hydric_balance_level"], "déficit")
         self.assertEqual(attrs["hydric_strategy"], "arroser profondément")
 
+    def test_objectif_sensor_fort_deficit_atteignable_via_recentrage_mad(self) -> None:
+        # [8] Le libellé hydrique était nourri par la réserve brute (≥ 0) → « fort déficit »
+        # inatteignable. Recentré sur le seuil MAD (`reserve_minimale_mm`), une réserve bien SOUS le
+        # seuil + fort déficit récent doit désormais produire « fort déficit ».
+        result = _make_result()
+        result.objectif_arrosage = 5.0  # objectif > 0 → l'harmonisation laisse passer le niveau brut
+        result.arrosage_recommande = True
+        result.extra.update(
+            {
+                "reserve_hydrique_sol_mm": 3.0,   # bien sous le seuil MAD (6.0)
+                "reserve_minimale_mm": 6.0,
+                "deficit_3j": 9.0,
+                "deficit_7j": 9.0,
+                "depletion_ratio": 0.9,
+            }
+        )
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=result, history=[], memory={})
+        attrs = sensor.GazonObjectifMmSensor(coordinator).extra_state_attributes
+        self.assertEqual(attrs["hydric_balance_level"], "fort déficit")
+
+    def test_objectif_sensor_reserve_au_seuil_mad_nest_pas_excedentaire(self) -> None:
+        # [8] Une réserve pile au seuil MAD (à la limite de déclencher l'arrosage) ne doit plus
+        # s'afficher « excédentaire » : recentrée, elle vaut 0 → « léger déficit » au mieux.
+        result = _make_result()
+        result.objectif_arrosage = 2.0
+        result.arrosage_recommande = True
+        result.extra.update(
+            {
+                "reserve_hydrique_sol_mm": 6.0,   # pile au seuil MAD
+                "reserve_minimale_mm": 6.0,
+                "deficit_3j": 0.5,
+                "deficit_7j": 0.5,
+                "depletion_ratio": 0.5,
+            }
+        )
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=result, history=[], memory={})
+        attrs = sensor.GazonObjectifMmSensor(coordinator).extra_state_attributes
+        self.assertNotEqual(attrs["hydric_balance_level"], "excédentaire")
+
     def test_objectif_sensor_harmonizes_hydric_labels_when_no_irrigation_is_needed(self) -> None:
         result = _make_result()
         result.objectif_arrosage = 0.0
@@ -1278,6 +1322,25 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertNotIn("block_reason", attrs)
         self.assertNotIn("confidence_reasons", attrs)
         self.assertEqual(attrs["window_reason_summary"], "Aucun arrosage nécessaire")
+
+    def test_heat_stress_display_label_mapping(self) -> None:
+        # Le niveau interne est un score de stress HYDRIQUE, pas une canicule → libellé honnête.
+        self.assertEqual(sensor._heat_stress_display_label("extreme"), "Stress hydrique sévère")
+        self.assertEqual(sensor._heat_stress_display_label("canicule"), "Stress hydrique élevé")
+        self.assertEqual(sensor._heat_stress_display_label("vigilance"), "Vigilance")
+        self.assertIsNone(sensor._heat_stress_display_label(""))
+        self.assertIsNone(sensor._heat_stress_display_label("inconnu"))
+
+    def test_watering_window_sensor_exposes_honest_stress_label(self) -> None:
+        # `stress_hydrique` (libellé d'affichage) ajouté UNE fois à côté de la clé technique
+        # `heat_stress_level` (inchangée) → la carte peut afficher sans « canicule », sans doublon d'état.
+        result = _make_result()
+        result.extra.update({"heat_stress_level": "extreme", "heat_stress_phase": "canicule_courte"})
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=result, history=[], memory={})
+        attrs = sensor.GazonFenetreOptimaleSensor(coordinator).extra_state_attributes
+        assert attrs is not None
+        self.assertEqual(attrs["stress_hydrique"], "Stress hydrique sévère")
+        self.assertEqual(attrs["heat_stress_level"], "extreme")  # clé technique inchangée
 
     def test_watering_window_sensor_surfaces_weekly_cap_when_soil_needs_water(self) -> None:
         result = _make_result()
@@ -1481,7 +1544,6 @@ class DecisionResultChainTests(unittest.TestCase):
                 "arrosage_recent_7j": 0.0,
                 "pluie_efficace": 0.0,
                 "retour_arrosage": 0.0,
-                "et0_mm": 1.3,
                 "soil_balance": {
                     "reserve_mm": 21.6,
                     "previous_reserve_mm": 23.4,
@@ -2968,3 +3030,76 @@ class DecisionResultChainTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InterventionProductDeselectionTests(unittest.TestCase):
+    """L'option « Aucun produit sélectionné » disparaissait dès qu'un produit était choisi,
+    rendant la désélection inatteignable depuis Home Assistant alors qu'async_select_option
+    sait la traiter."""
+
+    def _select(self, products, selected):
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(), data={}, result=None, history=[], memory={}
+        )
+        coordinator.products = products
+        coordinator.selected_product_id = selected
+        return select.GazonInterventionProductSelect(coordinator)
+
+    DEUX_PRODUITS = {
+        "bio-1": {"id": "bio-1", "nom": "Bio Boost"},
+        "engrais-printemps": {"id": "engrais-printemps", "nom": "Engrais Printemps"},
+    }
+
+    def test_deselection_reste_possible_apres_selection(self):
+        widget = self._select(self.DEUX_PRODUITS, "engrais-printemps")
+        self.assertIn("Aucun produit sélectionné", widget.options)
+
+    def test_placeholder_present_sans_selection(self):
+        widget = self._select(self.DEUX_PRODUITS, None)
+        self.assertEqual(widget.options[0], "Aucun produit sélectionné")
+
+    def test_catalogue_unique_nexpose_pas_le_placeholder(self):
+        # Un seul produit : il est auto-sélectionné, « aucun produit » serait aussitôt
+        # re-résolu vers lui — l'option serait trompeuse.
+        widget = self._select({"bio-1": {"id": "bio-1", "nom": "Bio Boost"}}, None)
+        self.assertEqual(widget.options, ["Bio Boost"])
+
+    def test_catalogue_vide_nexpose_rien(self):
+        widget = self._select({}, None)
+        self.assertEqual(widget.options, [])
+
+    def test_toute_option_affichee_est_selectionnable(self):
+        # Invariant Home Assistant : current_option doit toujours figurer dans options.
+        for selected in (None, "bio-1", "engrais-printemps"):
+            with self.subTest(selected=selected):
+                widget = self._select(self.DEUX_PRODUITS, selected)
+                self.assertIn(widget.current_option, widget.options)
+
+
+class AutoIrrigationBlockLabelsTests(unittest.TestCase):
+    """Chaque code de blocage renvoyé par `_should_launch_auto_irrigation` doit avoir un libellé
+    dans `_AUTO_IRRIGATION_BLOCK_INFO`, sinon le capteur de diagnostic affiche le code technique
+    brut. `evening_cooling_done` y manquait, tandis qu'`evening_disabled` y figurait sans être
+    jamais produit."""
+
+    def _codes_produits(self):
+        import re
+        from pathlib import Path
+        src = (Path(__file__).resolve().parents[1]
+               / "custom_components" / "gazon_intelligent" / "coordinator.py").read_text(encoding="utf-8")
+        # `return False, "<code>"` dans _should_launch_auto_irrigation
+        bloc = src[src.index("def _should_launch_auto_irrigation"):]
+        bloc = bloc[:bloc.index("\n    def ", 10)]
+        return {m.group(1) for m in re.finditer(r'return\s+False,\s*"([a-z_]+)"', bloc)}
+
+    def test_chaque_code_produit_a_un_libelle(self) -> None:
+        connus = set(sensor._AUTO_IRRIGATION_BLOCK_INFO)
+        for code in self._codes_produits():
+            with self.subTest(code=code):
+                self.assertIn(code, connus)
+
+    def test_evening_cooling_done_est_libelle(self) -> None:
+        self.assertIn("evening_cooling_done", sensor._AUTO_IRRIGATION_BLOCK_INFO)
+
+    def test_plus_dentree_evening_disabled_morte(self) -> None:
+        self.assertNotIn("evening_disabled", sensor._AUTO_IRRIGATION_BLOCK_INFO)

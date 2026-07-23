@@ -65,6 +65,24 @@ def build_risk_bundle(
         temperature=context.temperature,
         etp=etp,
     )
+    # Garde-fous du soir alimentés comme le chemin principal (cf. guidance._build_watering_ctx) :
+    # risque fongique (calculé ici, la fonction vit dans ce module) et marge de séchage déduite du
+    # coucher du soleil porté par le contexte. Sans eux, compute_action_guidance recalculait un
+    # `evening_allowed` trop permissif (ni blocage anti-fongique, ni marge de séchage).
+    _fungal_level = compute_fungal_risk(
+        temperature=context.temperature,
+        humidite=context.humidite,
+        rosee=advanced_context.get("rosee"),
+        pluie_24h=context.pluie_24h,
+        pluie_demain=context.pluie_demain,
+        hour_of_day=context.hour_of_day if context.hour_of_day is not None else 12,
+    ).get("fungal_risk_level")
+    _sunset_minute = context.weather_profile.get("sunset_minute") if isinstance(context.weather_profile, dict) else None
+    _minutes_to_sunset = (
+        float(_sunset_minute) - context.hour_of_day * 60
+        if _sunset_minute is not None and context.hour_of_day is not None
+        else None
+    )
     action_guidance = compute_action_guidance(
         phase_dominante=phase_dominante,
         sous_phase=sous_phase,
@@ -84,6 +102,8 @@ def build_risk_bundle(
         sous_phase_age_days=phase_bundle.get("sous_phase_age_days"),
         sous_phase_progression=phase_bundle.get("sous_phase_progression"),
         hauteur_gazon=advanced_context.get("hauteur_gazon"),
+        minutes_to_sunset=_minutes_to_sunset,
+        fungal_risk_level=_fungal_level,
     )
     prochaine_reevaluation = compute_next_reevaluation(
         phase_dominante=phase_dominante,

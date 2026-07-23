@@ -459,7 +459,10 @@ class AssistantDecisionTests(unittest.TestCase):
 
         self.assertEqual(entity.native_value, "Tonte différée: batterie faible.")
 
-    def test_action_recommandee_sensor_reports_night_delay_for_mowing(self) -> None:
+    def test_action_recommandee_sensor_reports_night_delay_from_sunrise_wording(self) -> None:
+        # Ce cas portait le MÊME nom que le suivant : Python ne gardait que la seconde
+        # définition et ce corps n'était jamais exécuté. Les deux motifs nocturnes sont
+        # pourtant distincts et doivent être couverts séparément.
         coordinator = _FakeCoordinator(
             entry=_FakeEntry(),
             data={
@@ -584,7 +587,9 @@ class AssistantDecisionTests(unittest.TestCase):
         self.assertEqual(entity.native_value, "Tonte différée: batterie faible.")
         self.assertEqual(entity.extra_state_attributes["summary"], "Tonte différée: batterie faible.")
 
-    def test_conseil_principal_sensor_reports_night_delay_for_mowing(self) -> None:
+    def test_conseil_principal_sensor_reports_night_delay_from_sunrise_wording(self) -> None:
+        # Doublon de nom corrigé : ce corps n'était jamais exécuté (cf. le cas jumeau ci-dessous,
+        # qui couvre l'autre formulation nocturne).
         coordinator = _FakeCoordinator(
             entry=_FakeEntry(),
             data={

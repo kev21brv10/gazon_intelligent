@@ -20,6 +20,7 @@ from homeassistant.util import dt as dt_util
 from .const import (
     DOMAIN,
     DEFAULT_AUTO_IRRIGATION_ENABLED,
+    DEFAULT_EVENING_COOLING_ENABLED,
     DEFAULT_MOWER_COORDINATION_ENABLED,
     DEFAULT_MOWING_COOLDOWN_AFTER_WATERING_MINUTES,
     APPLICATION_TYPE_FOLIAIRE,
@@ -106,6 +107,12 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "tonte_statut",
     "arrosage_recommande",
     "watering_cause",
+    # Fractionnement : _get_canonical_watering_plan et la construction des sessions les lisent
+    # dans self.data. Ils ne figuraient pas ici, donc self.data.get(...) rendait toujours None →
+    # repli sur 1 passage / 0 min de pause : l'arrosage profond n'était JAMAIS fractionné en
+    # pratique, malgré le calcul correct côté guidance (risque de ruissellement sur grosse dose).
+    "watering_passages",
+    "watering_pause_minutes",
     "type_arrosage",
     "conseil_principal",
     "action_recommandee",
@@ -414,7 +421,15 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         forecast_summary: dict[str, Any],
     ) -> tuple[float | None, str, float | None]:
         temperature_source = "capteur"
-        temperature = self._get_float_state(self._get_conf(CONF_CAPTEUR_TEMPERATURE))
+        # VALIDER DÈS LA LECTURE. Cette valeur ne sert pas qu'à l'affichage : elle construit
+        # `temperature_reference_hydrique`, qui pilote seule l'ET0 et donc les doses d'arrosage.
+        # Elle n'était filtrée que plus loin, pour l'autre usage : un capteur qui déraille (glitch
+        # Netatmo, défaut de câblage) à 80 °C était bien rejeté là-bas, mais avait déjà contaminé
+        # la référence hydrique ici — d'où une ET0 délirante et un sur-arrosage.
+        temperature = self._validate_sensor_value(
+            self._get_float_state(self._get_conf(CONF_CAPTEUR_TEMPERATURE)),
+            "temperature",
+        )
         if temperature is None:
             weather_temperature = weather_profile.get("weather_temperature")
             weather_apparent_temperature = weather_profile.get("weather_apparent_temperature")
@@ -431,6 +446,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 forecast_temperature_today = float(forecast_temperature_today)
             except (TypeError, ValueError):
                 forecast_temperature_today = None
+            # Même garde-fou sur la prévision : elle pèse 70 % de la référence hydrique le matin
+            # et sert de repli quand le capteur manque.
+            forecast_temperature_today = self._validate_sensor_value(
+                forecast_temperature_today, "temperature"
+            )
         if forecast_temperature_today is not None:
             if temperature is None:
                 temperature = forecast_temperature_today
@@ -564,7 +584,12 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if retour_arrosage_sensor is not None and retour_arrosage_sensor > 0:
             retour_arrosage = retour_arrosage_sensor
         else:
-            retour_arrosage_today = compute_recent_watering_mm(self.history, today=self._current_date(), days=0)
+            # Choix explicite (Kévin, 25/06/2026) : arrosages EXTERNES (`zone_session`) totalement
+            # ignorés → ils ne reviennent pas non plus par le « retour d'arrosage » (qui alimente
+            # le modèle déficit). Seuls les arrosages pilotés par l'intégration sont pris en compte.
+            retour_arrosage_today = compute_recent_watering_mm(
+                self.history, today=self._current_date(), days=0, include_external=False
+            )
             retour_arrosage = retour_arrosage_today if retour_arrosage_today > 0 else None
         type_sol = self._get_conf(CONF_TYPE_SOL) or DEFAULT_TYPE_SOL
         hauteur_min_tondeuse_cm = self._get_float_conf(
@@ -612,7 +637,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # LOT A — santé capteurs (calculé ici pour garantir la présence dans coordinator.data)
         snapshot["sensor_health"] = {
             "temperature_valid": temperature is not None,
-            "pluie_valid": pluie_24h is not None or pluie_24h_sensor is None,
+            # Tester le CAPTEUR, pas la valeur résolue : `pluie_24h` reprend la valeur du capteur
+            # quand il en a une, et retombe sur la prévision sinon — l'expression d'origine
+            # (`pluie_24h is not None or pluie_24h_sensor is None`) était donc toujours vraie et le
+            # voyant ne pouvait jamais signaler un capteur pluie en panne. Même forme que etp_valid.
+            "pluie_valid": pluie_24h_sensor is not None or self._get_conf(CONF_CAPTEUR_PLUIE_24H) is None,
             "etp_valid": etp_capteur is not None or self._get_conf(CONF_CAPTEUR_ETP) is None,
             "humidity_valid": humidite is not None or self._get_conf(CONF_CAPTEUR_HUMIDITE) is None,
         }
@@ -710,6 +739,21 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_set_auto_irrigation_enabled(self, enabled: bool) -> None:
         """Autorise ou bloque l'arrosage automatique globalement."""
         self.memory["auto_irrigation_enabled"] = bool(enabled)
+        await self._async_save_state()
+        await self.async_request_refresh()
+
+    @property
+    def evening_cooling_enabled(self) -> bool:
+        memory = self.memory
+        if isinstance(memory, dict):
+            return bool(
+                memory.get("evening_cooling_enabled", DEFAULT_EVENING_COOLING_ENABLED)
+            )
+        return DEFAULT_EVENING_COOLING_ENABLED
+
+    async def async_set_evening_cooling_enabled(self, enabled: bool) -> None:
+        """Autorise ou bloque le rafraîchissement du soir en canicule."""
+        self.memory["evening_cooling_enabled"] = bool(enabled)
         await self._async_save_state()
         await self.async_request_refresh()
 
@@ -916,10 +960,6 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "resolution_candidate_count": candidate_count,
         }
 
-    def _discover_mower_entity_id(self) -> str | None:
-        """Retourne la tondeuse résolue, sans deviner en cas d'ambiguïté."""
-        return self._resolve_mower_selection().get("entity_id")
-
     def _resolve_mower_related_entity_id(self, mower_entity_id: str | None, config_key: str, platform: str, suffix: str) -> str | None:
         configured = self._get_conf(config_key)
         if isinstance(configured, str):
@@ -1067,6 +1107,12 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _build_runtime_context(self) -> dict[str, Any]:
         semis_progress = self._semis_cycle_progress()
         return {
+            # Instant courant UTC réel. Les modules de décision sont purs (sans accès à Home
+            # Assistant ni à la base de fuseaux) : sans cette valeur ils reconstruisaient « maintenant »
+            # à partir de today + hour_of_day, or hour_of_day est une heure LOCALE (Europe/Paris)
+            # qu'ils estampillaient en UTC — les durées écoulées étaient donc surestimées de
+            # l'offset local (1 h en hiver, 2 h en été) face aux horodatages d'arrosage, eux en UTC réel.
+            "now_utc": self._serialize_runtime_value(self._current_utc_datetime()),
             "active_irrigation_session": self._get_active_irrigation_session(),
             "last_irrigation_execution": self._runtime_state.get("last_irrigation_execution"),
             "mowing_cooldown_after_watering_minutes": self.mowing_cooldown_after_watering_minutes,
@@ -1869,13 +1915,6 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return None
         return plan.as_dict()
 
-    def _plan_type_for_zone_count(self, zone_count: int) -> str:
-        if zone_count <= 0:
-            return "no_plan"
-        if zone_count > 1:
-            return "multi_zone"
-        return "single_zone"
-
     def _build_watering_plan_summary_for_user_action(
         self,
         objectif_mm: float | None = None,
@@ -2022,9 +2061,6 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "source": active_session.get("source"),
             }
         last_execution = self._runtime_state.get("last_irrigation_execution")
-        last_watering_completed_at = None
-        if isinstance(last_execution, dict):
-            last_watering_completed_at = last_execution.get("ended_at") or last_execution.get("completed_at")
         return {
             "active_irrigation_session": self._serialize_runtime_value(active_session),
             "last_irrigation_execution": self._serialize_runtime_value(last_execution),
@@ -2039,7 +2075,6 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ),
             "persisted_watering_session": persisted_watering_session,
             "last_irrigation_execution_persisted": self._serialize_runtime_value(last_execution),
-            "last_watering_completed_at": self._serialize_runtime_value(last_watering_completed_at),
         }
 
     def _serialize_runtime_value(self, value: Any) -> Any:
@@ -2167,8 +2202,15 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             planned_total_seconds = max(0.0, float(session.get("planned_total_seconds") or 0.0))
         except (TypeError, ValueError):
             planned_total_seconds = 0.0
+        # Des segments restent-ils à exécuter ? Si oui, le cycle N'EST PAS terminé, quelle que soit
+        # la durée écoulée — sinon une coupure de HA plus longue que la durée planifiée (typiquement
+        # pendant la pause inter-passages) clôturait le cycle et ABANDONNAIT le 2ᵉ passage (6 mm au
+        # lieu de 12). L'heuristique « elapsed >= planned » ne vaut que pour un cycle sans travail
+        # restant (session ancienne sans zones_pending → repli sur le comportement historique).
+        zones_pending = session.get("zones_pending")
+        has_pending_segments = isinstance(zones_pending, list) and len(zones_pending) > 0
         started_at = session.get("started_at")
-        if planned_total_seconds > 0 and isinstance(started_at, datetime):
+        if planned_total_seconds > 0 and isinstance(started_at, datetime) and not has_pending_segments:
             elapsed_seconds = max((self._current_utc_datetime() - started_at).total_seconds(), 0.0)
             if elapsed_seconds >= planned_total_seconds:
                 return True
@@ -2180,8 +2222,8 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             passage_count = max(1, int(session.get("passage_count") or 1))
         except (TypeError, ValueError):
             passage_count = 1
-        zones_pending = session.get("zones_pending")
-        if current_passage >= passage_count and isinstance(zones_pending, list) and not zones_pending:
+        # zones_pending déjà résolu plus haut (has_pending_segments).
+        if current_passage >= passage_count and not has_pending_segments and isinstance(zones_pending, list):
             return True
         return False
 
@@ -2374,6 +2416,55 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.debug("Impossible de vérifier l'état courant des zones d'arrosage.", exc_info=True)
         return False
 
+    def _shared_valve_busy_elsewhere(self) -> bool:
+        """Vrai si une AUTRE instance du domaine arrose une vanne physique partagée.
+
+        Deux pelouses peuvent piloter le même relais (Sonoff 4CH). Le garde local
+        `_watering_session_active` ne voit que ses propres sessions ; sans ce
+        complément, deux instances pourraient ouvrir la même vanne. Garde purement
+        ADDITIVE et en LECTURE SEULE de l'état des sœurs — jamais
+        `_get_active_irrigation_session` (qui purge une session finie) : le seul
+        effet possible est de REFUSER un lancement (sens de défaillance sûr, jamais
+        de double-arrosage).
+
+        En config réelle, la vanne partagée du Potager est neutralisée (débit 0) :
+        `_iter_zones_with_rate` ne la yield pas → intersection vide → ce garde reste
+        DORMANT (aucun changement de comportement). Il ne se déclenche que si deux
+        instances déclarent un débit > 0 sur la même vanne — le seul cas qui peut
+        réellement entrer en collision.
+        """
+        hass = getattr(self, "hass", None)
+        domain_data = getattr(hass, "data", {}).get(DOMAIN) if hass is not None else None
+        if not isinstance(domain_data, dict) or len(domain_data) < 2:
+            return False
+        try:
+            my_valves = {entity_id for entity_id, _rate in self._iter_zones_with_rate()}
+        except Exception:  # pragma: no cover - best effort fallback
+            return False
+        if not my_valves:
+            return False
+        for other in domain_data.values():
+            if other is self or not isinstance(other, GazonIntelligentCoordinator):
+                continue
+            runtime = getattr(other, "_runtime_state", None)
+            session = runtime.get("active_irrigation_session") if isinstance(runtime, dict) else None
+            if not isinstance(session, dict):
+                continue
+            status = str(session.get("status") or "").strip().lower()
+            if status not in {"running", "paused", "recovery_required"}:
+                continue
+            # Prédicat PUR (aucune mutation) : ignore une session en réalité terminée
+            # mais pas encore purgée, pour ne jamais bloquer un lancement à tort.
+            if self._is_finished_irrigation_session(session):
+                continue
+            try:
+                other_valves = {entity_id for entity_id, _rate in other._iter_zones_with_rate()}
+            except Exception:  # pragma: no cover - best effort fallback
+                continue
+            if my_valves & other_valves:
+                return True
+        return False
+
     def _should_launch_auto_irrigation(self, snapshot: dict[str, Any]) -> tuple[bool, str]:
         if self._auto_irrigation_safety_lock_active():
             return False, "safety_lock"
@@ -2415,7 +2506,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not post_application_auto_ready and fenetre in {"", "unknown", "unavailable", "none", "attendre"}:
             return False, "window_unavailable"
 
-        if self._watering_session_active():
+        if self._watering_session_active() or self._shared_valve_busy_elsewhere():
             return False, "watering_in_progress"
 
         target_date = str(snapshot.get("watering_target_date") or "").strip()
@@ -2505,6 +2596,58 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         return True, "ready"
 
+    _SKIP_NOISE_REASONS: frozenset[str] = frozenset(
+        {
+            "safety_lock",
+            "startup_guard",
+            "auto_irrigation_disabled",
+            "no_objective",
+            "not_recommended",
+            "window_unavailable",
+            "watering_in_progress",
+            "target_date_future",
+            "semis_target_reached",
+            "semis_cycle_pending",
+            "outside_window",
+            "outside_evening_window",
+            "relaunch_cooldown",
+        }
+    )
+
+    def _maybe_record_skip(self, snapshot: dict[str, Any], reason: str) -> None:
+        if reason in self._SKIP_NOISE_REASONS:
+            return
+        if not bool(snapshot.get("arrosage_recommande")):
+            return
+        fenetre = str(snapshot.get("fenetre_optimale") or "").strip()
+        if fenetre not in {"matin", "soir"}:
+            return
+
+        today_str = self._current_date().isoformat()
+        skip_key = f"{today_str}:{fenetre}"
+        recorded: list[str] = self._runtime_state.get("skip_keys_today") or []
+        if not isinstance(recorded, list):
+            recorded = []
+        if skip_key in recorded:
+            return
+        recorded.append(skip_key)
+        self._runtime_state["skip_keys_today"] = recorded[-20:]
+
+        objectif_mm: float | None = None
+        try:
+            v = float(snapshot.get("objectif_mm") or 0.0)
+            objectif_mm = v if v > 0 else None
+        except (TypeError, ValueError):
+            pass
+
+        raison_decision = str(snapshot.get("raison_decision") or "").strip() or None
+        self.brain.record_skip(
+            reason=reason,
+            fenetre=fenetre,
+            objectif_mm=objectif_mm,
+            raison_decision=raison_decision,
+        )
+
     async def _maybe_schedule_auto_irrigation(self, snapshot: dict[str, Any]) -> None:
         GazonIntelligentCoordinator._ensure_irrigation_runtime_bootstrap(self)
         if self._irrigation_launch_lock is None:
@@ -2520,6 +2663,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             should_launch, reason = self._should_launch_auto_irrigation(snapshot)
             self._set_last_auto_irrigation_reason(reason)
             if not should_launch:
+                self._maybe_record_skip(snapshot, reason)
                 await self._persist_runtime_state()
                 return
 
@@ -3152,8 +3296,19 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         data = self.entry.data
         opts = self.entry.options
         for idx in range(1, 6):
-            entity_id = opts.get(f"zone_{idx}", data.get(f"zone_{idx}"))
-            rate_h = opts.get(f"debit_zone_{idx}", data.get(f"debit_zone_{idx}"))
+            # ENTITÉ : `or` et non `get(..., défaut)` — le défaut de `get` ne sert que si la clé est
+            # ABSENTE. Une clé présente mais à None (ce que l'options flow écrivait) masquait la
+            # valeur réelle d'entry.data et faisait disparaître la zone du plan, en silence.
+            entity_id = opts.get(f"zone_{idx}") or data.get(f"zone_{idx}")
+            # DÉBIT : surtout PAS `or` — 0.0 est FALSY mais parfaitement significatif, c'est la
+            # façon offerte à l'utilisateur de neutraliser une zone. Avec `or`, un débit mis à 0
+            # dans les options retombait sur l'ancienne valeur d'entry.data et RÉACTIVAIT la zone.
+            # Cas réel : l'instance « Gazon Potager » pointe zone_1 sur la vanne de la zone 3 de la
+            # pelouse principale, neutralisée par un débit à 0 — le `or` la remettait en service.
+            # Il faut donc un test explicite sur None, qui distingue « absent » de « zéro voulu ».
+            rate_h = opts.get(f"debit_zone_{idx}")
+            if rate_h is None:
+                rate_h = data.get(f"debit_zone_{idx}")
             rate_mm_min = self._get_zone_rate_mm_min(entity_id, rate_h)
             if entity_id and rate_mm_min > 0:
                 yield entity_id, rate_mm_min
@@ -3188,13 +3343,20 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         pending: list[dict[str, Any]] = []
         for passage in range(1, plan.passage_count + 1):
             for zone_index, zone in enumerate(plan.zones):
+                # Durée/mm PAR PASSAGE (zone_for_passage), pas la dose pleine : sur un cycle
+                # fractionné (passages > 1), stocker `zone.duration_s`/`zone.mm` par passage
+                # surestimait chaque segment (2 passages → 2× la dose affichée dans zones_pending).
+                # Inerte aujourd'hui (l'exécution, le mm crédité et la reprise recalculent tous via
+                # zone_for_passage), mais c'était un piège : un futur code lisant ces valeurs pour
+                # la reprise aurait double-dosé. On stocke donc la valeur réellement délivrée.
+                segment = plan.zone_for_passage(zone_index, passage)
                 pending.append(
                     {
                         "passage": passage,
                         "zone_index": zone_index,
                         "zone": zone.zone,
-                        "duration_s": zone.duration_s,
-                        "mm": round(zone.mm, 1),
+                        "duration_s": segment.duration_s,
+                        "mm": round(segment.mm, 1),
                     }
                 )
         return pending
@@ -3389,8 +3551,6 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             anomalies.append("detected_gap")
         if session.get("last_error"):
             anomalies.append("runtime_error")
-        if any(str(item.get("status") or "") == "recovery_interrupted" for item in session.get("zones_failed") or []):
-            anomalies.append("recovery_interrupted")
         if bool(self._runtime_state.get("auto_irrigation_safety_lock")):
             anomalies.append("safety_lock")
         return anomalies
@@ -3498,6 +3658,24 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         session: dict[str, Any] | None = None,
     ) -> None:
         user_action_context = dict(user_action_context or {})
+        # ATTENDRE QUE LES VANNES RÉPONDENT AVANT DE LANCER. `switch.turn_on` sur une entité
+        # `unavailable` ne lève aucune erreur : la commande part dans le vide, aucune goutte n'est
+        # délivrée, et la dose complète est pourtant comptabilisée en fin de cycle — le gazon
+        # reste sec pendant que l'intégration affiche un arrosage réussi et crédite la réserve.
+        # Ce garde existait déjà mais n'était branché que sur le chemin de REPRISE après
+        # redémarrage ; le lancement normal (auto comme manuel) ne le traversait pas.
+        zone_ids = [getattr(z, "zone", None) for z in (plan.zones or [])]
+        if session is None and not await self._wait_for_zones_available(zone_ids):
+            _LOGGER.error(
+                "Arrosage annulé : vannes indisponibles après 60 s (%s). Aucune commande envoyée, "
+                "aucune dose comptabilisée.",
+                ", ".join(str(z) for z in zone_ids if z) or "aucune zone",
+            )
+            self._emit_irrigation_event(
+                "gazon_intelligent_auto_irrigation_failed",
+                {"reason": "zones_unavailable", "zones": [str(z) for z in zone_ids if z]},
+            )
+            return
         runtime_session = session or self._build_active_irrigation_session(
             plan=plan,
             source=source,
@@ -4160,6 +4338,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _async_save_state(self) -> None:
         """Sauvegarde l'état persistant (mode, date_action)."""
+        # Écriture IMMÉDIATE et volontaire (pas de `async_delay_save`) : cette méthode est aussi
+        # appelée aux transitions d'arrosage (ouverture/fermeture de vanne, verrou de sécurité),
+        # où l'état DOIT survivre à une coupure de HA pour ne pas laisser une vanne « oubliée » ou
+        # reprendre un cycle fantôme. Un debounce global gagnerait quelques écouts SD au prix de
+        # cette durabilité — compromis refusé (cf. audit [6]). HA écrit déjà fréquemment `.storage`.
         payload = self.brain.dump_state()
         payload["runtime"] = self._serialized_runtime_state()
         await self._store.async_save(payload)

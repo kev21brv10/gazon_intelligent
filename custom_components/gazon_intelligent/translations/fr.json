@@ -37,23 +37,6 @@
           "type_sol": "Type de sol (obligatoire)"
         }
       },
-      "reconfigure": {
-        "title": "Paramètres de base",
-        "description": "Mettez à jour ici les zones, les débits et le type de sol.",
-        "data": {
-          "zone_1": "Zone 1",
-          "zone_2": "Zone 2",
-          "zone_3": "Zone 3",
-          "zone_4": "Zone 4",
-          "zone_5": "Zone 5",
-          "debit_zone_1": "Débit zone 1 (mm/h, 0 si non utilisée)",
-          "debit_zone_2": "Débit zone 2 (mm/h, 0 si non utilisée)",
-          "debit_zone_3": "Débit zone 3 (mm/h, 0 si non utilisée)",
-          "debit_zone_4": "Débit zone 4 (mm/h, 0 si non utilisée)",
-          "debit_zone_5": "Débit zone 5 (mm/h, 0 si non utilisée)",
-          "type_sol": "Type de sol (obligatoire)"
-        }
-      },
       "sensors": {
         "title": "Météo principale et capteurs complémentaires",
         "description": "Renseignez ici une météo principale, puis les capteurs complémentaires si vous les avez. La météo est utilisée en priorité, et les capteurs fournis remplacent ou complètent les valeurs manquantes.",
@@ -65,6 +48,13 @@
           "capteur_etp": "ETP du jour (optionnel, calcul automatique si non renseigné)",
           "capteur_humidite": "Humidité locale (optionnel, prioritaire si fournie)",
           "capteur_hauteur_gazon": "Hauteur du gazon (recommandé si disponible)",
+          "entite_tondeuse": "Robot tondeuse (optionnel)",
+          "capteur_tondeuse_erreur": "Capteur erreur tondeuse (optionnel)",
+          "capteur_tondeuse_batterie": "Capteur batterie tondeuse (optionnel)",
+          "capteur_tondeuse_pluie": "Capteur pluie tondeuse (optionnel)",
+          "capteur_tondeuse_en_charge": "Capteur tondeuse en charge (optionnel)",
+          "capteur_tondeuse_prochain_depart": "Capteur prochain départ tondeuse (optionnel)",
+          "capteur_tondeuse_hauteur_coupe": "Hauteur de coupe tondeuse (optionnel)",
           "hauteur_min_tondeuse_cm": "Hauteur minimale tondeuse (cm)",
           "hauteur_max_tondeuse_cm": "Hauteur maximale tondeuse (cm)",
           "capteur_retour_arrosage": "Retour arrosage (optionnel, calcul automatique ou estimation via l'historique des zones)",
@@ -95,6 +85,13 @@
           "capteur_etp": "ETP du jour (optionnel, calcul automatique si non renseigné)",
           "capteur_humidite": "Humidité locale (optionnel, prioritaire si fournie)",
           "capteur_hauteur_gazon": "Hauteur du gazon (recommandé si disponible)",
+          "entite_tondeuse": "Robot tondeuse (optionnel)",
+          "capteur_tondeuse_erreur": "Capteur erreur tondeuse (optionnel)",
+          "capteur_tondeuse_batterie": "Capteur batterie tondeuse (optionnel)",
+          "capteur_tondeuse_pluie": "Capteur pluie tondeuse (optionnel)",
+          "capteur_tondeuse_en_charge": "Capteur tondeuse en charge (optionnel)",
+          "capteur_tondeuse_prochain_depart": "Capteur prochain départ tondeuse (optionnel)",
+          "capteur_tondeuse_hauteur_coupe": "Hauteur de coupe tondeuse (optionnel)",
           "hauteur_min_tondeuse_cm": "Hauteur minimale tondeuse (cm)",
           "hauteur_max_tondeuse_cm": "Hauteur maximale tondeuse (cm)",
           "capteur_retour_arrosage": "Retour arrosage (optionnel, calcul automatique ou estimation via l'historique des zones)",
@@ -308,6 +305,22 @@
         "note": {
           "name": "Note (optionnelle)",
           "description": "Commentaire libre."
+        },
+        "usage_mode": {
+          "name": "Mode d'usage",
+          "description": "Contexte d'utilisation du produit."
+        },
+        "max_applications_per_year": {
+          "name": "Applications max par an",
+          "description": "Nombre maximal d'applications autorisées sur une année."
+        },
+        "temperature_min": {
+          "name": "Température minimale (°C)",
+          "description": "En dessous, le produit n'est pas recommandé."
+        },
+        "temperature_max": {
+          "name": "Température maximale (°C)",
+          "description": "Au-dessus, le produit n'est pas recommandé."
         }
       }
     },
@@ -332,6 +345,10 @@
         "date_action": {
           "name": "Date de tonte (optionnelle)",
           "description": "Date au format JJ/MM/AAAA ou YYYY-MM-DD. Si vide, aujourd'hui."
+        },
+        "hauteur_coupe_mm": {
+          "name": "Hauteur de coupe (mm)",
+          "description": "Hauteur de coupe utilisée pour cette tonte, en millimètres."
         }
       }
     },
@@ -348,12 +365,25 @@
           "description": "Quantité d'eau appliquée en mm."
         }
       }
+    },
+    "recalibrate_reserve": {
+      "name": "Recaler la réserve du sol",
+      "description": "Fixe la réserve hydrique du sol à une valeur connue. La valeur reste figée jusqu'au lendemain : pluie, arrosage et évapotranspiration du jour ne sont plus comptés. À appeler de préférence le soir, hors épisode de pluie.",
+      "fields": {
+        "reserve_mm": {
+          "name": "Réserve du sol (mm)",
+          "description": "Valeur mesurée ou estimée de la réserve hydrique, en millimètres."
+        }
+      }
     }
   },
   "entity": {
     "switch": {
       "auto_irrigation_enabled": {
         "name": "Arrosage auto autorisé"
+      },
+      "evening_cooling_enabled": {
+        "name": "Rafraîchissement du soir autorisé"
       }
     }
   }

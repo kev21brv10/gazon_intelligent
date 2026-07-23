@@ -11,6 +11,8 @@ except Exception:  # pragma: no cover - standalone fallback
 
 _LOGGER = logging.getLogger(__name__)
 
+# JUMEAU : water._SOIL_RESERVE_UTILE_MM — même réserve utile du sol par type de sol, gardée
+# identique à la main (cf. tests/test_soil_balance.py::TestSoilReserveTwins).
 SOIL_RESERVE_BASE_MM = {
     "sableux": 8.0,
     "limoneux": 12.0,
@@ -26,6 +28,10 @@ SOIL_RESERVE_MAX_MM = {
 SOIL_RESERVE_DEFAULT_BASE_MM = 12.0
 SOIL_RESERVE_DEFAULT_MAX_MM = 24.0
 SOIL_BALANCE_LEDGER_LIMIT = 120
+# Plafond physique de l'ET0 journalière (mm) pour le bilan sol : borne le « pic du jour » retenu
+# par le lissage, afin qu'un faux pic météo ponctuel ne draine pas la réserve de façon absurde.
+# L'ET0 d'un gazon de référence ne dépasse quasi jamais ~12 mm/j, même en canicule → 14 = marge.
+ETP_DAILY_CAP_MM = 14.0
 
 
 def _to_float(value: Any) -> float | None:
@@ -42,6 +48,8 @@ def _round_half_up_1(value: float) -> float:
     # negatives, producing an asymmetric result (e.g. -1.2 → -1.1).
     # We apply the same logic on the absolute value and restore the sign so that
     # previous_reserve + delta_mm == reserve_mm holds after rounding.
+    # JUMEAU : water._round_half_up_1 — garder les deux identiques
+    # (cf. tests/test_soil_balance.py::TestRoundHalfUpTwins).
     if value < 0:
         return -float(int(abs(value) * 10.0 + 0.5)) / 10.0
     return float(int(value * 10.0 + 0.5)) / 10.0
@@ -162,9 +170,17 @@ def update_soil_balance(
     reserve_min_mm = _to_float(state.get("reserve_min_mm"))
     if reserve_min_mm is None:
         reserve_min_mm = 0.0
+    # Plafond de stock : il DOIT suivre le type de sol configuré. `normalize_soil_balance_state`
+    # le résout depuis l'état PERSISTÉ, or au tout premier appel cet état est vide → type_sol None
+    # → SOIL_RESERVE_DEFAULT_MAX_MM (24 mm) écrit dans le ledger. Comme la valeur n'était alors
+    # plus None, elle n'était jamais recalculée : toute installation restait bloquée sur 24 mm et
+    # la table SOIL_RESERVE_MAX_MM (sableux 16 / argileux 32) était inatteignable. On re-résout
+    # donc dès que le type de sol reçu diffère de celui mémorisé (premier appel inclus, où le
+    # mémorisé vaut None), ce qui couvre aussi un changement de sol en configuration.
+    stored_type_sol = state.get("type_sol")
     reserve_max_mm = _to_float(state.get("reserve_max_mm"))
-    if reserve_max_mm is None:
-        reserve_max_mm = max_reserve_mm(type_sol or state.get("type_sol"))
+    if reserve_max_mm is None or (type_sol is not None and type_sol != stored_type_sol):
+        reserve_max_mm = max_reserve_mm(type_sol or stored_type_sol)
     if reserve_max_mm < reserve_min_mm:
         reserve_max_mm = reserve_min_mm
 
@@ -194,6 +210,32 @@ def update_soil_balance(
             arrosage_raw,
         )
     etp = max(0.0, _to_float(etp_mm) or 0.0)
+    # Lissage de l'ET0 du jour : on retient le PIC de la journée (la vraie demande max) au lieu de
+    # laisser l'estimation redescendre le soir ou suivre les soubresauts météo (met.no qui passe de
+    # soleil à pluie → ET0 qui chute à tort). Sans ça la réserve fait du yoyo (constaté 06/2026 :
+    # ET0 4,9 ↔ 9,5 dans la même journée → réserve 7,5 ↔ 11,6, jauge instable). Le pic se
+    # réinitialise chaque jour (au 1er passage d'une nouvelle date, l'entrée repart de l'ET0
+    # courante). Plafonné (ETP_DAILY_CAP_MM) pour qu'un faux pic ponctuel ne casse pas le bilan.
+    if ledger and ledger[-1].get("date") == today_str:
+        _etp_pic_jour = _to_float(ledger[-1].get("etp_mm"))
+        if _etp_pic_jour is not None:
+            etp = max(etp, _etp_pic_jour)
+    etp = min(etp, ETP_DAILY_CAP_MM)
+    # Protection de bord de journée pour la PLUIE : conserver la valeur déjà comptabilisée
+    # UNIQUEMENT quand la lecture du jour est ABSENTE (capteur indisponible, glitch, redémarrage).
+    # Sans cela, `_to_float(None) or 0.0` transforme une absence de mesure en « 0 mm de pluie » et
+    # efface rétroactivement la pluie du jour, faisant chuter la réserve.
+    #
+    # NE PAS utiliser max(pluie, pic_du_jour) ici : la remise à zéro du capteur ne coïncide PAS
+    # avec le changement de date (le Netatmo bascule plusieurs dizaines de minutes après minuit
+    # local). Le coordinateur tournant toutes les 2 min, l'entrée du jour est donc systématiquement
+    # créée avec le cumul de la VEILLE — qu'un max() figerait pour toute la journée. Un simple
+    # remplacement laisse au contraire l'erreur se corriger d'elle-même au reset suivant.
+    # Comme pour les débits de zone : « absent » et « zéro » ne sont pas la même chose.
+    if pluie_mm is None and ledger and ledger[-1].get("date") == today_str:
+        _pluie_deja_comptee = _to_float(ledger[-1].get("pluie_mm"))
+        if _pluie_deja_comptee is not None:
+            pluie = _pluie_deja_comptee
     delta = pluie + arrosage - etp
     reserve_mm = min(max(previous_reserve + delta, reserve_min_mm), reserve_max_mm)
 

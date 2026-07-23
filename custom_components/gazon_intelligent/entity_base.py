@@ -145,7 +145,6 @@ class GazonEntityBase(CoordinatorEntity):
         resolved_entity_id = public_entity_id(platform, suffix, instance_slug=self.instance_slug)
         _domain, object_id = resolved_entity_id.split(".", 1)
         self._attr_unique_id = f"{entry_id}_{suffix}"
-        self._attr_entity_id = resolved_entity_id
         self._attr_suggested_object_id = object_id
         self.entity_id = resolved_entity_id
 

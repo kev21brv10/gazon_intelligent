@@ -27,18 +27,28 @@ jobs:
 
       - name: Create Release
         uses: actions/github-script@v7
+        # Les entrées transitent par `env` et sont lues via `process.env` : interpolées
+        # directement dans le script (`'${{ inputs.tag }}'`), elles permettaient une injection de
+        # code — une valeur contenant une apostrophe sort de la chaîne et exécute du JavaScript
+        # arbitraire avec la permission `contents: write`. C'est déjà le patron retenu pour
+        # `body` à l'étape précédente ; `tag` et `target_sha` l'avaient simplement manqué.
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TARGET_SHA: ${{ inputs.target_sha }}
         with:
           script: |
             const fs = require('fs');
             const body = fs.readFileSync('/tmp/release_body.md', 'utf8');
+            const tag = process.env.RELEASE_TAG;
+            const targetSha = process.env.RELEASE_TARGET_SHA;
             await github.rest.repos.createRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              tag_name: '${{ inputs.tag }}',
-              name: '${{ inputs.tag }}',
+              tag_name: tag,
+              name: tag,
               body: body,
-              target_commitish: '${{ inputs.target_sha }}',
+              target_commitish: targetSha,
               draft: false,
               prerelease: false,
             });
-            console.log('Release created: ${{ inputs.tag }}');
+            console.log(`Release created: ${tag}`);

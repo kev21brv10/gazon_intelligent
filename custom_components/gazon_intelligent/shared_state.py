@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import copy
 from collections.abc import Mapping
 from typing import Any
@@ -117,25 +118,36 @@ class GazonIntelligentSharedState:
         self.hass = hass
         self._store = Store(hass, _STORE_VERSION, f"{DOMAIN}_shared.json")
         self._loaded = False
+        self._load_lock = asyncio.Lock()
         self.shared_config: dict[str, Any] = {}
         self.products: dict[str, dict[str, Any]] = {}
 
     async def async_load(self) -> None:
+        # État partagé PAR LES DEUX INSTANCES (singleton). Home Assistant peut initialiser les
+        # deux entrées du même domaine en parallèle → deux appels concurrents à async_load. Sans
+        # sérialisation, ils passaient tous deux la garde `if self._loaded` AVANT l'await du Store,
+        # puis RÉASSIGNAIENT `self.products` à un nouveau dict — un cerveau qui tenait déjà une
+        # référence à l'ancien se retrouvait avec un catalogue orphelin. Verrou + double-vérification
+        # (le 2ᵉ appel attend, voit `_loaded` et sort) : un seul chargement, aucune réassignation
+        # concurrente. En séquentiel, comportement identique.
         if self._loaded:
             return
-        data = await self._store.async_load() or {}
-        if isinstance(data, dict):
-            shared_config = data.get("shared_config")
-            if isinstance(shared_config, dict):
-                self.shared_config = _extract_shared_config(shared_config)
-            products = data.get("products")
-            if isinstance(products, dict):
-                normalized_products: dict[str, dict[str, Any]] = {}
-                for product_id, product in products.items():
-                    if isinstance(product_id, str) and isinstance(product, dict):
-                        normalized_products[product_id] = copy.deepcopy(product)
-                self.products = normalized_products
-        self._loaded = True
+        async with self._load_lock:
+            if self._loaded:
+                return
+            data = await self._store.async_load() or {}
+            if isinstance(data, dict):
+                shared_config = data.get("shared_config")
+                if isinstance(shared_config, dict):
+                    self.shared_config = _extract_shared_config(shared_config)
+                products = data.get("products")
+                if isinstance(products, dict):
+                    normalized_products: dict[str, dict[str, Any]] = {}
+                    for product_id, product in products.items():
+                        if isinstance(product_id, str) and isinstance(product, dict):
+                            normalized_products[product_id] = copy.deepcopy(product)
+                    self.products = normalized_products
+            self._loaded = True
 
     async def async_save(self) -> None:
         await self._store.async_save(
@@ -156,14 +168,9 @@ class GazonIntelligentSharedState:
             shared_config = _extract_shared_config({**entry.data, **entry.options})
             if shared_config:
                 self.shared_config.update(shared_config)
-        if not self.products:
-            products = getattr(entry, "products", None)
-            if isinstance(products, dict) and products:
-                normalized_products: dict[str, dict[str, Any]] = {}
-                for product_id, product in products.items():
-                    if isinstance(product_id, str) and isinstance(product, dict):
-                        normalized_products[product_id] = copy.deepcopy(product)
-                self.products.update(normalized_products)
+        # Pas de bootstrap du catalogue produits ici : un ConfigEntry n'expose aucun attribut
+        # `products`, le bloc qui le lisait par getattr était donc inatteignable. Le catalogue est
+        # peuplé et persisté par brain.load_state(shared_products=…) puis async_save().
         await self.async_save()
 
     async def async_update_shared_config(self, updates: dict[str, Any]) -> None:
@@ -182,13 +189,6 @@ class GazonIntelligentSharedState:
                 changed = True
         if changed:
             await self.async_save()
-
-    async def async_sync_products(self, products: dict[str, dict[str, Any]]) -> None:
-        self.products.clear()
-        for product_id, product in products.items():
-            if isinstance(product_id, str) and isinstance(product, dict):
-                self.products[product_id] = copy.deepcopy(product)
-        await self.async_save()
 
 
 def get_shared_state(hass, *, create: bool = True) -> GazonIntelligentSharedState | None:

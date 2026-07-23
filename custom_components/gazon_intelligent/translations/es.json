@@ -37,23 +37,6 @@
           "type_sol": "Tipo de suelo (obligatorio)"
         }
       },
-      "reconfigure": {
-        "title": "Ajustes básicos",
-        "description": "Actualiza aquí las zonas, los caudales y el tipo de suelo.",
-        "data": {
-          "zone_1": "Zona 1",
-          "zone_2": "Zona 2",
-          "zone_3": "Zona 3",
-          "zone_4": "Zona 4",
-          "zone_5": "Zona 5",
-          "debit_zone_1": "Caudal zona 1 (mm/h, 0 si no se usa)",
-          "debit_zone_2": "Caudal zona 2 (mm/h, 0 si no se usa)",
-          "debit_zone_3": "Caudal zona 3 (mm/h, 0 si no se usa)",
-          "debit_zone_4": "Caudal zona 4 (mm/h, 0 si no se usa)",
-          "debit_zone_5": "Caudal zona 5 (mm/h, 0 si no se usa)",
-          "type_sol": "Tipo de suelo (obligatorio)"
-        }
-      },
       "sensors": {
         "title": "Meteorología principal y sensores complementarios",
         "description": "Rellena aquí una meteorología principal y, después, los sensores complementarios si los tienes. La meteorología tiene prioridad y los sensores proporcionados sustituyen o completan los valores que falten.",
@@ -65,6 +48,13 @@
           "capteur_etp": "ETP diario (opcional, cálculo automático si no se indica)",
           "capteur_humidite": "Humedad local (opcional, se usa primero si existe)",
           "capteur_hauteur_gazon": "Altura del césped (recomendado si está disponible)",
+          "entite_tondeuse": "Robot cortacésped (opcional)",
+          "capteur_tondeuse_erreur": "Sensor de error del cortacésped (opcional)",
+          "capteur_tondeuse_batterie": "Sensor de batería del cortacésped (opcional)",
+          "capteur_tondeuse_pluie": "Sensor de lluvia del cortacésped (opcional)",
+          "capteur_tondeuse_en_charge": "Sensor de carga del cortacésped (opcional)",
+          "capteur_tondeuse_prochain_depart": "Sensor de próximo inicio del cortacésped (opcional)",
+          "capteur_tondeuse_hauteur_coupe": "Altura de corte del cortacésped (opcional)",
           "hauteur_min_tondeuse_cm": "Altura mínima del cortacésped (cm)",
           "hauteur_max_tondeuse_cm": "Altura máxima del cortacésped (cm)",
           "capteur_retour_arrosage": "Retorno de riego (opcional, automático o estimado desde el historial de zonas)",
@@ -75,7 +65,8 @@
       }
     },
     "error": {
-      "invalid_instance_slug": "Identificador de césped no válido."
+      "invalid_instance_slug": "Identificador de césped no válido.",
+      "entity_not_found": "Entidad no encontrada en Home Assistant."
     },
     "abort": {
       "already_configured": "Gazon Intelligent ya está configurado."
@@ -94,6 +85,13 @@
           "capteur_etp": "ETP diario (opcional, cálculo automático si no se indica)",
           "capteur_humidite": "Humedad local (opcional, se usa primero si existe)",
           "capteur_hauteur_gazon": "Altura del césped (recomendado si está disponible)",
+          "entite_tondeuse": "Robot cortacésped (opcional)",
+          "capteur_tondeuse_erreur": "Sensor de error del cortacésped (opcional)",
+          "capteur_tondeuse_batterie": "Sensor de batería del cortacésped (opcional)",
+          "capteur_tondeuse_pluie": "Sensor de lluvia del cortacésped (opcional)",
+          "capteur_tondeuse_en_charge": "Sensor de carga del cortacésped (opcional)",
+          "capteur_tondeuse_prochain_depart": "Sensor de próximo inicio del cortacésped (opcional)",
+          "capteur_tondeuse_hauteur_coupe": "Altura de corte del cortacésped (opcional)",
           "hauteur_min_tondeuse_cm": "Altura mínima del cortacésped (cm)",
           "hauteur_max_tondeuse_cm": "Altura máxima del cortacésped (cm)",
           "capteur_retour_arrosage": "Retorno de riego (opcional, automático o estimado desde el historial de zonas)",
@@ -307,6 +305,22 @@
         "note": {
           "name": "Nota (opcional)",
           "description": "Comentario libre."
+        },
+        "usage_mode": {
+          "name": "Modo de uso",
+          "description": "Contexto de utilización del producto."
+        },
+        "max_applications_per_year": {
+          "name": "Aplicaciones máx. por año",
+          "description": "Número máximo de aplicaciones permitidas al año."
+        },
+        "temperature_min": {
+          "name": "Temperatura mínima (°C)",
+          "description": "Por debajo, el producto no se recomienda."
+        },
+        "temperature_max": {
+          "name": "Temperatura máxima (°C)",
+          "description": "Por encima, el producto no se recomienda."
         }
       }
     },
@@ -331,6 +345,10 @@
         "date_action": {
           "name": "Fecha de corte (opcional)",
           "description": "Fecha en formato DD/MM/AAAA o AAAA-MM-DD. Si está vacío, se usa hoy."
+        },
+        "hauteur_coupe_mm": {
+          "name": "Altura de corte (mm)",
+          "description": "Altura de corte utilizada para este corte, en milímetros."
         }
       }
     },
@@ -347,12 +365,25 @@
           "description": "Cantidad de agua aplicada en mm."
         }
       }
+    },
+    "recalibrate_reserve": {
+      "name": "Recalibrar la reserva del suelo",
+      "description": "Fija la reserva hídrica del suelo en un valor conocido. El valor queda congelado hasta el día siguiente: lluvia, riego y evapotranspiración ya no se contabilizan hoy. Conviene llamarlo por la tarde, fuera de episodios de lluvia.",
+      "fields": {
+        "reserve_mm": {
+          "name": "Reserva del suelo (mm)",
+          "description": "Reserva hídrica del suelo medida o estimada, en milímetros."
+        }
+      }
     }
   },
   "entity": {
     "switch": {
       "auto_irrigation_enabled": {
         "name": "Riego automático permitido"
+      },
+      "evening_cooling_enabled": {
+        "name": "Refresco vespertino permitido"
       }
     }
   }

@@ -48,6 +48,7 @@ _ensure_package("custom_components.gazon_intelligent", PACKAGE_DIR)
 _ensure_homeassistant_dt_module()
 
 memory = importlib.import_module("custom_components.gazon_intelligent.memory")
+const = importlib.import_module("custom_components.gazon_intelligent.const")
 intervention = importlib.import_module("custom_components.gazon_intelligent.intervention_recommendation")
 decision_models = importlib.import_module("custom_components.gazon_intelligent.decision_models")
 phases = importlib.import_module("custom_components.gazon_intelligent.phases")
@@ -1723,3 +1724,63 @@ class MemoryCatalogTests(unittest.TestCase):
         self.assertEqual(profile["block_reason"], "temperature_trop_basse")
         self.assertEqual(profile["mm_final_recommande"], 0.0)
         self.assertFalse(profile["arrosage_recommande"])
+
+
+class PersistedSettingsSurviveComputeMemoryTests(unittest.TestCase):
+    """`compute_memory` RECONSTRUIT la mémoire à chaque cycle du coordinateur (2 min) : tout
+    réglage utilisateur absent du dict qu'elle renvoie est perdu, et l'entité correspondante
+    repart sur sa valeur par défaut au refresh suivant.
+
+    `evening_cooling_enabled` avait été ajouté au switch sans être reconduit ici : couper le
+    rafraîchissement du soir ne tenait pas, l'interrupteur se rallumait tout seul. Ce test couvre
+    tous les réglages persistés, pour que l'oubli ne se répète pas à la prochaine option.
+    """
+
+    REGLAGES_PERSISTES = (
+        "auto_irrigation_enabled",
+        "mower_coordination_enabled",
+        "evening_cooling_enabled",
+    )
+
+    def _cycle(self, previous_memory):
+        return memory.compute_memory(
+            history=[],
+            current_phase="Normal",
+            decision={"phase_active": "Normal", "objectif_mm": 0.0},
+            previous_memory=previous_memory,
+            today=date(2026, 7, 22),
+        )
+
+    def test_un_reglage_coupe_reste_coupe(self) -> None:
+        for cle in self.REGLAGES_PERSISTES:
+            with self.subTest(reglage=cle):
+                resultat = self._cycle({cle: False})
+                self.assertIs(resultat.get(cle), False)
+
+    def test_un_reglage_coupe_survit_a_plusieurs_cycles(self) -> None:
+        # Le coordinateur rafraîchit toutes les 2 min : la perte se verrait au cycle suivant.
+        etat = {cle: False for cle in self.REGLAGES_PERSISTES}
+        for cycle in range(5):
+            etat = self._cycle(etat)
+            for cle in self.REGLAGES_PERSISTES:
+                with self.subTest(reglage=cle, cycle=cycle):
+                    self.assertIs(etat.get(cle), False)
+
+    def test_chaque_reglage_est_toujours_present(self) -> None:
+        resultat = self._cycle({})
+        for cle in self.REGLAGES_PERSISTES:
+            with self.subTest(reglage=cle):
+                self.assertIn(cle, resultat)
+
+    def test_sans_memoire_prealable_les_defauts_sappliquent(self) -> None:
+        resultat = self._cycle(None)
+        self.assertIs(resultat["auto_irrigation_enabled"], const.DEFAULT_AUTO_IRRIGATION_ENABLED)
+        self.assertIs(
+            resultat["mower_coordination_enabled"], const.DEFAULT_MOWER_COORDINATION_ENABLED
+        )
+        self.assertIs(resultat["evening_cooling_enabled"], const.DEFAULT_EVENING_COOLING_ENABLED)
+
+    def test_un_reglage_active_reste_active(self) -> None:
+        for cle in self.REGLAGES_PERSISTES:
+            with self.subTest(reglage=cle):
+                self.assertIs(self._cycle({cle: True}).get(cle), True)

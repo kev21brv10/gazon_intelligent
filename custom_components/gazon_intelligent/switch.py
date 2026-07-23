@@ -14,6 +14,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
     async_add_entities(
         [
             GazonAutoIrrigationSwitch(coordinator),
+            GazonEveningCoolingSwitch(coordinator),
             GazonMowerCoordinationSwitch(coordinator),
         ]
     )
@@ -38,6 +39,27 @@ class GazonAutoIrrigationSwitch(GazonEntityBase, SwitchEntity):
 
     async def async_turn_off(self, **kwargs):
         await self.coordinator.async_set_auto_irrigation_enabled(False)
+
+
+class GazonEveningCoolingSwitch(GazonEntityBase, SwitchEntity):
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_icon = "mdi:weather-sunset-down"
+    _attr_translation_key = "evening_cooling_enabled"
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._set_entity_identity("switch", "rafraichissement_soir")
+
+    @property
+    def is_on(self):
+        return bool(self.coordinator.evening_cooling_enabled)
+
+    async def async_turn_on(self, **kwargs):
+        await self.coordinator.async_set_evening_cooling_enabled(True)
+
+    async def async_turn_off(self, **kwargs):
+        await self.coordinator.async_set_evening_cooling_enabled(False)
 
 
 class GazonMowerCoordinationSwitch(GazonEntityBase, SwitchEntity):

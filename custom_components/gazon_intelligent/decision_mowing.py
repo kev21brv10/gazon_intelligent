@@ -23,7 +23,6 @@ _MOWING_BLOCK_PRIORITIES = {
     "watering_cooldown": 3,
     "mowing_spacing": 4,
     "mowing_night": 5,
-    "phase": 10,
     "pluie_active": 20,
     "vent_fort": 21,
     "hauteur_trop_faible": 30,
@@ -259,6 +258,42 @@ def _configured_zone_ids(context: DecisionContext) -> tuple[str, ...]:
     )
 
 
+def _reference_now_utc(context: DecisionContext) -> datetime:
+    """Instant courant, en UTC réel, pour mesurer un délai depuis un arrosage.
+
+    Les horodatages d'arrosage (`ended_at`, `started_at`…) sont des instants UTC réels écrits par
+    le coordinateur. Les comparer exige donc un « maintenant » lui aussi en UTC réel.
+
+    `context.hour_of_day` est une heure LOCALE (`dt_util.now().hour`, Europe/Paris). La reconstruire
+    en `tzinfo=timezone.utc` décalait l'instant de l'offset local — 2 h en été — et faisait donc
+    expirer cooldown de tonte et délai de ressuyage 1 à 2 h trop tôt. On privilégie l'instant fourni
+    par le coordinateur (`runtime_context["now_utc"]`) ; la reconstruction locale n'est qu'un repli
+    pour les appels hors runtime (tests, calculs sur une journée passée).
+    """
+    runtime_context = context.runtime_context if isinstance(context.runtime_context, dict) else {}
+    raw_now = runtime_context.get("now_utc")
+    if raw_now:
+        if isinstance(raw_now, datetime):
+            parsed = raw_now
+        else:
+            try:
+                parsed = datetime.fromisoformat(str(raw_now).replace("Z", "+00:00"))
+            except ValueError:
+                parsed = None
+        if parsed is not None:
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+    reference_hour = context.hour_of_day if context.hour_of_day is not None else 6
+    return datetime.combine(context.today, time(reference_hour % 24, 0), tzinfo=timezone.utc)
+
+
+def _elapsed_minutes_since_watering(context: DecisionContext) -> int:
+    """Minutes écoulées depuis le dernier arrosage, bornées à 0."""
+    delta = _reference_now_utc(context) - _latest_watering_timestamp(context)
+    return max(0, int(delta.total_seconds() // 60))
+
+
 def _latest_watering_timestamp(context: DecisionContext) -> datetime:
     """Retourne l'horodatage du dernier arrosage détecté ou la date du jour."""
     allowed_zone_ids = _configured_zone_ids(context)
@@ -295,10 +330,7 @@ def _mowing_cooldown_state(context: DecisionContext) -> tuple[bool, int]:
     if cooldown_minutes <= 0:
         return False, 0
 
-    latest_watering = _latest_watering_timestamp(context)
-    reference_hour = context.hour_of_day if context.hour_of_day is not None else 6
-    now_dt = datetime.combine(context.today, time(reference_hour % 24, 0), tzinfo=timezone.utc)
-    elapsed_minutes = max(0, int((now_dt - latest_watering).total_seconds() // 60))
+    elapsed_minutes = _elapsed_minutes_since_watering(context)
     remaining_minutes = max(0, cooldown_minutes - elapsed_minutes)
     return remaining_minutes > 0, remaining_minutes
 
@@ -336,8 +368,12 @@ def _upcoming_watering_coordination(
     current_minute = (context.hour_of_day or 0) * 60
     minutes_until = int(start_minute) - current_minute
     if minutes_until <= 0:
-        # La fenêtre a déjà démarré ou est passée — arrosage peut survenir à tout moment
-        return "discourage", "Arrosage recommandé ce matin — arrose avant de tondre si possible."
+        # La fenêtre a déjà démarré ou est passée — arrosage peut survenir à tout moment.
+        # Le moment affiché suit l'heure réelle : `minutes_until <= 0` couvre TOUTE la fin de
+        # journée (dont la fenêtre du soir de canicule), pas seulement la matinée.
+        hour = context.hour_of_day if context.hour_of_day is not None else 0
+        moment = "ce matin" if hour < 12 else "cet après-midi" if hour < 18 else "ce soir"
+        return "discourage", f"Arrosage recommandé {moment} — arrose avant de tondre si possible."
     if minutes_until <= 30:
         return "block", (
             f"Arrosage imminent dans ~{minutes_until} min: "
@@ -358,10 +394,7 @@ def _watering_related_mowing_block(
     if not _has_recent_watering_history(context):
         return False, None, None
 
-    latest_watering = _latest_watering_timestamp(context)
-    reference_hour = context.hour_of_day if context.hour_of_day is not None else 6
-    now_dt = datetime.combine(context.today, time(reference_hour % 24, 0), tzinfo=timezone.utc)
-    elapsed_minutes = max(0, int((now_dt - latest_watering).total_seconds() // 60))
+    elapsed_minutes = _elapsed_minutes_since_watering(context)
     ressuyage_hours = _estimate_mowing_ressuyage_hours(context, phase_bundle, water_bundle)
     ressuyage_minutes = int(ressuyage_hours * 60)
     if elapsed_minutes < ressuyage_minutes:
@@ -1060,12 +1093,6 @@ def _select_mowing_block_reason(
     phase_bundle: dict[str, Any],
     water_bundle: dict[str, Any],
     weather_profile: dict[str, Any],
-    humidite: float,
-    pluie_demain: float,
-    pluie_j2: float,
-    pluie_3j: float,
-    pluie_probabilite_max_3j: float,
-    arrosage_recent_jour: float,
     rosee: Any,
     temperature: float,
     etp: float,
@@ -1130,22 +1157,6 @@ def _select_mowing_block_reason(
                     False,
                 )
             )
-
-    if phase_dominante in {"Traitement", "Hivernage"} or (
-        phase_dominante == "Sursemis" and phase_bundle.get("sous_phase") in _SURSEMIS_MOWING_BLOCKED_SUBPHASES
-    ):
-        candidates.append(
-            (
-                _MOWING_BLOCK_PRIORITIES["phase"],
-                f"phase_{phase_dominante.lower()}",
-                (
-                    f"Sursemis / {phase_bundle['sous_phase']}: tonte interdite pendant l'installation du gazon."
-                    if phase_dominante == "Sursemis"
-                    else f"Phase {phase_dominante}: mieux vaut différer la tonte."
-                ),
-                False,
-            )
-        )
 
     if is_active_rain_weather(weather_profile):
         candidates.append(
@@ -1437,12 +1448,6 @@ def build_mowing_bundle(
         phase_bundle=phase_bundle,
         water_bundle=water_bundle,
         weather_profile=context.weather_profile,
-        humidite=float(context.humidite or 0.0),
-        pluie_demain=float(context.pluie_demain or 0.0),
-        pluie_j2=float(context.pluie_j2 or 0.0),
-        pluie_3j=float(context.pluie_3j or 0.0),
-        pluie_probabilite_max_3j=float(context.pluie_probabilite_max_3j or 0.0),
-        arrosage_recent_jour=float(water_bundle["water_balance"].get("arrosage_recent_jour") or 0.0),
         rosee=water_bundle["advanced_context"].get("rosee"),
         temperature=float(context.temperature or 0.0),
         etp=float(water_bundle.get("etp") or 0.0),
@@ -1544,7 +1549,12 @@ def build_mowing_bundle(
 
     mowing_is_overdue, overdue_factor, overdue_days = _mowing_overdue_state(context, phase_bundle)
     overdue_relaxed_baseline = False
-    if mowing_is_overdue and reason_code in _OVERDUE_SOFT_OVERRIDE_CODES:
+    # `reason_code is None` couvre le blocage par SCORE SEUL : entre le seuil baseline (55) et le
+    # seuil « conditions défavorables » (65), la tonte est refusée sans qu'aucun code agronomique
+    # ne soit posé. L'override de retard étant indexé sur `reason_code`, cette bande était
+    # impossible à débloquer — une tonte pouvait rester refusée avec 37 jours de retard, sans
+    # motif affiché. C'est exactement le cas que l'override existe pour traiter.
+    if mowing_is_overdue and (reason_code is None or reason_code in _OVERDUE_SOFT_OVERRIDE_CODES):
         extended_threshold = 65 if overdue_factor < 2.0 else 70
         overdue_relaxed_baseline = score_tonte < extended_threshold and score_stress < 70
 

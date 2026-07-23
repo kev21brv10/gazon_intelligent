@@ -203,6 +203,61 @@ class GazonBrainTests(unittest.TestCase):
         self.assertEqual(dumped["date_action"], "2026-04-15")
         self.assertEqual(brain.date_action, "2026-04-15")
 
+    def test_record_watering_keeps_rafraichissement_soir_cause(self) -> None:
+        # Régression (bug 25-26/06) : la cause `rafraichissement_soir` (cooling du soir) DOIT être
+        # écrite dans l'historique. Avant, la liste blanche l'excluait → cause droppée à `None` →
+        # le cooling passait pour un arrosage normal (armait le cooldown 24 h + créditait la réserve).
+        brain = GazonBrain()
+        brain.record_watering(
+            date_action=date(2026, 6, 26),
+            total_mm=3.0,
+            source="auto_irrigation",
+            watering_cause="rafraichissement_soir",
+        )
+        self.assertEqual(brain.history[-1]["watering_cause"], "rafraichissement_soir")
+        # L'arrosage hydrique normal reste bien étiqueté.
+        brain.record_watering(
+            date_action=date(2026, 6, 26),
+            total_mm=8.0,
+            source="auto_irrigation",
+            watering_cause="hydrique",
+        )
+        self.assertEqual(brain.history[-1]["watering_cause"], "hydrique")
+
+    def test_record_skip_basic(self) -> None:
+        brain = GazonBrain()
+        result = brain.record_skip(
+            reason="recent_watering",
+            fenetre="matin",
+            objectif_mm=12.0,
+            raison_decision="Réserve 5.0/12.0mm sous le seuil MAD",
+            date_action=date(2026, 6, 28),
+        )
+        self.assertEqual(result["type"], "decision_skip")
+        self.assertEqual(result["reason"], "recent_watering")
+        self.assertEqual(result["fenetre"], "matin")
+        self.assertEqual(result["objectif_mm"], 12.0)
+        self.assertEqual(result["raison_decision"], "Réserve 5.0/12.0mm sous le seuil MAD")
+        self.assertEqual(result["date"], "2026-06-28")
+        self.assertIn(result, brain.history)
+
+    def test_record_skip_minimal(self) -> None:
+        brain = GazonBrain()
+        result = brain.record_skip(reason="irrigation_blocked")
+        self.assertEqual(result["type"], "decision_skip")
+        self.assertEqual(result["reason"], "irrigation_blocked")
+        self.assertNotIn("fenetre", result)
+        self.assertNotIn("objectif_mm", result)
+        self.assertNotIn("raison_decision", result)
+
+    def test_record_skip_appended_to_history(self) -> None:
+        brain = GazonBrain()
+        brain.record_watering(date_action=date(2026, 6, 28), total_mm=12.0, source="auto_irrigation")
+        brain.record_skip(reason="recent_watering", fenetre="soir", date_action=date(2026, 6, 28))
+        self.assertEqual(len(brain.history), 2)
+        self.assertEqual(brain.history[0]["type"], "arrosage")
+        self.assertEqual(brain.history[1]["type"], "decision_skip")
+
     def test_set_normal_removes_active_phase_until_inclusive_end_then_keeps_expired_history(self) -> None:
         brain = GazonBrain()
         brain.history = [
@@ -993,3 +1048,41 @@ class KcPostMowingTests(unittest.TestCase):
         kc_base = compute_kc_gazon("Normal")
         kc_post = compute_kc_gazon("Normal", days_since_mowing=20)
         self.assertEqual(kc_post, kc_base)
+
+
+class LedgerOnlyCountsMeasuredRainTests(unittest.TestCase):
+    """`pluie_24h` est une valeur RÉSOLUE : elle bascule silencieusement sur la prévision météo
+    quand le capteur de pluie est indisponible. Créditer la réserve avec de la pluie ANNONCÉE mais
+    jamais tombée provoque un sous-arrosage durable — et le capteur ici est la station Netatmo
+    d'un voisin, hors de tout contrôle, qui peut disparaître à tout moment."""
+
+    def _reserve(self, *, pluie, source):
+        brain = GazonBrain()
+        brain.soil_balance = {
+            "date": "2026-07-22", "reserve_mm": 6.0, "previous_reserve_mm": 6.0,
+            "pluie_mm": 0.0, "arrosage_mm": 0.0, "etp_mm": 0.0, "delta_mm": 0.0,
+            "type_sol": "limoneux", "reserve_max_mm": 24.0, "reserve_min_mm": 0.0,
+            "ledger": [],
+        }
+        brain.compute_snapshot(
+            today=date(2026, 7, 23), hour_of_day=8,
+            temperature=20.0, pluie_24h=pluie, pluie_demain=0.0, humidite=55.0,
+            etp_capteur=0.0, type_sol="limoneux",
+            pluie_source=source, pluie_demain_source="meteo_forecast",
+            humidite_sol=None, vent=None, rosee=None, hauteur_gazon=None,
+            retour_arrosage=None, weather_profile={},
+        )
+        return brain.soil_balance["ledger"][-1]["pluie_mm"]
+
+    def test_pluie_mesuree_est_creditee(self) -> None:
+        self.assertEqual(self._reserve(pluie=8.0, source="capteur"), 8.0)
+
+    def test_variante_de_nom_de_source_capteur_reconnue(self) -> None:
+        # La source s'écrit "capteur" côté coordinateur, "capteur_pluie_24h" ailleurs.
+        self.assertEqual(self._reserve(pluie=8.0, source="capteur_pluie_24h"), 8.0)
+
+    def test_pluie_prevue_nest_pas_creditee(self) -> None:
+        self.assertEqual(self._reserve(pluie=8.0, source="meteo_forecast"), 0.0)
+
+    def test_source_indisponible_nest_pas_creditee(self) -> None:
+        self.assertEqual(self._reserve(pluie=8.0, source="non disponible"), 0.0)

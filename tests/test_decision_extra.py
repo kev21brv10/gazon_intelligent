@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 import importlib
 from pathlib import Path
 import sys
@@ -283,7 +283,10 @@ class TestDecisionSnapshotSursemisRules(unittest.TestCase):
                 ),
                 0.0,
                 False,
-                "temperature_trop_basse",
+                # Sous-phase Germination à 8 °C : le motif SPÉCIFIQUE doit remonter. L'attendu
+                # était le générique « temperature_trop_basse » parce que le garde germination
+                # était posé AVANT le bloc générique, qui écrasait aussitôt son motif.
+                "temperature_trop_basse_germination",
                 False,
             ),
         ]
@@ -1607,6 +1610,72 @@ class TestEtpComputation(unittest.TestCase):
         )
         self.assertGreaterEqual(etp, 8.0)
 
+    def test_compute_etp_prefers_measured_humidity_and_wind_over_weather(self) -> None:
+        # Demandé par Kévin (2026-06-22) : si des capteurs mesurés (humidite/vent) sont fournis,
+        # l'ET0 doit les utiliser EN PRIORITÉ sur l'entité météo (weather_profile), elle-même
+        # simple repli avant les valeurs par défaut.
+        base_wp = {
+            "weather_temperature": 35.0,
+            "weather_humidity": 80.0,  # météo "humide"
+            "weather_wind_speed": 2.0,  # météo "peu de vent"
+            "weather_wind_speed_unit": "km/h",
+            "weather_cloud_coverage": 0.0,
+            "ha_latitude": 46.5,
+            "ha_day_of_year": 173,
+        }
+        etp_weather = decision.compute_etp(
+            temperature=35.0, pluie_24h=0.0, etp_capteur=None, weather_profile=base_wp
+        )
+        # Capteurs : air SEC (30 %) et VENTÉ (25 km/h) → ET0 nettement plus élevée.
+        etp_sensors = decision.compute_etp(
+            temperature=35.0,
+            pluie_24h=0.0,
+            etp_capteur=None,
+            weather_profile=base_wp,
+            humidite=30.0,
+            vent=25.0,
+        )
+        self.assertGreater(etp_sensors, etp_weather)
+        # Le capteur doit ÉCRASER le weather_profile : résultat identique à une météo
+        # qui porterait directement ces valeurs.
+        etp_equiv = decision.compute_etp(
+            temperature=35.0,
+            pluie_24h=0.0,
+            etp_capteur=None,
+            weather_profile={**base_wp, "weather_humidity": 30.0, "weather_wind_speed": 25.0},
+        )
+        self.assertEqual(etp_sensors, etp_equiv)
+
+    def test_compute_etp_sensor_wind_assumed_kmh(self) -> None:
+        # Le vent capteur (sans unité explicite) est supposé en km/h (standard HA/Netatmo) :
+        # vent=10.8 (capteur) == weather_wind_speed=10.8 km/h.
+        common = {
+            "weather_temperature": 28.0,
+            "weather_cloud_coverage": 10.0,
+            "ha_latitude": 46.5,
+            "ha_day_of_year": 173,
+        }
+        etp_sensor = decision.compute_etp(
+            temperature=28.0,
+            pluie_24h=0.0,
+            etp_capteur=None,
+            weather_profile=common,
+            humidite=50.0,
+            vent=10.8,
+        )
+        etp_weather_kmh = decision.compute_etp(
+            temperature=28.0,
+            pluie_24h=0.0,
+            etp_capteur=None,
+            weather_profile={
+                **common,
+                "weather_humidity": 50.0,
+                "weather_wind_speed": 10.8,
+                "weather_wind_speed_unit": "km/h",
+            },
+        )
+        self.assertEqual(etp_sensor, etp_weather_kmh)
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -2127,6 +2196,7 @@ class TestDepletionWateringModel(unittest.TestCase):
 
     @staticmethod
     def _profile(**overrides):
+        temperature = overrides.pop("temperature", 30.0)
         water_balance = dict(
             bilan_hydrique_mm=-7.0,
             deficit_jour=4.0,
@@ -2155,7 +2225,7 @@ class TestDepletionWateringModel(unittest.TestCase):
             pluie_3j=0.0,
             pluie_probabilite_max_3j=0.0,
             humidite=40.0,
-            temperature=30.0,
+            temperature=temperature,
             etp=7.0,
             type_sol="limoneux",
             weather_profile={},
@@ -2177,26 +2247,72 @@ class TestDepletionWateringModel(unittest.TestCase):
         self.assertIsNone(profile["block_reason"])
 
     def test_dose_capped_by_weekly_budget(self):
-        # 22 mm déjà arrosés sur 7 jours glissants : la recharge est plafonnée au reste du
-        # budget hebdomadaire (cap dur), même si la réserve est épuisée.
-        profile = self._profile(arrosage_recent_7j=22.0)
-        weekly_room = round(profile["weekly_guardrail_mm_max"] - 22.0, 1)
+        # Beaucoup déjà arrosé sur 7 j glissants : la recharge est plafonnée au reste du budget
+        # hebdo (cap dur), même réserve épuisée. NB : en canicule le plafond hebdo est rehaussé
+        # (~42 mm, suit l'ETc), donc il faut un cumul élevé pour atteindre le cap.
+        profile = self._profile(arrosage_recent_7j=38.0)
+        weekly_room = round(profile["weekly_guardrail_mm_max"] - 38.0, 1)
         self.assertEqual(profile["mm_final_recommande"], weekly_room)
         self.assertLess(profile["mm_final_recommande"], 7.0)
 
+    def test_canicule_weekly_cap_follows_etc_not_throttled_to_survival(self):
+        # Régression (06/2026) : en canicule, le plafond hebdo NORMAL (~30 mm) étranglait la
+        # recharge sous la demande ETc (~50 mm/sem) → réserve à 0 mais dose bridée à 5 mm de
+        # survie → gazon qui sèche. Désormais le plafond canicule suit l'ETc : avec ~35 mm déjà
+        # arrosés (sous le nouveau plafond ~42), une vraie recharge > plancher de survie passe.
+        profile = self._profile(
+            arrosage_recent_7j=35.5, reserve_actuelle_mm=0.0, depletion_mm=12.0, depletion_ratio=1.0
+        )
+        self.assertGreater(profile["weekly_guardrail_mm_max"], 30.0)  # plafond rehaussé en canicule
+        self.assertGreater(profile["mm_final_recommande"], 5.0)  # plus bridé au plancher de survie
+
     def test_survival_watering_during_heatwave_overrides_weekly_cap(self):
-        # Réserve à 0/12 (100 % épuisé) + canicule (temp 30 / ET0 7 → stress extrême) +
-        # budget hebdo dépassé : un petit cycle de survie est délivré malgré le garde-fou,
-        # sinon le gazon grillerait.
+        # Réserve à 0/12 (100 % épuisé) + VRAIE canicule (temp 34 °C) + budget hebdo dépassé :
+        # un petit cycle de survie est délivré malgré le garde-fou, sinon le gazon grillerait.
         profile = self._profile(
             reserve_actuelle_mm=0.0,
             reserve_stock_mm=0.0,
             depletion_mm=12.0,
             depletion_ratio=1.0,
             arrosage_recent_7j=40.0,
+            temperature=34.0,
         )
         self.assertGreater(profile["mm_final_recommande"], 0.0)
         self.assertNotEqual(profile.get("block_reason"), "garde_fou_hebdomadaire")
+
+    def test_pas_de_survie_a_30_degres_meme_reserve_epuisee(self):
+        # 30 °C = journée d'été sèche NORMALE, pas une canicule. Même réserve épuisée + budget
+        # dépassé, la survie ne doit PAS s'armer (le score composite dit "extreme" par l'ET0/air sec,
+        # mais on exige une chaleur RÉELLE ≥ 32 °C) → le garde-fou hebdo reste un cap dur.
+        profile = self._profile(
+            reserve_actuelle_mm=0.0,
+            reserve_stock_mm=0.0,
+            depletion_mm=12.0,
+            depletion_ratio=1.0,
+            arrosage_recent_7j=40.0,
+            et0_mm=7.0,
+            et_elapsed_fraction=1.0,   # journée écoulée → déplétion réelle = 100 %, mais temp 30 °C
+            temperature=30.0,
+        )
+        chaud = self._profile(
+            reserve_actuelle_mm=0.0, reserve_stock_mm=0.0, depletion_mm=12.0, depletion_ratio=1.0,
+            arrosage_recent_7j=40.0, et0_mm=7.0, et_elapsed_fraction=1.0, temperature=34.0,
+        )
+        # À 30 °C la survie ne délivre pas la recharge complète ; à 34 °C (vraie canicule) oui.
+        self.assertLess(profile["mm_final_recommande"], chaud["mm_final_recommande"])
+
+    def test_survie_canicule_ne_sarme_pas_a_minuit_sur_depletion_anticipee(self):
+        # « Falaise de minuit » : à 00h01 le ledger a débité tout l'ET0 du jour → depletion_ratio=1.0
+        # (ANTICIPÉ) alors qu'aucune évapotranspiration n'a encore eu lieu. La survie canicule (qui
+        # outrepasse le garde-fou hebdo) ne doit PAS s'armer sur cette déplétion anticipée : elle se
+        # base désormais sur l'ET RÉELLEMENT écoulée (`et_elapsed_fraction`). Budget hebdo dépassé.
+        commun = dict(depletion_mm=12.0, depletion_ratio=1.0, arrosage_recent_7j=40.0, et0_mm=7.0, temperature=34.0)
+        minuit = self._profile(**commun, et_elapsed_fraction=0.0)      # rien d'écoulé → réel ≈ 5/12
+        apres_midi = self._profile(**commun, et_elapsed_fraction=1.0)  # journée écoulée → réel = 12/12
+        # À minuit, la survie ne s'arme pas → le garde-fou hebdo (budget dépassé) bride la dose ;
+        # l'après-midi, la déplétion est réelle → la survie l'emporte et délivre une vraie recharge.
+        self.assertLess(minuit["mm_final_recommande"], apres_midi["mm_final_recommande"])
+        self.assertGreater(apres_midi["mm_final_recommande"], 5.0)
 
     def test_no_survival_watering_without_heatwave(self):
         # Même réserve épuisée + budget dépassé, MAIS sans canicule (temps frais) :
@@ -2341,9 +2457,30 @@ class TestEveningCoolingWatering(unittest.TestCase):
         )
         self.assertEqual(profile["watering_evening_end_minute"], 1290)
 
+    def test_evening_deficit_becomes_cooling_never_hydric(self):
+        # 3e cas SUPPRIMÉ : même avec un gros déficit (réserve à sec), le SOIR ne fait QUE le
+        # cooling (3 mm), jamais une recharge hydrique. La vraie recharge est reportée au matin →
+        # l'arrosage du soir n'arme donc pas le cooldown 24 h et ne bloque plus le matin suivant.
+        profile = self._cooling_profile(
+            bilan_hydrique_mm=-12.0,
+            deficit_jour=10.0,
+            deficit_3j=12.0,
+            deficit_7j=20.0,
+            reserve_actuelle_mm=2.0,
+            reserve_stock_mm=2.0,
+            depletion_mm=10.0,
+            depletion_ratio=0.83,
+        )
+        self.assertEqual(profile["heat_stress_level"], "extreme")
+        self.assertEqual(profile["fenetre_optimale"], "soir")
+        # C'est le cooling (3 mm) qui sort, PAS la grosse recharge hydrique du déficit.
+        self.assertEqual(profile["mm_final_recommande"], guidance.EVENING_COOLING_MM)
+        self.assertTrue(profile["evening_cooling"])
+        self.assertIsNone(profile["block_reason"])
+
     def test_cooling_applied_on_canicule_evening(self):
-        # Le soir, la chaleur redescend souvent d'« extreme » à « canicule » : le cooling doit
-        # quand même se déclencher (sinon il ne partirait jamais le soir).
+        # Le soir, la chaleur redescend : le cooling doit se déclencher si la température mesurée
+        # est encore ≥ EVENING_COOLING_MIN_TEMP (32 °C) — représente une journée à ~38 °C de max.
         moment = datetime(2026, 7, 15, 21, 10, tzinfo=timezone.utc)
         water_balance = dict(
             bilan_hydrique_mm=-1.0,
@@ -2371,7 +2508,7 @@ class TestEveningCoolingWatering(unittest.TestCase):
                 pluie_3j=0.0,
                 pluie_probabilite_max_3j=0.0,
                 humidite=50.0,
-                temperature=31.0,
+                temperature=34.0,
                 etp=4.0,
                 type_sol="limoneux",
                 weather_profile={"sunset_minute": 1290},
@@ -2380,6 +2517,193 @@ class TestEveningCoolingWatering(unittest.TestCase):
         self.assertEqual(profile["heat_stress_level"], "canicule")
         self.assertEqual(profile["fenetre_optimale"], "soir")
         self.assertEqual(profile["mm_final_recommande"], guidance.EVENING_COOLING_MM)
+
+    def _evening_recharge_profile(self, *, temperature, evening_cooling_enabled=True):
+        # Réserve TRÈS épuisée (déplétion 0.83 > MAD 0.5) → le mode Normal veut une vraie recharge.
+        moment = datetime(2026, 7, 15, 21, 10, tzinfo=timezone.utc)
+        water_balance = dict(
+            bilan_hydrique_mm=-14.0,
+            deficit_3j=14.0,
+            deficit_7j=18.0,
+            arrosage_recent_7j=0.0,
+            reserve_from_soil_ledger=True,
+            reserve_utile_mm=12.0,
+            reserve_actuelle_mm=2.0,
+            reserve_stock_mm=2.0,
+            reserve_stock_max_mm=24.0,
+            depletion_mm=10.0,
+            depletion_ratio=0.83,
+            mad_ratio=0.5,
+        )
+        with patch.object(guidance, "_current_datetime", return_value=moment):
+            return guidance.compute_watering_profile(
+                phase_dominante="Normal",
+                sous_phase="Normal",
+                water_balance=water_balance,
+                today=date(2026, 7, 15),
+                pluie_24h=0.0,
+                pluie_demain=0.0,
+                pluie_j2=0.0,
+                pluie_3j=0.0,
+                pluie_probabilite_max_3j=0.0,
+                humidite=45.0,
+                temperature=temperature,
+                etp=6.0,
+                type_sol="limoneux",
+                weather_profile={"sunset_minute": 1290},
+                history=[],
+                evening_cooling_enabled=evening_cooling_enabled,
+            )
+
+    def test_no_cooling_on_saturated_soil(self):
+        # RÉGRESSION : `cooling_active` remettait block_reason=None sans condition, effaçant aussi
+        # « sol_deja_humide ». Canicule après un gros orage (bilan +6 mm > seuil de saturation) :
+        # arroser un sol détrempé n'apporte rien et laisse le gazon trempé la nuit.
+        moment = datetime(2026, 7, 15, 21, 10, tzinfo=timezone.utc)
+        water_balance = dict(
+            bilan_hydrique_mm=6.0,  # > SATURATION_BILAN_HYDRIQUE_MM (5.0) → saturation_block
+            deficit_3j=0.0,
+            deficit_7j=0.0,
+            arrosage_recent_7j=0.0,
+            reserve_from_soil_ledger=True,
+            reserve_utile_mm=12.0,
+            reserve_actuelle_mm=11.5,
+            reserve_stock_mm=11.5,
+            reserve_stock_max_mm=24.0,
+            depletion_mm=0.5,
+            depletion_ratio=0.04,
+            mad_ratio=0.5,
+        )
+        with patch.object(guidance, "_current_datetime", return_value=moment):
+            profile = guidance.compute_watering_profile(
+                phase_dominante="Normal",
+                sous_phase="Normal",
+                water_balance=water_balance,
+                today=date(2026, 7, 15),
+                pluie_24h=0.0,
+                pluie_demain=0.0,
+                pluie_j2=0.0,
+                pluie_3j=0.0,
+                pluie_probabilite_max_3j=0.0,
+                humidite=45.0,
+                temperature=35.0,
+                etp=6.0,
+                type_sol="limoneux",
+                weather_profile={"sunset_minute": 1290},
+                history=[],
+            )
+        self.assertIn(profile["heat_stress_level"], {"canicule", "extreme"})
+        self.assertFalse(profile["evening_cooling"])
+        self.assertEqual(profile["mm_final_recommande"], 0.0)
+        self.assertEqual(profile["block_reason"], "sol_deja_humide")
+
+    def test_no_evening_recharge_when_cooling_inactive_below_min_temp(self):
+        # RÉGRESSION : en canicule, _evening_window_allowed LÈVE la marge de séchage de 90 min en
+        # supposant les 3 mm de cooling. Si le cooling ne s'active pas (T mesurée < 32 °C), la dose
+        # de RECHARGE ne doit PAS partir le soir — sinon gros arrosage à la tombée de la nuit sans
+        # séchage → risque fongique. Elle est reportée au matin.
+        profile = self._evening_recharge_profile(temperature=30.0)
+        self.assertIn(profile["heat_stress_level"], {"canicule", "extreme"})
+        self.assertNotEqual(profile["fenetre_optimale"], "soir")
+        # Le coordinateur ne doit PAS être autorisé à lancer dans la fenêtre du soir.
+        self.assertFalse(profile["watering_evening_allowed"])
+
+    def test_no_evening_recharge_when_switch_disabled(self):
+        # Même garde-fou quand c'est le switch qui coupe le rafraîchissement.
+        profile = self._evening_recharge_profile(temperature=34.0, evening_cooling_enabled=False)
+        self.assertIn(profile["heat_stress_level"], {"canicule", "extreme"})
+        self.assertNotEqual(profile["fenetre_optimale"], "soir")
+        self.assertFalse(profile["watering_evening_allowed"])
+
+    def test_evening_window_still_published_for_real_cooling(self):
+        # Contrôle positif : vraie canicule (T ≥ 32 °C) → le cooling reste proposé le soir et la
+        # fenêtre est bien publiée au coordinateur.
+        profile = self._evening_recharge_profile(temperature=34.0)
+        self.assertEqual(profile["fenetre_optimale"], "soir")
+        self.assertEqual(profile["mm_final_recommande"], guidance.EVENING_COOLING_MM)
+        self.assertTrue(profile["watering_evening_allowed"])
+        self.assertEqual(profile["watering_evening_end_minute"], 1290)
+
+    def test_no_cooling_when_switch_disabled(self):
+        # Switch « Rafraîchissement du soir » sur OFF : même en pleine canicule et dans la fenêtre
+        # du coucher, aucun cooling ne part.
+        moment = datetime(2026, 7, 15, 21, 10, tzinfo=timezone.utc)
+        water_balance = dict(
+            bilan_hydrique_mm=-1.0,
+            deficit_3j=0.0,
+            deficit_7j=0.0,
+            arrosage_recent_7j=0.0,
+            reserve_from_soil_ledger=True,
+            reserve_utile_mm=12.0,
+            reserve_actuelle_mm=9.6,
+            reserve_stock_mm=9.6,
+            reserve_stock_max_mm=24.0,
+            depletion_mm=2.4,
+            depletion_ratio=0.2,
+            mad_ratio=0.5,
+        )
+        with patch.object(guidance, "_current_datetime", return_value=moment):
+            profile = guidance.compute_watering_profile(
+                phase_dominante="Normal",
+                sous_phase="Normal",
+                water_balance=water_balance,
+                today=date(2026, 7, 15),
+                pluie_24h=0.0,
+                pluie_demain=0.0,
+                pluie_j2=0.0,
+                pluie_3j=0.0,
+                pluie_probabilite_max_3j=0.0,
+                humidite=50.0,
+                temperature=34.0,
+                etp=4.0,
+                type_sol="limoneux",
+                weather_profile={"sunset_minute": 1290},
+                history=[],
+                evening_cooling_enabled=False,
+            )
+        self.assertEqual(profile["heat_stress_level"], "canicule")
+        self.assertEqual(profile["mm_final_recommande"], 0.0)
+        self.assertNotEqual(profile["fenetre_optimale"], "soir")
+
+    def test_no_cooling_below_min_temperature(self):
+        # Score de stress « canicule » atteint via ET0/humidité, mais température mesurée au
+        # coucher < EVENING_COOLING_MIN_TEMP → pas de cooling (refroidir n'a pas de sens).
+        moment = datetime(2026, 7, 15, 21, 10, tzinfo=timezone.utc)
+        water_balance = dict(
+            bilan_hydrique_mm=-1.0,
+            deficit_3j=0.0,
+            deficit_7j=0.0,
+            arrosage_recent_7j=0.0,
+            reserve_from_soil_ledger=True,
+            reserve_utile_mm=12.0,
+            reserve_actuelle_mm=9.6,
+            reserve_stock_mm=9.6,
+            reserve_stock_max_mm=24.0,
+            depletion_mm=2.4,
+            depletion_ratio=0.2,
+            mad_ratio=0.5,
+        )
+        with patch.object(guidance, "_current_datetime", return_value=moment):
+            profile = guidance.compute_watering_profile(
+                phase_dominante="Normal",
+                sous_phase="Normal",
+                water_balance=water_balance,
+                today=date(2026, 7, 15),
+                pluie_24h=0.0,
+                pluie_demain=0.0,
+                pluie_j2=0.0,
+                pluie_3j=0.0,
+                pluie_probabilite_max_3j=0.0,
+                humidite=30.0,
+                temperature=28.0,
+                etp=5.0,
+                type_sol="limoneux",
+                weather_profile={"sunset_minute": 1290},
+                history=[],
+            )
+        self.assertIn(profile["heat_stress_level"], {"canicule", "extreme"})
+        self.assertEqual(profile["mm_final_recommande"], 0.0)
+        self.assertNotEqual(profile["fenetre_optimale"], "soir")
 
     def test_no_cooling_in_afternoon(self):
         # En après-midi (14h), hors fenêtre du soir → réserve saine, aucun arrosage.
@@ -2531,3 +2855,276 @@ class TestEveningCoolingCooldownExemption(unittest.TestCase):
         latest = guidance._latest_watering_datetime(history)
         self.assertIsNotNone(latest)
         self.assertEqual(latest.date().isoformat(), "2026-04-04")
+
+
+class MowingCooldownTimezoneTests(unittest.TestCase):
+    """`context.hour_of_day` est une heure LOCALE (Europe/Paris) que decision_mowing estampillait
+    en `tzinfo=utc`, alors que les horodatages d'arrosage sont des instants UTC réels. En été
+    (UTC+2) le temps écoulé était surestimé de 2 h : le cooldown de tonte et le délai de ressuyage
+    expiraient 1 à 2 h trop tôt, autorisant la tonte sur un gazon encore gorgé d'eau."""
+
+    # 22/07/2026 : arrosage terminé à 09:00 Paris = 07:00 UTC ; il est 10:00 Paris = 08:00 UTC.
+    WATERING_UTC = "2026-07-22T07:00:00+00:00"
+    NOW_UTC = "2026-07-22T08:00:00+00:00"
+    LOCAL_HOUR = 10  # ce que le coordinateur passe dans hour_of_day
+
+    def _context(self, *, with_now_utc):
+        runtime = {
+            "mowing_cooldown_after_watering_minutes": 120,
+            "last_irrigation_execution": {"ended_at": self.WATERING_UTC, "zones": []},
+        }
+        if with_now_utc:
+            runtime["now_utc"] = self.NOW_UTC
+        return decision.DecisionContext.from_legacy_args(
+            today=date(2026, 7, 22),
+            hour_of_day=self.LOCAL_HOUR,
+            history=[],
+            runtime_context=runtime,
+        )
+
+    def test_instant_de_reference_est_bien_en_utc_reel(self):
+        now = decision_mowing._reference_now_utc(self._context(with_now_utc=True))
+        self.assertEqual(now, datetime(2026, 7, 22, 8, 0, tzinfo=timezone.utc))
+
+    def test_une_heure_ecoulee_est_comptee_comme_une_heure(self):
+        # Sans la correction : 10:00 estampillé UTC − 07:00 UTC = 180 min au lieu de 60.
+        elapsed = decision_mowing._elapsed_minutes_since_watering(self._context(with_now_utc=True))
+        self.assertEqual(elapsed, 60)
+
+    def test_cooldown_de_120min_encore_actif_apres_60min(self):
+        active, remaining = decision_mowing._mowing_cooldown_state(self._context(with_now_utc=True))
+        self.assertTrue(active)
+        self.assertEqual(remaining, 60)
+
+    def test_repli_sans_now_utc_reste_deterministe(self):
+        # Hors runtime (tests, journée passée), repli sur today + hour_of_day.
+        now = decision_mowing._reference_now_utc(self._context(with_now_utc=False))
+        self.assertEqual(now, datetime(2026, 7, 22, self.LOCAL_HOUR, 0, tzinfo=timezone.utc))
+
+
+class IrrigationExecutionContractTests(unittest.TestCase):
+    """`_apply_irrigation_execution_contract` cherchait `water_balance` / `bilan_hydrique_mm`
+    dans un payload où rien ne les plaçait : le déficit lu valait toujours 0.0 et le drapeau
+    « bloqué alors que critique » ne se levait jamais, quel que soit le déficit réel."""
+
+    def _payload(self, *, bilan_mm, blocked=True):
+        base = decision_watering._build_watering_bundle_base(
+            water_bundle={
+                "objectif_mm": 0.0,
+                "water_balance": {"bilan_hydrique_mm": bilan_mm},
+            },
+            phase_bundle={},
+            risk_bundle={
+                "niveau_action": "surveiller",
+                "fenetre_optimale": "ce_matin",
+                "risque_gazon": "faible",
+                "prochaine_reevaluation": None,
+            },
+            mowing_bundle={"tonte_autorisee": True, "tonte_statut": "ok"},
+            mower_context={},
+            application_payload={},
+            watering_target_date=None,
+        )
+        if blocked:
+            base["type_arrosage"] = "bloque"
+        return decision_watering._apply_irrigation_execution_contract(base)
+
+    def test_le_bilan_atteint_bien_le_contrat(self):
+        payload = self._payload(bilan_mm=-8.0)
+        self.assertEqual(payload["bilan_hydrique_mm"], -8.0)
+
+    def test_deficit_critique_et_blocage_leve_le_drapeau(self):
+        payload = self._payload(bilan_mm=-8.0, blocked=True)
+        self.assertTrue(payload["irrigation_blocked_but_critical"])
+        self.assertEqual(payload["critical_deficit_mm"], -8.0)
+        self.assertIn("Déficit critique", payload["critical_irrigation_reason"])
+
+    def test_deficit_leger_ne_leve_pas_le_drapeau(self):
+        payload = self._payload(bilan_mm=-1.0, blocked=True)
+        self.assertFalse(payload["irrigation_blocked_but_critical"])
+
+    def test_sans_blocage_pas_dalerte_meme_si_critique(self):
+        payload = self._payload(bilan_mm=-8.0, blocked=False)
+        self.assertFalse(payload["irrigation_blocked_but_critical"])
+
+
+class EveningCoolingRecommendationTests(unittest.TestCase):
+    """Le garde `recommande = objectif_mm > 0 and besoin_eau` ré-accouplait le rafraîchissement
+    du soir au déficit, alors que guidance.py l'en a découplé en 0.14.0 : réserve saine, le
+    cooling de canicule était ramené à 0 mm — exactement le cas qu'il devait couvrir."""
+
+    def test_le_cooling_est_exempte_du_garde_besoin_eau(self):
+        # Réserve saine : besoin_eau est faux, mais le cooling doit rester recommandé.
+        besoin_eau = False
+        objectif_mm = guidance.EVENING_COOLING_MM
+        for evening_cooling, attendu in ((True, True), (False, False)):
+            with self.subTest(evening_cooling=evening_cooling):
+                recommande = objectif_mm > 0 and (besoin_eau or bool(evening_cooling))
+                self.assertEqual(recommande, attendu)
+
+
+class MowingScoreOnlyBlockTests(unittest.TestCase):
+    """Entre le seuil baseline (55) et le seuil « conditions défavorables » (65), la tonte est
+    refusée par le SCORE SEUL, sans qu'aucun code agronomique ne soit posé. L'override de retard
+    étant indexé sur `reason_code`, cette bande était impossible à débloquer : une tonte pouvait
+    rester refusée avec 37 jours de retard, sans motif affiché."""
+
+    def _bundle(self, *, humidite):
+        context = decision.DecisionContext.from_legacy_args(
+            history=[{"type": "tonte", "date": "2026-05-01"}],  # 37 jours de retard
+            today=date(2026, 6, 7),
+            hour_of_day=11,
+            temperature=22,
+            pluie_24h=6, pluie_demain=5, pluie_j2=2, pluie_3j=0,
+            pluie_probabilite_max_3j=0,
+            humidite=humidite,
+            type_sol="limoneux",
+            etp_capteur=3.0,
+        )
+        phase_bundle = decision_phase.build_phase_bundle(context)
+        water_bundle = decision_watering.build_water_bundle(context, phase_bundle)
+        risk_bundle = decision_risk.build_risk_bundle(context, phase_bundle, water_bundle)
+        bundle = decision_mowing.build_mowing_bundle(context, phase_bundle, water_bundle, risk_bundle)
+        return bundle, int(risk_bundle["scores"]["score_tonte"])
+
+    def test_bande_intermediaire_debloquee_par_le_retard(self):
+        bundle, score = self._bundle(humidite=80)
+        self.assertGreaterEqual(score, 55, "le cas doit rester dans la bande bloquante")
+        self.assertLess(score, 65, "le cas doit rester SOUS conditions_defavorables")
+        self.assertTrue(bundle["mowing_is_overdue"])
+        self.assertTrue(
+            bundle["tonte_autorisee"],
+            "un blocage par score seul doit être levable par l'override de retard",
+        )
+
+    def test_conditions_defavorables_restent_levables(self):
+        # Contrôle : le cas historiquement couvert (score >= 65) continue de fonctionner.
+        bundle, score = self._bundle(humidite=88)
+        self.assertGreaterEqual(score, 65)
+        self.assertTrue(bundle["mowing_is_overdue"])
+        self.assertTrue(bundle["tonte_autorisee"])
+
+    def test_au_dela_du_seuil_etendu_le_blocage_tient(self):
+        # L'override n'est pas un passe-droit : au-delà de 70 (seuil étendu quand le retard
+        # dépasse le facteur 2), la tonte reste refusée même très en retard.
+        bundle, score = self._bundle(humidite=90)
+        self.assertGreaterEqual(score, 70)
+        self.assertTrue(bundle["mowing_is_overdue"])
+        self.assertFalse(bundle["tonte_autorisee"])
+
+
+class FungalGuardWiringTests(unittest.TestCase):
+    """`_evening_window_allowed` porte un garde anti-fongique — « risque élevé → jamais
+    d'arrosage du soir » — mais `fungal_risk_level` n'était jamais transmis : le paramètre gardait
+    sa valeur par défaut None et le garde n'a jamais pu se déclencher. Or gazon humide toute la
+    nuit est précisément le facteur déclenchant des maladies qu'il visait à éviter."""
+
+    BASE = dict(
+        temperature=26.0, humidite=55.0,
+        water_balance={"bilan_hydrique_mm": -8.0, "deficit_3j": 8.0, "arrosage_recent": 0.0},
+        objectif_mm=10.0, heat_stress_level="canicule", minutes_to_sunset=25.0,
+    )
+
+    def test_risque_eleve_ferme_la_fenetre_du_soir(self):
+        for niveau in ("moderate", "high"):
+            with self.subTest(niveau=niveau):
+                self.assertFalse(
+                    guidance._evening_window_allowed(**self.BASE, fungal_risk_level=niveau)
+                )
+
+    def test_risque_faible_laisse_la_fenetre_ouverte(self):
+        for niveau in ("none", "low", None):
+            with self.subTest(niveau=niveau):
+                self.assertTrue(
+                    guidance._evening_window_allowed(**self.BASE, fungal_risk_level=niveau)
+                )
+
+    def test_le_niveau_traverse_bien_le_profil_complet(self):
+        # Bout en bout : compute_watering_profile doit propager le niveau jusqu'au garde.
+        def profil(niveau):
+            return guidance.compute_watering_profile(
+                phase_dominante="Normal", sous_phase="Normal",
+                water_balance=dict(
+                    bilan_hydrique_mm=-14.0, deficit_3j=14.0, deficit_7j=18.0,
+                    arrosage_recent_7j=0.0, reserve_from_soil_ledger=True,
+                    reserve_utile_mm=12.0, reserve_actuelle_mm=2.0, reserve_stock_mm=2.0,
+                    reserve_stock_max_mm=24.0, depletion_mm=10.0, depletion_ratio=0.83,
+                    mad_ratio=0.5,
+                ),
+                today=date(2026, 7, 15), pluie_24h=0.0, pluie_demain=0.0, pluie_j2=0.0,
+                pluie_3j=0.0, pluie_probabilite_max_3j=0.0, humidite=55.0, temperature=34.0,
+                etp=6.0, type_sol="limoneux", weather_profile={"sunset_minute": 1290},
+                history=[], fungal_risk_level=niveau,
+            )
+        moment = datetime(2026, 7, 15, 21, 10, tzinfo=timezone.utc)
+        with patch.object(guidance, "_current_datetime", return_value=moment):
+            self.assertFalse(profil("high")["watering_evening_allowed"])
+            self.assertTrue(profil("none")["watering_evening_allowed"])
+
+
+class AgroPhaseEveningWindowTests(unittest.TestCase):
+    """En phases produit (Fertilisation / Biostimulant / Agent Mouillant / Scarification), le test
+    de la fenêtre du soir avait perdu sa borne basse `EVENING_START_HOUR <=` : `now_hour <
+    EVENING_END_HOUR` restait vrai de 00h00 à 17h59, donc avec T ≥ 24 la fenêtre s'annonçait
+    « soir » toute la journée. Effet réel : le coordinateur court-circuite son garde
+    anti-réarrosage quand `fenetre == "soir"` — il sautait donc dès le matin, pas seulement le soir."""
+
+    def _fenetre(self, hour):
+        moment = datetime(2026, 7, 15, hour, 0, tzinfo=timezone.utc)
+        with patch.object(guidance, "_current_datetime", return_value=moment):
+            return guidance.compute_watering_profile(
+                phase_dominante="Biostimulant", sous_phase="Normal",
+                water_balance=dict(
+                    bilan_hydrique_mm=-6.0, deficit_3j=6.0, deficit_7j=8.0,
+                    arrosage_recent_7j=0.0, reserve_utile_mm=12.0, reserve_actuelle_mm=4.0,
+                    reserve_stock_mm=4.0, reserve_stock_max_mm=24.0, depletion_mm=8.0,
+                    depletion_ratio=0.66, mad_ratio=0.5,
+                ),
+                today=date(2026, 7, 15), pluie_24h=0.0, pluie_demain=0.0, pluie_j2=0.0,
+                pluie_3j=0.0, pluie_probabilite_max_3j=0.0, humidite=45.0, temperature=26.0,
+                etp=5.0, type_sol="limoneux", weather_profile={"sunset_minute": 1290}, history=[],
+            )["fenetre_optimale"]
+
+    def test_le_matin_nest_jamais_soir(self):
+        for hour in (0, 6, 8, 11):
+            with self.subTest(heure=hour):
+                self.assertNotEqual(self._fenetre(hour), "soir")
+
+    def test_lapres_midi_hors_creneau_nest_pas_soir(self):
+        for hour in (14, 16, 17):
+            with self.subTest(heure=hour):
+                self.assertNotEqual(self._fenetre(hour), "soir")
+
+    def test_le_creneau_du_soir_reste_soir(self):
+        for hour in (18, 19):
+            with self.subTest(heure=hour):
+                self.assertEqual(self._fenetre(hour), "soir")
+
+
+class ActionGuidanceEveningGuardsTests(unittest.TestCase):
+    """`compute_action_guidance` recalcule `evening_allowed` (il alimente le libellé « soir » et,
+    via lui, le court-circuit du garde anti-réarrosage du coordinateur). Cet appel omettait
+    `minutes_to_sunset` et `fungal_risk_level` : la marge de séchage et le blocage anti-fongique
+    n'y étaient pas enforced, contrairement au chemin principal (_build_watering_ctx)."""
+
+    def _fenetre(self, *, fungal_risk_level=None, minutes_to_sunset=120.0, hour=19):
+        return guidance.compute_action_guidance(
+            phase_dominante="Normal", sous_phase="Normal",
+            water_balance={"bilan_hydrique_mm": -5.0, "deficit_3j": 5.0, "deficit_7j": 7.0,
+                           "arrosage_recent": 0.0},
+            advanced_context={}, pluie_24h=0.0, pluie_demain=0.0, humidite=55.0,
+            temperature=25.0, etp=5.0, objectif_mm=8.0, hour_of_day=hour,
+            minutes_to_sunset=minutes_to_sunset, fungal_risk_level=fungal_risk_level,
+        )["fenetre_optimale"]
+
+    def test_soir_autorise_sans_risque_ni_marge_insuffisante(self):
+        self.assertEqual(self._fenetre(), "soir")
+
+    def test_risque_fongique_eleve_ferme_le_soir(self):
+        for niveau in ("moderate", "high"):
+            with self.subTest(niveau=niveau):
+                self.assertNotEqual(self._fenetre(fungal_risk_level=niveau), "soir")
+
+    def test_marge_de_sechage_insuffisante_ferme_le_soir(self):
+        # Hors canicule, un arrosage du soir doit finir >= 90 min avant le coucher.
+        self.assertNotEqual(self._fenetre(minutes_to_sunset=30.0), "soir")
