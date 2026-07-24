@@ -1942,6 +1942,7 @@ class GazonReserveActuelleSensor(GazonEntityBase, SensorEntity):
             "arrosage_recent_jour",
             "arrosage_recent_3j",
             "arrosage_recent_7j",
+            "arrosage_applique_7j",
             "pluie_efficace",
             "retour_arrosage",
             "et0_mm",

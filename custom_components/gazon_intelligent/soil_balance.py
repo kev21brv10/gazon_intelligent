@@ -146,6 +146,7 @@ def update_soil_balance(
     arrosage_mm: float | None = None,
     etp_mm: float | None = None,
     type_sol: str | None = None,
+    et_elapsed_fraction: float | None = None,
 ) -> dict[str, Any]:
     if today is None:
         if dt_util is not None:
@@ -189,7 +190,28 @@ def update_soil_balance(
         if previous_reserve is None:
             previous_reserve = _to_float(state.get("previous_reserve_mm"))
     else:
-        previous_reserve = _to_float(state.get("reserve_mm"))
+        # CLÔTURE DE LA VEILLE. L'ET0 est désormais débitée AU FIL de la journée (cf. plus bas) :
+        # la dernière valeur écrite pour hier ne reflète donc que la fraction de journée écoulée au
+        # moment du dernier passage. Si Home Assistant s'est arrêté avant le coucher du soleil,
+        # hier resterait sous-débité et l'erreur se propagerait de jour en jour. On reconstruit
+        # donc le solde de clôture de la veille avec son ET0 du jour ENTIER — les trois composantes
+        # (réserve d'ouverture, pluie, arrosage) sont stockées dans l'entrée, et `etp_mm` y est
+        # toujours l'ET0 pleine journée (pic du jour), jamais la fraction écoulée.
+        previous_reserve = None
+        if ledger:
+            _last = ledger[-1]
+            _last_open = _to_float(_last.get("previous_reserve_mm"))
+            _last_etp = _to_float(_last.get("etp_mm"))
+            if _last_open is not None and _last_etp is not None:
+                _last_close = (
+                    _last_open
+                    + (_to_float(_last.get("pluie_mm")) or 0.0)
+                    + (_to_float(_last.get("arrosage_mm")) or 0.0)
+                    - _last_etp
+                )
+                previous_reserve = min(max(_last_close, reserve_min_mm), reserve_max_mm)
+        if previous_reserve is None:
+            previous_reserve = _to_float(state.get("reserve_mm"))
         if previous_reserve is None:
             previous_reserve = base_reserve_mm(type_sol or state.get("type_sol"))
 
@@ -236,7 +258,19 @@ def update_soil_balance(
         _pluie_deja_comptee = _to_float(ledger[-1].get("pluie_mm"))
         if _pluie_deja_comptee is not None:
             pluie = _pluie_deja_comptee
-    delta = pluie + arrosage - etp
+    # DÉBIT PROGRESSIF DE L'ET0. Débiter toute l'ET0 du jour dès le premier passage après minuit
+    # (comportement historique) rendait la réserve ANTICIPÉE : à 00h01 elle chutait d'un coup de
+    # toute la demande à venir (« falaise de minuit ») et se trouvait ÉCRASÉE au plancher dès que
+    # le résultat passait sous zéro — information perdue pour de bon. Au petit matin le pilotage
+    # voyait donc un sol « vide » et commandait une recharge pleine sur un sol encore rempli : le
+    # surplus drainait sous les racines (constaté 07/2026 : ~59 mm appliqués sur 7 jours pour un
+    # besoin ETc de ~33 mm). On débite donc l'ET0 au prorata de la journée RÉELLEMENT écoulée
+    # (`et_elapsed_fraction`, 0 au lever → 1 au coucher). Le total débité en fin de journée est
+    # identique : seule la RÉPARTITION change. `etp_mm` reste l'ET0 pleine journée dans l'entrée —
+    # le pic du jour et la clôture de la veille (ci-dessus) en dépendent.
+    # Fraction absente (démarrage, position du soleil inconnue) → 1.0 = comportement historique.
+    _fraction = 1.0 if et_elapsed_fraction is None else min(1.0, max(0.0, float(et_elapsed_fraction)))
+    delta = pluie + arrosage - etp * _fraction
     reserve_mm = min(max(previous_reserve + delta, reserve_min_mm), reserve_max_mm)
 
     entry = {

@@ -2301,18 +2301,46 @@ class TestDepletionWateringModel(unittest.TestCase):
         # À 30 °C la survie ne délivre pas la recharge complète ; à 34 °C (vraie canicule) oui.
         self.assertLess(profile["mm_final_recommande"], chaud["mm_final_recommande"])
 
-    def test_survie_canicule_ne_sarme_pas_a_minuit_sur_depletion_anticipee(self):
-        # « Falaise de minuit » : à 00h01 le ledger a débité tout l'ET0 du jour → depletion_ratio=1.0
-        # (ANTICIPÉ) alors qu'aucune évapotranspiration n'a encore eu lieu. La survie canicule (qui
-        # outrepasse le garde-fou hebdo) ne doit PAS s'armer sur cette déplétion anticipée : elle se
-        # base désormais sur l'ET RÉELLEMENT écoulée (`et_elapsed_fraction`). Budget hebdo dépassé.
-        commun = dict(depletion_mm=12.0, depletion_ratio=1.0, arrosage_recent_7j=40.0, et0_mm=7.0, temperature=34.0)
-        minuit = self._profile(**commun, et_elapsed_fraction=0.0)      # rien d'écoulé → réel ≈ 5/12
-        apres_midi = self._profile(**commun, et_elapsed_fraction=1.0)  # journée écoulée → réel = 12/12
-        # À minuit, la survie ne s'arme pas → le garde-fou hebdo (budget dépassé) bride la dose ;
-        # l'après-midi, la déplétion est réelle → la survie l'emporte et délivre une vraie recharge.
-        self.assertLess(minuit["mm_final_recommande"], apres_midi["mm_final_recommande"])
-        self.assertGreater(apres_midi["mm_final_recommande"], 5.0)
+    # NOTE : l'ancien test `test_survie_canicule_ne_sarme_pas_a_minuit_sur_depletion_anticipee`
+    # vivait ici. La « falaise de minuit » qu'il compensait est désormais supprimée À LA SOURCE :
+    # le ledger débite l'ET0 au prorata de la journée écoulée (soil_balance.update_soil_balance),
+    # donc `depletion_ratio` est déjà la déplétion réelle et guidance n'a plus à la reconstruire.
+    # La garantie est testée directement sur le ledger, cf. tests/test_soil_balance.py
+    # (`test_et0_debitee_au_prorata_de_la_journee`).
+
+    def test_declenchement_a_l_aube_sur_soif_projetee_mais_dose_reelle(self):
+        # L'arrosage doit TOUJOURS partir à l'aube (évaporation minimale, feuillage sec le soir).
+        # Or, le ledger débitant l'ET0 au fil de la journée, la déplétion RÉELLE ne franchit le
+        # seuil MAD qu'en milieu de journée. On déclenche donc sur la soif PROJETÉE en fin de
+        # journée (déplétion + ET0 restant), tout en dosant sur la place RÉELLEMENT disponible.
+        aube = self._profile(
+            reserve_actuelle_mm=8.4,
+            reserve_stock_mm=8.4,
+            depletion_mm=3.6,
+            depletion_ratio=0.3,  # réel : encore SOUS le seuil MAD (0,5)
+            et0_mm=9.6,
+            et_elapsed_fraction=0.0,  # aube : toute l'ET0 du jour reste à s'écouler
+            arrosage_recent_7j=0.0,
+            temperature=28.0,
+        )
+        # 3,6 + 9,6 = 13,2 mm > réserve utile → le sol manquera aujourd'hui : on arrose dès l'aube.
+        self.assertGreater(aube["mm_final_recommande"], 0.0)
+        # Mais la dose reste bornée par la place réelle (3,6 mm) + le plancher de session utile —
+        # surtout pas les 13,2 mm projetés, qui draineraient sous les racines.
+        self.assertLessEqual(aube["mm_final_recommande"], 6.0)
+
+        # Journée fraîche : le sol tiendra jusqu'à demain → aucun arrosage déclenché.
+        frais = self._profile(
+            reserve_actuelle_mm=12.0,
+            reserve_stock_mm=12.0,
+            depletion_mm=0.0,
+            depletion_ratio=0.0,
+            et0_mm=3.0,
+            et_elapsed_fraction=0.0,
+            arrosage_recent_7j=0.0,
+            temperature=22.0,
+        )
+        self.assertEqual(frais["mm_final_recommande"], 0.0)
 
     def test_no_survival_watering_without_heatwave(self):
         # Même réserve épuisée + budget dépassé, MAIS sans canicule (temps frais) :

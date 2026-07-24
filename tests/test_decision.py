@@ -338,6 +338,54 @@ class TestPhaseLogic(unittest.TestCase):
         self.assertLess(subphase["progression"], 5.0)
 
 class TestHydricCoreAndMemory(unittest.TestCase):
+    def test_arrosage_recent_jour_ne_compte_que_le_jour_meme(self) -> None:
+        # Régression : la fenêtre « jour » retenait aussi la VEILLE (filtre `delta <= days` avec
+        # days=1). Le bilan journalier créditait donc 2 jours d'arrosage contre 1 seul jour d'ET0
+        # → bilan surestimé d'un arrosage entier (vu en réel : 24 mm affichés pour 12 mm appliqués).
+        # Le ledger sol utilise déjà days=0 : on s'aligne. Les fenêtres 3j/7j restent inchangées.
+        history = [
+            {"type": "arrosage", "date": "2026-03-17", "total_mm": 12.0},
+            {"type": "arrosage", "date": "2026-03-16", "total_mm": 12.0},
+        ]
+
+        balance = decision.compute_water_balance(
+            history=history,
+            today=date(2026, 3, 17),
+            etp=6.3,
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            type_sol="limoneux",
+        )
+
+        self.assertEqual(balance["arrosage_recent_jour"], 12.0)  # et non 24.0 (la veille exclue)
+        self.assertEqual(balance["arrosage_recent_3j"], 24.0)  # la veille reste bien dans 3j
+        self.assertEqual(balance["arrosage_recent_7j"], 24.0)
+
+    def test_arrosage_applique_7j_inclut_les_arrosages_techniques(self) -> None:
+        # `arrosage_recent_7j` sert au GARDE-FOU : il exclut les arrosages techniques
+        # (rafraîchissement du soir, incorporation post-produit). L'eau réellement reçue par le
+        # gazon est donc supérieure — écart invisible jusqu'ici, ce qui a masqué un sur-arrosage
+        # durable. `arrosage_applique_7j` expose ce total réel.
+        history = [
+            {"type": "arrosage", "date": "2026-03-17", "total_mm": 12.0, "watering_cause": "hydrique"},
+            {"type": "arrosage", "date": "2026-03-16", "total_mm": 3.0,
+             "watering_cause": "rafraichissement_soir"},
+            {"type": "arrosage", "date": "2026-03-15", "total_mm": 3.0,
+             "watering_cause": "post_application"},
+        ]
+
+        balance = decision.compute_water_balance(
+            history=history,
+            today=date(2026, 3, 17),
+            etp=5.0,
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            type_sol="limoneux",
+        )
+
+        self.assertEqual(balance["arrosage_recent_7j"], 12.0)     # budget : technique exclu
+        self.assertEqual(balance["arrosage_applique_7j"], 18.0)   # réel : 12 + 3 + 3
+
     def test_compute_water_balance_returns_detailed_metrics(self) -> None:
         history = [
             {"type": "arrosage", "date": "2026-03-17", "objectif_mm": 0.5},
@@ -926,6 +974,45 @@ class TestDecisionSnapshotWatering(unittest.TestCase):
         self.assertEqual(snapshot["type_arrosage"], "application_technique")
         self.assertEqual(snapshot["fenetre_optimale"], "maintenant")
         self.assertIn("arrosage manuel immédiat", snapshot["conseil_principal"].lower())
+
+    def test_build_decision_snapshot_sol_application_suggestion_mode_no_wait_zero(self) -> None:
+        # Régression : application sol en mode "suggestion", délai d'incorporation écoulé (0 min).
+        # Le drapeau `post_watering_ready` est TOUJOURS faux en suggestion (jamais de lancement auto),
+        # donc l'ancienne branche affichait un absurde "attendre encore 0 min avant l'arrosage
+        # technique". On doit à la place obtenir le message de suggestion "sans lancement automatique".
+        snapshot = make_snapshot(
+            history=[
+                {
+                    "type": "Biostimulant",
+                    "date": "2026-03-17",
+                    "declared_at": "2026-03-17T08:00:00+00:00",
+                    "produit": "Humuslight",
+                    "application_type": "sol",
+                    "application_requires_watering_after": True,
+                    "application_post_watering_mm": 3.0,
+                    "application_irrigation_block_hours": 0.0,
+                    "application_irrigation_delay_minutes": 0.0,
+                    "application_irrigation_mode": "suggestion",
+                }
+            ],
+            today=date(2026, 3, 17),
+            hour_of_day=8,
+            temperature=18,
+            humidite=55,
+            etp_capteur=2.0,
+        )
+
+        self.assertEqual(snapshot["application_irrigation_mode"], "suggestion")
+        self.assertFalse(snapshot["application_block_active"])
+        self.assertFalse(snapshot["application_post_watering_ready"])
+        self.assertEqual(snapshot["application_post_watering_delay_remaining_minutes"], 0.0)
+        self.assertEqual(snapshot["watering_cause"], "post_application")
+        self.assertEqual(snapshot["fenetre_optimale"], "maintenant")
+        self.assertFalse(snapshot["arrosage_recommande"])
+        self.assertEqual(snapshot["objectif_mm"], 0.0)
+        # Le bon message (suggestion) — et surtout PAS le "attendre encore 0 min".
+        self.assertIn("suggéré, sans lancement automatique", snapshot["conseil_principal"])
+        self.assertNotIn("attendre encore", snapshot["conseil_principal"])
 
     def test_build_decision_snapshot_unknown_application_type_blocks_auto_watering(self) -> None:
         snapshot = decision.build_decision_snapshot(

@@ -851,6 +851,9 @@ class GazonBrain:
             arrosage_mm=arrosage_reel_jour,
             etp_mm=etp,
             type_sol=type_sol,
+            # Fraction de journée écoulée : l'ET0 est débitée au prorata au lieu d'être retranchée
+            # en entier dès minuit (cf. update_soil_balance). Sans elle → repli sur 1.0.
+            et_elapsed_fraction=weather_profile.get("et_elapsed_fraction"),
         )
         context = DecisionContext.from_legacy_args(
             history=self.history,
