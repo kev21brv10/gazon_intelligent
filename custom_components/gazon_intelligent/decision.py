@@ -286,6 +286,7 @@ def _build_decision_extra(
         "arrosage_recent_jour": water_balance.get("arrosage_recent_jour"),
         "arrosage_recent_3j": water_balance.get("arrosage_recent_3j"),
         "arrosage_recent_7j": water_balance.get("arrosage_recent_7j"),
+        "arrosage_applique_7j": water_balance.get("arrosage_applique_7j"),
         "bilan_hydrique_mm": water_balance.get("bilan_hydrique_mm"),
         "bilan_hydrique_3j": water_balance.get("bilan_hydrique_3j"),
         "bilan_hydrique_7j": water_balance.get("bilan_hydrique_7j"),

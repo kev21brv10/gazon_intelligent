@@ -543,6 +543,53 @@ class WateringSessionMonitoringTests(unittest.TestCase):
         self.assertTrue(should_launch)
         self.assertEqual(reason, "ready")
 
+    def test_post_application_incorporation_auto_launches_even_if_soil_humid(self) -> None:
+        # Incorporation post-application (produit sol type Humuslight) en mode auto : arrosage
+        # TECHNIQUE (faire pénétrer le produit via l'eau, cf. fertigation). Un sol déjà humide ne
+        # doit PAS le bloquer — sinon « rien ne se lance ». Il doit partir.
+        coordinator = _build_coordinator()
+        coordinator.history = []
+        snapshot = _ready_launch_snapshot(
+            coordinator,
+            type_arrosage="application_technique_auto",
+            application_post_watering_status="autorise",
+            objectif_mm=3.0,
+            block_reason="sol_deja_humide",
+        )
+        should_launch, reason = coordinator._should_launch_auto_irrigation(snapshot)
+        self.assertTrue(should_launch)
+        self.assertEqual(reason, "post_application_ready")
+
+    def test_normal_watering_still_blocked_by_soil_humid(self) -> None:
+        # Garde-fou : l'exemption « sol humide » ne concerne QUE l'incorporation technique.
+        # Un arrosage hydrique normal reste bloqué par un sol déjà humide.
+        coordinator = _build_coordinator()
+        coordinator.history = []
+        snapshot = _ready_launch_snapshot(
+            coordinator,
+            type_arrosage="auto",
+            block_reason="sol_deja_humide",
+        )
+        should_launch, reason = coordinator._should_launch_auto_irrigation(snapshot)
+        self.assertFalse(should_launch)
+        self.assertEqual(reason, "irrigation_blocked")
+
+    def test_post_application_incorporation_still_blocked_by_rain(self) -> None:
+        # L'exemption ne vaut QUE pour « sol déjà humide » : un autre motif (pluie) bloque toujours
+        # l'incorporation auto (inutile d'arroser si la pluie va incorporer le produit).
+        coordinator = _build_coordinator()
+        coordinator.history = []
+        snapshot = _ready_launch_snapshot(
+            coordinator,
+            type_arrosage="application_technique_auto",
+            application_post_watering_status="autorise",
+            objectif_mm=3.0,
+            block_reason="pluie_proche",
+        )
+        should_launch, reason = coordinator._should_launch_auto_irrigation(snapshot)
+        self.assertFalse(should_launch)
+        self.assertEqual(reason, "irrigation_blocked")
+
     def test_relaunch_cooldown_blocks_evening_recharge_rerun(self) -> None:
         # Un arrosage du soir NON-rafraîchissement (recharge hydrique du soir) reste soumis au
         # cooldown anti-relance : s'il vient de finir (10 min), pas de relance. (Le rafraîchissement

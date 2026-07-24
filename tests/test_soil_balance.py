@@ -47,6 +47,62 @@ class SoilBalanceTests(unittest.TestCase):
         self.assertEqual(len(state["ledger"]), 1)
         self.assertEqual(state["ledger"][0]["reserve_mm"], 14.8)
 
+    def test_et0_debitee_au_prorata_de_la_journee(self) -> None:
+        # Anti « falaise de minuit » ET anti sur-arrosage : l'ET0 du jour est débitée AU PRORATA de
+        # la journée écoulée, pas en totalité dès 00h01. Sinon la réserve tombe à 0 au petit matin
+        # (et se fait écraser au plancher, information perdue) : le pilotage commande alors une
+        # recharge pleine sur un sol encore rempli — constaté en réel 07/2026, ~59 mm appliqués sur
+        # 7 jours pour un besoin ETc de ~33 mm.
+        commun = dict(
+            previous_state=None,
+            today=date(2026, 7, 24),
+            pluie_mm=0.0,
+            arrosage_mm=0.0,
+            etp_mm=8.0,
+            type_sol="limoneux",
+        )
+
+        minuit = soil_balance.update_soil_balance(**commun, et_elapsed_fraction=0.0)
+        midi = soil_balance.update_soil_balance(**commun, et_elapsed_fraction=0.5)
+        soir = soil_balance.update_soil_balance(**commun, et_elapsed_fraction=1.0)
+
+        # Réserve d'ouverture limoneux = 12 mm. À minuit rien n'est encore évaporé.
+        self.assertEqual(minuit["reserve_mm"], 12.0)
+        self.assertEqual(midi["reserve_mm"], 8.0)  # 12 − 8 × 0,5
+        self.assertEqual(soir["reserve_mm"], 4.0)  # 12 − 8 × 1,0 : total du jour inchangé
+        # `etp_mm` reste l'ET0 PLEINE JOURNÉE (pic du jour + clôture de la veille en dépendent).
+        self.assertEqual(minuit["etp_mm"], 8.0)
+        self.assertEqual(soir["etp_mm"], 8.0)
+
+    def test_cloture_de_la_veille_debite_l_et0_entiere(self) -> None:
+        # Si Home Assistant s'arrête avant le coucher du soleil, la dernière écriture de la veille
+        # ne contient qu'une FRACTION de son ET0. Au changement de jour on doit rouvrir sur le
+        # solde de clôture réel (ET0 pleine journée), sinon l'erreur se propage de jour en jour.
+        veille = soil_balance.update_soil_balance(
+            previous_state=None,
+            today=date(2026, 7, 24),
+            pluie_mm=0.0,
+            arrosage_mm=0.0,
+            etp_mm=8.0,
+            type_sol="limoneux",
+            et_elapsed_fraction=0.25,  # HA coupé en début de journée
+        )
+        self.assertEqual(veille["reserve_mm"], 10.0)  # 12 − 8 × 0,25 : valeur partielle
+
+        lendemain = soil_balance.update_soil_balance(
+            previous_state=veille,
+            today=date(2026, 7, 25),
+            pluie_mm=0.0,
+            arrosage_mm=0.0,
+            etp_mm=6.0,
+            type_sol="limoneux",
+            et_elapsed_fraction=0.0,
+        )
+
+        # La veille est clôturée à 12 − 8 = 4 mm (ET0 ENTIÈRE), et non aux 10 mm partiels.
+        self.assertEqual(lendemain["previous_reserve_mm"], 4.0)
+        self.assertEqual(lendemain["reserve_mm"], 4.0)  # rien d'évaporé encore le lendemain
+
     def test_update_soil_balance_replaces_same_day_entry(self) -> None:
         initial = soil_balance.update_soil_balance(
             previous_state=None,

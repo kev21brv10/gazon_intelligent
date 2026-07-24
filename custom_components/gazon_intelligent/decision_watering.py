@@ -887,7 +887,16 @@ def _resolve_pending_sol_application_override(state: dict[str, Any]) -> dict[str
     ):
         return None
 
-    if not state["application_post_watering_ready"]:
+    # « Pas prêt » recouvre deux causes distinctes ici (le bloc de protection est
+    # déjà capté en amont par _resolve_application_block_override) : soit un délai
+    # d'incorporation encore en cours (> 0), soit un mode qui n'autorise pas le
+    # lancement auto (« suggestion »). On ne parle d'« attendre » QUE s'il reste un
+    # vrai délai ; sinon (délai écoulé + mode suggestion) on laisse la branche
+    # suggestion ci-dessous rendre le bon message, au lieu d'un « attendre 0 min ».
+    if (
+        not state["application_post_watering_ready"]
+        and state["application_post_watering_delay_remaining_minutes"] > 0
+    ):
         return _bundle_with(
             state["base_bundle"],
             objectif_mm=0.0,

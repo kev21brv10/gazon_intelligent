@@ -1678,19 +1678,7 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
     # ET0·(1−fraction)`. Le pilotage NORMAL (mm_cible) reste anticipatif — il continue de planifier
     # l'arrosage du matin. Appliqué au seul chemin ledger (source de la falaise) ; repli sûr :
     # fraction/soleil inconnu → 1.0 → déplétion anticipée = comportement historique.
-    _depletion_ratio_anticipe = float(ctx.water_balance.get("depletion_ratio") or 0.0)
-    _reserve_utile_urgence = float(ctx.water_balance.get("reserve_utile_mm") or 0.0)
-    if bool(ctx.water_balance.get("reserve_from_soil_ledger")) and _reserve_utile_urgence > 0:
-        _frac_raw = ctx.water_balance.get("et_elapsed_fraction")
-        _et_elapsed = float(_frac_raw) if _frac_raw is not None else 1.0
-        _et0_day = float(ctx.water_balance.get("et0_mm") or 0.0)
-        _depletion_mm_reel = max(
-            0.0,
-            float(ctx.water_balance.get("depletion_mm") or 0.0) - _et0_day * max(0.0, 1.0 - _et_elapsed),
-        )
-        _depletion_ratio_urgence = min(1.0, _depletion_mm_reel / _reserve_utile_urgence)
-    else:
-        _depletion_ratio_urgence = _depletion_ratio_anticipe
+    _depletion_ratio_urgence = float(ctx.water_balance.get("depletion_ratio") or 0.0)
     # Déplétion critique : réserve très basse (≥ 80 % RÉELLEMENT épuisée). Dans ce cas seulement, on
     # autorise l'arrosage à outrepasser le cooldown 24 h — respecter le délai laisserait le gazon en
     # stress sévère. Les autres blocages (pluie, sol détrempé) restent prioritaires.
@@ -1748,6 +1736,24 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
         depletion_ratio = float(ctx.water_balance.get("depletion_ratio") or 0.0)
         mad_ratio = float(ctx.water_balance.get("mad_ratio") or 0.5)
         depletion_mm = float(ctx.water_balance.get("depletion_mm") or 0.0)
+        # DÉCLENCHEMENT ANTICIPÉ, DOSE RÉELLE.
+        # Depuis que le ledger débite l'ET0 au fil de la journée, `depletion_ratio` ne franchit le
+        # seuil MAD qu'une fois la soif RÉELLEMENT installée — donc souvent en milieu de journée,
+        # le pire moment pour arroser. Or l'arrosage doit TOUJOURS partir à l'aube (évaporation
+        # minimale, feuillage sec avant la nuit). On déclenche donc sur la déplétion PROJETÉE en
+        # fin de journée = déplétion actuelle + ET0 qu'il reste à s'écouler. À l'aube cela répond
+        # à la bonne question : « le sol va-t-il manquer d'eau aujourd'hui ? ».
+        # La DOSE, elle, reste calée sur la déplétion RÉELLE, c'est-à-dire la place réellement
+        # disponible dans le sol : verser au-delà ne ferait que drainer sous les racines — c'était
+        # la cause du sur-arrosage (~59 mm/semaine appliqués pour ~33 mm de besoin ETc).
+        # Les URGENCES (survie canicule, déplétion critique) gardent volontairement la déplétion
+        # réelle via `_depletion_ratio_urgence` : pas de fausse urgence armée la nuit.
+        _reserve_utile_decl = float(ctx.water_balance.get("reserve_utile_mm") or 0.0)
+        if _reserve_utile_decl > 0:
+            _frac_decl_raw = ctx.water_balance.get("et_elapsed_fraction")
+            _frac_decl = float(_frac_decl_raw) if _frac_decl_raw is not None else 1.0
+            _et0_restant = float(ctx.water_balance.get("et0_mm") or 0.0) * max(0.0, 1.0 - _frac_decl)
+            depletion_ratio = min(1.0, (depletion_mm + _et0_restant) / _reserve_utile_decl)
         if depletion_ratio < mad_ratio:
             mm_cible = 0.0
         else:

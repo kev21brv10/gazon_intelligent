@@ -2484,23 +2484,32 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Blocages explicites : type_arrosage bloqué, irrigation_blocked, tondeuse
         type_arrosage = str(snapshot.get("type_arrosage") or "").strip().lower()
-        if (
-            type_arrosage == "bloque"
-            or bool(snapshot.get("irrigation_blocked"))
-            or bool(snapshot.get("watering_blocked_by_mower"))
-            or snapshot.get("block_reason") is not None
-        ):
-            return False, "irrigation_blocked"
-        if not bool(snapshot.get("arrosage_auto_autorise")):
-            return False, "auto_not_allowed"
-        if not bool(snapshot.get("irrigation_execution_allowed", True)):
-            return False, "execution_not_allowed"
         post_status = str(snapshot.get("application_post_watering_status") or "").strip().lower()
         post_application_auto_ready = (
             type_arrosage == "application_technique_auto"
             and post_status == "autorise"
             and bool(snapshot.get("arrosage_auto_autorise"))
         )
+        # L'arrosage d'incorporation post-application est TECHNIQUE : il fait pénétrer le produit
+        # dans le sol via l'eau (cf. fertigation). Un sol déjà humide ne doit donc PAS le bloquer —
+        # c'est justement dans l'eau que le produit descend. On exempte l'incorporation auto du SEUL
+        # motif « sol déjà humide » ; tous les autres motifs (pluie, tondeuse, sécurité, type bloqué)
+        # restent bloquants.
+        block_reason = snapshot.get("block_reason")
+        block_reason_bloquant = block_reason is not None and not (
+            post_application_auto_ready and block_reason == "sol_deja_humide"
+        )
+        if (
+            type_arrosage == "bloque"
+            or bool(snapshot.get("irrigation_blocked"))
+            or bool(snapshot.get("watering_blocked_by_mower"))
+            or block_reason_bloquant
+        ):
+            return False, "irrigation_blocked"
+        if not bool(snapshot.get("arrosage_auto_autorise")):
+            return False, "auto_not_allowed"
+        if not bool(snapshot.get("irrigation_execution_allowed", True)):
+            return False, "execution_not_allowed"
 
         fenetre = str(snapshot.get("fenetre_optimale") or "").strip()
         if not post_application_auto_ready and fenetre in {"", "unknown", "unavailable", "none", "attendre"}:

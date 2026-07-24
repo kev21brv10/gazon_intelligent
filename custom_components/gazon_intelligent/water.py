@@ -428,14 +428,22 @@ def compute_recent_watering_mm(
     today: date | None = None,
     days: int = 2,
     include_external: bool = True,
+    include_technical: bool = False,
 ) -> float:
+    """Somme des mm arrosés sur la fenêtre.
+
+    `include_technical=False` (défaut) = base du GARDE-FOU hebdomadaire : les arrosages
+    techniques (rafraîchissement du soir, incorporation post-produit) en sont exclus.
+    `include_technical=True` donne l'eau RÉELLEMENT reçue par le gazon — l'écart entre les deux
+    est invisible autrement, ce qui a longtemps masqué un sur-arrosage.
+    """
     today = today or _current_date()
     total = 0.0
     for item in _iter_recent_watering_items(
         history,
         today=today,
         days=days,
-        include_technical=False,
+        include_technical=include_technical,
         include_external=include_external,
     ):
         mm = _watering_item_mm(item)
@@ -515,7 +523,13 @@ def _recent_watering_windows(
         if recent_watering_mm_override is not None
         else compute_recent_watering_mm(history, today=today, days=7, include_external=False)
     )
-    arrosage_recent_jour = compute_recent_watering_mm(history, today=today, days=1, include_external=False)
+    # `days=0` = AUJOURD'HUI SEUL. Le filtre retient `delta <= days`, donc `days=1` ramassait
+    # aussi la veille : le bilan journalier créditait alors 2 jours d'arrosage contre 1 seul jour
+    # d'ET0 (`_horizon_balance(horizon_days=1)`) → bilan surestimé d'un arrosage entier (vu en
+    # réel : 24 mm affichés pour 12 mm réellement appliqués). Le ledger sol, lui, utilise déjà
+    # `days=0` (`arrosage_reel_jour`, cf. gazon_brain) : on s'aligne dessus. Les fenêtres 3j/7j
+    # gardent leur sémantique (budget hebdo) et ne sont pas touchées.
+    arrosage_recent_jour = compute_recent_watering_mm(history, today=today, days=0, include_external=False)
     arrosage_recent_3j = compute_recent_watering_mm(history, today=today, days=3, include_external=False)
     if retour_arrosage is not None:
         retour = float(retour_arrosage)
@@ -524,13 +538,23 @@ def _recent_watering_windows(
         arrosage_recent_7j = max(arrosage_recent_7j, retour)
     arrosage_recent_3j = max(arrosage_recent_3j, arrosage_recent_jour)
     arrosage_recent_7j = max(arrosage_recent_7j, arrosage_recent_3j)
+    # Eau RÉELLEMENT reçue sur 7 j (arrosages techniques INCLUS). Diagnostic : `arrosage_recent_7j`
+    # sert au garde-fou et exclut le technique — sans ce total, l'écart reste invisible.
+    arrosage_applique_7j = max(
+        arrosage_recent_7j,
+        compute_recent_watering_mm(
+            history, today=today, days=7, include_external=False, include_technical=True
+        ),
+    )
     if arrosage_recent_7j > 100:
         _LOGGER.warning("arrosage_recent_7j aberrant (%.1f mm), valeur clampée à 100 mm", arrosage_recent_7j)
         arrosage_recent_7j = 100.0
+    arrosage_applique_7j = min(max(arrosage_applique_7j, arrosage_recent_7j), 150.0)
     return {
         "jour": arrosage_recent_jour,
         "3j": arrosage_recent_3j,
         "7j": arrosage_recent_7j,
+        "applique_7j": arrosage_applique_7j,
     }
 
 
@@ -953,6 +977,7 @@ def compute_water_balance(
         "pluie_efficace": pluie_efficace,
         "pluie_j2": pluie_j2,
         "arrosage_recent": _round_half_up_1(arrosage_recent_7j),
+        "arrosage_applique_7j": _round_half_up_1(recent_watering["applique_7j"]),
         "arrosage_recent_jour": _round_half_up_1(arrosage_recent_jour),
         "arrosage_recent_3j": _round_half_up_1(arrosage_recent_3j),
         "arrosage_recent_7j": _round_half_up_1(arrosage_recent_7j),
