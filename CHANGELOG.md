@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.17.2
+Correction d'une **régression introduite en 0.16.0** : le logo de l'intégration ne s'affichait plus dans Home Assistant (vignette « icon not available »). Aucun changement fonctionnel — **722 tests verts**, inchangés.
+- **Restauration de `custom_components/gazon_intelligent/brand/` (`icon.png`, `logo.png`)** : ce dossier avait été supprimé en 0.16.0, à tort, sous le motif « images identiques à la racine, non référencées ». Il l'était en réalité par Home Assistant lui-même : depuis **HA 2026.3** ([annonce](https://developers.home-assistant.io/blog/2026/02/24/brands-proxy-api)), une intégration custom fournit ses images de marque dans un dossier `brand/`, et **ces images locales sont prioritaires sur le CDN** `brands.home-assistant.io`. Sans ce dossier, HA retombait sur le CDN, où le domaine `gazon_intelligent` n'est pas enregistré — d'où la vignette grise. Le dossier est restauré avec la nouvelle identité visuelle (256×256, détourées et compressées sans perte).
+- **Note pour l'avenir** : le dépôt `home-assistant/brands` **n'accepte plus** de nouvelles intégrations custom (cf. la même annonce) ; le dossier `brand/` local est désormais la seule voie. Ne pas le supprimer.
+
 ## 0.17.1
 Nouveau logo (identité visuelle retravaillée). Aucun changement fonctionnel — **722 tests verts**, inchangés.
 - **Identité visuelle (`icon.png`, `logo.png`)** : nouvelle version du blason (bandeau « INTELLIGENT » doré, contour retravaillé). Ces images servent au README et à la vitrine du dépôt : Home Assistant ne les lit pas — l'icône affichée dans HA provient du dépôt officiel [home-assistant/brands](https://github.com/home-assistant/brands), où le domaine `gazon_intelligent` n'est pas encore enregistré (d'où la vignette « icon not available » dans la liste des mises à jour).
