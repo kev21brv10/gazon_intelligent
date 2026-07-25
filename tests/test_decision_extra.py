@@ -2191,6 +2191,32 @@ class TestNormalRainReductionPropagation(unittest.TestCase):
         self.assertLessEqual(depleted["objectif_mm"], depleted["reserve_utile_mm"])
 
 
+class TestFenetreOptimaleArbitrage(unittest.TestCase):
+    """Arbitrage de la fenêtre entre le profil d'arrosage et le risk bundle."""
+
+    def test_le_profil_peut_retirer_le_soir_pas_seulement_l_ajouter(self):
+        # Régression (constatée en réel le 24/07/2026) : le risk bundle ne teste que
+        # `evening_allowed` + l'heure, tandis que le PROFIL connaît le coucher du soleil et
+        # applique les garde-fous de séchage (« LE SOIR = UNIQUEMENT LE RAFRAÎCHISSEMENT (3 mm),
+        # JAMAIS UNE RECHARGE »). L'ancienne écriture ne laissait le profil qu'AJOUTER « soir ».
+        # Quand il renvoyait délibérément « ce_matin » (cooling inactif → recharge reportée au
+        # frais), le « soir » du risk bundle reprenait le dessus : 11 mm planifiés à 21h11 pour un
+        # cycle de 2h13, fin ~1h45 après le coucher du soleil, gazon trempé toute la nuit.
+        resolve = decision_watering._resolve_optimal_window
+
+        # Le profil écarte le soir → il doit gagner, même si le risk bundle dit « soir ».
+        self.assertEqual(resolve("ce_matin", "soir"), "ce_matin")
+        self.assertEqual(resolve("maintenant", "soir"), "maintenant")
+
+        # Le profil décide un vrai cycle du soir (rafraîchissement) → « soir » retenu.
+        self.assertEqual(resolve("soir", "ce_matin"), "soir")
+        self.assertEqual(resolve("soir", "soir"), "soir")
+
+        # Hors « soir », le risk bundle reste la référence (fenêtres de risque, blocages…).
+        self.assertEqual(resolve("ce_matin", "apres_pluie"), "apres_pluie")
+        self.assertEqual(resolve(None, "soir"), "soir")  # profil muet → repli inchangé
+
+
 class TestDepletionWateringModel(unittest.TestCase):
     """Modèle de dépletion (Normal + réserve sol interne) : deplete-to-MAD, refill-to-full."""
 
@@ -2379,6 +2405,28 @@ class TestDepletionWateringModel(unittest.TestCase):
             history=[],
         )
         self.assertEqual(profile["mm_final_recommande"], 0.0)
+
+    def test_reserve_reellement_vide_arrose_en_secours_sous_32(self):
+        # Régression (25/07/2026) : réserve RÉELLEMENT à 0 (le ledger débite l'ET0 au prorata →
+        # `depletion_ratio` brut = 1.0, pas la falaise de minuit), journée demandante (canicule)
+        # mais 30 °C < 32, et budget hebdo largement dépassé. Avant : ni survie (< 32 °C) ni
+        # `_critical_depletion` (déplétion urgence sous-estimée à l'aube) → RIEN ne partait, gazon à
+        # sec toute la journée. Désormais : arrosage de SECOURS modéré (~min_session), la recharge
+        # complète restant réservée à la vraie canicule (≥ 32 °C).
+        vide = self._profile(
+            reserve_actuelle_mm=0.0, reserve_stock_mm=0.0, depletion_mm=12.0, depletion_ratio=1.0,
+            et0_mm=6.0, et_elapsed_fraction=0.0, arrosage_recent_7j=60.0, temperature=30.0,
+        )
+        self.assertGreater(vide["mm_final_recommande"], 0.0)       # ça arrose (plus bloqué)
+        self.assertLessEqual(vide["mm_final_recommande"], 6.0)     # secours modéré, pas recharge pleine
+
+        # Contrôle : réserve encore correcte (33 % épuisée), même budget dépassé → PAS de secours,
+        # le garde-fou hebdo reste un cap dur tant que le sol n'est pas réellement vide.
+        ok = self._profile(
+            reserve_actuelle_mm=8.0, reserve_stock_mm=8.0, depletion_mm=4.0, depletion_ratio=0.333,
+            et0_mm=6.0, et_elapsed_fraction=0.0, arrosage_recent_7j=60.0, temperature=30.0,
+        )
+        self.assertEqual(ok["mm_final_recommande"], 0.0)
 
     def test_ledger_depleted_overrides_stale_bilan_block(self):
         # Réserve réelle (ledger temps réel) épuisée (86 %) MAIS bilan glissant encore positif

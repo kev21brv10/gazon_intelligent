@@ -1705,10 +1705,30 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
     _depletion_ratio = float(ctx.water_balance.get("depletion_ratio") or 0.0)
     _mad_ratio = float(ctx.water_balance.get("mad_ratio") or 0.5)
     _ledger_demande_eau = _ledger_reserve and _depletion_ratio >= _mad_ratio
+    # RÉSERVE RÉELLEMENT VIDE — exemption indépendante de la température.
+    # Depuis que le ledger débite l'ET0 au prorata de la journée (plus de « falaise de minuit »),
+    # `_depletion_ratio` (dérivé de la réserve RÉELLE) reflète l'état vrai du sol à tout instant,
+    # à l'aube comme en journée. Si la réserve est genuinement quasi vide (≥ 90 % épuisée), le
+    # gazon a soif POUR DE VRAI et doit pouvoir arroser MÊME sous 32 °C — sinon un sol réellement
+    # à sec reste bloqué par le garde-fou hebdo (qui plafonne surtout un sur-arrosage HÉRITÉ) ou
+    # par le cooldown d'un petit arrosage manuel de secours (constaté 25/07/2026 : réserve à 0,
+    # 31 °C prévus < 32, rien ne s'est déclenché à l'aube). Distinct de la survie canicule
+    # (basée sur la CHALEUR) et de `_depletion_ratio_urgence` (qui retranche l'ET0 non écoulée pour
+    # ne pas ARMER une recharge ANTICIPÉE la nuit) : ici on constate un FAIT — la réserve est vide —
+    # pas une projection. Ne s'arme qu'avec le bilan sol interne actif (jamais sur le modèle déficit).
+    # ET on exige une DEMANDE réelle (`heat_stress_level` ≠ « normal ») : par temps frais à ET0
+    # faible (ex. 15 °C), une réserve « vide » n'est pas une urgence — le gazon ne transpire quasi
+    # pas, on peut attendre pluie/fraîcheur. Le secours ne se justifie que si le sol est vide ET la
+    # journée demandante (au moins « vigilance »).
+    _reserve_critique_reelle = (
+        _ledger_reserve
+        and _depletion_ratio >= 0.9
+        and ctx.heat_stress_level in {"vigilance", "canicule", "extreme"}
+    )
     block_reason = None
     if ctx.pluie_compensatrice or ctx.pluie_proche:
         block_reason = "pluie_prevue_suffisante"
-    elif ctx.cooldown_24h_active and not _critical_depletion:
+    elif ctx.cooldown_24h_active and not _critical_depletion and not _reserve_critique_reelle:
         block_reason = "cooldown_24h"
     elif ctx.saturation_block and not _ledger_demande_eau:
         block_reason = "sol_deja_humide"
@@ -1719,6 +1739,7 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
         and ctx.recent_watering_mm_7j >= ctx.guardrail_min_mm
         and ctx.deficit_mm_ajuste < ctx.guardrail_min_mm
         and not _survie_canicule
+        and not _reserve_critique_reelle
     ):
         block_reason = "garde_fou_hebdomadaire"
     # Mode Normal (pelouse établie).
@@ -1769,6 +1790,13 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
                 # qu'aucune dose inférieure ne permet de sortir du plancher à 0.
                 _survie_floor = depletion_mm if depletion_ratio >= 1.0 else min_session_mm
                 weekly_room = max(weekly_room, _survie_floor)
+            elif _reserve_critique_reelle:
+                # Réserve réellement vide MAIS sous 32 °C : on débloque un arrosage de SECOURS
+                # MODÉRÉ (min_session ~5 mm) au lieu de la recharge complète. Assez pour maintenir
+                # le gazon un jour de plus sans le laisser bone-dry, mais on ne recharge pas à fond
+                # hors canicule (la recharge pleine reste réservée à `_survie_canicule` ≥ 32 °C,
+                # cf. règle 0.16.0). Le garde-fou plafonne un sur-arrosage HÉRITÉ, pas ce secours.
+                weekly_room = max(weekly_room, min_session_mm)
             mm_cible = round(min(mm_cible, weekly_room), 1)
         if block_reason is not None:
             mm_cible = 0.0

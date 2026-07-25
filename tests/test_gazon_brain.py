@@ -490,6 +490,51 @@ class GazonBrainTests(unittest.TestCase):
         self.assertEqual(snapshot["reserve_utile_mm"], 12.0)
         self.assertAlmostEqual(snapshot["depletion_ratio"], 0.167, places=3)
 
+    def _run_snapshot_capturing_ledger_etp(self, brain, *, etp_capteur, weather_profile):
+        with patch.object(gazon_brain_module, "update_soil_balance") as usb:
+            usb.return_value = {
+                "date": "2026-07-25", "reserve_mm": 10.0, "previous_reserve_mm": 10.0,
+                "pluie_mm": 0.0, "arrosage_mm": 0.0, "etp_mm": 0.0, "delta_mm": 0.0,
+                "type_sol": "limoneux", "reserve_max_mm": 24.0, "reserve_min_mm": 0.0, "ledger": [],
+            }
+            brain.compute_snapshot(
+                today=date(2026, 7, 25), temperature=30.0, forecast_temperature_today=31.0,
+                temperature_source="capteur", temperature_reference_hydrique=None,
+                pluie_24h=0.0, pluie_demain=0.0, humidite=40.0, type_sol="limoneux",
+                etp_capteur=etp_capteur, humidite_sol=None, vent=None, rosee=None, hauteur_gazon=None,
+                retour_arrosage=None, pluie_source="capteur_pluie_24h",
+                pluie_demain_source="meteo_forecast", weather_profile=weather_profile,
+                et0_source="capteur",
+            )
+            return usb.call_args.kwargs["etp_mm"]
+
+    def test_ledger_debite_etc_pas_et0(self) -> None:
+        # Le sol perd son eau au rythme de l'HERBE (ETc = ET0 × Kc), pas de l'ET0 brute. On force
+        # ET0 = 10 (etp_capteur) et un Kc du cycle précédent = 0.55 (Hivernage) : le ledger doit
+        # recevoir 10 × 0.55 = 5.5, prouvant qu'il applique le Kc du `last_result` (et non l'ET0).
+        brain = GazonBrain()
+        brain.last_result = DecisionResult(
+            phase_dominante="Hivernage", sous_phase="Hivernage",
+            action_recommandee="RAS", action_a_eviter="Aucune.", niveau_action="aucune_action",
+            fenetre_optimale="attendre", risque_gazon="faible", objectif_arrosage=0.0,
+            tonte_autorisee=True, tonte_statut="autorisee", conseil_principal="RAS",
+            extra={"kc_gazon": 0.55},
+        )
+        etp_ledger = self._run_snapshot_capturing_ledger_etp(
+            brain, etp_capteur=10.0, weather_profile={"et_elapsed_fraction": 1.0}
+        )
+        self.assertAlmostEqual(etp_ledger, 5.5, places=3)
+
+    def test_ledger_kc_defaut_08_sans_cycle_precedent(self) -> None:
+        # Premier cycle / après redémarrage : pas de `last_result` → repli Kc = 0.8 (Normal).
+        # ET0 = 10 → ledger reçoit 8.0.
+        brain = GazonBrain()
+        brain.last_result = None
+        etp_ledger = self._run_snapshot_capturing_ledger_etp(
+            brain, etp_capteur=10.0, weather_profile={"et_elapsed_fraction": 1.0}
+        )
+        self.assertAlmostEqual(etp_ledger, 8.0, places=3)
+
     def test_compute_snapshot_keeps_last_valid_et0_and_etc_when_weather_is_not_ready(self) -> None:
         brain = GazonBrain()
         brain.last_result = DecisionResult(

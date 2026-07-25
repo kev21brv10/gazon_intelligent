@@ -526,11 +526,18 @@ def _build_watering_bundle_base(
         "block_reason": water_bundle.get("block_reason"),
         "raison_decision": None,
         "niveau_action": risk_bundle["niveau_action"],
-        # La fenêtre vient du risk bundle SAUF quand le profil d'arrosage décide explicitement
-        # un cycle du soir (rafraîchissement de canicule) : seul le profil reçoit le coucher du
-        # soleil et applique les garde-fous séchage, donc c'est lui qui fait foi pour "soir".
-        "fenetre_optimale": (
-            "soir" if water_bundle.get("fenetre_optimale") == "soir" else risk_bundle["fenetre_optimale"]
+        # Le profil d'arrosage fait foi pour « soir » DANS LES DEUX SENS.
+        # Lui seul reçoit le coucher du soleil et applique les garde-fous de séchage
+        # (cf. _profile_for_normal : « LE SOIR = UNIQUEMENT LE RAFRAÎCHISSEMENT (3 mm), JAMAIS UNE
+        # RECHARGE »). Le risk bundle, lui, ne teste que `evening_allowed` + l'heure.
+        # L'ancienne écriture ne laissait le profil qu'AJOUTER « soir », jamais le RETIRER : quand
+        # il renvoyait délibérément une fenêtre du matin (cooling inactif — switch éteint,
+        # température < seuil, pluie — donc recharge complète reportée au frais), le « soir » du
+        # risk bundle reprenait le dessus. Constaté en réel (24/07/2026) : 11 mm de recharge
+        # planifiés à 21h11 pour un cycle de 2h13, soit une fin ~1h45 APRÈS le coucher du soleil,
+        # gazon trempé toute la nuit — exactement le risque fongique que le profil écartait.
+        "fenetre_optimale": _resolve_optimal_window(
+            water_bundle.get("fenetre_optimale"), risk_bundle["fenetre_optimale"]
         ),
         "risque_gazon": risk_bundle["risque_gazon"],
         "prochaine_reevaluation": risk_bundle["prochaine_reevaluation"],
@@ -724,6 +731,21 @@ def _apply_mower_coordination_block(payload: dict[str, Any]) -> dict[str, Any]:
             "type_arrosage": "bloque",
         }
     return payload
+
+
+def _resolve_optimal_window(profil: Any, risk: Any) -> Any:
+    """Fenêtre retenue entre le profil d'arrosage et le risk bundle.
+
+    Le PROFIL fait autorité sur « soir », dans les deux sens : lui seul connaît le coucher du
+    soleil et applique les garde-fous de séchage. Le risk bundle ne teste que `evening_allowed`
+    et l'heure ; s'il propose « soir » alors que le profil a écarté cette fenêtre, on suit le
+    profil (la recharge complète est reportée au frais du matin, cf. _profile_for_normal).
+    """
+    if profil == "soir":
+        return "soir"
+    if risk == "soir" and profil:
+        return profil
+    return risk
 
 
 def _bundle_with(base_bundle: dict[str, Any], **updates: Any) -> dict[str, Any]:
@@ -1424,15 +1446,12 @@ def build_watering_bundle(
         "watering_window_acceptable_end_minute"
     ) or risk_bundle.get("watering_window_acceptable_end_minute")
     niveau_action = risk_bundle["niveau_action"]
-    # La fenêtre vient du risk bundle SAUF quand le profil d'arrosage décide explicitement un
-    # cycle du soir (rafraîchissement canicule) : seul le profil reçoit le coucher du soleil et
-    # applique le vrai test du soir, donc c'est lui qui fait foi pour « soir ». Sans ce pont, le
-    # risk bundle (qui n'a pas le coucher → jamais « soir » en canicule) masque le cooling et le
-    # coordinateur ne le lance jamais.
-    fenetre_optimale = (
-        "soir"
-        if water_bundle.get("fenetre_optimale") == "soir"
-        else risk_bundle["fenetre_optimale"]
+    # Le profil fait foi pour « soir » DANS LES DEUX SENS (cf. _resolve_optimal_window) : sans le
+    # pont, le risk bundle (qui n'a pas le coucher du soleil) masquerait le cooling ; sans le sens
+    # inverse, il imposerait « soir » à une recharge complète que le profil avait justement
+    # reportée au matin. Deuxième copie de l'arbitrage — les deux doivent rester alignées.
+    fenetre_optimale = _resolve_optimal_window(
+        water_bundle.get("fenetre_optimale"), risk_bundle["fenetre_optimale"]
     )
     risque_gazon = risk_bundle["risque_gazon"]
     prochaine_reevaluation = risk_bundle["prochaine_reevaluation"]
