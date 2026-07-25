@@ -197,6 +197,28 @@ class TestPhaseLogic(unittest.TestCase):
             27.5,
         )
 
+    def test_compute_recent_watering_mm_can_exclude_manual_sessions(self) -> None:
+        # Régression (cercle vicieux, constaté 25/07/2026) : un arrosage MANUEL de secours
+        # (start_manual_irrigation) ne doit pas gonfler le garde-fou hebdo, sinon plus l'utilisateur
+        # arrose à la main pour compenser un auto bloqué, plus l'auto reste bloqué. Le manuel doit
+        # rester dans l'eau RÉELLEMENT reçue (crédit de la réserve), mais sortir du budget de l'auto.
+        history = [
+            {"type": "arrosage", "date": "2026-03-17", "total_mm": 8.0, "source": "auto_irrigation"},
+            {"type": "arrosage", "date": "2026-03-16", "total_mm": 3.0, "source": "manual_irrigation"},
+            {"type": "arrosage", "date": "2026-03-15", "total_mm": 5.0, "source": "manual_force"},
+        ]
+        today = date(2026, 3, 17)
+        # Garde-fou hebdo (include_manual=False) → seuls les 8 mm auto comptent.
+        self.assertEqual(
+            decision.compute_recent_watering_mm(history, today=today, days=7, include_manual=False),
+            8.0,
+        )
+        # Eau réellement reçue (défaut) → manuel inclus (l'eau est bien tombée).
+        self.assertEqual(
+            decision.compute_recent_watering_mm(history, today=today, days=7),
+            16.0,
+        )
+
     def test_compute_recent_watering_count_can_exclude_external_sessions(self) -> None:
         # Le COMPTE hebdo doit aussi pouvoir ignorer les sessions externes (cohérence garde-fou).
         history = [

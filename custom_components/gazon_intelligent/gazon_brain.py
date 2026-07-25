@@ -844,14 +844,27 @@ class GazonBrain:
         # "capteur_pluie_24h" ailleurs. Les valeurs non mesurées sont "meteo_forecast" et
         # "non disponible" — tout ce qui commence par "capteur" est une lecture réelle.
         pluie_mesuree = pluie_24h if str(pluie_source or "").startswith("capteur") else None
+        # Le sol perd son eau au rythme de l'HERBE — ETc = ET0 × Kc (FAO-56) — pas de l'ET0 brute.
+        # Débiter l'ET0 pleine asséchait le bilan ~20 % trop vite : réserve affichée à « 0 » alors
+        # que le sol en avait encore (constaté 25/07/2026 : ~52 mm reçus sur 7 j, réserve à 0 ;
+        # recalcul en ETc → ~10 mm). Le Kc dépend de la phase, calculée seulement APRÈS (dans la
+        # décision) : on réutilise donc le Kc du cycle PRÉCÉDENT (`last_result`) — le coordinateur
+        # tourne toutes les 2 min, la phase évolue sur des jours, jamais entre deux cycles. Repli
+        # sur 0.8 (Normal) au premier cycle / après redémarrage. NB : le CALCUL de l'ET0 n'est pas
+        # touché (cf. note projet « on ne touche pas à l'ET0 ») — on applique juste le Kc déjà
+        # calculé par le modèle avant de débiter le SOL.
+        _kc_ledger = self._result_float_value(self.last_result, "kc_gazon")
+        if _kc_ledger is None or not (0.4 <= _kc_ledger <= 1.1):
+            _kc_ledger = 0.8
+        etc_ledger = etp * _kc_ledger if etp is not None else None
         self.soil_balance = update_soil_balance(
             self.soil_balance,
             today=today,
             pluie_mm=pluie_mesuree,
             arrosage_mm=arrosage_reel_jour,
-            etp_mm=etp,
+            etp_mm=etc_ledger,
             type_sol=type_sol,
-            # Fraction de journée écoulée : l'ET0 est débitée au prorata au lieu d'être retranchée
+            # Fraction de journée écoulée : l'ETc est débitée au prorata au lieu d'être retranchée
             # en entier dès minuit (cf. update_soil_balance). Sans elle → repli sur 1.0.
             et_elapsed_fraction=weather_profile.get("et_elapsed_fraction"),
         )

@@ -423,12 +423,27 @@ def _is_external_watering(item: dict[str, Any]) -> bool:
     return str(item.get("source") or "").strip().lower() in _EXTERNAL_WATERING_SOURCES
 
 
+# Arrosages MANUELS lancés via l'intégration (bouton/carte/service start_manual_irrigation).
+# Contrairement à l'externe, ils créditent bien la réserve sol (l'intégration sait exactement
+# combien d'eau elle a délivrée). Mais ils NE doivent PAS compter dans le garde-fou hebdomadaire :
+# celui-ci plafonne l'arrosage AUTO. Les compter créait un cercle vicieux (constaté 25/07/2026) :
+# réserve à sec + budget déjà haut → auto bloqué → l'utilisateur arrose à la main → le manuel
+# gonfle le budget → auto bloqué plus longtemps → … l'auto ne repartait jamais. Le manuel remplit
+# la réserve, donc l'auto n'a de toute façon plus soif juste après : aucun sur-arrosage possible.
+_MANUAL_WATERING_SOURCES = ("manual_irrigation", "manual_force", "manual_application")
+
+
+def _is_manual_watering(item: dict[str, Any]) -> bool:
+    return str(item.get("source") or "").strip().lower() in _MANUAL_WATERING_SOURCES
+
+
 def compute_recent_watering_mm(
     history: list[dict[str, Any]],
     today: date | None = None,
     days: int = 2,
     include_external: bool = True,
     include_technical: bool = False,
+    include_manual: bool = True,
 ) -> float:
     """Somme des mm arrosés sur la fenêtre.
 
@@ -436,6 +451,8 @@ def compute_recent_watering_mm(
     techniques (rafraîchissement du soir, incorporation post-produit) en sont exclus.
     `include_technical=True` donne l'eau RÉELLEMENT reçue par le gazon — l'écart entre les deux
     est invisible autrement, ce qui a longtemps masqué un sur-arrosage.
+    `include_manual=False` exclut les arrosages manuels : ils créditent la réserve mais ne
+    plafonnent PAS l'auto (cf. `_is_manual_watering`). Défaut True = eau réellement reçue.
     """
     today = today or _current_date()
     total = 0.0
@@ -445,6 +462,7 @@ def compute_recent_watering_mm(
         days=days,
         include_technical=include_technical,
         include_external=include_external,
+        include_manual=include_manual,
     ):
         mm = _watering_item_mm(item)
         if mm is not None:
@@ -458,6 +476,7 @@ def _iter_recent_watering_items(
     days: int,
     include_technical: bool = True,
     include_external: bool = True,
+    include_manual: bool = True,
 ):
     for item in history:
         if not isinstance(item, dict) or item.get("type") != "arrosage":
@@ -465,6 +484,8 @@ def _iter_recent_watering_items(
         if not include_technical and _is_technical_watering(item):
             continue
         if not include_external and _is_external_watering(item):
+            continue
+        if not include_manual and _is_manual_watering(item):
             continue
         raw_date = item.get("date")
         if not raw_date:
@@ -515,13 +536,19 @@ def _recent_watering_windows(
     recent_watering_mm_override: float | None,
     retour_arrosage: float | None,
 ) -> dict[str, float]:
-    # Garde-fou hebdo & modèle déficit : ne compter QUE les arrosages pilotés par l'intégration
-    # (on exclut les sessions externes `zone_session`). Le crédit de la réserve sol passe par un
-    # autre chemin (gazon_brain) et reste, lui, alimenté par tout l'arrosage réel.
+    # Garde-fou hebdo & modèle déficit : ne compter QUE les arrosages AUTO de l'intégration.
+    # On exclut l'externe (`zone_session`) ET le manuel (`start_manual_irrigation`) : le garde-fou
+    # plafonne l'arrosage AUTO, or un arrosage manuel est une décision de l'utilisateur. Les
+    # compter créait un cercle vicieux (25/07/2026) : réserve à sec + budget haut → auto bloqué →
+    # arrosage manuel de secours → budget plus haut → auto bloqué plus longtemps → jamais de reprise
+    # auto. Le crédit de la RÉSERVE sol passe par un autre chemin (gazon_brain, `arrosage_reel_jour`)
+    # et reste, lui, alimenté par TOUT l'arrosage réel — manuel inclus (l'eau est bien tombée).
     arrosage_recent_7j = (
         recent_watering_mm_override
         if recent_watering_mm_override is not None
-        else compute_recent_watering_mm(history, today=today, days=7, include_external=False)
+        else compute_recent_watering_mm(
+            history, today=today, days=7, include_external=False, include_manual=False
+        )
     )
     # `days=0` = AUJOURD'HUI SEUL. Le filtre retient `delta <= days`, donc `days=1` ramassait
     # aussi la veille : le bilan journalier créditait alors 2 jours d'arrosage contre 1 seul jour
@@ -529,8 +556,12 @@ def _recent_watering_windows(
     # réel : 24 mm affichés pour 12 mm réellement appliqués). Le ledger sol, lui, utilise déjà
     # `days=0` (`arrosage_reel_jour`, cf. gazon_brain) : on s'aligne dessus. Les fenêtres 3j/7j
     # gardent leur sémantique (budget hebdo) et ne sont pas touchées.
-    arrosage_recent_jour = compute_recent_watering_mm(history, today=today, days=0, include_external=False)
-    arrosage_recent_3j = compute_recent_watering_mm(history, today=today, days=3, include_external=False)
+    arrosage_recent_jour = compute_recent_watering_mm(
+        history, today=today, days=0, include_external=False, include_manual=False
+    )
+    arrosage_recent_3j = compute_recent_watering_mm(
+        history, today=today, days=3, include_external=False, include_manual=False
+    )
     if retour_arrosage is not None:
         retour = float(retour_arrosage)
         arrosage_recent_jour = max(arrosage_recent_jour, retour)
