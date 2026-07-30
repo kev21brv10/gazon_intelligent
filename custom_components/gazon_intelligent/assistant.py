@@ -31,7 +31,7 @@ _BLOCK_REASON_LABELS = {
     "sol_non_adapte": "Sol non adapté",
     "pluie_probabilite_elevee": "Pluie probable élevée",
     "surface_non_seche": "Surface non sèche",
-    "cooldown_24h": "Cooldown 24 h",
+    "cooldown_24h": "Déjà arrosé aujourd'hui",
     "humidite_excessive": "Humidité excessive",
     "humidite_elevee": "Humidité élevée",
     "garde_fou_hebdomadaire": "Garde-fou hebdomadaire",
@@ -96,7 +96,11 @@ def _to_float(value: object | None, default: float = 0.0) -> float:
     if value in (None, "", [], {}):
         return default
     try:
-        return float(value)
+        # `float(object)` est refusé par le vérificateur de types, mais c'est exactement le but :
+        # on accepte n'importe quelle entrée et on retombe sur le défaut si elle n'est pas
+        # convertible. Le `str()` rend l'intention explicite sans changer le comportement —
+        # `float("3.5")` comme `float(3.5)` donnent 3.5, et une valeur absurde lève toujours.
+        return float(str(value).strip())
     except (TypeError, ValueError):
         return default
 

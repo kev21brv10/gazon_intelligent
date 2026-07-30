@@ -31,6 +31,11 @@ _CONFIG_HISTORY_KEYS: tuple[str, ...] = (
     "capteur_humidite_sol",
     "capteur_vent",
     "capteur_rosee",
+    # Sans elles, un diagnostic de support ne permet pas de trancher « ET0 sur valeurs MESURÉES »
+    # vs « repli modèle nuages / pression standard » — précisément la question qui compte depuis
+    # la 0.19.0, où ces deux entrées déterminent la précision de l'ET0 qui pilote le bilan sol.
+    "capteur_rayonnement",
+    "capteur_pression",
     "capteur_hauteur_gazon",
     "capteur_retour_arrosage",
     "hauteur_min_tondeuse_cm",
@@ -153,6 +158,10 @@ _DIAGNOSTICS_REDACT_KEYS: set[str] = {
     "capteur_humidite_sol",
     "capteur_pluie_24h",
     "capteur_pluie_demain",
+    # Entrées ET0 horaire (0.19.0) : mêmes entity_id de configuration que les autres capteurs,
+    # donc mêmes règles de caviardage.
+    "capteur_pression",
+    "capteur_rayonnement",
     "capteur_retour_arrosage",
     "capteur_rosee",
     "capteur_temperature",

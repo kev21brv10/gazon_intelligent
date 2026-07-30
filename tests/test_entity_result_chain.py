@@ -179,6 +179,22 @@ def _local_text(iso_value: str) -> str:
     return datetime.fromisoformat(iso_value).astimezone(TEST_TZ).strftime("%d/%m/%Y à %H:%M")
 
 
+class FormatteursIndisponiblesTests(unittest.TestCase):
+    """Les formateurs d'affichage ne doivent JAMAIS restituer un état « pas de donnée »."""
+
+    def test_formateurs_ne_restituent_pas_unavailable(self) -> None:
+        # RÉGRESSION (28/07/2026) : les deux formateurs terminaient par `return text`, donc un
+        # `unavailable`/`unknown` ressortait tel quel — l'utilisateur lisait « unavailable » à la
+        # place d'une date. Filtré en amont côté coordinateur, mais ces fonctions restent
+        # atteignables depuis un état restauré ou un attribut.
+        for absent in ("unavailable", "unknown", "UNAVAILABLE", "  Unknown  "):
+            self.assertIsNone(sensor._human_datetime_text(absent), f"datetime: « {absent} »")
+            self.assertIsNone(sensor._human_date_text(absent), f"date: « {absent} »")
+
+        # Non-régression : une vraie date reste formatée.
+        self.assertEqual(sensor._human_date_text("2026-07-29"), "29/07/2026")
+
+
 class DecisionResultChainTests(unittest.TestCase):
     def test_public_mowing_facade_smooths_tonte_entities_and_assistant(self) -> None:
         coordinator = _FakeCoordinator(
@@ -1140,8 +1156,15 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(attrs["bilan_hydrique_mm"], -1.1)
         self.assertNotIn("bilan_hydrique_journalier_mm", attrs)
         self.assertEqual(attrs["reserve_hydrique_sol_mm"], 15.6)
-        self.assertEqual(attrs["hydric_balance_level"], "déficit")
-        self.assertEqual(attrs["hydric_strategy"], "arroser profondément")
+        # Ce cas n'a PAS de `reserve_minimale_mm` → repli documenté sur la réserve brute
+        # (`_objective_display_balance`, cas « tout premier cycle »), soit 15,6 mm → excédentaire.
+        # Il attendait « déficit » avant la 0.26.0, mais cette valeur ne venait PAS du bilan :
+        # elle sortait du veto par cumul (`stress <= 8.0` avec deficit_7j = 8.0, pile à la borne),
+        # qui écrasait le niveau quel que soit l'état réel du sol. Veto retiré → le niveau reflète
+        # enfin la réserve. Cf. `_hydric_balance_level` pour la mesure qui a motivé le retrait.
+        self.assertEqual(attrs["hydric_balance_level"], "excédentaire")
+        # La stratégie suit mécaniquement le niveau : « excédentaire » → « reporter ».
+        self.assertEqual(attrs["hydric_strategy"], "reporter")
 
     def test_objectif_sensor_fort_deficit_atteignable_via_recentrage_mad(self) -> None:
         # [8] Le libellé hydrique était nourri par la réserve brute (≥ 0) → « fort déficit »
@@ -1325,8 +1348,8 @@ class DecisionResultChainTests(unittest.TestCase):
 
     def test_heat_stress_display_label_mapping(self) -> None:
         # Le niveau interne est un score de stress HYDRIQUE, pas une canicule → libellé honnête.
-        self.assertEqual(sensor._heat_stress_display_label("extreme"), "Stress hydrique sévère")
-        self.assertEqual(sensor._heat_stress_display_label("canicule"), "Stress hydrique élevé")
+        self.assertEqual(sensor._heat_stress_display_label("severe"), "Stress hydrique sévère")
+        self.assertEqual(sensor._heat_stress_display_label("eleve"), "Stress hydrique élevé")
         self.assertEqual(sensor._heat_stress_display_label("vigilance"), "Vigilance")
         self.assertIsNone(sensor._heat_stress_display_label(""))
         self.assertIsNone(sensor._heat_stress_display_label("inconnu"))
@@ -1335,12 +1358,12 @@ class DecisionResultChainTests(unittest.TestCase):
         # `stress_hydrique` (libellé d'affichage) ajouté UNE fois à côté de la clé technique
         # `heat_stress_level` (inchangée) → la carte peut afficher sans « canicule », sans doublon d'état.
         result = _make_result()
-        result.extra.update({"heat_stress_level": "extreme", "heat_stress_phase": "canicule_courte"})
+        result.extra.update({"heat_stress_level": "severe", "heat_stress_phase": "stress_court"})
         coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=result, history=[], memory={})
         attrs = sensor.GazonFenetreOptimaleSensor(coordinator).extra_state_attributes
         assert attrs is not None
         self.assertEqual(attrs["stress_hydrique"], "Stress hydrique sévère")
-        self.assertEqual(attrs["heat_stress_level"], "extreme")  # clé technique inchangée
+        self.assertEqual(attrs["heat_stress_level"], "severe")  # clé technique inchangée
 
     def test_watering_window_sensor_surfaces_weekly_cap_when_soil_needs_water(self) -> None:
         result = _make_result()
@@ -3103,3 +3126,126 @@ class AutoIrrigationBlockLabelsTests(unittest.TestCase):
 
     def test_plus_dentree_evening_disabled_morte(self) -> None:
         self.assertNotIn("evening_disabled", sensor._AUTO_IRRIGATION_BLOCK_INFO)
+
+
+class ProchainArrosageSensorTests(unittest.TestCase):
+    """Le capteur « Prochain arrosage » — 120 lignes sans le moindre test jusqu'au 29/07/2026.
+
+    C'est pourtant l'entité en tête de la carte. On teste ici sa LOGIQUE DE PRÉSENTATION en lui
+    fournissant directement son état contextuel : la dérivation du statut, elle, est déjà couverte
+    en amont. Ce qui n'était pas couvert, c'est la traduction état → libellé → attributs publics.
+    """
+
+    def _sensor(self, *, status, objectif_mm=0.0, block_reason="", fenetre="attendre",
+                target_date="2026-05-12"):
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={
+                "block_reason": block_reason,
+                "objectif_mm": objectif_mm,
+                "fenetre_optimale": fenetre,
+                "watering_target_date": target_date,
+            },
+            result=None,
+            history=[],
+            memory={},
+        )
+        capteur = sensor.GazonProchainArrosageSensor(coordinator)
+        capteur._contextual_watering_state = lambda: {"status": status}
+        return capteur
+
+    def test_etat_bloque(self) -> None:
+        self.assertEqual(self._sensor(status="bloque", block_reason="cooldown_24h").native_value, "Bloqué")
+
+    def test_etat_non_requis_quand_termine_sans_objectif(self) -> None:
+        self.assertEqual(self._sensor(status="termine", objectif_mm=0.0).native_value, "Non requis")
+
+    def test_une_date_cible_prime_sur_le_statut(self) -> None:
+        # Comportement RÉEL du capteur : une date concrète est plus utile qu'un « Maintenant ».
+        # Vérifié ici pour qu'un futur refactor ne l'inverse pas par inadvertance.
+        self.assertEqual(self._sensor(status="autorise", objectif_mm=6.0).native_value, "12/05/2026")
+
+    def test_maintenant_quand_autorise_sans_date_cible(self) -> None:
+        capteur = self._sensor(status="autorise", objectif_mm=6.0, target_date="")
+        self.assertEqual(capteur.native_value, "Maintenant")
+
+    def test_aujourdhui_quand_auto_sans_date_cible(self) -> None:
+        capteur = self._sensor(status="auto", objectif_mm=6.0, target_date="")
+        self.assertEqual(capteur.native_value, "Aujourd\'hui")
+
+    def test_le_motif_accompagne_toujours_l_etat_bloque(self) -> None:
+        # Cohérence : quand l'état dit « Bloqué », le motif doit être exposé pour l'expliquer,
+        # sinon la carte affiche un blocage sans raison.
+        attrs = self._sensor(status="bloque", block_reason="cooldown_24h").extra_state_attributes
+        self.assertEqual(attrs.get("block_reason"), "cooldown_24h")
+        self.assertTrue(str(attrs.get("block_reason_label") or "").strip())
+        self.assertIn("Arrosage bloqué", str(attrs.get("summary") or ""))
+
+    def test_aucune_cible_exposee_pendant_un_blocage(self) -> None:
+        # Annoncer une date de cible pendant un blocage ferait croire à un arrosage programmé.
+        attrs = self._sensor(status="bloque", objectif_mm=6.0, block_reason="cooldown_24h").extra_state_attributes
+        self.assertIsNone(attrs.get("target_date"))
+        self.assertIsNone(attrs.get("target_display"))
+
+    def test_resume_dedie_pour_la_pluie_prevue(self) -> None:
+        attrs = self._sensor(status="bloque", block_reason="pluie_prevue_suffisante").extra_state_attributes
+        self.assertEqual(attrs.get("summary"), "Aucun arrosage nécessaire, la pluie prévue suffit")
+
+    def test_resume_dedie_pour_le_ressuyage(self) -> None:
+        attrs = self._sensor(status="bloque", block_reason="soil_wet").extra_state_attributes
+        self.assertEqual(attrs.get("summary"), "Arrosage à reprendre après ressuyage du sol")
+
+class NiveauHydriqueAtteignableTests(unittest.TestCase):
+    """Les 5 niveaux doivent rester atteignables en pleine saison.
+
+    Jusqu'à la 0.26.0, un veto par CUMUL (`deficit_3j` / `deficit_7j`, 12 à 42 mm en saison)
+    était comparé à des seuils à l'échelle d'un déficit JOURNALIER (1/2/4/8). Il était donc
+    toujours armé : mesuré sur une grille ET0 2-7 mm/j, seuls « déficit » et « fort déficit »
+    sortaient — un gazon au bilan +5 mm s'affichait « déficit ». Le niveau ne dérive plus que
+    du bilan signé, déjà recentré sur le seuil MAD.
+    """
+
+    def test_les_cinq_niveaux_sortent_du_bilan_signe(self) -> None:
+        attendu = (
+            (5.0, "excédentaire"),
+            (2.0, "excédentaire"),
+            (1.0, "équilibré"),
+            (0.0, "léger déficit"),
+            (-1.0, "déficit"),
+            (-3.0, "fort déficit"),
+        )
+        for bilan, niveau in attendu:
+            with self.subTest(bilan=bilan):
+                self.assertEqual(sensor._hydric_balance_level(bilan, 0.0, 0.0), niveau)
+
+    def test_le_cumul_saisonnier_ne_masque_plus_le_niveau(self) -> None:
+        # Le cas qui a motivé le correctif : gazon en pleine forme, mais ET0 de saison.
+        # deficit_3j / deficit_7j sont volontairement énormes — ils doivent être IGNORÉS.
+        for et0 in (2.0, 3.0, 4.0, 5.0, 6.0, 7.0):
+            with self.subTest(et0=et0):
+                self.assertEqual(
+                    sensor._hydric_balance_level(5.0, et0 * 3, et0 * 7),
+                    "excédentaire",
+                    "le veto par cumul a été réintroduit",
+                )
+
+    def test_tous_les_niveaux_restent_atteignables_en_saison(self) -> None:
+        vus = {
+            sensor._hydric_balance_level(bilan, et0 * 3, et0 * 7)
+            for bilan in (-6.0, -3.0, -2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0, 4.0, 6.0)
+            for et0 in (2.0, 3.0, 4.0, 5.0, 6.0, 7.0)
+        }
+        self.assertEqual(
+            vus,
+            {"excédentaire", "équilibré", "léger déficit", "déficit", "fort déficit"},
+            "des niveaux sont redevenus inatteignables en saison",
+        )
+
+    def test_fort_deficit_reste_atteignable_correctif_0_16_0(self) -> None:
+        # Contrainte historique : réserve 3,0 bien sous le seuil MAD 6,0 → bilan −3,0.
+        # C'est ce cas que la normalisation seule régressait (elle retombait sur « déficit »).
+        self.assertEqual(sensor._hydric_balance_level(-3.0, 9.0, 9.0), "fort déficit")
+
+    def test_aucune_donnee_reste_sans_niveau(self) -> None:
+        self.assertIsNone(sensor._hydric_balance_level(None, None, None))
+

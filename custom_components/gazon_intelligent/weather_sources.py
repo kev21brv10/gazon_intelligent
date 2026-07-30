@@ -142,9 +142,14 @@ def extract_weather_forecast_summary(forecasts: list[Mapping[str, Any]] | None) 
     if horizon_forecasts[2] is None:
         horizon_forecasts[2] = forecasts[2] if len(forecasts) > 2 and isinstance(forecasts[2], Mapping) else None
 
-    daily_summaries = []
-    for forecast, forecast_date in zip(horizon_forecasts, horizon_dates):
-        daily_summaries.append(_daily_summary(forecast, forecast_date))
+    daily_summaries: list[dict[str, Any]] = []
+    # `strict=False` explicite : les deux listes font exactement 3 éléments (construites juste
+    # au-dessus), mais le rendre visible évite qu'on croie à une troncature silencieuse.
+    # Nom DISTINCT de la boucle de tri plus haut : là-bas `forecast` est forcément un Mapping
+    # (filtré par `isinstance`), ici il peut être None — un jour absent des prévisions, que
+    # `_daily_summary` traduit en résumé vide. Réutiliser le même nom mélangeait les deux.
+    for horizon_forecast, forecast_date in zip(horizon_forecasts, horizon_dates, strict=False):
+        daily_summaries.append(_daily_summary(horizon_forecast, forecast_date))
 
     precipitation_mm_values = [item["precipitation_mm"] for item in daily_summaries]
     precipitation_probability_values = [

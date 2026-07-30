@@ -29,6 +29,8 @@ from .const import (
     CONF_CAPTEUR_HUMIDITE_SOL,
     CONF_CAPTEUR_VENT,
     CONF_CAPTEUR_ROSEE,
+    CONF_CAPTEUR_RAYONNEMENT,
+    CONF_CAPTEUR_PRESSION,
     CONF_CAPTEUR_HAUTEUR_GAZON,
     CONF_CAPTEUR_RETOUR_ARROSAGE,
     CONF_ENTITE_TONDEUSE,
@@ -69,6 +71,8 @@ _OPTIONAL_CLEARABLE_KEYS = (
     CONF_CAPTEUR_HUMIDITE_SOL,
     CONF_CAPTEUR_VENT,
     CONF_CAPTEUR_ROSEE,
+    CONF_CAPTEUR_RAYONNEMENT,
+    CONF_CAPTEUR_PRESSION,
     CONF_CAPTEUR_HAUTEUR_GAZON,
     CONF_CAPTEUR_RETOUR_ARROSAGE,
     CONF_ENTITE_TONDEUSE,
@@ -92,6 +96,8 @@ _OPTIONAL_ENTITY_KEYS = (
     CONF_CAPTEUR_HUMIDITE_SOL,
     CONF_CAPTEUR_VENT,
     CONF_CAPTEUR_ROSEE,
+    CONF_CAPTEUR_RAYONNEMENT,
+    CONF_CAPTEUR_PRESSION,
     CONF_CAPTEUR_HAUTEUR_GAZON,
     CONF_CAPTEUR_RETOUR_ARROSAGE,
     CONF_ENTITE_TONDEUSE,
@@ -132,8 +138,10 @@ def _replace_with_base_config(
 ) -> dict:
     merged = dict(current or {})
     normalized = _normalize_optional_clears(payload)
-    for key, value in normalized.items():
-        merged[key] = value
+    # `update` et surtout PAS une compréhension de dictionnaire : `merged` est pré-rempli avec la
+    # configuration EXISTANTE, qu'une compréhension écraserait — on perdrait tous les réglages non
+    # touchés lors d'une reconfiguration.
+    merged.update(normalized)
     for idx in range(1, 6):
         zone_key = f"zone_{idx}"
         rate_key = f"debit_zone_{idx}"
@@ -297,6 +305,15 @@ def build_advanced_schema(current: dict | None = None, *, shared_defaults: dict 
             ),
             vol.Optional(CONF_CAPTEUR_ROSEE, default=_d(current.get(CONF_CAPTEUR_ROSEE))): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="sensor")
+            ),
+            # `device_class` filtre la liste proposée : ces deux entrées pilotent le bilan sol,
+            # et une unité inattendue le fausse massivement (rayonnement en kW/m² → ET0 −81 %,
+            # donc un sol qui ne sèche plus et un arrosage qui ne part jamais).
+            vol.Optional(CONF_CAPTEUR_RAYONNEMENT, default=_d(current.get(CONF_CAPTEUR_RAYONNEMENT))): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="sensor", device_class="irradiance")
+            ),
+            vol.Optional(CONF_CAPTEUR_PRESSION, default=_d(current.get(CONF_CAPTEUR_PRESSION))): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="sensor", device_class="atmospheric_pressure")
             ),
         }
     )

@@ -137,7 +137,10 @@ class AssistantDecisionTests(unittest.TestCase):
         self.assertEqual(decision["moment"], "attendre")
         self.assertEqual(decision["quantity_mm"], 0.0)
         self.assertEqual(decision["status"], "blocked")
-        self.assertEqual(decision["reason"], "Cooldown 24 h")
+        # Libellé changé en 0.28.0 : le garde n'est plus « 24 h glissantes » mais
+        # « une fois par jour ». Le CODE `cooldown_24h` reste (contrat public consommé
+        # par la carte et les automatisations) ; seul le texte affiché suit la réalité.
+        self.assertEqual(decision["reason"], "Déjà arrosé aujourd'hui")
 
     def test_build_assistant_decision_irrigation_block_precedes_recommendation_reason(self) -> None:
         decision = assistant.build_assistant_decision(

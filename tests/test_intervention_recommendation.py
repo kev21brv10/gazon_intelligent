@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import importlib
 from pathlib import Path
 import sys
@@ -77,6 +77,42 @@ class OpportunityEvaluationTests(unittest.TestCase):
         self.assertIn("Contexte hydrique excédentaire", result["reasons"])
 
 
+class BlocageArrosageNeBloquePasLesApplicationsTests(unittest.TestCase):
+    """Garde-fou : `block_reason` (arrosage) ne doit JAMAIS piloter les recommandations produit.
+
+    Le module lit une clé `application_block_reason` qui n'est produite nulle part. Elle a
+    l'air d'un nom qui aurait dérivé de `block_reason` — c'est faux, et le rebranchement a été
+    tenté puis annulé le 29/07/2026. `block_reason` porte le motif de blocage de l'ARROSAGE
+    ("cooldown_24h", "sol_deja_humide", "pluie_prevue_suffisante"…), pas celui d'une
+    application produit : le brancher ici bloquerait dur toute recommandation dès que
+    l'arrosage est en cooldown — l'état le plus courant — en affichant un code interne
+    comme motif à l'utilisateur.
+    """
+
+    def test_un_arrosage_bloque_ne_bloque_pas_les_recommandations(self) -> None:
+        for code in ("cooldown_24h", "sol_deja_humide", "pluie_prevue_suffisante"):
+            with self.subTest(code=code):
+                result = intervention._opportunity_evaluation({"block_reason": code})
+                self.assertFalse(result["hard_blocking"], "le blocage d'arrosage a été rebranché")
+                self.assertIsNone(result["hard_block_reason"])
+
+    def test_les_quatre_vrais_blocages_d_application_restent_actifs(self) -> None:
+        # L'absence de `application_block_reason` ne rend PAS les gardes inertes : les quatre
+        # conditions réelles produisent chacune leur phrase en clair.
+        cas = (
+            {"application_block_active": True},
+            {"application_post_watering_pending": True},
+            {"application_post_watering_delay_remaining_minutes": 45},
+            {"application_post_watering_status": "bloque"},
+        )
+        for state in cas:
+            with self.subTest(state=state):
+                result = intervention._opportunity_evaluation(state)
+                self.assertTrue(result["hard_blocking"])
+                motif = str(result["hard_block_reason"] or "")
+                self.assertTrue(motif.endswith("."), f"motif pas en clair : {motif!r}")
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -126,3 +162,58 @@ class ProductDetailsRawRecordTests(unittest.TestCase):
         self.assertEqual(selection["id"], "humuslight")
         self.assertEqual(selection["name"], "Humuslight")
         self.assertEqual(selection["type"], "Biostimulant")
+
+
+class DelaiReapplicationInvalideTests(unittest.TestCase):
+    """Un délai de réapplication négatif ne doit pas faire tomber le moteur de recommandation."""
+
+    def test_delai_negatif_ne_leve_plus_dattributeerror(self) -> None:
+        # Le garde interne refuse de calculer une échéance sur un délai négatif, mais le bloc de
+        # scoring ne testait que la présence du délai : `None.strftime(...)` levait une
+        # AttributeError et PLUS AUCUN produit n'était proposé. `register_product` refuse déjà un
+        # délai négatif ; un `.storage` retouché ou un catalogue importé, non.
+        produit = {
+            "id": "p1",
+            "nom": "Engrais",
+            "type": "Fertilisation",
+            "reapplication_after_days": -3,
+        }
+        historique = [
+            {"date": "2026-07-20", "produit_id": "p1", "produit": "Engrais", "type": "Fertilisation"}
+        ]
+
+        resultat = intervention._evaluate_product_candidate(
+            product=produit,
+            history=historique,
+            today=date(2026, 7, 29),
+            phase_active="Normal",
+            selected_product_id=None,
+        )
+
+        self.assertIsInstance(resultat.get("score"), (int, float))
+        self.assertIn("Délai de réapplication invalide — ignoré", resultat.get("reasons") or [])
+
+    def test_delai_positif_annonce_toujours_lecheance(self) -> None:
+        # Non-régression : le cas normal doit continuer à citer la date de réapplication.
+        produit = {
+            "id": "p1",
+            "nom": "Engrais",
+            "type": "Fertilisation",
+            "reapplication_after_days": 30,
+        }
+        historique = [
+            {"date": "2026-07-20", "produit_id": "p1", "produit": "Engrais", "type": "Fertilisation"}
+        ]
+
+        resultat = intervention._evaluate_product_candidate(
+            product=produit,
+            history=historique,
+            today=date(2026, 7, 29),
+            phase_active="Normal",
+            selected_product_id=None,
+        )
+
+        self.assertTrue(
+            any("19/08/2026" in str(reason) for reason in (resultat.get("reasons") or [])),
+            resultat.get("reasons"),
+        )

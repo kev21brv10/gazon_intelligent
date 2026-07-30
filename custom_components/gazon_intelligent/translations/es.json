@@ -60,7 +60,9 @@
           "capteur_retour_arrosage": "Retorno de riego (opcional, automático o estimado desde el historial de zonas)",
           "capteur_humidite_sol": "Humedad del suelo (%) (recomendado si está disponible)",
           "capteur_vent": "Viento local (opcional, se usa primero si existe)",
-          "capteur_rosee": "Rocío / humedad foliar (opcional, cálculo automático si no se indica)"
+          "capteur_rosee": "Rocío / humedad foliar (opcional, cálculo automático si no se indica)",
+          "capteur_rayonnement": "Radiación global medida (opcional, W/m² — mejora mucho el cálculo de ET0)",
+          "capteur_pression": "Presión atmosférica medida (opcional, hPa — afina el cálculo de ET0)"
         }
       }
     },
@@ -97,7 +99,9 @@
           "capteur_retour_arrosage": "Retorno de riego (opcional, automático o estimado desde el historial de zonas)",
           "capteur_humidite_sol": "Humedad del suelo (%) (recomendado si está disponible)",
           "capteur_vent": "Viento local (opcional, se usa primero si existe)",
-          "capteur_rosee": "Rocío / humedad foliar (opcional, cálculo automático si no se indica)"
+          "capteur_rosee": "Rocío / humedad foliar (opcional, cálculo automático si no se indica)",
+          "capteur_rayonnement": "Radiación global medida (opcional, W/m² — mejora mucho el cálculo de ET0)",
+          "capteur_pression": "Presión atmosférica medida (opcional, hPa — afina el cálculo de ET0)"
         }
       }
     },

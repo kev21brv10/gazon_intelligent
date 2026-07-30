@@ -159,6 +159,7 @@ class EntityRegistryTests(unittest.TestCase):
             sensor.GazonObjectifLegacySensor(coordinator),
             sensor.GazonObjectifDepletionSensor(coordinator),
             sensor.GazonEt0Sensor(coordinator),
+            sensor.GazonEtoHoraireSensor(coordinator),
             sensor.GazonEtcSensor(coordinator),
             sensor.GazonReserveActuelleSensor(coordinator),
             sensor.GazonDepletionRatioSensor(coordinator),
@@ -265,6 +266,7 @@ class EntityRegistryTests(unittest.TestCase):
             sensor.GazonObjectifLegacySensor(coordinator),
             sensor.GazonObjectifDepletionSensor(coordinator),
             sensor.GazonEt0Sensor(coordinator),
+            sensor.GazonEtoHoraireSensor(coordinator),
             sensor.GazonEtcSensor(coordinator),
             sensor.GazonReserveActuelleSensor(coordinator),
             sensor.GazonDepletionRatioSensor(coordinator),
@@ -273,6 +275,42 @@ class EntityRegistryTests(unittest.TestCase):
 
         for entity in entities:
             self.assertFalse(entity._attr_entity_registry_enabled_default)  # noqa: SLF001
+
+    def test_eto_horaire_sensor_lit_le_calcul_du_coordinator(self) -> None:
+        # Câblage bout-en-bout : le coordinator publie `eto_horaire_mm_h` (+ son diagnostic),
+        # le capteur doit les restituer tels quels. L'ENTITÉ est de catégorie diagnostic, mais la
+        # VALEUR pilote le bilan sol depuis la 0.19.0 (ledger → réserve → dose).
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={
+                "eto_horaire_mm_h": 0.6116,
+                "eto_horaire_diagnostic": {
+                    "value": 0.6116,
+                    "radiation_source": "capteur",
+                    "radiation_wm2": 756.0,
+                    "pressure_source": "capteur",
+                },
+            },
+        )
+        entity = sensor.GazonEtoHoraireSensor(coordinator)
+
+        # 0.6116 → 0.612 : l'exposition publique arrondit à 3 décimales (_round_precision_for_key).
+        # Effet d'AFFICHAGE seulement (≤ 0.024 mm/j cumulé) ; une future accumulation devra
+        # consommer la valeur brute du coordinator, jamais l'état arrondi du capteur.
+        self.assertEqual(entity.native_value, 0.612)
+        self.assertEqual(entity._attr_native_unit_of_measurement, "mm/h")  # noqa: SLF001
+        attrs = entity.extra_state_attributes
+        self.assertEqual(attrs["radiation_source"], "capteur")
+        self.assertEqual(attrs["radiation_wm2"], 756.0)
+        self.assertNotIn("value", attrs)  # déjà porté par l'état
+
+    def test_eto_horaire_sensor_sans_donnee_reste_none(self) -> None:
+        # Entrées manquantes (pas de position, pas d'humidité…) → état None, jamais d'exception
+        # ni de valeur inventée : un diagnostic muet vaut mieux qu'un chiffre faux.
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={})
+        entity = sensor.GazonEtoHoraireSensor(coordinator)
+
+        self.assertIsNone(entity.native_value)
 
     def test_button_labels_are_explicit(self) -> None:
         coordinator = _FakeCoordinator(entry=_FakeEntry(), data={})

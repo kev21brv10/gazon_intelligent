@@ -38,6 +38,7 @@ PUBLIC_ENTITY_KEYS: dict[str, tuple[str, str]] = {
     "objectif_legacy_mm": ("sensor", f"{DOMAIN}_objectif_legacy"),
     "objectif_depletion_mm": ("sensor", f"{DOMAIN}_objectif_depletion"),
     "et0": ("sensor", f"{DOMAIN}_et0"),
+    "eto_horaire": ("sensor", f"{DOMAIN}_eto_horaire"),
     "etc": ("sensor", f"{DOMAIN}_etc"),
     "reserve_actuelle": ("sensor", f"{DOMAIN}_reserve_actuelle"),
     "depletion_ratio": ("sensor", f"{DOMAIN}_depletion_ratio"),

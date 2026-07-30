@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, TypedDict
+from typing import Any
 
 from homeassistant.util import dt as dt_util
 
@@ -75,16 +75,6 @@ POSSIBLE_WATERING_STAGE_VALUES: tuple[str, ...] = (
     WATERING_STAGE_ENRACINEMENT,
 )
 
-DOSE_BAND_VALUES: tuple[str, ...] = (
-    "baseline",
-    "spring",
-    "summer",
-    "heatwave",
-    "autumn",
-    "sursemis",
-    "hivernage",
-)
-
 TYPE_ARROSAGE_DISPLAY_LABELS: dict[str, str] = {
     "aucune_action": "Aucune action",
     "bloque": "Arrosage bloqué",
@@ -106,7 +96,6 @@ _POSSIBLE_VALUES_BY_KEY: dict[str, tuple[str, ...]] = {
     "watering_strategy": POSSIBLE_WATERING_STRATEGY_VALUES,
     "objective_scope": POSSIBLE_OBJECTIVE_SCOPE_VALUES,
     "watering_stage": POSSIBLE_WATERING_STAGE_VALUES,
-    "dose_band": DOSE_BAND_VALUES,
 }
 
 _DECISION_RESULT_DEFAULTS: dict[str, str] = {
@@ -252,56 +241,6 @@ class DecisionContext:
             mower_context=mower_context or {},
             runtime_context=runtime_context or {},
         )
-
-
-class DoseInputs(TypedDict, total=False):
-    temperature: float | None
-    forecast_temperature_today: float | None
-    et0_mm: float | None
-    etc_mm: float | None
-    phase_dominante: str | None
-    sous_phase: str | None
-    vent: float | None
-    humidite_sol: float | None
-    type_sol: str | None
-    month: int | None
-    season_label: str | None
-    weather_condition: str | None
-    weather_precipitation_probability: float | None
-    weather_precipitation_24h: float | None
-    reserve_stock_mm: float | None
-    reserve_stock_max_mm: float | None
-    reserve_utile_mm: float | None
-    reserve_surplus_mm: float | None
-    depletion_ratio: float | None
-    soil_balance_reserve_mm: float | None
-    soil_balance_delta_mm: float | None
-    arrosage_recent_jour: float | None
-    arrosage_recent_3j: float | None
-    arrosage_recent_7j: float | None
-    heat_stress_level: str | None
-    heat_stress_phase: str | None
-    legacy_objective_mm: float | None
-    previous_band: str | None
-    previous_mm: float | None
-    previous_reason: str | None
-    dynamic_enabled: bool
-
-
-class DosePolicyPayload(TypedDict, total=False):
-    enabled: bool
-    source: str
-    dose_band: str
-    dose_reason: str
-    dose_mm_base: float
-    dose_mm_effective: float
-    dose_mm_target: float
-    dose_mm_min: float
-    dose_mm_max: float
-    dose_inputs: DoseInputs
-    candidate_band: str
-    candidate_mm: float
-    candidate_reason: str
 
 
 @dataclass

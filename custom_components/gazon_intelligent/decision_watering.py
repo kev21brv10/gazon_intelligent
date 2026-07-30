@@ -29,7 +29,12 @@ from .guidance import (
 )
 from .memory import compute_application_state
 from .scores import classify_stress_level
-from .water import compute_advanced_context, compute_etp, compute_water_balance
+from .water import (
+    compute_advanced_context,
+    compute_etp,
+    compute_water_balance,
+    estimate_days_until_watering,
+)
 from .watering_policy import get_watering_policy
 
 _LOGGER = logging.getLogger(__name__)
@@ -141,7 +146,37 @@ def build_water_bundle(
     reserve_utile_mm = float(water_balance.get("reserve_utile_mm") or 0.0)
     reserve_actuelle_mm = float(water_balance.get("reserve_actuelle_mm") or 0.0)
     mm_cible_depletion = round(max(0.0, reserve_utile_mm - reserve_actuelle_mm), 1)
+    # Estimation indicative du prochain jour d'arrosage (AFFICHAGE seul, n'entre dans aucune
+    # décision) : nb de jours avant que la réserve atteigne le seuil MAD, au rythme ~ETc/jour.
+    jours_avant_arrosage_estime = estimate_days_until_watering(
+        reserve_actuelle_mm,
+        water_balance.get("reserve_minimale_mm"),
+        etc_mm,
+    )
+    # PLANCHER À DEMAIN QUAND ON A DÉJÀ ARROSÉ AUJOURD'HUI. `estimate_days_until_watering` ne
+    # raisonne que sur la réserve : elle répond « quand le sol aura-t-il soif », pas « quand
+    # aurai-je le droit ». Son `0` signifie « la projection d'aube franchit le seuil », or l'aube
+    # d'aujourd'hui est passée — le prochain déclenchement possible est celui de demain.
+    # Sans ce plancher, deux attributs publics se contredisaient le jour même d'un arrosage :
+    # `block_reason_label` annonçait « Cooldown 24 h » pendant que `date_prochain_arrosage_estime`
+    # affichait AUJOURD'HUI (constaté le 29/07/2026, réserve 10,9 mm après l'arrosage de 06:36).
+    if (
+        jours_avant_arrosage_estime is not None
+        and jours_avant_arrosage_estime <= 0
+        and float(water_balance.get("arrosage_recent_jour") or 0.0) > 0.0
+    ):
+        jours_avant_arrosage_estime = 1
+    date_prochain_arrosage_estime = (
+        (context.today + timedelta(days=jours_avant_arrosage_estime)).isoformat()
+        if jours_avant_arrosage_estime is not None
+        else None
+    )
     balance_snapshot = dict(water_balance)
+    # ETc (= ET0 × Kc) exposée au bilan : la PROJECTION de déclenchement à l'aube en a besoin.
+    # Le sol perd son eau au rythme de l'HERBE, et le ledger débite déjà l'ETc ; projeter avec
+    # l'ET0 brute mélangeait les unités et gonflait la soif prévue de ~25 % (cf. _profile_for_normal).
+    balance_snapshot["etc_mm"] = etc_mm
+    balance_snapshot["kc_gazon"] = kc_gazon
     if context.soil_balance:
         reserve_mm = context.soil_balance.get("reserve_mm")
         if reserve_mm is not None:
@@ -211,6 +246,8 @@ def build_water_bundle(
         "et0_source": context.et0_source,
         "kc_gazon": round(min(max(kc_gazon, 0.4), 1.1), 2),
         "etc_mm": etc_mm,
+        "jours_avant_arrosage_estime": jours_avant_arrosage_estime,
+        "date_prochain_arrosage_estime": date_prochain_arrosage_estime,
         "use_depletion_logic": (
             phase_bundle["phase_dominante"] == "Normal"
             and bool(balance_snapshot.get("reserve_from_soil_ledger"))
@@ -247,6 +284,10 @@ def build_water_bundle(
         "fenetre_optimale_profil": watering_profile.get("fenetre_optimale_profil"),
         "evening_cooling": watering_profile.get("evening_cooling"),
         "evening_cooling_likely": watering_profile.get("evening_cooling_likely"),
+        # ⚠️ `water_bundle` recopie les clés du profil UNE PAR UNE (pas de `**watering_profile`) :
+        # une clé ajoutée dans `_profile_for_normal` sans être listée ici n'atteint jamais les
+        # capteurs, en silence. C'est ce qui est arrivé à `survie_canicule_active` au premier essai.
+        "survie_canicule_active": watering_profile.get("survie_canicule_active"),
         "evening_cooling_debug": watering_profile.get("evening_cooling_debug"),
         "block_reason": watering_profile.get("block_reason"),
         "recent_watering_count_7j": watering_profile["recent_watering_count_7j"],
@@ -494,8 +535,12 @@ def _build_watering_bundle_base(
         "objectif_mm_brut": float(water_bundle.get("objectif_mm_brut") or 0.0),
         "deficit_brut_mm": float(water_bundle.get("deficit_brut_mm") or water_bundle.get("objectif_mm_brut") or 0.0),
         "deficit_mm_brut": float(water_bundle.get("deficit_mm_brut") or water_bundle.get("objectif_mm_brut") or 0.0),
+        # Même piège qu'en aval : zéro est une valeur LÉGITIME du déficit ajusté (pluie annoncée),
+        # pas une absence. Le `or` publiait le déficit brut à sa place dans l'attribut public.
         "deficit_mm_ajuste": float(
-            water_bundle.get("deficit_mm_ajuste") or water_bundle.get("objectif_mm_brut") or 0.0
+            water_bundle["deficit_mm_ajuste"]
+            if water_bundle.get("deficit_mm_ajuste") is not None
+            else (water_bundle.get("objectif_mm_brut") or 0.0)
         ),
         "mm_cible": float(water_bundle.get("mm_cible") or 0.0),
         "mm_final_recommande": float(water_bundle.get("mm_final_recommande") or water_bundle.get("objectif_mm") or 0.0),
@@ -1284,7 +1329,11 @@ def _resolve_sursemis_override(state: dict[str, Any]) -> dict[str, Any] | None:
             semis_followup_state=semis_followup_state or "waiting",
             semis_followup_due_display=semis_followup_due_display or None,
             semis_followup_due_at=semis_followup_due_at,
-            semis_cycles_completed_today=max(0, daily_cycles_target - semis_cycles_remaining_today),
+            # `semis_cycles_remaining_today` est forcément un entier NON NUL ici : on n'entre dans
+            # cette branche que si `(semis_cycles_remaining_today or 0) > 0` (cf. la condition du
+            # `if` plus haut). Le vérificateur de types ne sait pas affiner à travers ce motif, d'où
+            # la reformulation — même valeur, garde rendue lisible.
+            semis_cycles_completed_today=max(0, daily_cycles_target - (semis_cycles_remaining_today or 0)),
             semis_cycles_remaining_today=semis_cycles_remaining_today,
             fractionnement={
                 "enabled": False,
@@ -1917,14 +1966,14 @@ def build_watering_bundle(
     elif phase_dominante == "Sursemis":
         raison_parts.append("Sursemis: micro-apports légers et fréquents, jamais d'auto standard.")
     if heat_stress_level != "normal":
-        raison_parts.append(f"Stress thermique={heat_stress_level}; matin renforcé, soirée plus restrictive.")
+        raison_parts.append(f"Stress hydrique={heat_stress_level}; matin renforcé, soirée plus restrictive.")
     if heat_stress_phase_value not in (None, "normal"):
         # Durée de l'épisode de stress (distinct du niveau ci-dessus). Libellé honnête : la clé
-        # interne "canicule_courte/prolongee" décrit surtout la DURÉE, pas une vraie canicule.
+        # interne "stress_court/prolonge" décrit surtout la DURÉE, pas une vraie canicule.
         _duree_stress = {
-            "canicule_courte": "courte",
-            "canicule_prolongee": "prolongée",
-            "sortie_de_canicule": "en sortie",
+            "stress_court": "courte",
+            "stress_prolonge": "prolongée",
+            "sortie_de_stress": "en sortie",
         }.get(str(heat_stress_phase_value), str(heat_stress_phase_value))
         raison_parts.append(f"Durée du stress: {_duree_stress}")
     reserve_available_ratio = float(water_balance.get("reserve_available_ratio") or 0.0)

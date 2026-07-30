@@ -46,7 +46,7 @@ Gazon Intelligent ne se contente pas d'allumer des zones d'arrosage ou de remont
 **💧 Arrosage intelligent (mode Normal)**
 - Piloté par la **réserve d'eau du sol** : on laisse la réserve descendre jusqu'au **seuil d'épuisement (MAD 50 %)**, puis on **recharge en profondeur** jusqu'au plein. Résultat : des arrosages **plus espacés et plus profonds** → meilleur enracinement, au lieu de petits apports fréquents.
 - Borné par un **garde-fou hebdomadaire** (jamais trop d'eau sur la semaine).
-- **Calcul ET0 réaliste sans capteur dédié** (FAO-56), tenant compte de la pluie, du vent, de l'humidité et de la rosée.
+- **ET0 mesurée, pas seulement estimée** (FAO-56) : avec un capteur de rayonnement et de pression, l'intégration calcule l'ET0 **heure par heure** (Penman-Monteith, Eq. 53) et le bilan du sol **intègre cette évaporation réelle au fil de la journée** — au lieu d'étaler une prévision journalière. Sans ces capteurs, elle retombe sur une estimation journalière tenant compte de la pluie, du vent, de l'humidité et de la rosée.
 - **Gestion des fortes chaleurs** : dose de **secours** le matin si la réserve est presque vide **et qu'il fait réellement chaud (≥ 32 °C)**, et **rafraîchissement du soir** (petit arrosage de **3 mm, 30 min avant le coucher du soleil, dès 32 °C**) pour faire baisser la température du gazon même réserve pleine — sous garde-fous anti-maladies (air sec, pas de pluie).
 - **Comptage fiable** de l'eau réellement appliquée (anti double-comptage des cycles fractionnés) et **suivi en temps réel** pendant un cycle.
 
@@ -101,7 +101,9 @@ Tout se fait depuis l'interface (config flow), **par pelouse**.
 
 **1. Pelouse** — `instance_slug` (pour séparer plusieurs gazons), zones `zone_1`…`zone_5` avec leurs débits `debit_zone_1`…`debit_zone_5`, et `type_sol`.
 
-**2. Météo et capteurs** *(tous optionnels — l'intégration estime ce qui manque)* — `entite_meteo`, `capteur_pluie_24h`, `capteur_pluie_demain`, `capteur_temperature`, `capteur_etp`, `capteur_humidite`, `capteur_humidite_sol`, `capteur_vent`, `capteur_rosee`, `capteur_hauteur_gazon`, `capteur_retour_arrosage`.
+**2. Météo et capteurs** *(tous optionnels — l'intégration estime ce qui manque)* — `entite_meteo`, `capteur_pluie_24h`, `capteur_pluie_demain`, `capteur_temperature`, `capteur_etp`, `capteur_humidite`, `capteur_humidite_sol`, `capteur_vent`, `capteur_rosee`, `capteur_rayonnement`, `capteur_pression`, `capteur_hauteur_gazon`, `capteur_retour_arrosage`.
+
+> 💡 **Pour une ET0 précise, renseignez `capteur_rayonnement` et `capteur_pression`.** Ils alimentent le calcul FAO-56 **horaire** (Eq. 53) dont le bilan du sol se sert pour savoir combien d'eau s'est *réellement* évaporée. Sans eux, l'intégration retombe sur un rayonnement déduit de la couverture nuageuse et une pression standard — utilisable, mais nettement moins fidèle. Le `capteur_rayonnement` attend un **rayonnement global en W/m²** (par ex. un capteur REST Open-Meteo `shortwave_radiation`), la `capteur_pression` une **pression en hPa**. Le capteur de diagnostic `ETo horaire` indique dans ses attributs (`radiation_source`, `pressure_source`) si le calcul tourne sur des valeurs mesurées ou sur les replis. Renseigner aussi `capteur_vent` et `capteur_humidite` est recommandé : ils sont prioritaires sur la prévision météo, souvent moins proche du jardin.
 
 **3. Robot tondeuse** *(optionnel, par pelouse)* — `entite_tondeuse`, `capteur_tondeuse_erreur`, `capteur_tondeuse_batterie`, `capteur_tondeuse_pluie`, `capteur_tondeuse_en_charge`, `capteur_tondeuse_prochain_depart`, `capteur_tondeuse_hauteur_coupe`, `hauteur_min_tondeuse_cm`, `hauteur_max_tondeuse_cm`.
 

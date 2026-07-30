@@ -312,6 +312,8 @@ Attributs canoniques:
 - `confidence_reasons`
 - `watering_window_display`
 - `optimal_window_display`
+- `jours_avant_arrosage_estime` *(0.18.0 — estimation INDICATIVE : `0` = imminent, `1` = demain… ; n'entre dans aucune décision)*
+- `date_prochain_arrosage_estime` *(0.18.0 — date ISO correspondante)*
 
 ### `sensor.*_conseil_principal`
 

@@ -18,3 +18,8 @@ __pycache__/
 
 # Flows Node-RED personnels (config locale, hors dépôt)
 docs/node_red/
+
+# Artefacts de couverture de tests
+.coverage
+.coverage.*
+htmlcov/

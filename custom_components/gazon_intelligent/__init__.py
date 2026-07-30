@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import voluptuous as vol
 
@@ -95,6 +96,12 @@ _ALL_SERVICES = (
     SERVICE_REMOVE_PRODUCT,
     SERVICE_RECALIBRATE_RESERVE,
 )
+
+# Validateur booléen des schémas de service. `cv.boolean` accepte les formes que Home Assistant
+# reçoit réellement ("true", "on", 1…) là où `bool()` transformerait la chaîne "false" en True.
+# Hors Home Assistant (tests, environnement allégé) `cv` est None : on retombe sur `bool`, jamais
+# atteint en production puisque les schémas n'y sont évalués que par Home Assistant lui-même.
+_BOOLEAN_VALIDATOR = getattr(cv, "boolean", bool) if cv is not None else bool
 
 if cv is None:
     CONFIG_SCHEMA = vol.Schema({})
@@ -440,6 +447,9 @@ def _async_register_services(hass: HomeAssistant) -> None:
                     vol.Coerce(float),
                     vol.Range(min=0, max=100),
                 ),
+                # Défaut VRAI = comportement historique préservé. À mettre à faux pour corriger
+                # une comptabilité faussée en cours de journée sans figer le reste de celle-ci.
+                vol.Optional("figer_la_journee", default=True): _BOOLEAN_VALIDATOR,
             }
         ),
     )
@@ -627,7 +637,10 @@ async def _handle_recalibrate_reserve(call: ServiceCall) -> None:
     _require_explicit_target_for_multi_instance(call)
     coordinator = await _coordinator_from_call(call)
     try:
-        await coordinator.async_recalibrate_reserve(float(call.data["reserve_mm"]))
+        await coordinator.async_recalibrate_reserve(
+            float(call.data["reserve_mm"]),
+            freeze_day=bool(call.data.get("figer_la_journee", True)),
+        )
     except (HomeAssistantError, ValueError) as err:
         _LOGGER.debug("Echec recalibrate_reserve: %s", err)
         raise HomeAssistantError(f"Echec recalibrate_reserve: {err}") from err

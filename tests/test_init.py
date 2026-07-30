@@ -112,7 +112,9 @@ def _install_voluptuous_stub() -> None:
     def Required(value):
         return value
 
-    def Optional(value):
+    def Optional(value, default=None):
+        # Le vrai `vol.Optional` accepte `default=` ; sans ce paramètre le stub faisait échouer
+        # tout `async_setup` dès qu'un schéma de service déclarait une valeur par défaut.
         return value
 
     def In(value):

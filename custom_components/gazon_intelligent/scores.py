@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date
 from typing import Any
 
@@ -154,7 +155,11 @@ def _threshold_score(value: float, thresholds: tuple[tuple[float, float], ...]) 
 
 
 def _apply_grouped_metric_thresholds(
-    metrics: dict[str, float], thresholds_by_metric: dict[str, tuple[tuple[float, float], ...]]
+    metrics: Mapping[str, float],
+    # `Mapping` et non `dict` : ce dernier est INVARIANT en valeur, donc une table de seuils
+    # déclarée avec un nombre fixe de paliers était refusée alors qu'elle est parfaitement
+    # compatible. Cette fonction ne fait que lire — `Mapping` dit exactement ça.
+    thresholds_by_metric: Mapping[str, tuple[tuple[float, float], ...]],
 ) -> float:
     score = 0.0
     for metric_name, thresholds in thresholds_by_metric.items():

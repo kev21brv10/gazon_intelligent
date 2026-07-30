@@ -60,7 +60,9 @@
           "capteur_retour_arrosage": "Retour arrosage (optionnel, calcul automatique ou estimation via l'historique des zones)",
           "capteur_humidite_sol": "Humidité sol (%) (recommandé si disponible)",
           "capteur_vent": "Vent local (optionnel, prioritaire si fourni)",
-          "capteur_rosee": "Rosée / humidité foliaire (optionnel, calcul automatique si non renseigné)"
+          "capteur_rosee": "Rosée / humidité foliaire (optionnel, calcul automatique si non renseigné)",
+          "capteur_rayonnement": "Rayonnement global mesuré (optionnel, W/m² — améliore nettement le calcul de l'ET0)",
+          "capteur_pression": "Pression atmosphérique mesurée (optionnel, hPa — affine le calcul de l'ET0)"
         }
       }
     },
@@ -97,7 +99,9 @@
           "capteur_retour_arrosage": "Retour arrosage (optionnel, calcul automatique ou estimation via l'historique des zones)",
           "capteur_humidite_sol": "Humidité sol (%) (recommandé si disponible)",
           "capteur_vent": "Vent local (optionnel, prioritaire si fourni)",
-          "capteur_rosee": "Rosée / humidité foliaire (optionnel, calcul automatique si non renseigné)"
+          "capteur_rosee": "Rosée / humidité foliaire (optionnel, calcul automatique si non renseigné)",
+          "capteur_rayonnement": "Rayonnement global mesuré (optionnel, W/m² — améliore nettement le calcul de l'ET0)",
+          "capteur_pression": "Pression atmosphérique mesurée (optionnel, hPa — affine le calcul de l'ET0)"
         }
       }
     },
