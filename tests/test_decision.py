@@ -38,6 +38,11 @@ def _install_homeassistant_dt_stub() -> None:
         sys.modules["homeassistant.util"] = util
     dt_module = types.ModuleType("homeassistant.util.dt")
     dt_module.now = lambda: datetime(2026, 4, 4, 14, 15, tzinfo=ZoneInfo("Europe/Paris"))  # type: ignore[attr-defined]
+    # `as_local` MANQUAIT au stub : le code de production qui convertit un instant en heure murale
+    # retombait donc silencieusement sur son repli, et les tests ne pouvaient pas voir la
+    # différence entre « converti » et « pas converti ». C'est ce qui avait laissé passer la
+    # projection de tonte calée sur des heures UTC.
+    dt_module.as_local = lambda d: d.astimezone(ZoneInfo("Europe/Paris"))  # type: ignore[attr-defined]
     sys.modules["homeassistant.util.dt"] = dt_module
 
 
@@ -73,6 +78,88 @@ def make_snapshot(**overrides):
     }
     params.update(overrides)
     return decision.build_decision_snapshot(**params)
+
+
+class TestEtoHourly(unittest.TestCase):
+    """ET0 horaire FAO-56 Eq. 53 — port de la chaîne template `eto_fao56.yaml`.
+
+    Valeurs verrouillées contre les capteurs réels du 28/07/2026 (station Netatmo
+    + rayonnement Open-Meteo) : Rs, ETo et Ra doivent matcher la chaîne HA.
+    """
+
+    LAT = 46.5757513
+    LON = 0.3559245
+    J = 209  # 28 juillet
+
+    def test_ra_hourly_est_astronomique(self) -> None:
+        # Ra ne dépend que de la position + date/heure (aucun capteur, jamais indispo).
+        ra = water._ra_hourly(self.LAT, self.LON, self.J, 14.74)
+        self.assertAlmostEqual(ra, 3.4951, places=3)
+        # Nuit : soleil sous l'horizon → Ra nul.
+        self.assertEqual(water._ra_hourly(self.LAT, self.LON, self.J, 1.0), 0.0)
+
+    def test_rs_horaire_utilise_la_radiation_mesuree(self) -> None:
+        ra = water._ra_hourly(self.LAT, self.LON, self.J, 14.74)
+        rs, ratio = water._rs_hourly(ra, 756.0, 0.0)
+        # 756 W/m² × 0.0036 = 2.7216 MJ/m²/h (identique au capteur `eto_rs_horaire`).
+        self.assertAlmostEqual(rs, 2.7216, places=4)
+        self.assertAlmostEqual(ratio, 1.0, places=3)
+
+    def test_rs_horaire_repli_modele_nuages_sans_radiation(self) -> None:
+        # Sans capteur radiation → Rso × facteur nuages (Kasten-Czeplak). Ciel clair
+        # (n=0) → r_nu=1 → Rs = 0.7524·Ra (plafonné 0.85·Ra, non atteint).
+        ra = water._ra_hourly(self.LAT, self.LON, self.J, 12.0)
+        rs, ratio = water._rs_hourly(ra, None, 0.0)
+        self.assertAlmostEqual(rs, 0.7524 * ra, places=3)
+        self.assertAlmostEqual(ratio, 1.0, places=3)
+
+    def test_eto_horaire_reproduit_le_capteur_reel(self) -> None:
+        # 28/07 ~16:44 (14:44 UTC) : ~34 °C, air très sec, 756 W/m², vent 5.8 km/h.
+        # Le capteur `sensor.eto_horaire` affichait 0.6108 mm/h → on doit retomber dessus.
+        eto = water.compute_eto_hourly(
+            temperature=34.0, humidity=20.0, pressure_hpa=1016.9, wind_kmh=5.8,
+            radiation_wm2=756.0, cloud_pct=0.0,
+            latitude=self.LAT, longitude=self.LON, day_of_year=self.J, hour_utc=14.74,
+        )
+        self.assertAlmostEqual(eto, 0.6116, places=3)
+        # Cas médian déterministe (midi, ciel clair, 30 °C).
+        eto_midi = water.compute_eto_hourly(
+            temperature=30.0, humidity=35.0, pressure_hpa=1015.0, wind_kmh=6.0,
+            radiation_wm2=750.0, cloud_pct=0.0,
+            latitude=self.LAT, longitude=self.LON, day_of_year=self.J, hour_utc=12.0,
+        )
+        self.assertAlmostEqual(eto_midi, 0.581, places=3)
+
+    def test_eto_horaire_normalise_l_unite_de_vent(self) -> None:
+        # L'ET0 JOURNALIÈRE lisait déjà `weather_wind_speed_unit` (m/s, mph…) ; l'horaire, elle,
+        # divisait par 3,6 sans condition. Une entité météo en m/s voyait donc son vent divisé
+        # par 3,6 en trop → ET0 horaire sous-estimée d'environ 12 %, et comme ce taux pilote le
+        # ledger depuis la 0.19.0, un sol qui paraît sécher trop lentement.
+        kwargs = dict(
+            temperature=30.0, humidity=35.0, pressure_hpa=1015.0,
+            radiation_wm2=750.0, cloud_pct=0.0,
+            latitude=self.LAT, longitude=self.LON, day_of_year=self.J, hour_utc=12.0,
+        )
+        # 5 m/s = 18 km/h : les deux expressions du MÊME vent doivent donner la même ET0.
+        en_ms = water.compute_eto_hourly(wind_kmh=5.0, wind_unit="m/s", **kwargs)
+        en_kmh = water.compute_eto_hourly(wind_kmh=18.0, wind_unit="km/h", **kwargs)
+        self.assertAlmostEqual(en_ms, en_kmh, places=4)
+        # Et un vent en m/s pris pour des km/h sous-estime bien l'ET0 (le défaut corrigé).
+        mal_interprete = water.compute_eto_hourly(wind_kmh=5.0, wind_unit="km/h", **kwargs)
+        self.assertLess(mal_interprete, en_ms)
+        # Unité absente ou inconnue → repli km/h (défaut Home Assistant), comportement historique.
+        self.assertAlmostEqual(
+            water.compute_eto_hourly(wind_kmh=5.0, wind_unit=None, **kwargs), mal_interprete, places=4
+        )
+
+    def test_eto_horaire_nulle_la_nuit(self) -> None:
+        # Radiation nulle la nuit → Rn négatif, ETo bornée à 0 (pas d'évaporation).
+        eto = water.compute_eto_hourly(
+            temperature=18.0, humidity=80.0, pressure_hpa=1015.0, wind_kmh=4.0,
+            radiation_wm2=0.0, cloud_pct=50.0,
+            latitude=self.LAT, longitude=self.LON, day_of_year=self.J, hour_utc=1.0,
+        )
+        self.assertEqual(eto, 0.0)
 
 
 class TestPhaseLogic(unittest.TestCase):
@@ -364,7 +451,8 @@ class TestHydricCoreAndMemory(unittest.TestCase):
         # Régression : la fenêtre « jour » retenait aussi la VEILLE (filtre `delta <= days` avec
         # days=1). Le bilan journalier créditait donc 2 jours d'arrosage contre 1 seul jour d'ET0
         # → bilan surestimé d'un arrosage entier (vu en réel : 24 mm affichés pour 12 mm appliqués).
-        # Le ledger sol utilise déjà days=0 : on s'aligne. Les fenêtres 3j/7j restent inchangées.
+        # Le ledger sol utilise déjà days=0 : on s'aligne. Les fenêtres 3j/7j suivent désormais la
+        # MÊME règle (K jours = days=K-1) — cf. test_fenetres_3j_7j_sont_de_vraies_fenetres.
         history = [
             {"type": "arrosage", "date": "2026-03-17", "total_mm": 12.0},
             {"type": "arrosage", "date": "2026-03-16", "total_mm": 12.0},
@@ -382,6 +470,33 @@ class TestHydricCoreAndMemory(unittest.TestCase):
         self.assertEqual(balance["arrosage_recent_jour"], 12.0)  # et non 24.0 (la veille exclue)
         self.assertEqual(balance["arrosage_recent_3j"], 24.0)  # la veille reste bien dans 3j
         self.assertEqual(balance["arrosage_recent_7j"], 24.0)
+
+    def test_fenetres_3j_7j_sont_de_vraies_fenetres(self) -> None:
+        # Correction du décalage d'un jour : `days=N` retient `delta <= N` = N+1 jours calendaires.
+        # Les fenêtres 3j/7j passaient days=3/7 (soit 4/8 jours) alors que la fenêtre journalière
+        # avait déjà été ramenée à days=0. Elles utilisent désormais days=2/6 → 3 et 7 jours PILE.
+        # Effet réel constaté (27/07/2026) : le garde-fou hebdo gardait un arrosage un jour de trop,
+        # le budget mettait un jour de plus à retomber sous le plafond.
+        history = [
+            {"type": "arrosage", "date": "2026-03-15", "total_mm": 5.0},   # delta 2 → dans 3j ET 7j
+            {"type": "arrosage", "date": "2026-03-14", "total_mm": 7.0},   # delta 3 → HORS 3j, dans 7j
+            {"type": "arrosage", "date": "2026-03-11", "total_mm": 9.0},   # delta 6 → dans 7j (bord)
+            {"type": "arrosage", "date": "2026-03-10", "total_mm": 11.0},  # delta 7 → HORS 7j
+        ]
+
+        balance = decision.compute_water_balance(
+            history=history,
+            today=date(2026, 3, 17),
+            etp=5.0,
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            type_sol="limoneux",
+        )
+
+        # 3j = days=2 : seul delta 2 compte (delta 3 exclu).
+        self.assertEqual(balance["arrosage_recent_3j"], 5.0)
+        # 7j = days=6 : delta 2+3+6 comptent, delta 7 exclu (avant : aurait inclus les 11 mm → 32).
+        self.assertEqual(balance["arrosage_recent_7j"], 21.0)
 
     def test_arrosage_applique_7j_inclut_les_arrosages_techniques(self) -> None:
         # `arrosage_recent_7j` sert au GARDE-FOU : il exclut les arrosages techniques
@@ -407,6 +522,55 @@ class TestHydricCoreAndMemory(unittest.TestCase):
 
         self.assertEqual(balance["arrosage_recent_7j"], 12.0)     # budget : technique exclu
         self.assertEqual(balance["arrosage_applique_7j"], 18.0)   # réel : 12 + 3 + 3
+
+    def test_arrosage_recent_7j_ne_seffondre_pas_sur_larrosage_du_jour(self) -> None:
+        # Régression (28/07/2026) : les jours d'arrosage, `retour_arrosage` (l'arrosage du JOUR)
+        # REMPLAÇAIT la somme 7 j au lieu de la plancher → le budget hebdo se refermait sur le seul
+        # arrosage du jour (12 mm) alors que 36 mm d'AUTO avaient été appliqués sur 7 j. Le
+        # garde-fou en devenait trop permissif et l'affichage « budget » faux (27 % au lieu de 81 %).
+        history = [
+            {"type": "arrosage", "date": "2026-03-17", "total_mm": 12.0, "watering_cause": "hydrique"},
+            {"type": "arrosage", "date": "2026-03-14", "total_mm": 3.0,
+             "source": "manual_irrigation", "watering_cause": "hydrique"},  # manuel : hors budget
+            {"type": "arrosage", "date": "2026-03-12", "total_mm": 12.0, "watering_cause": "hydrique"},
+            {"type": "arrosage", "date": "2026-03-11", "total_mm": 3.0,
+             "watering_cause": "rafraichissement_soir"},  # technique : hors budget
+            {"type": "arrosage", "date": "2026-03-11", "total_mm": 12.0, "watering_cause": "hydrique"},
+        ]
+
+        balance = decision.compute_water_balance(
+            history=history,
+            today=date(2026, 3, 17),
+            etp=6.9,
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            type_sol="limoneux",
+            recent_watering_mm_override=12.0,  # arrosage du jour (retour_arrosage)
+            advanced_context={"retour_arrosage": 12.0},
+        )
+
+        # 3 arrosages AUTO hydriques de 12 mm sur 7 j = 36 (manuel + technique exclus du budget),
+        # et NON 12 : l'arrosage du jour ne doit pas écraser la somme des jours précédents.
+        self.assertEqual(balance["arrosage_recent_7j"], 36.0)
+        # Total réellement reçu (technique ET manuel inclus, externe exclu) = 12+3+12+3+12 = 42.
+        self.assertEqual(balance["arrosage_applique_7j"], 42.0)
+
+    def test_retour_arrosage_planche_sans_ecraser_quand_absent_de_lhistorique(self) -> None:
+        # L'arrosage du jour peut ne pas encore être dans l'historique : `retour_arrosage` doit
+        # alors servir de PLANCHER (il est compté), sans rien inventer au-delà.
+        balance = decision.compute_water_balance(
+            history=[],
+            today=date(2026, 3, 17),
+            etp=6.0,
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            type_sol="limoneux",
+            recent_watering_mm_override=12.0,
+            advanced_context={"retour_arrosage": 12.0},
+        )
+
+        self.assertEqual(balance["arrosage_recent_jour"], 12.0)
+        self.assertEqual(balance["arrosage_recent_7j"], 12.0)
 
     def test_compute_water_balance_returns_detailed_metrics(self) -> None:
         history = [
@@ -1146,9 +1310,9 @@ class TestDecisionSnapshotSursemisAndHeatStress(unittest.TestCase):
             pluie_3j=8.0,
         )
 
-        self.assertEqual(short["heat_stress_phase"], "canicule_courte")
-        self.assertEqual(prolonged["heat_stress_phase"], "canicule_prolongee")
-        self.assertEqual(recovery["heat_stress_phase"], "sortie_de_canicule")
+        self.assertEqual(short["heat_stress_phase"], "stress_court")
+        self.assertEqual(prolonged["heat_stress_phase"], "stress_prolonge")
+        self.assertEqual(recovery["heat_stress_phase"], "sortie_de_stress")
         self.assertGreater(short["objectif_mm"], 0.0)
         self.assertGreater(prolonged["objectif_mm"], short["objectif_mm"])
         self.assertEqual(recovery["objectif_mm"], 0.0)
@@ -1966,7 +2130,7 @@ class TestObjectiveAndGuidance(unittest.TestCase):
             humidite=30.0,
             water_balance={"bilan_hydrique_mm": -10.0, "deficit_3j": 9.0},
             objectif_mm=4.0,
-            heat_stress_level="extreme",
+            heat_stress_level="severe",
             minutes_to_sunset=120,
         )
         self.assertTrue(allowed)
@@ -1980,7 +2144,7 @@ class TestObjectiveAndGuidance(unittest.TestCase):
             humidite=35.0,
             water_balance={"bilan_hydrique_mm": 9.9, "deficit_3j": 0.0},
             objectif_mm=0.0,
-            heat_stress_level="extreme",
+            heat_stress_level="severe",
             minutes_to_sunset=180,
         )
         self.assertTrue(allowed)
@@ -2006,7 +2170,7 @@ class TestObjectiveAndGuidance(unittest.TestCase):
             humidite=30.0,
             water_balance={"bilan_hydrique_mm": -10.0, "deficit_3j": 9.0},
             objectif_mm=4.0,
-            heat_stress_level="extreme",
+            heat_stress_level="severe",
             minutes_to_sunset=30,
         )
         self.assertTrue(allowed)
@@ -2030,7 +2194,7 @@ class TestObjectiveAndGuidance(unittest.TestCase):
             humidite=30.0,
             water_balance={"bilan_hydrique_mm": -10.0, "deficit_3j": 9.0},
             objectif_mm=4.0,
-            heat_stress_level="extreme",
+            heat_stress_level="severe",
             minutes_to_sunset=None,
         )
         self.assertFalse(allowed)
@@ -2042,7 +2206,7 @@ class TestObjectiveAndGuidance(unittest.TestCase):
             humidite=80.0,
             water_balance={"bilan_hydrique_mm": -10.0, "deficit_3j": 9.0},
             objectif_mm=4.0,
-            heat_stress_level="extreme",
+            heat_stress_level="severe",
             minutes_to_sunset=120,
         )
         self.assertFalse(allowed)
@@ -2194,5 +2358,337 @@ class TestAuditMinorFixes(unittest.TestCase):
         self.assertTrue(snapshot.get("raison_blocage_tonte"))
 
 
+class TestNextWateringEstimate(unittest.TestCase):
+    """Estimation indicative du prochain jour d'arrosage (déplétion réserve → MAD)."""
+
+    # ⚠️ L'estimation tient compte du DÉCLENCHEMENT À L'AUBE : l'arrosage part le matin du jour
+    # où la réserve VA franchir le seuil MAD dans la journée (projection `déplétion + ETc
+    # restant`), pas le lendemain. La marge utile est donc `réserve − MAD − une journée d'ETc`.
+    # Sans ce retrait, l'estimation annonçait « demain » le matin même où l'arrosage partait.
+
+    def test_pure_reserve_franchira_le_seuil_aujourdhui_est_imminent(self) -> None:
+        # réserve 7,2 / MAD 6 / ETc 3,2 : la journée consomme 3,2 → on finit à 4,0, sous le
+        # seuil 6. La projection d'aube franchit donc le seuil DÈS CE MATIN → 0 (imminent).
+        self.assertEqual(water.estimate_days_until_watering(7.2, 6.0, 3.2), 0)
+
+    def test_pure_full_reserve(self) -> None:
+        # réserve pleine 12 / MAD 6 / ETc 3,2 → ceil((6 − 3,2) / 3,2) = 1
+        self.assertEqual(water.estimate_days_until_watering(12.0, 6.0, 3.2), 1)
+
+    def test_pure_exact_day_boundary(self) -> None:
+        # 9,2 − 6 − 3,2 = 0 pile → la projection franchit le seuil ce matin → 0.
+        self.assertEqual(water.estimate_days_until_watering(9.2, 6.0, 3.2), 0)
+        # Juste au-dessus (9,3) : il reste une marge → 1 jour.
+        self.assertEqual(water.estimate_days_until_watering(9.3, 6.0, 3.2), 1)
+
+    def test_pure_at_or_below_mad_is_imminent(self) -> None:
+        self.assertEqual(water.estimate_days_until_watering(6.0, 6.0, 3.2), 0)
+        self.assertEqual(water.estimate_days_until_watering(5.0, 6.0, 3.2), 0)
+
+    def test_pure_no_drying_returns_none(self) -> None:
+        self.assertIsNone(water.estimate_days_until_watering(10.0, 6.0, 0.0))
+        self.assertIsNone(water.estimate_days_until_watering(10.0, 6.0, 0.05))
+
+    def test_pure_missing_data_returns_none(self) -> None:
+        self.assertIsNone(water.estimate_days_until_watering(None, 6.0, 3.2))
+        self.assertIsNone(water.estimate_days_until_watering(10.0, None, 3.2))
+        self.assertIsNone(water.estimate_days_until_watering(10.0, 6.0, None))
+
+    def test_snapshot_expose_survie_canicule_active(self) -> None:
+        # PROPAGATION BOUT-EN-BOUT. `water_bundle` recopie les clés du profil UNE PAR UNE (pas de
+        # `**watering_profile`) : une clé ajoutée dans `_profile_for_normal` sans être listée dans
+        # `decision_watering` n'atteint JAMAIS les capteurs, sans la moindre erreur. C'est arrivé
+        # à cet attribut au premier essai — vérifié seulement parce qu'il manquait en live.
+        snapshot = make_snapshot(temperature=20, etp_capteur=1.0)
+        self.assertIn("survie_canicule_active", snapshot)
+        self.assertIsNotNone(snapshot["survie_canicule_active"])
+
+    def test_snapshot_exposes_estimate_and_consistent_date(self) -> None:
+        today = date(2026, 6, 15)
+        snapshot = make_snapshot(
+            today=today,
+            hour_of_day=8,
+            temperature=20,
+            etp_capteur=1.0,
+        )
+        jours = snapshot.get("jours_avant_arrosage_estime")
+        self.assertIsInstance(jours, int)
+        self.assertGreaterEqual(jours, 0)
+        # date exposée = aujourd'hui + jours estimés (cohérence bout-en-bout)
+        self.assertEqual(
+            snapshot.get("date_prochain_arrosage_estime"),
+            (today + timedelta(days=jours)).isoformat(),
+        )
+
+
+class TestGuardrailDemandBased(unittest.TestCase):
+    """Plafond hebdo piloté par la DEMANDE ETc en continu (fin des paliers « canicule »)."""
+
+    def _cap(self, et0):
+        _, maximum, reason = guidance_module._dynamic_weekly_guardrail(
+            today=date(2026, 7, 15), phase_dominante="Normal", et0_mm=et0, soil_profile="limoneux",
+        )
+        return maximum, reason
+
+    def test_cap_suit_et0_en_continu(self):
+        # ET0 faible → plancher saisonnier ; ET0 moyen → au-dessus ; ET0 fort → borné au ceiling.
+        max_low, _ = self._cap(2.0)
+        max_mid, _ = self._cap(5.0)
+        max_high, _ = self._cap(9.0)
+        self.assertLess(max_low, max_mid)          # croît avec la demande
+        self.assertLess(max_mid, max_high)
+        # 7 × 5 × 0,8 × 1,15 = 32,2 (> base été 26)
+        self.assertAlmostEqual(max_mid, 32.2, delta=0.2)
+        # ET0 fort → demande ~58 → borné au plafond de sûreté.
+        self.assertEqual(max_high, guidance_module._GUARDRAIL_CEILING_MM)
+
+    def test_plancher_saisonnier_preserve(self):
+        # ET0 faible : le plafond ne descend jamais SOUS la base saisonnière (juillet ≈ 26).
+        max_low, reason = self._cap(1.0)
+        self.assertGreaterEqual(max_low, 25.0)
+        # La raison expose la demande, plus un palier thermique.
+        self.assertIn("demande_etc=", reason)
+        self.assertNotIn("phase=canicule", reason)
+
+
 if __name__ == "__main__":
     unittest.main()
+
+class TestNextWateringEstimateAfterTodaysWatering(unittest.TestCase):
+    """Le jour d'un arrosage, l'estimation ne doit pas annoncer « aujourd'hui ».
+
+    `estimate_days_until_watering` ne raisonne que sur la réserve : son `0` veut dire « la
+    projection d'aube franchit le seuil ». Mais l'aube d'aujourd'hui est passée — le prochain
+    déclenchement possible est celui de demain. Sans plancher, deux attributs publics se
+    contredisaient (constaté le 29/07/2026) : `block_reason_label` annonçait « Cooldown 24 h »
+    pendant que `date_prochain_arrosage_estime` affichait le jour même.
+    """
+
+    @staticmethod
+    def _estimate(historique):
+        snap = make_snapshot(
+            history=historique,
+            temperature=30.0,
+            etp_capteur=7.0,
+        )
+        return (
+            snap.get("jours_avant_arrosage_estime"),
+            snap.get("date_prochain_arrosage_estime"),
+        )
+
+    def test_sans_arrosage_aujourdhui_l_estimation_reste_inchangee(self) -> None:
+        jours, date_estimee = self._estimate([])
+        self.assertIsNotNone(jours)
+        # Non-régression : aucun plancher appliqué quand rien n'a été arrosé aujourd'hui.
+        attendue = (FIXED_TODAY + timedelta(days=int(jours))).isoformat()
+        self.assertEqual(date_estimee, attendue)
+
+    def test_apres_un_arrosage_du_jour_l_estimation_repousse_a_demain(self) -> None:
+        historique = [
+            {
+                "date": FIXED_TODAY.isoformat(),
+                # Le type doit être en MINUSCULES : `_iter_recent_watering_items` filtre sur
+                # `item.get("type") != "arrosage"`. Un « Arrosage » capitalisé est ignoré en
+                # silence — piège rencontré en écrivant ce test.
+                "type": "arrosage",
+                "mm": 6.0,
+                "source": "auto_irrigation",
+            }
+        ]
+        jours, date_estimee = self._estimate(historique)
+
+        self.assertIsNotNone(jours)
+        self.assertGreaterEqual(int(jours), 1, "0 jour = « aujourd'hui », or l'aube est passée")
+        self.assertNotEqual(
+            date_estimee,
+            FIXED_TODAY.isoformat(),
+            "l'estimation ne peut pas désigner un jour déjà arrosé",
+        )
+
+
+class TestPauseReserveeAuxGrossesDoses(unittest.TestCase):
+    """La pause de 25 min ne se justifie que sur une GROSSE dose (demande de Kévin, 29/07/2026).
+
+    Elle existe pour laisser le premier passage s'infiltrer avant le second — un enjeu de
+    ruissellement, qui ne se pose pas sur un petit volume. Or le fractionnement peut être imposé
+    pour d'autres raisons (session maximale, budget hebdo saturé) : la pause s'appliquait alors à
+    des doses modestes, rallongeant la séance pour rien et repoussant la fin hors du créneau frais.
+
+    Base agronomique du seuil : le régime manuel éprouvé appliquait 8,8 à 10,0 mm en UN SEUL
+    passage, 3×/semaine, gazon en pleine forme et sans ruissellement observé.
+    """
+
+    SCENARIOS = [
+        dict(temperature=30, humidite=45, type_sol="argileux", etp_capteur=4.5),
+        dict(temperature=28, humidite=50, type_sol="limoneux", etp_capteur=4.0),
+        dict(temperature=22, humidite=60, type_sol="limoneux", etp_capteur=2.0),
+        dict(temperature=18, humidite=70, type_sol="sableux", etp_capteur=1.5),
+        dict(temperature=33, humidite=35, type_sol="sableux", etp_capteur=6.0),
+        # DISCRIMINANT : produit 9,5 mm, soit entre l'ancien seuil (6) et le nouveau (10).
+        # Sous l'ancienne règle cette dose était coupée en deux avec 25 min d'attente ;
+        # c'est exactement le cas que Kévin arrosait en un seul passage depuis des années.
+        dict(temperature=18, humidite=50, type_sol="sableux", etp_capteur=1.5),
+    ]
+
+    def test_une_pause_implique_toujours_une_grosse_dose(self) -> None:
+        # INVARIANT, volontairement testé sur plusieurs profils plutôt que sur un cas choisi :
+        # dès qu'une pause est posée, la dose doit atteindre le seuil qui la justifie.
+        seuil = guidance_module.PAUSE_LONGUE_MIN_DOSE_MM
+        vus_avec_pause = 0
+        for params in self.SCENARIOS:
+            snap = make_snapshot(**params)
+            pause = snap.get("watering_pause_minutes") or 0
+            dose = float(snap.get("mm_final") or 0.0)
+            if pause > 0:
+                vus_avec_pause += 1
+                self.assertGreaterEqual(
+                    dose, seuil,
+                    f"pause de {pause} min sur une dose de {dose} mm ({params})",
+                )
+        self.assertGreater(vus_avec_pause, 0, "aucun scénario ne produit de pause : test creux")
+
+    def test_une_petite_dose_ne_declenche_jamais_de_pause(self) -> None:
+        for params in self.SCENARIOS:
+            snap = make_snapshot(**params)
+            dose = float(snap.get("mm_final") or 0.0)
+            if 0 < dose < guidance_module.PAUSE_LONGUE_MIN_DOSE_MM:
+                self.assertEqual(
+                    snap.get("watering_pause_minutes") or 0, 0,
+                    f"pause posée sur {dose} mm ({params})",
+                )
+
+    def test_le_seuil_de_fractionnement_suit_la_pratique_eprouvee(self) -> None:
+        # Garde-fou explicite : ces valeurs sont agronomiques, pas techniques. Les changer
+        # sans raison documentée doit faire échouer un test, pas passer inaperçu.
+        self.assertEqual(guidance_module.FRACTIONNEMENT_NORMAL_SEUIL_MM, 10.0)
+        self.assertEqual(guidance_module.PAUSE_LONGUE_MIN_DOSE_MM, 10.0)
+        self.assertEqual(guidance_module.PAUSE_ENTRE_PASSAGES_MIN, 25)
+
+    def test_une_dose_de_9_5_mm_part_en_un_seul_passage_sans_pause(self) -> None:
+        # LE cas concret de la demande de Kévin, valeurs codées en dur exprès : sous l'ancienne
+        # règle (seuil 6 mm, pause inconditionnelle), 9,5 mm était coupé en deux avec 25 minutes
+        # d'attente — alors que c'est précisément la dose qu'il appliquait d'un trait depuis des
+        # années sans ruissellement. Ce test échoue si quelqu'un rabaisse le seuil.
+        snap = make_snapshot(temperature=18, humidite=50, type_sol="sableux", etp_capteur=1.5)
+
+        self.assertAlmostEqual(float(snap["mm_final"]), 9.5, places=1)
+        self.assertEqual(snap.get("watering_passages"), 1)
+        self.assertEqual(snap.get("watering_pause_minutes") or 0, 0)
+
+
+class TestProjectionTonteHeureMurale(unittest.TestCase):
+    """La projection de tonte raisonne en heures de la vie courante, pas en UTC.
+
+    « Pas de tonte après 18 h, report à 6 h le lendemain » : ces bornes étaient testées et écrites
+    sur un instant UTC. En Europe/Paris l'été, le seuil se déclenchait donc à 20 h locales et le
+    « 6 h » écrit valait 8 h locales — toute projection tombant entre 18 h et 20 h annonçait le
+    mauvais jour sur la carte.
+    """
+
+    def test_un_instant_de_19h_locales_est_bien_vu_comme_le_soir(self) -> None:
+        # 17:06 UTC = 19:06 à Paris en été. Sous l'ancien code, l'heure testée valait 17 → pas de
+        # report ; en heure murale elle vaut 19 → report au lendemain matin.
+        instant = datetime(2026, 7, 29, 17, 6, tzinfo=timezone.utc)
+
+        mural = decision_mowing._as_wall_clock(instant)
+
+        self.assertEqual(mural.hour, 19, "l'instant n'a pas été ramené à l'heure murale")
+        self.assertGreaterEqual(mural.hour, 18, "le report du soir ne se déclencherait pas")
+        self.assertLess(instant.hour, 18, "sans conversion, le seuil était manqué")
+
+    def test_la_date_murale_peut_differer_de_la_date_utc(self) -> None:
+        # 23:30 UTC le 29 = 01:30 le 30 à Paris. La date renvoyée est comparée à `context.today`,
+        # qui est une date LOCALE : les deux doivent être dans le même référentiel.
+        instant = datetime(2026, 7, 29, 23, 30, tzinfo=timezone.utc)
+
+        mural = decision_mowing._as_wall_clock(instant)
+
+        self.assertEqual(mural.date().isoformat(), "2026-07-30")
+        self.assertEqual(instant.date().isoformat(), "2026-07-29")
+
+    def test_un_instant_naif_est_laisse_tel_quel(self) -> None:
+        # Repli : hors runtime Home Assistant (ou sur un instant sans fuseau), on ne convertit pas.
+        naif = datetime(2026, 7, 29, 17, 6)
+        self.assertIs(decision_mowing._as_wall_clock(naif), naif)
+
+
+class TestArrosageSoirSecoursAtteignable(unittest.TestCase):
+    """L'exception « déficit critique » du soir est VIVANTE — un audit l'avait crue morte.
+
+    Sa condition se lit « le gazon n'a rien reçu de toute la semaine », pas « rien reçu
+    aujourd'hui » : c'est un filet pour l'absence prolongée, l'arrosage coupé ou un blocage d'une
+    semaine. Elle dort tant que l'arrosage fonctionne, ce qui est le fonctionnement attendu.
+    """
+
+    @staticmethod
+    def _autorise(*, bilan=-5.0, recent=0.0, temp=26.0, hum=50.0):
+        return guidance_module._evening_window_allowed(
+            temperature=temp,
+            humidite=hum,
+            water_balance={"bilan_hydrique_mm": bilan, "arrosage_recent": recent},
+            objectif_mm=6.0,
+            heat_stress_level="vigilance",
+            minutes_to_sunset=120.0,
+        )
+
+    def test_une_semaine_sans_eau_en_deficit_declenche_le_secours(self) -> None:
+        self.assertTrue(self._autorise(recent=0.0))
+
+    def test_un_arrosage_dans_la_semaine_referme_le_secours(self) -> None:
+        self.assertFalse(self._autorise(recent=6.0))
+
+    def test_le_seuil_tolere_une_trace_negligeable(self) -> None:
+        # 0,2 mm sur sept jours = « rien », l'exception reste ouverte.
+        self.assertTrue(self._autorise(recent=0.2))
+
+    def test_un_bilan_sain_ne_declenche_pas_le_secours(self) -> None:
+        self.assertFalse(self._autorise(bilan=-1.0))
+
+    def test_il_faut_aussi_de_la_chaleur(self) -> None:
+        self.assertFalse(self._autorise(temp=22.0))
+
+
+class TestIncorporationCrediteLaReserve(unittest.TestCase):
+    """L'arrosage d'incorporation post-produit crédite la réserve ; le rafraîchissement du soir non.
+
+    Décision de Kévin (29/07/2026). L'incorporation a pour BUT de faire pénétrer le produit dans
+    le sol : cette eau atteint la zone racinaire. Ne pas la compter sous-estimait la réserve de la
+    dose d'incorporation et provoquait une recharge inutile le lendemain matin, en silence.
+    Les 3 mm du rafraîchissement du soir, eux, s'évaporent pour refroidir le gazon — c'est leur
+    fonction, et les compter ferait paraître le sol plus plein qu'il ne l'est.
+    """
+
+    JOUR = date(2026, 3, 17)
+    HISTORIQUE = [
+        {"type": "arrosage", "date": "2026-03-17", "mm": 6.0, "watering_cause": "hydrique",
+         "source": "auto_irrigation"},
+        {"type": "arrosage", "date": "2026-03-17", "mm": 8.0, "watering_cause": "post_application",
+         "source": "auto_irrigation"},
+        {"type": "arrosage", "date": "2026-03-17", "mm": 3.0,
+         "watering_cause": "rafraichissement_soir", "source": "auto_irrigation"},
+    ]
+
+    def _total(self, **kw):
+        return water.compute_recent_watering_mm(
+            self.HISTORIQUE, today=self.JOUR, days=0, include_external=False, **kw
+        )
+
+    def test_le_credit_reserve_inclut_l_incorporation(self) -> None:
+        self.assertEqual(self._total(include_incorporation=True), 14.0)  # 6 hydrique + 8 incorporation
+
+    def test_le_credit_reserve_exclut_le_rafraichissement(self) -> None:
+        # 3 mm de cooling absents des 14 : ils s'évaporent, ils ne rechargent pas.
+        self.assertNotIn(3.0, {self._total(include_incorporation=True) - 6.0 - 8.0})
+        self.assertEqual(self._total(include_incorporation=True), 14.0)
+
+    def test_le_garde_fou_hebdo_ne_compte_que_la_recharge_deliberee(self) -> None:
+        # Un produit ne doit pas grignoter le budget d'arrosage du gazon.
+        self.assertEqual(self._total(), 6.0)
+
+    def test_l_eau_reellement_recue_les_compte_tous(self) -> None:
+        self.assertEqual(
+            water.compute_recent_watering_mm(
+                self.HISTORIQUE, today=self.JOUR, days=0, include_technical=True
+            ),
+            17.0,
+        )

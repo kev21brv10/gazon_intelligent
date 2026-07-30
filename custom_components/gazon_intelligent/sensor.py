@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 import re
+from typing import Any
 
 from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.helpers.entity import EntityCategory
@@ -29,7 +30,7 @@ from .water import (
 )
 
 
-def _session_surface_mm(session: dict[str, object]) -> float | None:
+def _session_surface_mm(session: dict[str, Any]) -> float | None:
     """Surface réelle (mm) d'une session d'arrosage.
 
     Privilégie la valeur canonique de l'intégration (`session_total_mm`/`total_mm` = surface
@@ -71,6 +72,11 @@ _APPLICATION_PUBLIC_ATTR_KEYS = (
     "application_irrigation_mode",
     "application_post_watering_status",
 )
+# ⚠️ HOMONYME VOLONTAIREMENT DIFFÉRENT de `binary_sensor._APPLICATION_STATUS_ATTR_KEYS`, qui
+# porte en plus `auto_irrigation_enabled`. Ici cette clé est exposée par un AUTRE chemin
+# (cf. la liste d'attributs plus bas), l'ajouter ici la publierait deux fois. Ne pas
+# « harmoniser par symétrie » : deux constantes de même nom au contenu différent sont un
+# piège, et c'est justement pour ça que l'écart est noté des deux côtés.
 _APPLICATION_STATUS_ATTR_KEYS = (
     "application_block_active",
     "application_block_remaining_minutes",
@@ -88,12 +94,12 @@ _GENERIC_NOOP_ACTION_LABELS = {
 }
 
 
-def _coordinator_snapshot(coordinator) -> dict[str, object]:
+def _coordinator_snapshot(coordinator) -> dict[str, Any]:
     snapshot = getattr(coordinator, "data", None)
     return snapshot if isinstance(snapshot, dict) else {}
 
 
-def _coordinator_used_entities_attributes(coordinator) -> dict[str, object]:
+def _coordinator_used_entities_attributes(coordinator) -> dict[str, Any]:
     getter = getattr(coordinator, "get_used_entities_attributes", None)
     if not callable(getter):
         return {}
@@ -111,7 +117,7 @@ def _entry_coordinator(hass, entry):
     return domain_data.get(entry.entry_id)
 
 
-def _clean_public_attrs(attrs: dict[str, object] | None) -> dict[str, object] | None:
+def _clean_public_attrs(attrs: dict[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(attrs, dict):
         return None
     clean = {
@@ -122,8 +128,19 @@ def _clean_public_attrs(attrs: dict[str, object] | None) -> dict[str, object] | 
     return clean or None
 
 
+# États Home Assistant qui signifient « pas de donnée » : ils ne doivent jamais ressortir tels
+# quels d'un formateur d'affichage (l'utilisateur lirait « unavailable » à la place d'une date).
+# Filtrés en amont côté coordinateur ; conservé ici pour les valeurs venant d'un état restauré
+# ou d'un attribut, qui ne passent pas par ce chemin.
+_UNAVAILABLE_TEXTS: frozenset[str] = frozenset({"unavailable", "unknown"})
+
+
+def _is_unavailable_text(value: object) -> bool:
+    return isinstance(value, str) and value.strip().lower() in _UNAVAILABLE_TEXTS
+
+
 def _human_datetime_text(value: object) -> str | None:
-    if value in (None, "", [], {}):
+    if value in (None, "", [], {}) or _is_unavailable_text(value):
         return None
     if isinstance(value, datetime):
         dt = value
@@ -155,7 +172,7 @@ def _human_datetime_text(value: object) -> str | None:
 
 
 def _human_date_text(value: object) -> str | None:
-    if value in (None, "", [], {}):
+    if value in (None, "", [], {}) or _is_unavailable_text(value):
         return None
     if isinstance(value, date):
         return value.strftime("%d/%m/%Y")
@@ -170,7 +187,7 @@ def _human_date_text(value: object) -> str | None:
         return text
 
 
-def _assistant_action_fallback(payload: dict[str, object] | None) -> str | None:
+def _assistant_action_fallback(payload: dict[str, Any] | None) -> str | None:
     if not isinstance(payload, dict) or not payload:
         return None
     action = str(payload.get("action") or "none").strip().lower()
@@ -200,7 +217,7 @@ def _assistant_action_fallback(payload: dict[str, object] | None) -> str | None:
     return None
 
 
-def _public_mowing_facade(entity: GazonEntityBase) -> dict[str, object]:
+def _public_mowing_facade(entity: GazonEntityBase) -> dict[str, Any]:
     facade = entity._public_mowing_facade()
     if facade:
         return facade
@@ -298,7 +315,7 @@ def _aligned_public_watering_action_text(entity: GazonEntityBase, action_text: s
     return action_text
 
 
-def _assistant_public_summary(payload: dict[str, object] | None) -> str | None:
+def _assistant_public_summary(payload: dict[str, Any] | None) -> str | None:
     if not isinstance(payload, dict) or not payload:
         return None
     action = str(payload.get("action") or "none").strip().lower()
@@ -355,7 +372,7 @@ def _irrigation_blocked_due_to_conditions_summary(entity: GazonEntityBase) -> st
     return None
 
 
-def _assistant_payload_for_public(entity: GazonEntityBase) -> dict[str, object] | None:
+def _assistant_payload_for_public(entity: GazonEntityBase) -> dict[str, Any] | None:
     facade = _public_mowing_facade(entity)
     assistant_payload = facade.get("assistant")
     if not isinstance(assistant_payload, dict) or not assistant_payload:
@@ -460,7 +477,7 @@ def _public_conseil_principal(entity: GazonEntityBase) -> str | None:
     return raw_text or watering_text or intervention_text or None
 
 
-def _normalize_recommendation_constraints_payload(payload: dict[str, object]) -> dict[str, object]:
+def _normalize_recommendation_constraints_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict) or not payload:
         return payload
 
@@ -496,7 +513,7 @@ def _normalize_recommendation_constraints_payload(payload: dict[str, object]) ->
     if not isinstance(constraints, list):
         return normalized if changed else payload
 
-    normalized_constraints: list[dict[str, object] | object] = []
+    normalized_constraints: list[dict[str, Any] | object] = []
     for constraint in constraints:
         if not isinstance(constraint, dict):
             normalized_constraints.append(constraint)
@@ -577,23 +594,40 @@ def _watering_cause_value(entity: GazonEntityBase, raw_value: object | None = No
 
 
 def _hydric_balance_level(balance_mm: float | None, deficit_3j: float | None, deficit_7j: float | None) -> str | None:
-    # `balance_mm` est un bilan SIGNÉ (0 = à la cible/seuil MAD, négatif = déficit), normalisé par
-    # `_objective_display_balance` (réserve recentrée sur le seuil d'épuisement). Les 5 niveaux,
-    # « fort déficit » compris, sont donc atteignables. Ne PAS lui passer la réserve brute (≥ 0) :
-    # les branches négatives redeviendraient inertes.
+    """Niveau hydrique affiché, dérivé du SEUL bilan signé.
+
+    `balance_mm` est un bilan SIGNÉ (0 = au seuil MAD, négatif = déficit), normalisé par
+    `_objective_display_balance` (réserve recentrée sur le seuil d'épuisement). Il porte à lui
+    seul l'information : ne PAS lui passer la réserve brute (≥ 0), les branches négatives
+    redeviendraient inertes.
+
+    ⚠️ VETO PAR CUMUL RETIRÉ le 29/07/2026 (arbitrage de Kévin), NE PAS LE REMETTRE.
+    Les quatre seuils sont à l'échelle d'un déficit JOURNALIER, mais `deficit_3j` / `deficit_7j`
+    sont des CUMULS (12 à 42 mm en pleine saison) : le veto était donc toujours armé.
+    Mesuré sur une grille ET0 2-7 mm/j : **2 niveaux sur 5 seulement** étaient atteignables —
+    « excédentaire », « équilibré » ET « léger déficit » étaient hors d'atteinte, et un gazon
+    au bilan +5 mm s'affichait « déficit ». L'attribut ne portait plus aucune information.
+
+    Deux correctifs partiels ont été mesurés puis écartés :
+    - normaliser les cumuls en taux journalier SEUL → régresse le correctif 0.16.0
+      (cf. test_objectif_sensor_fort_deficit_atteignable_via_recentrage_mad, qui retombe
+      sur « déficit ») ;
+    - normaliser ET aligner la dernière branche sur `and` → 4 niveaux sur 5, mais le cas qui
+      motivait le correctif (gazon en forme) affichait encore « déficit ».
+
+    Les paramètres `deficit_3j` / `deficit_7j` sont conservés dans la signature : les appelants
+    les passent encore, et les garder documente explicitement qu'ils sont ignorés ici.
+    """
     if balance_mm is None and deficit_3j is None and deficit_7j is None:
         return None
     balance_mm = float(balance_mm or 0.0)
-    deficit_3j = float(deficit_3j or 0.0)
-    deficit_7j = float(deficit_7j or 0.0)
-    stress = max(deficit_3j, deficit_7j)
-    if balance_mm >= 2.0 and stress <= 1.0:
+    if balance_mm >= 2.0:
         return "excédentaire"
-    if balance_mm >= 0.5 and stress <= 2.0:
+    if balance_mm >= 0.5:
         return "équilibré"
-    if balance_mm >= -0.5 and stress <= 4.0:
+    if balance_mm >= -0.5:
         return "léger déficit"
-    if balance_mm >= -2.0 or stress <= 8.0:
+    if balance_mm >= -2.0:
         return "déficit"
     return "fort déficit"
 
@@ -631,7 +665,7 @@ def _phase_support_phase(entity: GazonEntityBase) -> str | None:
     return None
 
 
-def _is_phase_support_irrigation_context(entity: GazonEntityBase, attrs: dict[str, object] | None = None) -> bool:
+def _is_phase_support_irrigation_context(entity: GazonEntityBase, attrs: dict[str, Any] | None = None) -> bool:
     if _objective_mm_value(entity) <= 0.0 or not bool(entity._decision_value("arrosage_recommande", False)):
         return False
     if _phase_support_phase(entity) is None:
@@ -716,7 +750,7 @@ def _is_passive_irrigation_context(entity: GazonEntityBase) -> bool:
     )
 
 
-def _hydric_state_from_depletion_ratio(value: object | None) -> str | None:
+def _hydric_state_from_depletion_ratio(value: Any) -> str | None:
     try:
         ratio = float(value)
     except (TypeError, ValueError):
@@ -730,7 +764,7 @@ def _hydric_state_from_depletion_ratio(value: object | None) -> str | None:
     return "critique"
 
 
-def _hydric_state_from_reserve_ratio(current: object | None, useful: object | None) -> str | None:
+def _hydric_state_from_reserve_ratio(current: Any, useful: Any) -> str | None:
     try:
         current_value = float(current)
         useful_value = float(useful)
@@ -748,7 +782,7 @@ def _hydric_state_from_reserve_ratio(current: object | None, useful: object | No
     return "critique"
 
 
-def _hydric_state_for_objective_sensor(entity: GazonEntityBase, attrs: dict[str, object]) -> str | None:
+def _hydric_state_for_objective_sensor(entity: GazonEntityBase, attrs: dict[str, Any]) -> str | None:
     hydric_state = _hydric_state_from_depletion_ratio(attrs.get("depletion_ratio"))
     if hydric_state is not None:
         return hydric_state
@@ -764,7 +798,8 @@ def _hydric_state_for_objective_sensor(entity: GazonEntityBase, attrs: dict[str,
         return None
 
     try:
-        legacy_reserve = float(attrs.get("reserve_hydrique_sol_mm"))
+        # Valeur d'un instantané hétérogène : le `except` couvre l'absence comme le non-numérique.
+        legacy_reserve = float(attrs.get("reserve_hydrique_sol_mm"))  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
     return "plein" if legacy_reserve > 0.0 else None
@@ -776,7 +811,7 @@ def _harmonized_hydric_labels(
     hydric_state: str | None,
     hydric_balance_level: str | None,
     hydric_strategy: str | None,
-    attrs: dict[str, object] | None = None,
+    attrs: dict[str, Any] | None = None,
 ) -> tuple[str | None, str | None]:
     if _is_phase_support_irrigation_context(entity, attrs):
         return "équilibré", "maintenir le niveau hydrique"
@@ -789,7 +824,7 @@ def _harmonized_hydric_labels(
     return hydric_balance_level, hydric_strategy
 
 
-def _objective_display_balance(attrs: dict[str, object]) -> float | None:
+def _objective_display_balance(attrs: dict[str, Any]) -> float | None:
     # Bilan SIGNÉ pour classer le niveau hydrique (`_hydric_balance_level`, seuils signés : 0 = à la
     # cible, négatif = déficit). La réserve sol brute est TOUJOURS ≥ 0 ; on la recentre sur le seuil
     # d'épuisement MAD (`reserve_minimale_mm`, sous lequel l'arrosage se déclenche) → réserve au seuil
@@ -817,7 +852,7 @@ def _objective_display_balance(attrs: dict[str, object]) -> float | None:
         return None
 
 
-def _score_level_and_tone(score: object) -> tuple[str | None, str]:
+def _score_level_and_tone(score: Any) -> tuple[str | None, str]:
     try:
         value = float(score)
     except (TypeError, ValueError):
@@ -866,8 +901,8 @@ def _block_reason_display_label(value: object) -> str | None:
 _HEAT_STRESS_DISPLAY_LABELS: dict[str, str] = {
     "normal": "Normal",
     "vigilance": "Vigilance",
-    "canicule": "Stress hydrique élevé",
-    "extreme": "Stress hydrique sévère",
+    "eleve": "Stress hydrique élevé",
+    "severe": "Stress hydrique sévère",
 }
 
 
@@ -878,7 +913,7 @@ def _heat_stress_display_label(value: object) -> str | None:
     return _HEAT_STRESS_DISPLAY_LABELS.get(normalized)
 
 
-def _fallback_machine_unavailable_label_from_attrs(attrs: dict[str, object]) -> str | None:
+def _fallback_machine_unavailable_label_from_attrs(attrs: dict[str, Any]) -> str | None:
     operation_state = str(attrs.get("mower_operation_state") or attrs.get("tondeuse_statut") or "").strip().lower()
     operation_label = str(attrs.get("mower_operation_label") or attrs.get("tondeuse_statut_libelle") or "").strip()
     reason_code = str(attrs.get("mower_reason_code") or "").strip().lower()
@@ -910,7 +945,7 @@ def _fallback_machine_unavailable_label_from_attrs(attrs: dict[str, object]) -> 
     return None
 
 
-def _apply_public_mower_aliases(attrs: dict[str, object]) -> dict[str, object]:
+def _apply_public_mower_aliases(attrs: dict[str, Any]) -> dict[str, Any]:
     tondeuse_erreur = attrs.get("tondeuse_erreur")
     if tondeuse_erreur not in (None, "", [], {}):
         attrs.setdefault("tondeuse_erreur_code", tondeuse_erreur)
@@ -921,7 +956,9 @@ def _apply_public_mower_aliases(attrs: dict[str, object]) -> dict[str, object]:
     return attrs
 
 
-def _minute_range_display(start_minute: object, end_minute: object) -> str | None:
+def _minute_range_display(start_minute: Any, end_minute: Any) -> str | None:
+    # `Any` et non `object` : ces minutes sortent de snapshots hétérogènes et sont
+    # converties en interne. `object` obligeait chaque appelant à re-typer.
     try:
         start = int(start_minute)
         end = int(end_minute)
@@ -938,7 +975,7 @@ def _minute_range_display(start_minute: object, end_minute: object) -> str | Non
     return f"{_fmt(start)}–{_fmt(end)}"
 
 
-def _datetime_from_date_and_minute(date_value: object, minute_value: object) -> str | None:
+def _datetime_from_date_and_minute(date_value: Any, minute_value: Any) -> str | None:
     date_text = str(date_value or "").strip()
     try:
         minute = int(minute_value)
@@ -960,8 +997,8 @@ def _datetime_from_date_and_minute(date_value: object, minute_value: object) -> 
 
 def _window_reason_summary(
     entity: GazonEntityBase,
-    attrs: dict[str, object],
-    contextual_state: dict[str, object] | None,
+    attrs: dict[str, Any],
+    contextual_state: dict[str, Any] | None,
 ) -> str | None:
     summary = str((contextual_state or {}).get("summary") or "").strip()
     if summary == "Aucun arrosage nécessaire":
@@ -1002,7 +1039,7 @@ def _window_reason_summary(
     return summary or None
 
 
-def _compact_application_summary(summary: object) -> dict[str, object] | None:
+def _compact_application_summary(summary: object) -> dict[str, Any] | None:
     if not isinstance(summary, dict) or not summary:
         return None
     compact = {
@@ -1013,16 +1050,16 @@ def _compact_application_summary(summary: object) -> dict[str, object] | None:
     return compact or None
 
 
-def _skip_history_entries(history: object, n: int = 5) -> list[dict[str, object]]:
+def _skip_history_entries(history: object, n: int = 5) -> list[dict[str, Any]]:
     if not isinstance(history, list):
         return []
-    result: list[dict[str, object]] = []
+    result: list[dict[str, Any]] = []
     for item in reversed(history):
         if not isinstance(item, dict):
             continue
         if item.get("type") != "decision_skip":
             continue
-        entry: dict[str, object] = {"reason": item.get("reason"), "date": item.get("date")}
+        entry: dict[str, Any] = {"reason": item.get("reason"), "date": item.get("date")}
         for key in ("fenetre", "objectif_mm", "raison_decision", "recorded_at"):
             if item.get(key) not in (None, ""):
                 entry[key] = item[key]
@@ -1032,17 +1069,17 @@ def _skip_history_entries(history: object, n: int = 5) -> list[dict[str, object]
     return result
 
 
-def _watering_history_entries(history: object, n: int = 7) -> list[dict[str, object]]:
+def _watering_history_entries(history: object, n: int = 7) -> list[dict[str, Any]]:
     """Return the last n arrosage entries for the history card display."""
     if not isinstance(history, list):
         return []
-    result: list[dict[str, object]] = []
+    result: list[dict[str, Any]] = []
     for item in reversed(history):
         if not isinstance(item, dict):
             continue
         if item.get("type") != "arrosage":
             continue
-        entry: dict[str, object] = {
+        entry: dict[str, Any] = {
             "date": item.get("date"),
             "recorded_at": item.get("recorded_at"),
             "source": item.get("source"),
@@ -1064,10 +1101,10 @@ def _watering_history_entries(history: object, n: int = 7) -> list[dict[str, obj
     return result
 
 
-def _application_history_entries(history: object) -> list[dict[str, object]]:
+def _application_history_entries(history: object) -> list[dict[str, Any]]:
     if not isinstance(history, list):
         return []
-    entries: list[dict[str, object]] = []
+    entries: list[dict[str, Any]] = []
     for item in history:
         if not isinstance(item, dict):
             continue
@@ -1080,7 +1117,7 @@ def _application_history_entries(history: object) -> list[dict[str, object]]:
     return entries
 
 
-def _public_intervention_attributes(payload: dict[str, object]) -> dict[str, object]:
+def _public_intervention_attributes(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict) or not payload:
         return {}
     product = payload.get("product")
@@ -1355,7 +1392,7 @@ class GazonArrosageAutoBlocageSensor(GazonEntityBase, SensorEntity):
         _label, blocked, pourquoi, comment = info
         if reason == "garde_fou_hebdomadaire":
             heat_stress = str(self._decision_value("heat_stress_level") or "")
-            if heat_stress in {"canicule", "extreme"}:
+            if heat_stress in {"eleve", "severe"}:
                 comment = (
                     "Le budget hebdomadaire est atteint. En cas de stress hydrique sévère ET de "
                     "forte chaleur réelle (≥ 32 °C), un arrosage de secours se déclenchera quand "
@@ -1393,6 +1430,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
             GazonObjectifLegacySensor(coordinator),
             GazonObjectifDepletionSensor(coordinator),
             GazonEt0Sensor(coordinator),
+            GazonEtoHoraireSensor(coordinator),
             GazonEtcSensor(coordinator),
             GazonReserveActuelleSensor(coordinator),
             GazonDepletionRatioSensor(coordinator),
@@ -1512,6 +1550,7 @@ class GazonHauteurTonteSensor(GazonEntityBase, SensorEntity):
         attrs = self._attrs_from_result(
             "hauteur_tonte_min_cm",
             "hauteur_tonte_max_cm",
+            "hauteur_tonte_garde_fou_label",
             "tonte_statut",
             "phase_active",
             "mowing_frequency_target_per_week",
@@ -1646,17 +1685,6 @@ class GazonObjectifMmSensor(GazonEntityBase, SensorEntity):
             "depletion_mm",
             "depletion_allowed_mm",
             "mad_ratio",
-            "mad_ratio_base",
-            "mad_ratio_effective",
-            "mad_band",
-            "mad_reason",
-            "mad_policy_enabled",
-            "mad_policy_source",
-            "mad_policy_inputs",
-            "mad_policy_candidate_band",
-            "mad_policy_candidate_ratio",
-            "mad_hysteresis_state",
-            "mad_threshold_mm",
             "soil_moisture_override_state",
             "soil_moisture_confidence_adjustment",
             "et0_mm",
@@ -1842,6 +1870,48 @@ class GazonEt0Sensor(GazonEntityBase, SensorEntity):
         )
 
 
+class GazonEtoHoraireSensor(GazonEntityBase, SensorEntity):
+    """ET0 de référence horaire (FAO-56 Eq. 53), en mm/h.
+
+    Calculée à partir du rayonnement et de la pression mesurés quand ils sont configurés
+    (sinon replis : modèle nuages / pression standard, visibles dans les attributs).
+
+    ⚠️ Cette entité est de catégorie DIAGNOSTIC, mais la VALEUR qu'elle affiche, elle, pilote
+    le bilan sol depuis la 0.19.0 : le ledger l'intègre au fil du temps (× Kc) pour débiter la
+    réserve. L'entité sert à vérifier d'un coup d'œil que le calcul tourne bien sur des valeurs
+    MESURÉES (`radiation_source`/`pressure_source` = « capteur ») et non sur les replis.
+    """
+
+    _attr_name = "ETo horaire"
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
+    _attr_native_unit_of_measurement = "mm/h"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:water-thermometer-outline"
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._set_entity_identity("sensor", "eto_horaire")
+
+    @property
+    def native_value(self):
+        value = self._decision_value("eto_horaire_mm_h", None)
+        try:
+            return round(float(value), 4) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    @property
+    def extra_state_attributes(self):
+        diagnostic = self._decision_value("eto_horaire_diagnostic", None)
+        if not isinstance(diagnostic, dict):
+            return {"methode": "FAO-56 Penman-Monteith horaire (Eq. 53)"}
+        attrs = {k: v for k, v in diagnostic.items() if k != "value"}
+        attrs["methode"] = "FAO-56 Penman-Monteith horaire (Eq. 53)"
+        return attrs
+
+
 class GazonEtcSensor(GazonEntityBase, SensorEntity):
     _attr_name = "ETc"
     _attr_has_entity_name = True
@@ -1926,17 +1996,6 @@ class GazonReserveActuelleSensor(GazonEntityBase, SensorEntity):
             "reserve_minimale_mm",
             "depletion_mm",
             "depletion_ratio",
-            "mad_ratio_base",
-            "mad_ratio_effective",
-            "mad_band",
-            "mad_reason",
-            "mad_policy_enabled",
-            "mad_policy_source",
-            "mad_policy_inputs",
-            "mad_policy_candidate_band",
-            "mad_policy_candidate_ratio",
-            "mad_hysteresis_state",
-            "mad_threshold_mm",
             "bilan_hydrique_mm",
             "reserve_hydrique_sol_mm",
             "arrosage_recent_jour",
@@ -2034,17 +2093,6 @@ class GazonEtatHydriqueSensor(GazonEntityBase, SensorEntity):
             "reserve_minimale_mm",
             "depletion_mm",
             "depletion_ratio",
-            "mad_ratio_base",
-            "mad_ratio_effective",
-            "mad_band",
-            "mad_reason",
-            "mad_policy_enabled",
-            "mad_policy_source",
-            "mad_policy_inputs",
-            "mad_policy_candidate_band",
-            "mad_policy_candidate_ratio",
-            "mad_hysteresis_state",
-            "mad_threshold_mm",
         ) or {}
         hydric_state = _hydric_state_for_objective_sensor(self, attrs)
         if hydric_state is not None:
@@ -2110,7 +2158,8 @@ class GazonTypeArrosageSensor(GazonEntityBase, SensorEntity):
             possible_values = [value for value in possible_values if value != "Réglage personnalisé"]
         if not possible_values:
             return None
-        attrs = {"possible_values": possible_values}
+        # Hétérogène : au-delà de `possible_values`, on y ajoute un booléen et un flottant.
+        attrs: dict[str, Any] = {"possible_values": possible_values}
         # LOT B — urgence hydrique malgré blocage (lecture directe coordinator.data)
         data = getattr(self.coordinator, "data", None) or {}
         critical = data.get("irrigation_blocked_but_critical")
@@ -2147,7 +2196,7 @@ class GazonDernierArrosageDetecteSensor(GazonEntityBase, SensorEntity):
             if str(entity_id).strip()
         }
 
-    def _latest_zone_session(self) -> dict[str, object] | None:
+    def _latest_zone_session(self) -> dict[str, Any] | None:
         history = getattr(self.coordinator, "history", None)
         if not isinstance(history, list):
             return None
@@ -2186,7 +2235,7 @@ class GazonDernierArrosageDetecteSensor(GazonEntityBase, SensorEntity):
         return ("order", "zone", "entity_id", "rate_mm_h", "duration_min", "duration_seconds", "mm")
 
     @staticmethod
-    def _session_when_text(session: dict[str, object]) -> str | None:
+    def _session_when_text(session: dict[str, Any]) -> str | None:
         for key in ("detected_at", "recorded_at", "date"):
             value = session.get(key)
             human = _human_datetime_text(value)
@@ -2194,9 +2243,9 @@ class GazonDernierArrosageDetecteSensor(GazonEntityBase, SensorEntity):
                 return human
         return None
 
-    def _zone_session_attributes(self, session: dict[str, object]) -> dict[str, object] | None:
+    def _zone_session_attributes(self, session: dict[str, Any]) -> dict[str, Any] | None:
         zones = session.get("zones")
-        zone_details: list[dict[str, object]] = []
+        zone_details: list[dict[str, Any]] = []
         zones_used: list[str] = []
         if isinstance(zones, list):
             for zone in zones:
@@ -2218,7 +2267,7 @@ class GazonDernierArrosageDetecteSensor(GazonEntityBase, SensorEntity):
         if surface_mm is None:
             surface_mm = 0.0
 
-        attrs: dict[str, object] = {
+        attrs: dict[str, Any] = {
             "mm_scope": "global_surface",
             "mm_interpretation": "surface_uniform",
             "mm_measurement_kind": "surface_equivalent",
@@ -2281,7 +2330,7 @@ class GazonDernierArrosageDetecteSensor(GazonEntityBase, SensorEntity):
         session = self._latest_zone_session()
         skips = _skip_history_entries(getattr(self.coordinator, "history", None))
         if not session:
-            attrs: dict[str, object] = {
+            attrs: dict[str, Any] = {
                 "source": "none",
                 "zone_count": 0,
                 "surface_mm": 0.0,
@@ -2310,7 +2359,7 @@ class GazonDernierArrosageTotalZonesSensor(GazonDernierArrosageDetecteSensor):
         super().__init__(coordinator)
         self._set_entity_identity("sensor", "dernier_arrosage_total_zones")
 
-    def _zone_session_attributes(self, session: dict[str, object]) -> dict[str, object] | None:
+    def _zone_session_attributes(self, session: dict[str, Any]) -> dict[str, Any] | None:
         attrs = super()._zone_session_attributes(session)
         if not attrs:
             return attrs
@@ -2395,7 +2444,7 @@ class GazonDerniereApplicationSensor(GazonEntityBase, SensorEntity):
         self._set_entity_identity("sensor", "derniere_application")
 
     @staticmethod
-    def _empty_application_state() -> dict[str, object]:
+    def _empty_application_state() -> dict[str, Any]:
         return {
             "derniere_application": None,
             "summary": "Aucune application détectée",
@@ -2419,7 +2468,7 @@ class GazonDerniereApplicationSensor(GazonEntityBase, SensorEntity):
         }
 
     @staticmethod
-    def _application_when_text(summary: dict[str, object]) -> str | None:
+    def _application_when_text(summary: dict[str, Any]) -> str | None:
         for key in ("date_action", "date", "declared_at", "recorded_at"):
             value = summary.get(key)
             human = _human_date_text(value) if key in {"date_action", "date"} else _human_datetime_text(value)
@@ -2427,7 +2476,7 @@ class GazonDerniereApplicationSensor(GazonEntityBase, SensorEntity):
                 return human
         return None
 
-    def _application_state(self) -> dict[str, object]:
+    def _application_state(self) -> dict[str, Any]:
         memory = getattr(self.coordinator, "memory", None)
         if isinstance(memory, dict):
             state = {
@@ -2467,9 +2516,9 @@ class GazonDerniereApplicationSensor(GazonEntityBase, SensorEntity):
     def _application_attr_keys() -> tuple[str, ...]:
         return _APPLICATION_PUBLIC_ATTR_KEYS + _APPLICATION_STATUS_ATTR_KEYS
 
-    def _application_extra_attributes(self, state: dict[str, object]) -> dict[str, object] | None:
+    def _application_extra_attributes(self, state: dict[str, Any]) -> dict[str, Any] | None:
         summary = state.get("derniere_application")
-        attrs: dict[str, object] = {}
+        attrs: dict[str, Any] = {}
         compact_summary = _compact_application_summary(summary)
         if compact_summary:
             attrs.update(compact_summary)
@@ -2529,7 +2578,7 @@ class GazonDerniereActionUtilisateurSensor(GazonEntityBase, SensorEntity):
         super().__init__(coordinator)
         self._set_entity_identity("sensor", "derniere_action_utilisateur")
 
-    def _latest_action(self) -> dict[str, object] | None:
+    def _latest_action(self) -> dict[str, Any] | None:
         memory = getattr(self.coordinator, "memory", None)
         if not isinstance(memory, dict):
             return None
@@ -2539,7 +2588,7 @@ class GazonDerniereActionUtilisateurSensor(GazonEntityBase, SensorEntity):
         return None
 
     @staticmethod
-    def _clean_action_summary(summary: dict[str, object]) -> dict[str, object] | None:
+    def _clean_action_summary(summary: dict[str, Any]) -> dict[str, Any] | None:
         rename_map = {
             "action": "execution_action",
             "state": "execution_state",
@@ -2558,7 +2607,7 @@ class GazonDerniereActionUtilisateurSensor(GazonEntityBase, SensorEntity):
         return attrs or None
 
     @staticmethod
-    def _action_when_text(summary: dict[str, object]) -> str | None:
+    def _action_when_text(summary: dict[str, Any]) -> str | None:
         for key in ("triggered_at", "date", "recorded_at"):
             value = summary.get(key)
             human = _human_datetime_text(value)
@@ -2567,7 +2616,7 @@ class GazonDerniereActionUtilisateurSensor(GazonEntityBase, SensorEntity):
         return None
 
     @staticmethod
-    def _action_summary_text(summary: dict[str, object]) -> str:
+    def _action_summary_text(summary: dict[str, Any]) -> str:
         action = str(summary.get("action") or "Action").strip()
         state = str(summary.get("state") or "").strip()
         when_text = GazonDerniereActionUtilisateurSensor._action_when_text(summary)
@@ -2611,11 +2660,11 @@ class GazonCatalogueProduitsSensor(GazonEntityBase, SensorEntity):
         super().__init__(coordinator)
         self._set_entity_identity("sensor", "catalogue_produits")
 
-    def _products(self) -> list[dict[str, object]]:
+    def _products(self) -> list[dict[str, Any]]:
         products = getattr(self.coordinator, "products", None)
         if not isinstance(products, dict):
             return []
-        ordered: list[dict[str, object]] = []
+        ordered: list[dict[str, Any]] = []
         for product_id in sorted(products.keys()):
             product = products.get(product_id)
             if isinstance(product, dict):
@@ -2623,7 +2672,7 @@ class GazonCatalogueProduitsSensor(GazonEntityBase, SensorEntity):
         return ordered
 
     @staticmethod
-    def _compact_product(product: dict[str, object]) -> dict[str, object]:
+    def _compact_product(product: dict[str, Any]) -> dict[str, Any]:
         keys = (
             "id",
             "nom",
@@ -2676,7 +2725,7 @@ class GazonInterventionRecommendationSensor(GazonEntityBase, SensorEntity):
         super().__init__(coordinator)
         self._set_entity_identity("sensor", "prochaine_intervention")
 
-    def _recommendation_payload(self) -> dict[str, object]:
+    def _recommendation_payload(self) -> dict[str, Any]:
         snapshot = _coordinator_snapshot(self.coordinator)
         recommendation = snapshot.get("intervention_recommendation")
         if isinstance(recommendation, dict) and recommendation:
@@ -2798,7 +2847,7 @@ class GazonDebugInterventionSensor(GazonEntityBase, SensorEntity):
         super().__init__(coordinator)
         self._set_entity_identity("sensor", "debug_intervention")
 
-    def _debug_payload(self) -> dict[str, object]:
+    def _debug_payload(self) -> dict[str, Any]:
         snapshot = _coordinator_snapshot(self.coordinator)
         payload = snapshot.get("intervention_recommendation")
         if isinstance(payload, dict) and payload:
@@ -2809,14 +2858,14 @@ class GazonDebugInterventionSensor(GazonEntityBase, SensorEntity):
         return {}
 
     @staticmethod
-    def _constraint_impact(constraint: dict[str, object]) -> str:
+    def _constraint_impact(constraint: dict[str, Any]) -> str:
         if bool(constraint.get("blocking")):
             return "bloquant"
         if constraint.get("met") is False:
             return "dégradant"
         return "neutre"
 
-    def _constraint_view(self, constraint: dict[str, object]) -> dict[str, object]:
+    def _constraint_view(self, constraint: dict[str, Any]) -> dict[str, Any]:
         item = dict(constraint)
         item["impact"] = self._constraint_impact(item)
         return item
@@ -2910,7 +2959,7 @@ class GazonScoreNiveauSensor(GazonEntityBase, SensorEntity):
         super().__init__(coordinator)
         self._set_entity_identity("sensor", "score_niveau")
 
-    def _score_payload(self) -> dict[str, object]:
+    def _score_payload(self) -> dict[str, Any]:
         payload = self._decision_value("intervention_recommendation")
         if isinstance(payload, dict) and payload:
             return payload
@@ -2962,7 +3011,7 @@ class GazonProchaineFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
         super().__init__(coordinator)
         self._set_entity_identity("sensor", "prochaine_fenetre_optimale")
 
-    def _window_context(self) -> dict[str, object]:
+    def _window_context(self) -> dict[str, Any]:
         payload = self._decision_value("intervention_recommendation")
         context = payload.get("context") if isinstance(payload, dict) else {}
         if not isinstance(context, dict):
@@ -3017,7 +3066,7 @@ class GazonProchainBlocageAttenduSensor(GazonEntityBase, SensorEntity):
         super().__init__(coordinator)
         self._set_entity_identity("sensor", "prochain_blocage_attendu")
 
-    def _source_context(self) -> dict[str, object]:
+    def _source_context(self) -> dict[str, Any]:
         payload = self._decision_value("intervention_recommendation")
         context = payload.get("context") if isinstance(payload, dict) else {}
         if not isinstance(context, dict):
@@ -3083,7 +3132,7 @@ class GazonProchaineTonteSensor(GazonEntityBase, SensorEntity):
         super().__init__(coordinator)
         self._set_entity_identity("sensor", "prochaine_tonte")
 
-    def _mowing_attrs(self) -> dict[str, object]:
+    def _mowing_attrs(self) -> dict[str, Any]:
         keys = (
             "next_mowing_date",
             "next_mowing_display",
@@ -3265,10 +3314,10 @@ class GazonPlanArrosageSensor(GazonEntityBase, SensorEntity):
             return 0
         return self._int_setting("watering_pause_minutes", default=0, minimum=0)
 
-    def _build_plan(self) -> dict[str, object] | None:
+    def _build_plan(self) -> dict[str, Any] | None:
         objective = self._latest_objective()
 
-        def _empty_plan(reason: str) -> dict[str, object]:
+        def _empty_plan(reason: str) -> dict[str, Any]:
             return {
                 "objective_mm": round(max(0.0, objective or 0.0), 1),
                 "objectif_mm": round(max(0.0, objective or 0.0), 1),
@@ -3369,7 +3418,7 @@ class GazonArrosageEnCoursSensor(GazonEntityBase, SensorEntity):
         self._set_entity_identity("sensor", "arrosage_en_cours")
 
     @staticmethod
-    def _current_session(coordinator) -> dict[str, object] | None:
+    def _current_session(coordinator) -> dict[str, Any] | None:
         runtime_session_getter = getattr(coordinator, "_get_active_irrigation_session", None)
         if callable(runtime_session_getter):
             runtime_session = runtime_session_getter()
@@ -3388,7 +3437,7 @@ class GazonArrosageEnCoursSensor(GazonEntityBase, SensorEntity):
         progress = self._progress_state()
         return progress["progress_percent"] if progress["active"] else 0.0
 
-    def _live_water_state(self, session: dict[str, object], now: datetime) -> dict[str, object]:
+    def _live_water_state(self, session: dict[str, Any], now: datetime) -> dict[str, Any]:
         """mm appliqués par zone + réserve/surplus projetés EN TEMPS RÉEL."""
         rate_getter = getattr(self.coordinator, "_get_zone_rate_mm_h", None)
 
@@ -3432,7 +3481,7 @@ class GazonArrosageEnCoursSensor(GazonEntityBase, SensorEntity):
             "live_surplus_mm": live_surplus_mm,
         }
 
-    def _progress_state(self) -> dict[str, object]:
+    def _progress_state(self) -> dict[str, Any]:
         session = self._current_session(self.coordinator)
         if session is None:
             return {
@@ -3452,7 +3501,7 @@ class GazonArrosageEnCoursSensor(GazonEntityBase, SensorEntity):
 
         active_zones = session.get("active_zones")
         if isinstance(active_zones, dict):
-            active_zone_names = [str(zone_id) for zone_id in active_zones.keys()]
+            active_zone_names = [str(zone_id) for zone_id in active_zones]
         elif isinstance(active_zones, list):
             active_zone_names = [str(zone_id) for zone_id in active_zones]
         else:
@@ -3488,6 +3537,7 @@ class GazonArrosageEnCoursSensor(GazonEntityBase, SensorEntity):
         if planned_total_seconds > 0:
             progress_percent = min(100.0, (elapsed_seconds / planned_total_seconds) * 100.0)
         live_state = self._live_water_state(session, now)
+        _last_activity = session.get("last_activity_at")
         return {
             "active": True,
             "summary": summary,
@@ -3511,7 +3561,9 @@ class GazonArrosageEnCoursSensor(GazonEntityBase, SensorEntity):
             "started_at": started_text,
             "started_at_utc": started_at.isoformat() if isinstance(started_at, datetime) else None,
             "last_activity_at": last_activity,
-            "last_activity_at_utc": session.get("last_activity_at").isoformat() if isinstance(session.get("last_activity_at"), datetime) else None,
+            # Lu UNE fois : l'ancienne écriture appelait `session.get` deux fois, et le test
+            # `isinstance` portait donc sur une lecture différente de celle qu'on déréférence.
+            "last_activity_at_utc": _last_activity.isoformat() if isinstance(_last_activity, datetime) else None,
             "active_zones": active_zone_names,
             "target_mm": session.get("target_mm"),
             **live_state,
@@ -3562,9 +3614,10 @@ class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):
             "hauteur_tonte_recommandee_cm",
             "hauteur_tonte_min_cm",
             "hauteur_tonte_max_cm",
+            "hauteur_tonte_garde_fou_label",
         )
 
-    def _mowing_height_attributes(self) -> dict[str, object] | None:
+    def _mowing_height_attributes(self) -> dict[str, Any] | None:
         attrs = self._attrs_from_result(*self._mowing_height_keys())
         if attrs:
             return attrs
@@ -3633,7 +3686,7 @@ class GazonAssistantSensor(GazonEntityBase, SensorEntity):
         super().__init__(coordinator)
         self._set_entity_identity("sensor", "assistant")
 
-    def _assistant_payload(self) -> dict[str, object]:
+    def _assistant_payload(self) -> dict[str, Any]:
         facade = _public_mowing_facade(self)
         assistant = facade.get("assistant")
         if not isinstance(assistant, dict) or not assistant:
@@ -3696,6 +3749,13 @@ class GazonAssistantSensor(GazonEntityBase, SensorEntity):
             "status": status,
             "reason": reason,
         }
+        # VRAIE canicule (≥ 32 °C réels + réserve quasi vide) : signale un arrosage de SURVIE,
+        # à distinguer d'une recharge de routine. Les codes d'action ne portent PAS cette
+        # information (leurs valeurs sont `aucune_action`/`surveiller`/`a_faire`/`critique`),
+        # d'où cet attribut dédié — le seul moyen pour un affichage de le savoir.
+        _survie = self._decision_value("survie_canicule_active", None)
+        if _survie is not None:
+            attrs["survie_canicule_active"] = bool(_survie)
         target_date = (
             payload.get("next_action_date")
             or payload.get("watering_target_date")
@@ -3704,11 +3764,12 @@ class GazonAssistantSensor(GazonEntityBase, SensorEntity):
         )
         if target_date not in (None, "", [], {}):
             attrs["next_action_date"] = target_date
-            display_date = payload.get("next_action_display") or payload.get("watering_target_display")
+            # `watering_target_display` a été retirée de cette chaîne : elle n'est produite NULLE
+            # PART dans l'intégration (vérifié sur les 39 modules le 29/07/2026), donc ces deux
+            # replis ne se déclenchaient jamais. Du code fantôme de ce genre a déjà égaré un audit.
+            display_date = payload.get("next_action_display")
             if display_date in (None, "", [], {}):
                 display_date = self._decision_value("next_action_display")
-            if display_date in (None, "", [], {}):
-                display_date = self._decision_value("watering_target_display")
             if display_date in (None, "", [], {}):
                 display_date = _human_date_text(target_date)
             if display_date not in (None, "", [], {}):
@@ -3879,7 +3940,7 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
     def native_value(self):
         return self._decision_value("fenetre_optimale")
 
-    def _contextual_watering_state(self) -> dict[str, object] | None:
+    def _contextual_watering_state(self) -> dict[str, Any] | None:
         snapshot = _coordinator_snapshot(self.coordinator)
         result = self.decision_result
         extra = getattr(result, "extra", None) if result is not None else None
@@ -4077,7 +4138,7 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
             "watering_cause": watering_cause,
         }
 
-    def _next_action_date_attributes(self) -> dict[str, object] | None:
+    def _next_action_date_attributes(self) -> dict[str, Any] | None:
         snapshot = _coordinator_snapshot(self.coordinator)
         result = self.decision_result
         extra = getattr(result, "extra", None) if result is not None else None
@@ -4100,14 +4161,14 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
         if display_date is None:
             display_date = _human_date_text(target_date)
 
-        attrs: dict[str, object] = {}
+        attrs: dict[str, Any] = {}
         if target_date:
             attrs["next_action_date"] = target_date
         if display_date:
             attrs["next_action_display"] = display_date
         return _clean_public_attrs(attrs)
 
-    def _base_watering_attributes(self) -> dict[str, object] | None:
+    def _base_watering_attributes(self) -> dict[str, Any] | None:
         # Ajoute UN libellé d'affichage honnête (`stress_hydrique`) dérivé du niveau brut, là où
         # celui-ci est déjà exposé — source unique, pas de doublon. La carte Lovelace peut pointer
         # dessus au lieu de la clé technique `heat_stress_level`/`heat_stress_phase` (inchangées).
@@ -4118,7 +4179,7 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
                 attrs["stress_hydrique"] = stress_label
         return attrs
 
-    def _base_watering_attributes_raw(self) -> dict[str, object] | None:
+    def _base_watering_attributes_raw(self) -> dict[str, Any] | None:
         attrs = self._attrs_from_result(
             "watering_cause",
             "next_action_date",
@@ -4171,9 +4232,6 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
             "soil_drainage_factor",
             "soil_infiltration_factor",
             "soil_need_factor",
-            "dose_enabled",
-            "dose_band",
-            "dose_reason",
             "target_cycle_mm",
             "objective_mm_source",
             "feedback_observation",
@@ -4237,9 +4295,6 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
             "soil_drainage_factor",
             "soil_infiltration_factor",
             "soil_need_factor",
-            "dose_enabled",
-            "dose_band",
-            "dose_reason",
             "target_cycle_mm",
             "objective_mm_source",
             "feedback_observation",
@@ -4440,6 +4495,10 @@ class GazonProchainArrosageSensor(GazonFenetreOptimaleSensor):
                 base_attrs.get("watering_window_optimal_start_minute"),
                 base_attrs.get("watering_window_optimal_end_minute"),
             ),
+            # Estimation indicative du prochain jour d'arrosage (déplétion réserve → MAD au
+            # rythme ~ETc/jour). Diagnostic/affichage seul — n'entre dans aucune décision.
+            "jours_avant_arrosage_estime": self._decision_value("jours_avant_arrosage_estime"),
+            "date_prochain_arrosage_estime": self._decision_value("date_prochain_arrosage_estime"),
         }
         return _clean_public_attrs(attrs) or {}
 

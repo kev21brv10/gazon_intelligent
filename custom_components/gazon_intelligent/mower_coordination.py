@@ -117,7 +117,13 @@ def _presence_state(context: dict[str, Any], operation_state: str) -> str:
         return "dockee"
     if operation_state == "transit":
         return "retour"
-    if operation_state in {"tonte", "paused", "starting", "zoning", "searching_zone", "escaped_digital_fence", "rain_delayed"}:
+    # `rain_delayed` = pause pluie : le robot est RENTRÉ à sa station et y reste. Le classer
+    # « dehors » bloquait l'arrosage (`mower_not_stowed`) pour une machine parfaitement rangée —
+    # et la pause pluie s'arme sur quelques dixièmes de mm puis dure 6 à 12 h, donc le lendemain
+    # d'une averse insignifiante l'arrosage du matin était perdu.
+    if operation_state == "rain_delayed":
+        return "dockee"
+    if operation_state in {"tonte", "paused", "starting", "zoning", "searching_zone", "escaped_digital_fence"}:
         return "dehors"
     return "inconnue"
 
@@ -153,7 +159,10 @@ def _reliability(context: dict[str, Any], enabled: bool, operation_state: str, p
         return False, "mower_escaped_digital_fence", "Tondeuse sortie du périmètre."
 
     if operation_state == "rain_delayed":
-        return False, "mower_rain_delayed", "Pause pluie active."
+        # Le robot est à la station : la coordination est FIABLE (rien ne traîne sur la pelouse),
+        # même si la tonte, elle, reste évidemment reportée. Renvoyer False ici bloquait
+        # l'arrosage pour une machine rangée.
+        return True, "mower_rain_delayed", "Pause pluie active."
 
     if presence_state == "inconnue":
         return False, "unreliable", "Position réelle de la tondeuse inconnue."

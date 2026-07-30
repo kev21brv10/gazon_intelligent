@@ -711,12 +711,18 @@ def normalize_product_record(product_id: Any, payload: dict[str, Any] | None) ->
         "temperature_max": _to_float(payload.get("temperature_max")),
         "note": note or None,
     }
-    if record.get("max_applications_per_year") is not None and int(record["max_applications_per_year"]) < 0:
+    # Les valeurs ont déjà été normalisées par `_to_int`/`_to_float` juste au-dessus ; on relit
+    # dans une variable locale plutôt que dans le dict hétérogène, pour que la garde soit lisible
+    # (et vérifiable) sans reconvertir.
+    _max_apps = record.get("max_applications_per_year")
+    if isinstance(_max_apps, (int, float)) and _max_apps < 0:
         record["max_applications_per_year"] = None
+    _t_min = record.get("temperature_min")
+    _t_max = record.get("temperature_max")
     if (
-        record.get("temperature_min") is not None
-        and record.get("temperature_max") is not None
-        and float(record["temperature_min"]) > float(record["temperature_max"])
+        isinstance(_t_min, (int, float))
+        and isinstance(_t_max, (int, float))
+        and _t_min > _t_max
     ):
         record["temperature_min"], record["temperature_max"] = (
             record["temperature_max"],
@@ -885,11 +891,17 @@ def build_feedback_observation(
         recommended_mm = 0.0
 
     observed_mm = compute_recent_watering_mm(history, today=today, days=elapsed_days)
-    current_deficit = _to_float(
-        (decision or {}).get("deficit_mm_ajuste")
-        or (decision or {}).get("deficit_brut_mm")
-        or (decision or {}).get("objectif_mm")
-    )
+    # `or` INTERDIT ici : un `deficit_mm_ajuste` NUL est parfaitement légitime — c'est
+    # `max(0, brut − pluie_support − …)`, donc « il va pleuvoir demain, plus rien à combler ».
+    # La chaîne `or` le traitait comme absent et retombait sur le déficit BRUT : le message
+    # d'apprentissage annonçait « il reste 4,6 mm » alors que le moteur avait conclu à 0.
+    _decision = decision or {}
+    current_deficit = None
+    for _cle in ("deficit_mm_ajuste", "deficit_brut_mm", "objectif_mm"):
+        _valeur = _to_float(_decision.get(_cle))
+        if _valeur is not None:
+            current_deficit = _valeur
+            break
     if current_deficit is None:
         current_deficit = 0.0
 

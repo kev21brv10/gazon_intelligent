@@ -60,7 +60,9 @@
           "capteur_retour_arrosage": "Watering return (optional, automatic or estimated from zone history)",
           "capteur_humidite_sol": "Soil humidity (%) (recommended if available)",
           "capteur_vent": "Local wind (optional, used first if provided)",
-          "capteur_rosee": "Dew / leaf wetness (optional, automatic if not provided)"
+          "capteur_rosee": "Dew / leaf wetness (optional, automatic if not provided)",
+          "capteur_rayonnement": "Measured global solar radiation (optional, W/m² — greatly improves ET0 accuracy)",
+          "capteur_pression": "Measured atmospheric pressure (optional, hPa — refines ET0 accuracy)"
         }
       }
     },
@@ -97,7 +99,9 @@
           "capteur_retour_arrosage": "Watering return (optional, automatic or estimated from zone history)",
           "capteur_humidite_sol": "Soil humidity (%) (recommended if available)",
           "capteur_vent": "Local wind (optional, used first if provided)",
-          "capteur_rosee": "Dew / leaf wetness (optional, automatic if not provided)"
+          "capteur_rosee": "Dew / leaf wetness (optional, automatic if not provided)",
+          "capteur_rayonnement": "Measured global solar radiation (optional, W/m² — greatly improves ET0 accuracy)",
+          "capteur_pression": "Measured atmospheric pressure (optional, hPa — refines ET0 accuracy)"
         }
       }
     },

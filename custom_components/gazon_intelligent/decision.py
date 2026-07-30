@@ -1,13 +1,33 @@
 from __future__ import annotations
 
-"""Orchestrateur du moteur de décision.
+"""Orchestrateur du moteur de décision — ET assembleur unique du snapshot.
 
-Ce module garde l'API historique utilisée par le reste de l'intégration,
-mais délègue la logique métier aux modules spécialisés:
-- decision_phase.py
-- decision_watering.py
-- decision_risk.py
-- decision_mowing.py
+⚠️ Ce module n'est PAS une simple façade, contrairement à ce que son entête a longtemps
+laissé croire (corrigé le 29/07/2026 après un audit qui le soupçonnait d'être supprimable).
+Il se lit en deux moitiés :
+
+1. HAUT (jusqu'à ~L100) — délégations pures vers les modules spécialisés :
+   decision_phase.py, decision_watering.py, decision_risk.py, decision_mowing.py,
+   plus des ré-exports de water.py / guidance.py / memory.py / phases.py conservés
+   pour les tests historiques. Cette partie-là, oui, ne fait que passer le plat.
+
+   Exception : `compute_subphase` (voir sa note) synthétise `now` depuis `today`, donc il
+   ne se comporte PAS comme `phases.compute_subphase`. Ne pas le retirer avec les autres.
+
+2. BAS (`_build_decision_extra`, `_build_decision_result_from_bundles`) — LOGIQUE PROPRE,
+   qui n'existe nulle part ailleurs : c'est ici, et ici seulement, qu'est assemblé le
+   payload de ~210 clés porté par `DecisionResult.extra`, donc l'essentiel du snapshot
+   que lisent toutes les entités. `decision_models.to_snapshot` n'en produit qu'une
+   soixantaine à partir des champs typés, puis fusionne cet `extra`.
+
+   Deux clés y sont CALCULÉES sur place et n'ont aucun autre producteur :
+   - `next_action_display` (via `_display_date_from_iso`), lue par ~12 sites de sensor.py ;
+   - `raison_blocage_tonte`, qui arbitre blocage d'origine arrosage vs tonte, lue par
+     assistant.py, binary_sensor.py et sensor.py.
+
+Chemin de production : __init__.py → coordinator.py → gazon_brain.py:17 → ici, à chaque
+cycle. `compute_decision` et `build_decision_snapshot` sont, eux, de vraies façades legacy
+sans appelant de production (seuls les tests passent encore par elles).
 """
 
 from datetime import date, datetime
@@ -243,11 +263,10 @@ def _build_decision_extra(
         )
     advanced_context = water_bundle.get("advanced_context") or {}
     water_balance = water_bundle.get("water_balance") or {}
-    dose_policy = water_bundle.get("dose_policy") or {}
     mower_context = {
         key: value
         for key, value in mowing_bundle.items()
-        if (key.startswith("tondeuse_") or key.startswith("mower_")) and value is not None
+        if key.startswith(("tondeuse_", "mower_")) and value is not None
     }
 
     payload = {
@@ -268,6 +287,8 @@ def _build_decision_extra(
         "et0_source": context.et0_source,
         "kc_gazon": water_bundle.get("kc_gazon"),
         "etc_mm": water_bundle.get("etc_mm"),
+        "jours_avant_arrosage_estime": water_bundle.get("jours_avant_arrosage_estime"),
+        "date_prochain_arrosage_estime": water_bundle.get("date_prochain_arrosage_estime"),
         "humidite_sol": advanced_context.get("humidite_sol"),
         "vent": advanced_context.get("vent"),
         "rosee": advanced_context.get("rosee"),
@@ -298,32 +319,6 @@ def _build_decision_extra(
         "reserve_fill_ratio": water_balance.get("reserve_fill_ratio"),
         "reserve_available_ratio": water_balance.get("reserve_available_ratio"),
         "mad_ratio": water_balance.get("mad_ratio"),
-        "mad_ratio_base": water_balance.get("mad_ratio_base"),
-        "mad_ratio_effective": water_balance.get("mad_ratio_effective"),
-        "mad_band": water_balance.get("mad_band"),
-        "mad_reason": water_balance.get("mad_reason"),
-        "mad_policy_enabled": water_balance.get("mad_policy_enabled"),
-        "mad_policy_source": water_balance.get("mad_policy_source"),
-        "mad_policy_inputs": water_balance.get("mad_policy_inputs"),
-        "mad_policy_candidate_band": water_balance.get("mad_policy_candidate_band"),
-        "mad_policy_candidate_ratio": water_balance.get("mad_policy_candidate_ratio"),
-        "mad_hysteresis_state": water_balance.get("mad_hysteresis_state"),
-        "mad_threshold_mm": water_balance.get("mad_threshold_mm"),
-        "dose_policy": dose_policy or None,
-        "dose_enabled": water_bundle.get("dose_enabled"),
-        "dose_policy_enabled": dose_policy.get("enabled") if isinstance(dose_policy, dict) else None,
-        "dose_policy_source": dose_policy.get("source") if isinstance(dose_policy, dict) else None,
-        "dose_band": dose_policy.get("dose_band") if isinstance(dose_policy, dict) else None,
-        "dose_reason": dose_policy.get("dose_reason") if isinstance(dose_policy, dict) else None,
-        "dose_mm_base": dose_policy.get("dose_mm_base") if isinstance(dose_policy, dict) else None,
-        "dose_mm_effective": dose_policy.get("dose_mm_effective") if isinstance(dose_policy, dict) else None,
-        "dose_mm_target": dose_policy.get("dose_mm_target") if isinstance(dose_policy, dict) else None,
-        "dose_mm_min": dose_policy.get("dose_mm_min") if isinstance(dose_policy, dict) else None,
-        "dose_mm_max": dose_policy.get("dose_mm_max") if isinstance(dose_policy, dict) else None,
-        "dose_candidate_band": dose_policy.get("candidate_band") if isinstance(dose_policy, dict) else None,
-        "dose_candidate_mm": dose_policy.get("candidate_mm") if isinstance(dose_policy, dict) else None,
-        "dose_candidate_reason": dose_policy.get("candidate_reason") if isinstance(dose_policy, dict) else None,
-        "dose_policy_inputs": dose_policy.get("dose_inputs") if isinstance(dose_policy, dict) else None,
         "depletion_allowed_mm": water_balance.get("depletion_allowed_mm"),
         "reserve_minimale_mm": water_balance.get("reserve_minimale_mm"),
         "depletion_mm": water_balance.get("depletion_mm"),
@@ -335,13 +330,13 @@ def _build_decision_extra(
         "depletion_affichee_mm": water_balance.get("depletion_affichee_mm"),
         "depletion_ratio_affiche": water_balance.get("depletion_ratio_affiche"),
         "evening_cooling_likely": water_bundle.get("evening_cooling_likely"),
+        "survie_canicule_active": water_bundle.get("survie_canicule_active"),
         "evening_cooling_debug": water_bundle.get("evening_cooling_debug"),
         "fenetre_optimale_profil": water_bundle.get("fenetre_optimale_profil"),
         "objectif_mm": watering_bundle.get("objectif_mm"),
         "target_cycle_mm": water_bundle.get("target_cycle_mm"),
         "objective_mm_source": water_bundle.get("objective_mm_source"),
         "objectif_mm_brut": water_bundle.get("objectif_mm_brut"),
-        "objectif_mm_executable": watering_bundle.get("objectif_mm"),
         "deficit_brut_mm": watering_bundle.get("deficit_brut_mm"),
         "deficit_mm_ajuste": watering_bundle.get("deficit_mm_ajuste"),
         "mm_cible": watering_bundle.get("mm_cible"),
@@ -374,7 +369,6 @@ def _build_decision_extra(
         "surface_sec": watering_bundle.get("surface_sec"),
         "use_depletion_logic": water_bundle.get("use_depletion_logic"),
         "mm_cible_depletion": water_bundle.get("mm_cible_depletion"),
-        "mad_policy": water_bundle.get("mad_policy"),
         "sursemis_micro_apport_allowed": watering_bundle.get("sursemis_micro_apport_allowed"),
         "sursemis_block_reason": watering_bundle.get("sursemis_block_reason"),
         "sursemis_reason": watering_bundle.get("sursemis_reason"),
@@ -451,6 +445,9 @@ def _build_decision_extra(
             mowing_bundle.get("hauteur_tonte_recommandee_cm"),
         ),
         "hauteur_tonte_min_cm": watering_bundle.get("hauteur_tonte_min_cm", mowing_bundle.get("hauteur_tonte_min_cm")),
+        "hauteur_tonte_garde_fou_label": watering_bundle.get(
+            "hauteur_tonte_garde_fou_label", mowing_bundle.get("hauteur_tonte_garde_fou_label")
+        ),
         "hauteur_tonte_max_cm": watering_bundle.get("hauteur_tonte_max_cm", mowing_bundle.get("hauteur_tonte_max_cm")),
         "tonte_statut": watering_bundle.get("tonte_statut", mowing_bundle.get("tonte_statut")),
         "arrosage_auto_autorise": watering_bundle.get("arrosage_auto_autorise"),
@@ -458,7 +455,6 @@ def _build_decision_extra(
         "watering_cause": watering_bundle.get("watering_cause"),
         "type_arrosage": watering_bundle.get("type_arrosage"),
         "arrosage_conseille": watering_bundle.get("arrosage_conseille"),
-        "irrigation_need_mm": watering_bundle.get("irrigation_need_mm"),
         "irrigation_agronomic_recommendation": watering_bundle.get("irrigation_agronomic_recommendation"),
         "irrigation_blocked": watering_bundle.get("irrigation_blocked"),
         "irrigation_execution_allowed": watering_bundle.get("irrigation_execution_allowed"),
@@ -544,9 +540,13 @@ def _build_decision_result_from_bundles(
         mm_final=watering_bundle.get("mm_final", watering_bundle["objectif_mm"]),
         watering_passages=watering_bundle["watering_passages"],
         watering_pause_minutes=watering_bundle["watering_pause_minutes"],
-        watering_strategy=watering_bundle.get("watering_strategy"),
-        objective_scope=watering_bundle.get("objective_scope"),
-        watering_stage=watering_bundle.get("watering_stage"),
+        # Ces trois champs sont déclarés `str` sur DecisionResult : un `.get()` nu y injectait
+        # potentiellement None. Le défaut vide préserve le comportement (une chaîne vide était
+        # déjà traitée comme « non renseigné » par tous les consommateurs) et rend le contrat
+        # honnête au lieu de le contredire en silence.
+        watering_strategy=watering_bundle.get("watering_strategy") or "",
+        objective_scope=watering_bundle.get("objective_scope") or "",
+        watering_stage=watering_bundle.get("watering_stage") or "",
         surface_cycle_mm=watering_bundle.get("surface_cycle_mm"),
         daily_cycles_target=watering_bundle.get("daily_cycles_target"),
         cycle_spacing_minutes=watering_bundle.get("cycle_spacing_minutes"),

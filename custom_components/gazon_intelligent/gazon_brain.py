@@ -11,6 +11,7 @@ from .const import (
     DEFAULT_MOWER_COORDINATION_ENABLED,
     DEFAULT_MODE,
     INTERVENTIONS_ACTIONS,
+    KC_GAZON_NORMAL_DEFAUT,
 )
 from .assistant import build_assistant_decision
 from .decision import DecisionContext, build_decision_result
@@ -224,9 +225,13 @@ class GazonBrain:
         self.memory["historique_total"] = len(self.history)
         self.memory["catalogue_produits"] = len(self.products)
         self._normalize_selected_product_id()
+        _date_action = self._coerce_date(self.date_action)
+        _date_action_iso = _date_action.isoformat() if _date_action is not None else None
         return {
             "mode": self.mode,
-            "date_action": self._coerce_date(self.date_action).isoformat() if self._coerce_date(self.date_action) else None,
+            # Calculée UNE fois : l'ancienne écriture appelait `_coerce_date` deux fois par
+            # sérialisation, et empêchait le vérificateur de types de voir la garde.
+            "date_action": _date_action_iso,
             "history": copy.deepcopy(self.history[-300:]),
             "products": copy.deepcopy(self.products),
             "soil_balance": copy.deepcopy(self.soil_balance),
@@ -684,9 +689,16 @@ class GazonBrain:
         self,
         reserve_mm: float,
         today: date | None = None,
+        freeze_day: bool = True,
     ) -> dict[str, Any]:
-        """Recale la réserve hydrique du sol à une valeur connue (calibration manuelle)."""
-        self.soil_balance = set_reserve_mm(self.soil_balance, reserve_mm, today=today)
+        """Recale la réserve hydrique du sol à une valeur connue (calibration manuelle).
+
+        `freeze_day=False` corrige la valeur SANS figer la journée : l'ET continue d'être
+        débitée, la pluie et l'arrosage d'être crédités (cf. `soil_balance.set_reserve_mm`).
+        """
+        self.soil_balance = set_reserve_mm(
+            self.soil_balance, reserve_mm, today=today, freeze_day=freeze_day
+        )
         return self.soil_balance
 
     def record_user_action(
@@ -832,7 +844,13 @@ class GazonBrain:
         # Contrepartie ASSUMÉE (pas de capteur de sol) : le robot croit le sol sec après un
         # arrosage manuel et peut arroser PAR-DESSUS (double arrosage). Le crédit réserve ne
         # retient donc que les arrosages pilotés par l'intégration.
-        arrosage_reel_jour = compute_recent_watering_mm(self.history, today=today, days=0, include_external=False)
+        # `include_incorporation=True` : l'arrosage d'incorporation post-produit (5-10 mm) a pour
+        # BUT de faire pénétrer le produit dans le sol — cette eau atteint donc la zone racinaire
+        # et crédite la réserve (décision de Kévin, 29/07/2026). Le rafraîchissement du soir, lui,
+        # reste exclu : ses ~3 mm s'évaporent pour refroidir le gazon, c'est leur fonction.
+        arrosage_reel_jour = compute_recent_watering_mm(
+            self.history, today=today, days=0, include_external=False, include_incorporation=True
+        )
         # LE LEDGER EST UNE COMPTABILITÉ DE MESURES, PAS DE PRÉVISIONS.
         # `pluie_24h` est une valeur RÉSOLUE : elle bascule silencieusement sur la prévision météo
         # quand le capteur de pluie est indisponible. Créditer la réserve avec de la pluie
@@ -855,8 +873,17 @@ class GazonBrain:
         # calculé par le modèle avant de débiter le SOL.
         _kc_ledger = self._result_float_value(self.last_result, "kc_gazon")
         if _kc_ledger is None or not (0.4 <= _kc_ledger <= 1.1):
-            _kc_ledger = 0.8
+            _kc_ledger = KC_GAZON_NORMAL_DEFAUT
         etc_ledger = etp * _kc_ledger if etp is not None else None
+        # Taux HORAIRE mesuré (ET0 mm/h → ETc via le même Kc). Quand il est disponible, le ledger
+        # intègre ce taux au fil du temps au lieu d'étaler l'estimation journalière : le sol sèche
+        # alors au rythme RÉEL. Absent (pas de capteur, entrées incomplètes) → repli prorata.
+        try:
+            _eto_hourly_raw = weather_profile.get("eto_hourly_mm_h")
+            _eto_hourly = float(_eto_hourly_raw) if _eto_hourly_raw is not None else None
+        except (TypeError, ValueError):
+            _eto_hourly = None
+        etc_hourly = _eto_hourly * _kc_ledger if _eto_hourly is not None else None
         self.soil_balance = update_soil_balance(
             self.soil_balance,
             today=today,
@@ -867,6 +894,8 @@ class GazonBrain:
             # Fraction de journée écoulée : l'ETc est débitée au prorata au lieu d'être retranchée
             # en entier dès minuit (cf. update_soil_balance). Sans elle → repli sur 1.0.
             et_elapsed_fraction=weather_profile.get("et_elapsed_fraction"),
+            etc_hourly_mm_h=etc_hourly,
+            now=dt_util.now(),
         )
         context = DecisionContext.from_legacy_args(
             history=self.history,

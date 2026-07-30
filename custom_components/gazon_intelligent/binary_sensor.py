@@ -44,6 +44,10 @@ _APPLICATION_PUBLIC_ATTR_KEYS = (
     "application_irrigation_mode",
     "application_post_watering_status",
 )
+# ⚠️ HOMONYME VOLONTAIREMENT DIFFÉRENT de `sensor._APPLICATION_STATUS_ATTR_KEYS`, qui ne
+# porte PAS `auto_irrigation_enabled` (il l'expose par un autre chemin). Toute clé ajoutée
+# ici « par symétrie » creuserait un écart de contrat public que ni les tests ni la CI ne
+# verraient — les deux listes sont lues séparément.
 _APPLICATION_STATUS_ATTR_KEYS = (
     "application_block_active",
     "application_block_remaining_minutes",
@@ -333,6 +337,7 @@ class GazonTonteAutoriseeBinarySensor(GazonEntityBase, BinarySensorEntity):
             "hauteur_tonte_recommandee_cm",
             "hauteur_tonte_min_cm",
             "hauteur_tonte_max_cm",
+            "hauteur_tonte_garde_fou_label",
             "mowing_frequency_target_per_week",
             "mowing_frequency_label",
             "mowing_window_state",
@@ -440,7 +445,6 @@ class GazonArrosageRecommandeBinarySensor(GazonEntityBase, BinarySensorEntity):
     def extra_state_attributes(self):
         attrs = self._attrs_from_result(
             "objectif_mm",
-            "irrigation_need_mm",
             "irrigation_agronomic_recommendation",
             "irrigation_blocked",
             "irrigation_execution_allowed",
@@ -462,7 +466,11 @@ class GazonArrosageRecommandeBinarySensor(GazonEntityBase, BinarySensorEntity):
         if "type_arrosage" in attrs:
             attrs["type_arrosage"] = _normalized_public_type_arrosage(self, attrs.get("type_arrosage")) or None
         attrs["watering_cause"] = _watering_cause_value(self, attrs.get("watering_cause"))
-        attrs["besoin_hydrique_mm"] = attrs.get("irrigation_need_mm", attrs.get("objectif_mm", 0.0))
+        # `irrigation_need_mm` était lue ici avec repli silencieux sur `objectif_mm`, mais elle
+        # n'a JAMAIS eu de producteur : `decision_watering` ne l'émet pas, donc elle valait None
+        # et disparaissait du snapshot (to_snapshot filtre les None). Le repli était donc le seul
+        # chemin réel — on l'écrit franchement. Valeur exposée strictement inchangée (0.0 si vide).
+        attrs["besoin_hydrique_mm"] = attrs.get("objectif_mm", 0.0)
         attrs["recommendation_agronomique"] = bool(
             attrs.get(
                 "irrigation_agronomic_recommendation",
@@ -505,7 +513,6 @@ class GazonApplicationArrosageAutoriseBinarySensor(GazonEntityBase, BinarySensor
             "application_block_active": False,
             "application_block_remaining_minutes": 0.0,
             "application_post_watering_pending": False,
-            "application_post_watering_ready_at": None,
             "application_post_watering_delay_remaining_minutes": 0.0,
             "application_post_watering_ready": False,
             "application_post_watering_remaining_mm": 0.0,
@@ -513,7 +520,10 @@ class GazonApplicationArrosageAutoriseBinarySensor(GazonEntityBase, BinarySensor
         }
 
     def _application_state_keys(self) -> tuple[str, ...]:
-        return ("derniere_application",) + _APPLICATION_PUBLIC_ATTR_KEYS + _APPLICATION_STATUS_ATTR_KEYS
+        # Unpacking et non `+` : si l'une de ces constantes passait un jour en liste (édition
+        # anodine), `tuple + list` lèverait un TypeError AU DÉMARRAGE de Home Assistant,
+        # pendant la restauration d'état — pas en test.
+        return ("derniere_application", *_APPLICATION_PUBLIC_ATTR_KEYS, *_APPLICATION_STATUS_ATTR_KEYS)
 
     def _state_from_memory(self, memory: dict[str, object]) -> dict[str, object]:
         state = {

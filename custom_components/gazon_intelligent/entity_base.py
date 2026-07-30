@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import Any
 
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -88,12 +89,12 @@ def _normalize_exposed_value(value, key: str | None = None):
     return value
 
 
-def _coordinator_snapshot(coordinator) -> dict[str, object]:
+def _coordinator_snapshot(coordinator) -> dict[str, Any]:
     attrs = getattr(coordinator, "data", None)
     return attrs if isinstance(attrs, dict) else {}
 
 
-def _result_extra(result: DecisionResult | None) -> dict[str, object]:
+def _result_extra(result: DecisionResult | None) -> dict[str, Any]:
     if result is None:
         return {}
     extra = getattr(result, "extra", None)
@@ -112,7 +113,7 @@ def _result_value(result: DecisionResult | None, key: str):
     return _MISSING
 
 
-def _snapshot_value(snapshot: dict[str, object], key: str, default=_MISSING):
+def _snapshot_value(snapshot: dict[str, Any], key: str, default=_MISSING):
     if key in snapshot:
         return snapshot[key]
     return default
@@ -170,10 +171,10 @@ class GazonEntityBase(CoordinatorEntity):
             return legacy_result
         return None
 
-    def _snapshot_data(self) -> dict[str, object]:
+    def _snapshot_data(self) -> dict[str, Any]:
         return _coordinator_snapshot(self.coordinator)
 
-    def _public_mowing_facade(self) -> dict[str, object]:
+    def _public_mowing_facade(self) -> dict[str, Any]:
         snapshot = self._snapshot_data()
         facade = snapshot.get("_public_mowing_facade")
         if isinstance(facade, dict) and facade:
@@ -198,10 +199,10 @@ class GazonEntityBase(CoordinatorEntity):
             return default
         return _normalized_public_value(value, key)
 
-    def _decision_attrs(self, *keys: str) -> dict[str, object] | None:
+    def _decision_attrs(self, *keys: str) -> dict[str, Any] | None:
         result = self.decision_result
         if result is not None:
-            attrs: dict[str, object] = {}
+            attrs: dict[str, Any] = {}
             for key in keys:
                 value = _result_value(result, key)
                 if value is _MISSING:
@@ -211,14 +212,14 @@ class GazonEntityBase(CoordinatorEntity):
                 return attrs
         return self._attrs_from_data(*keys)
 
-    def _possible_values_attr(self, key: str) -> dict[str, object] | None:
+    def _possible_values_attr(self, key: str) -> dict[str, Any] | None:
         result = self.decision_result
         possible_values = result.possible_values_for(key) if result is not None else _legacy_possible_values_for(key)
         if not possible_values:
             return None
         return {"possible_values": list(possible_values)}
 
-    def _attrs_from_data(self, *keys: str) -> dict[str, object] | None:
+    def _attrs_from_data(self, *keys: str) -> dict[str, Any] | None:
         snapshot = self._snapshot_data()
         attrs = {
             key: _normalized_public_value(_snapshot_value(snapshot, key), key)
@@ -227,5 +228,5 @@ class GazonEntityBase(CoordinatorEntity):
         clean = {k: v for k, v in attrs.items() if v is not None}
         return clean or None
 
-    def _attrs_from_result(self, *keys: str) -> dict[str, object] | None:
+    def _attrs_from_result(self, *keys: str) -> dict[str, Any] | None:
         return self._decision_attrs(*keys)

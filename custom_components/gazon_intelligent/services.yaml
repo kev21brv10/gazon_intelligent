@@ -351,3 +351,14 @@ recalibrate_reserve:
           max: 100
           step: 0.1
           unit_of_measurement: mm
+    figer_la_journee:
+      required: false
+      default: true
+      description: >-
+        Activé (défaut) : la valeur est figée jusqu'à minuit — c'est ce qu'il faut quand tu
+        viens de sonder ton sol, sinon le recalcul du cycle suivant écraserait ta mesure.
+        Désactivé : la valeur est posée mais la journée continue normalement (évapotranspiration
+        débitée, pluie et arrosage crédités, jauge qui redescend). À utiliser pour corriger une
+        comptabilité faussée en cours de journée sans perdre le reste de celle-ci.
+      selector:
+        boolean:

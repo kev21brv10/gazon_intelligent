@@ -39,6 +39,10 @@ _MOWER_STATE_ALIASES: dict[str, str] = {
     "unknown": "inconnu",
 }
 
+# États Home Assistant signifiant « pas de mesure » : filtrés par `_clean_text`, donc jamais
+# retenus comme valeur (cf. coordinator._UNAVAILABLE_STATES, même intention en amont).
+_UNAVAILABLE_TEXT_VALUES = frozenset({"unavailable", "unknown"})
+
 _NO_ERROR_VALUES = {
     "",
     "none",
@@ -48,6 +52,12 @@ _NO_ERROR_VALUES = {
     "aucune",
     "aucune_erreur",
     "aucune erreur",
+    # « Pas de mesure » n'est PAS une panne : un capteur d'erreur indisponible (cas courant à
+    # chaque redémarrage de Home Assistant) était sinon lu comme un code d'erreur, et la tonte
+    # bloquée par un « Robot en erreur » imaginaire. Filtré aussi en amont
+    # (`coordinator._get_text_state`) ; conservé ici pour les valeurs arrivant d'un attribut.
+    "unavailable",
+    "unknown",
 }
 
 _RAIN_ERROR_VALUES = {
@@ -145,7 +155,15 @@ def _status_label(status: str, raw_state: Any) -> str | None:
 
 
 def _clean_text(value: Any) -> str | None:
+    """Texte exploitable, ou None si la valeur est une ABSENCE de mesure.
+
+    `unavailable`/`unknown` sont des états Home Assistant signifiant « pas de donnée » : les
+    laisser passer les transformait en valeurs — code d'erreur fantôme bloquant la tonte, ou
+    littéral « unavailable » affiché comme heure de prochain départ.
+    """
     text = str(value or "").strip()
+    if text.lower() in _UNAVAILABLE_TEXT_VALUES:
+        return None
     return text or None
 
 
@@ -205,6 +223,10 @@ def _normalize_mower_status(
 
 def _human_datetime_text(value: Any) -> str | None:
     if value in (None, "", [], {}):
+        return None
+    # Une date non mesurée ne se formate pas : sans ce filtre, un capteur indisponible finissait
+    # affiché littéralement « unavailable » à la place de l'heure du prochain départ.
+    if isinstance(value, str) and value.strip().lower() in _UNAVAILABLE_TEXT_VALUES:
         return None
     if isinstance(value, datetime):
         dt_value = value

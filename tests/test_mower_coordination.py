@@ -173,3 +173,41 @@ class MowingBeatsChargingTests(unittest.TestCase):
             _mc._operation_state({"tondeuse_connectee": False, "tondeuse_etat_brut": "mowing"}),
             "unknown",
         )
+
+
+class PauseAPluieTests(unittest.TestCase):
+    """Un robot en pause pluie est RANGÉ : il ne doit pas bloquer l'arrosage."""
+
+    BASE = {
+        "tondeuse_connectee": True,
+        "tondeuse_prete": False,
+        "tondeuse_pluie": True,
+        "tondeuse_statut": "pluie",
+        "tondeuse_source_entity": "lawn_mower.esperance_jr",
+        "tondeuse_resolution_state": "configured",
+        "tondeuse_etat_brut": "rain_delayed",
+    }
+
+    def test_pause_pluie_compte_comme_rangee_et_liberer_larrosage(self) -> None:
+        # RÉGRESSION (28/07/2026) : `rain_delayed` était classé « dehors » et jugé non fiable →
+        # l'arrosage était bloqué (`mower_not_stowed`/`mower_unreliable`) pour une machine
+        # pourtant à sa station. Or la pause pluie s'arme sur quelques dixièmes de mm et dure
+        # 6 à 12 h : le lendemain d'une averse insignifiante, la fenêtre d'arrosage du matin
+        # était perdue pour rien.
+        ctx = build_mower_coordination_context(dict(self.BASE), enabled=True)
+
+        self.assertEqual(ctx["mower_presence_state"], "dockee")
+        self.assertTrue(ctx["mower_is_docked"])
+        self.assertFalse(ctx["mower_is_outside"])
+        self.assertTrue(ctx["mower_coordination_ready"])
+        self.assertTrue(ctx["mower_is_safe_for_watering"], "l'arrosage doit être possible")
+        self.assertEqual(ctx["mower_reason_code"], "mower_rain_delayed")
+
+    def test_pause_pluie_reste_signalee_pour_la_tonte(self) -> None:
+        # Contrepartie indispensable : libérer l'ARROSAGE ne doit pas effacer le motif que la
+        # tonte utilise pour rester bloquée (gazon mouillé, robot en attente). Le code
+        # `mower_rain_delayed` doit donc subsister, et la tondeuse ne pas être déclarée prête.
+        ctx = build_mower_coordination_context(dict(self.BASE), enabled=True)
+
+        self.assertEqual(ctx["mower_reason_code"], "mower_rain_delayed")
+        self.assertFalse(ctx.get("tondeuse_prete", False))

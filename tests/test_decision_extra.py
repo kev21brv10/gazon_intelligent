@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import unittest
 from datetime import date, datetime, timezone
 import importlib
@@ -579,6 +580,110 @@ class TestDecisionSnapshotMowing(unittest.TestCase):
         self.assertEqual(mowing_bundle["mowing_block_reason_code"], "post_application_active")
         self.assertFalse(mowing_bundle["action_possible"])
 
+    def test_regle_du_tiers_active_sans_capteur_de_hauteur(self) -> None:
+        # RÉGRESSION (28/07/2026) : la règle du tiers et le garde-fou « hauteur trop faible » ne
+        # lisaient QUE `capteur_hauteur_gazon`, un capteur physique que peu d'installations
+        # possèdent. Sans lui, ces deux protections agronomiques étaient purement INACTIVES —
+        # le capteur « hauteur de gazon estimée », pourtant calculé et affiché, était décoratif.
+        # On retombe désormais sur l'estimation, comme le fait déjà le calcul de la hauteur
+        # conseillée. Ne jamais couper plus d'un tiers du brin : au-delà, le gazon jaunit.
+        def _bundle(last_mowing_date):
+            ctx = decision.DecisionContext.from_legacy_args(
+                history=[{"type": "tonte", "date": last_mowing_date, "hauteur_coupe_mm": 55}],
+                today=date(2026, 7, 15), hour_of_day=11, temperature=22,
+                pluie_24h=0, pluie_demain=0, humidite=45, type_sol="limoneux", etp_capteur=4.0,
+            )
+            phase = decision_phase.build_phase_bundle(ctx)
+            water = decision_watering.build_water_bundle(ctx, phase)
+            risk = decision_risk.build_risk_bundle(ctx, phase, water)
+            return decision_mowing.build_mowing_bundle(ctx, phase, water, risk)
+
+        # Gazon laissé très longtemps sans tonte → hauteur estimée élevée : couper à la hauteur
+        # conseillée retirerait bien plus d'un tiers → la règle doit BLOQUER.
+        haute = _bundle("2026-05-01")
+        self.assertIsNotNone(haute["gazon_hauteur_estimee_cm"])
+        self.assertIn(
+            haute["raison_blocage_code"],
+            {"regle_tiers", "regle_tiers_impossible"},
+            f"hauteur estimée {haute['gazon_hauteur_estimee_cm']} cm : la règle du tiers doit s'appliquer",
+        )
+        self.assertFalse(haute["tonte_autorisee"])
+
+        # Gazon tondu récemment → hauteur proche de la consigne : aucune raison de bloquer
+        # pour la hauteur (la règle ne doit pas devenir un blocage permanent).
+        recente = _bundle("2026-07-14")
+        self.assertNotIn(
+            recente["raison_blocage_code"],
+            {"regle_tiers", "regle_tiers_impossible", "hauteur_trop_faible"},
+        )
+
+    def test_contrat_public_tonte_coherent_avec_la_decision(self) -> None:
+        # RÉGRESSION (28/07/2026), deux incohérences dans le contrat public :
+        #  A) `temp_extreme` absent de `agronomic_block_codes` → `tonte_autorisee` restait à ON
+        #     à 35 °C, donc une automatisation branchée sur le binary_sensor lançait le robot en
+        #     pleine canicule.
+        #  B) `mowing_blocked` ne reflétait QUE les blocages machine/durs → il restait à False
+        #     alors que la tonte était interdite par le gazon. Inexploitable pour décider.
+        def _bundle(**over):
+            params = dict(
+                history=[], today=date(2026, 7, 15), hour_of_day=11,
+                pluie_24h=0, pluie_demain=0, humidite=45,
+                type_sol="limoneux", etp_capteur=4.0,
+            )
+            params.update(over)
+            ctx = decision.DecisionContext.from_legacy_args(**params)
+            phase = decision_phase.build_phase_bundle(ctx)
+            water = decision_watering.build_water_bundle(ctx, phase)
+            risk = decision_risk.build_risk_bundle(ctx, phase, water)
+            return decision_mowing.build_mowing_bundle(ctx, phase, water, risk)
+
+        # A) Canicule : le GAZON refuse → les deux drapeaux doivent le dire.
+        chaud = _bundle(temperature=35)
+        self.assertEqual(chaud["mowing_block_reason_code"], "temp_extreme")
+        self.assertFalse(chaud["tonte_autorisee"], "tonte_autorisee doit tomber à 35 °C")
+        self.assertTrue(chaud["mowing_blocked"])
+        self.assertFalse(chaud["action_possible"])
+
+        # B) Cohérence générale : tonte interdite ⇒ mowing_blocked vrai, quel que soit le motif.
+        for temperature in (5, 22, 35):
+            b = _bundle(temperature=temperature)
+            if not b["tonte_autorisee"]:
+                self.assertTrue(
+                    b["mowing_blocked"],
+                    f"tonte interdite à {temperature} °C mais mowing_blocked=False",
+                )
+
+    def test_pas_de_cooldown_de_tonte_sans_arrosage_dans_l_historique(self) -> None:
+        # RÉGRESSION (28/07/2026) : `_latest_watering_timestamp` fabrique un repli
+        # « aujourd'hui 06:00 UTC » quand aucun arrosage ne correspond, et le cooldown n'était pas
+        # gardé par l'historique. Résultat sur une instance qui n'a JAMAIS arrosé : tonte refusée
+        # de 08:00 à 11:00 locales — soit exactement la fenêtre idéale — avec le message mensonger
+        # « Arrosage récent : attends encore 180 min avant de reprendre la tonte. »
+        context = decision.DecisionContext.from_legacy_args(
+            history=[],  # aucun arrosage nulle part
+            today=date(2026, 6, 15),
+            hour_of_day=9,
+            temperature=22,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=50,
+            type_sol="limoneux",
+            etp_capteur=3.0,
+            runtime_context={
+                "now_utc": "2026-06-15T07:00:00+00:00",  # 09h00 locales
+                "mowing_cooldown_after_watering_minutes": 180,
+            },
+        )
+        phase_bundle = decision_phase.build_phase_bundle(context)
+        water_bundle = decision_watering.build_water_bundle(context, phase_bundle)
+        risk_bundle = decision_risk.build_risk_bundle(context, phase_bundle, water_bundle)
+
+        mowing_bundle = decision_mowing.build_mowing_bundle(context, phase_bundle, water_bundle, risk_bundle)
+
+        self.assertEqual(mowing_bundle["mowing_cooldown_remaining_minutes"], 0)
+        self.assertNotEqual(mowing_bundle["mowing_block_reason_code"], "watering_cooldown")
+        self.assertFalse(mowing_bundle["mowing_blocked_by_watering"])
+
     def test_build_mowing_bundle_prioritizes_phase_block_over_active_watering(self) -> None:
         # Phase Traitement active ET arrosage en cours : le blocage de phase doit gagner
         # (priorité la plus haute), pas le blocage lié à l'arrosage.
@@ -790,6 +895,80 @@ class TestDecisionSnapshotMowing(unittest.TestCase):
         self.assertEqual(mowing_bundle["mowing_window_reason"], "Fenêtre idéale du matin.")
         self.assertTrue(mowing_bundle["tonte_autorisee"])
 
+    def _fenetre_avec_vent(self, *, vent, weather_profile=None):
+        context = decision.DecisionContext.from_legacy_args(
+            history=[],
+            today=date(2026, 6, 15),
+            hour_of_day=11,
+            temperature=22,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=55,
+            type_sol="limoneux",
+            etp_capteur=3.0,
+            vent=vent,
+            weather_profile=weather_profile or {},
+        )
+        phase_bundle = decision_phase.build_phase_bundle(context)
+        water_bundle = decision_watering.build_water_bundle(context, phase_bundle)
+        risk_bundle = decision_risk.build_risk_bundle(context, phase_bundle, water_bundle)
+        bundle = decision_mowing.build_mowing_bundle(context, phase_bundle, water_bundle, risk_bundle)
+        return bundle["mowing_window_state"]
+
+    def test_capteur_vent_tombe_la_meteo_prend_le_relais(self) -> None:
+        """Capteur de vent indisponible (redémarrage HA) : le garde ne doit PAS disparaître.
+
+        `float(context.vent or 0.0)` faisait passer un vent inconnu pour un air calme, et la
+        fenêtre remontait de « à éviter » à « idéal ». `_resolve_mowing_block` consultait déjà
+        le repli météo ; la fenêtre, non. Le flow Node-RED démarre sur `ideal`/`acceptable` :
+        sans ce repli, le robot partait par vent fort.
+        """
+        self.assertEqual(self._fenetre_avec_vent(vent=40.0), "discouraged")
+        self.assertEqual(
+            self._fenetre_avec_vent(vent=None, weather_profile={"weather_wind_speed": 40.0}),
+            "discouraged",
+        )
+        # Vent réellement faible : la météo ne doit pas fermer la fenêtre pour autant.
+        self.assertEqual(
+            self._fenetre_avec_vent(vent=None, weather_profile={"weather_wind_speed": 5.0}),
+            "ideal",
+        )
+        # AUCUNE source de vent (installation sans capteur ni météo) : le garde reste muet,
+        # sinon une install sans anémomètre n'obtiendrait jamais de fenêtre idéale.
+        self.assertEqual(self._fenetre_avec_vent(vent=None), "ideal")
+
+    def test_motif_trop_chaud_ne_se_contredit_pas(self) -> None:
+        """À 30,2 °C le message affichait « 30 °C, seuil 30 °C » — un blocage juste, illisible.
+
+        Vu en direct le 30/07/2026. L'arrondi `.0f` faisait passer une comparaison correcte
+        (30,2 > 30) pour une erreur de seuil : de quoi chasser un bug qui n'existe pas.
+        """
+        context = decision.DecisionContext.from_legacy_args(
+            history=[],
+            today=date(2026, 6, 15),
+            hour_of_day=18,
+            temperature=30.2,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=55,
+            type_sol="limoneux",
+            etp_capteur=3.0,
+        )
+        phase_bundle = decision_phase.build_phase_bundle(context)
+        water_bundle = decision_watering.build_water_bundle(context, phase_bundle)
+        risk_bundle = decision_risk.build_risk_bundle(context, phase_bundle, water_bundle)
+        bundle = decision_mowing.build_mowing_bundle(context, phase_bundle, water_bundle, risk_bundle)
+
+        motif = bundle["mowing_window_reason"]
+        self.assertIn("30,2", motif)
+        self.assertNotIn("(30 °C, seuil 30 °C)", motif)
+        # VIRGULE et non point : un point décimal crée une fausse fin de phrase chez tout
+        # consommateur qui coupe le motif à la première phrase — la carte affichait
+        # « pour tondre (30 ». Vérifié en simulant ce découpage.
+        self.assertNotIn("30.2", motif)
+        premiere_phrase = re.split(r"\.\s", motif)[0]
+        self.assertIn("seuil", premiere_phrase)
+
     def test_build_mowing_bundle_marks_midday_as_discouraged_but_not_blocked(self) -> None:
         context = decision.DecisionContext.from_legacy_args(
             history=[],
@@ -946,6 +1125,40 @@ class TestDecisionSnapshotMowing(unittest.TestCase):
         self.assertTrue(mowing_bundle["tonte_autorisee"])
         self.assertFalse(mowing_bundle["action_possible"])
 
+    def test_machine_unavailable_detail_message_instable_atteignable(self) -> None:
+        # RÉGRESSION (28/07/2026) : la branche comparait `mower_reason_code` à `mower_unreliable`,
+        # or la coordination émet `unreliable` — `mower_unreliable` est le code côté ARROSAGE.
+        # Le message spécifique était donc inatteignable et tout retombait sur le générique.
+        detail = decision_mowing._machine_unavailable_detail(
+            {"mower_reason_code": "unreliable", "tondeuse_connectee": True, "tondeuse_prete": True}
+        )
+        self.assertEqual(
+            detail, ("unreliable", "Robot instable: vérifie sa disponibilité avant de reprendre.")
+        )
+
+    def test_libelle_temperature_distingue_chaud_et_froid(self) -> None:
+        # Les deux extrêmes renvoyaient le MÊME libellé « Température extrême » : impossible de
+        # savoir s'il faisait trop chaud ou trop froid, ni à quel seuil. Le CODE reste
+        # `temp_extreme` (contrat public), seul le libellé est précisé.
+        def _label(temperature):
+            ctx = decision.DecisionContext.from_legacy_args(
+                history=[], today=date(2026, 7, 15), hour_of_day=11, temperature=temperature,
+                pluie_24h=0, pluie_demain=0, humidite=45, type_sol="limoneux", etp_capteur=4.0,
+            )
+            phase = decision_phase.build_phase_bundle(ctx)
+            water = decision_watering.build_water_bundle(ctx, phase)
+            risk = decision_risk.build_risk_bundle(ctx, phase, water)
+            b = decision_mowing.build_mowing_bundle(ctx, phase, water, risk)
+            return b["mowing_block_reason_code"], (b["mowing_block_reason_label"] or "")
+
+        code_chaud, label_chaud = _label(35)
+        code_froid, label_froid = _label(3)
+        self.assertEqual(code_chaud, "temp_extreme")
+        self.assertEqual(code_froid, "temp_extreme")
+        self.assertIn("chaud", label_chaud.lower())
+        self.assertIn("froid", label_froid.lower())
+        self.assertNotEqual(label_chaud, label_froid)
+
     def test_machine_unavailable_detail_error_label(self) -> None:
         # Robot en erreur → libellé précis « Robot en erreur: … », prioritaire sur
         # « hors ligne » / le libellé générique.
@@ -974,6 +1187,17 @@ class TestDecisionSnapshotMowing(unittest.TestCase):
 
         # Garde anti faux positif : la sentinelle « no_error » (robot OK) ne déclenche rien.
         self.assertIsNone(decision_mowing._machine_unavailable_detail({"tondeuse_erreur": "no_error"}))
+
+        # RÉGRESSION (28/07/2026) : un capteur d'erreur INDISPONIBLE n'est pas une panne.
+        # `unavailable`/`unknown` étaient pris pour des codes d'erreur → « Robot en erreur :
+        # défaut signalé » → tonte bloquée alors que le robot va bien. Cas courant : la plupart
+        # des intégrations de tondeuse republient leurs capteurs en `unavailable` à chaque
+        # redémarrage de Home Assistant, et cette Mammotion en a plusieurs en permanence.
+        for _absent in ("unavailable", "unknown"):
+            self.assertIsNone(
+                decision_mowing._machine_unavailable_detail({"tondeuse_erreur": _absent}),
+                f"« {_absent} » ne doit pas être lu comme une panne",
+            )
 
         # Compatibilité « toutes tondeuses HA » : l'état standard `error` du domaine
         # lawn_mower → statut "erreur" (sans capteur d'erreur dédié) → libellé générique.
@@ -1257,9 +1481,15 @@ class TestDecisionSnapshotMowing(unittest.TestCase):
             hauteur_max_tondeuse_cm=8.0,
         )
 
-        self.assertEqual(snapshot["hauteur_tonte_recommandee_cm"], 6.5)
-        self.assertEqual(snapshot["hauteur_tonte_min_cm"], 3.0)
-        self.assertEqual(snapshot["hauteur_tonte_max_cm"], 8.0)
+        # 8,0 et non 6,5 depuis la 0.27.0 : le plafond fixe de 6,5 cm est retiré, la config
+        # (ici 3,0-8,0) borne seule. Avec un gazon à 12 cm, la règle du tiers interdit de
+        # descendre sous 8,0 — c'est elle qui fixe la consigne, et elle tape le maximum machine.
+        # Agronomiquement c'est le bon sens : la littérature conseille 7,5 à 10 cm en été pour
+        # une graminée de saison fraîche ; l'ancien plafond de 6,5 l'en empêchait.
+        self.assertEqual(snapshot["hauteur_tonte_recommandee_cm"], 8.0)
+        self.assertEqual(snapshot["hauteur_tonte_min_cm"], 3.0, "la config est de nouveau rognée")
+        self.assertEqual(snapshot["hauteur_tonte_max_cm"], 8.0, "la config est de nouveau rognée")
+        self.assertIn("tiers", str(snapshot["hauteur_tonte_garde_fou_label"]).lower())
 
     def test_build_decision_snapshot_prefers_slightly_lower_height_in_active_spring(self) -> None:
         snapshot = decision.build_decision_snapshot(
@@ -1294,7 +1524,10 @@ class TestDecisionSnapshotMowing(unittest.TestCase):
             hauteur_max_tondeuse_cm=9.0,
         )
 
-        self.assertEqual(snapshot["hauteur_tonte_recommandee_cm"], 6.5)
+        # 7,5 et non 6,5 depuis la 0.27.0 (plafond fixe retiré, cf. le test voisin) : par
+        # 34 °C, monter la coupe ombrage le sol et limite l'évaporation — c'est justement
+        # l'effet recherché, que l'ancien plafond bridait.
+        self.assertEqual(snapshot["hauteur_tonte_recommandee_cm"], 7.5)
 
     def test_build_decision_snapshot_allows_light_reduction_in_favorable_autumn(self) -> None:
         snapshot = decision.build_decision_snapshot(
@@ -1858,12 +2091,12 @@ class TestMowingOverdue(unittest.TestCase):
 class TestEstimatedGrassHeight(unittest.TestCase):
     """Tests pour l'estimation de la hauteur du gazon sans capteur physique."""
 
-    def _make_bundle(self, history, today, mower_context=None):
+    def _make_bundle(self, history, today, mower_context=None, hour_of_day=11, temperature=20):
         context = decision.DecisionContext.from_legacy_args(
             history=history,
             today=today,
-            hour_of_day=11,
-            temperature=20,
+            hour_of_day=hour_of_day,
+            temperature=temperature,
             pluie_24h=0,
             pluie_demain=0,
             humidite=55,
@@ -1903,14 +2136,111 @@ class TestEstimatedGrassHeight(unittest.TestCase):
         )
         self.assertEqual(bundle["gazon_hauteur_estimee_cm"], 4.5)
 
+    def test_la_fenetre_du_soir_suit_le_coucher_du_soleil(self) -> None:
+        """Demandé par Kévin : « il peut tondre plus tard, comme le soleil se couche plus tard ».
+
+        Le créneau du soir valait 17-19 h TOUTE L'ANNÉE. En juillet il s'arrêtait 2 h 45 avant
+        le coucher ; en décembre il tombait entièrement APRÈS la nuit.
+        """
+        import custom_components.gazon_intelligent.decision_mowing as dm
+
+        def fenetre(coucher_minute: float, heure: int) -> str:
+            etat, _ = dm._resolve_mowing_window(
+                decision.DecisionContext.from_legacy_args(
+                    history=[], today=date(2026, 7, 30), hour_of_day=heure, temperature=20,
+                    pluie_24h=0, pluie_demain=0, humidite=50, type_sol="limoneux", etp_capteur=3.0,
+                ),
+                weather_profile={"sunset_minute": coucher_minute},
+            )
+            return etat
+
+        # Coucher à 21 h 30 (fin juillet) : 19 h devient tondable, ce qu'il n'était pas.
+        self.assertEqual(fenetre(21 * 60 + 30, 19), "acceptable", "19 h refusé alors que le soleil se couche à 21 h 30")
+        # …mais pas 21 h : trop près du coucher, l'herbe coupée resterait humide la nuit.
+        self.assertNotEqual(fenetre(21 * 60 + 30, 21), "acceptable", "21 h accepté à 90 min du coucher")
+        # Coucher à 17 h (décembre) : 18 h est la nuit, jamais acceptable.
+        self.assertNotEqual(fenetre(17 * 60, 18), "acceptable", "18 h accepté alors que le soleil est couché")
+
+    def test_sans_coucher_connu_on_retombe_sur_les_bornes_fixes(self) -> None:
+        """Repli conservateur : sans `sun.sun`, on garde 17-19 h plutôt que d'inventer."""
+        import custom_components.gazon_intelligent.decision_mowing as dm
+        etat, _ = dm._resolve_mowing_window(
+            decision.DecisionContext.from_legacy_args(
+                history=[], today=date(2026, 7, 30), hour_of_day=18, temperature=20,
+                pluie_24h=0, pluie_demain=0, humidite=50, type_sol="limoneux", etp_capteur=3.0,
+            ),
+            weather_profile={},
+        )
+        self.assertEqual(etat, "acceptable")
+
+    def test_trop_chaud_ne_projette_pas_la_tonte_aujourd_hui(self) -> None:
+        """La projection ne doit pas annoncer un jour où la tonte est justement bloquée.
+
+        Constaté sur l'install le 30/07/2026 : « Trop chaud pour tondre (30 °C, seuil 30 °C) »
+        et « Prochaine tonte estimée le 30/07/2026 » dans la même phrase. `temp_extreme` n'avait
+        aucune branche de projection et tombait dans le repli, ancré sur maintenant.
+        """
+        for temperature in (38, 4):
+            with self.subTest(temperature=temperature):
+                bundle = self._make_bundle(
+                    history=[{"type": "tonte", "date": "2026-06-01"}],
+                    today=date(2026, 6, 7),
+                    mower_context={"tondeuse_hauteur_coupe_mm": 45},
+                    hour_of_day=14, temperature=temperature,
+                )
+                cible = bundle.get("next_mowing_date")
+                if cible is None:
+                    continue  # projection volontairement absente : acceptable, pas contradictoire
+                self.assertNotEqual(
+                    str(cible), "2026-06-07",
+                    f"à {temperature} °C la tonte est bloquée aujourd'hui, la projection ne peut pas dire aujourd'hui",
+                )
+
     def test_estimation_grows_after_mowing(self):
-        # Tonte il y a 4 jours en juin → hauteur = 4.5 + 4 * 0.5 = 6.5
+        # Tonte il y a 4 jours en juin, relevé à 11 h. Depuis la 0.29.0 la pousse du jour est
+        # étalée sur sa fenêtre (7 h - 20 h) au lieu de s'ajouter d'un bloc à minuit : à 11 h
+        # seuls 4/13 de la journée sont acquis, d'où 6,2 au lieu de 6,5. En fin de journée on
+        # retrouve exactement 6,5 (cf. test_la_hauteur_monte_au_fil_de_la_journee).
         bundle = self._make_bundle(
             history=[{"type": "tonte", "date": "2026-06-03"}],
             today=date(2026, 6, 7),
             mower_context={"tondeuse_hauteur_coupe_mm": 45},
         )
-        self.assertAlmostEqual(bundle["gazon_hauteur_estimee_cm"], 6.5, places=1)
+        self.assertAlmostEqual(bundle["gazon_hauteur_estimee_cm"], 6.2, places=1)
+
+    def test_la_hauteur_monte_au_fil_de_la_journee(self):
+        """Demandé par Kévin : la hauteur doit progresser dans la journée, pas sauter à minuit."""
+        mesures = []
+        for heure in (5, 7, 11, 15, 20, 23):
+            b = self._make_bundle(
+                history=[{"type": "tonte", "date": "2026-06-03"}],
+                today=date(2026, 6, 7),
+                mower_context={"tondeuse_hauteur_coupe_mm": 45},
+                hour_of_day=heure,
+            )
+            mesures.append((heure, b["gazon_hauteur_estimee_cm"]))
+        valeurs = [v for _, v in mesures]
+        self.assertEqual(valeurs, sorted(valeurs), f"la hauteur recule dans la journée : {mesures}")
+        self.assertEqual(valeurs[0], valeurs[1], "elle pousse avant 7 h du matin")
+        self.assertAlmostEqual(valeurs[4], 6.5, places=1, msg="le total du jour n'est pas atteint à 20 h")
+        self.assertEqual(valeurs[4], valeurs[5], "elle pousse encore après 20 h")
+        self.assertGreater(valeurs[3], valeurs[2], "elle ne progresse pas entre 11 h et 15 h")
+
+    def test_la_canicule_arrete_la_pousse(self):
+        """Kévin : « à certain moment la hauteur peut ne pas bouger et c'est normal »."""
+        doux = self._make_bundle(
+            history=[{"type": "tonte", "date": "2026-06-03"}],
+            today=date(2026, 6, 7),
+            mower_context={"tondeuse_hauteur_coupe_mm": 45},
+            hour_of_day=15, temperature=20,
+        )["gazon_hauteur_estimee_cm"]
+        canicule = self._make_bundle(
+            history=[{"type": "tonte", "date": "2026-06-03"}],
+            today=date(2026, 6, 7),
+            mower_context={"tondeuse_hauteur_coupe_mm": 45},
+            hour_of_day=15, temperature=38,
+        )["gazon_hauteur_estimee_cm"]
+        self.assertLess(canicule, doux, "38 °C ne freine pas la pousse")
 
     def test_estimation_zero_growth_in_winter(self):
         # Janvier → croissance 0 → hauteur reste égale à la hauteur de coupe
@@ -2274,18 +2604,67 @@ class TestDepletionWateringModel(unittest.TestCase):
 
     def test_dose_capped_by_weekly_budget(self):
         # Beaucoup déjà arrosé sur 7 j glissants : la recharge est plafonnée au reste du budget
-        # hebdo (cap dur), même réserve épuisée. NB : en canicule le plafond hebdo est rehaussé
-        # (~42 mm, suit l'ETc), donc il faut un cumul élevé pour atteindre le cap.
-        profile = self._profile(arrosage_recent_7j=38.0)
-        weekly_room = round(profile["weekly_guardrail_mm_max"] - 38.0, 1)
+        # hebdo (cap dur), même réserve épuisée. NB : le plafond hebdo suit désormais la DEMANDE
+        # ETc en continu (~45 mm ici, ET0 élevée) — il faut donc un cumul élevé pour que le budget
+        # (et non la déplétion 7 mm) devienne le facteur limitant.
+        recent = 40.0
+        profile = self._profile(arrosage_recent_7j=recent)
+        weekly_room = round(profile["weekly_guardrail_mm_max"] - recent, 1)
         self.assertEqual(profile["mm_final_recommande"], weekly_room)
-        self.assertLess(profile["mm_final_recommande"], 7.0)
+        self.assertLess(profile["mm_final_recommande"], 7.0)  # bridé SOUS la déplétion (budget contraint)
+
+    def test_projection_aube_utilise_etc_pas_et0_brute(self):
+        # Le DÉCLENCHEMENT à l'aube compare « déplétion + ET restant à s'écouler » au seuil MAD.
+        # Il doit projeter l'ETc (ET0 × Kc) — l'unité que le ledger débite — et non l'ET0 brute.
+        # Cas critique : LENDEMAIN d'une recharge complète (réserve pleine, déplétion ≈ 0) par
+        # forte ET0. À l'aube `et_elapsed_fraction` = 0, donc l'ET du jour entier est projetée :
+        #   ET0 brute 6,1 → (0 + 6,1)/12 = 0,51 > MAD 0,50 → arroserait un sol PLEIN
+        #   ETc     4,9 → (0 + 4,9)/12 = 0,41 < 0,50 → pas d'arrosage ✅
+        profile = self._profile(
+            reserve_actuelle_mm=12.0,
+            reserve_stock_mm=12.0,
+            depletion_mm=0.0,
+            depletion_ratio=0.0,
+            et0_mm=6.1,
+            etc_mm=4.9,
+            et_elapsed_fraction=0.0,
+            temperature=28.0,
+        )
+        self.assertEqual(profile["mm_final_recommande"], 0.0)
+
+        # Même sol, mais une vraie journée très demandante (ETc 7,5) : la soif projetée dépasse
+        # bien le seuil → l'arrosage part. La correction ne rend pas le déclenchement inerte.
+        profile_demandant = self._profile(
+            reserve_actuelle_mm=12.0,
+            reserve_stock_mm=12.0,
+            depletion_mm=0.0,
+            depletion_ratio=0.0,
+            et0_mm=9.4,
+            etc_mm=7.5,
+            et_elapsed_fraction=0.0,
+            temperature=28.0,
+        )
+        self.assertGreater(profile_demandant["mm_final_recommande"], 0.0)
+
+    def test_projection_aube_repli_kc_typique_sans_etc(self):
+        # Sans `etc_mm` fourni, on reste en unité ETc via le Kc typique (0,8) au lieu de retomber
+        # sur l'ET0 brute : 6,1 × 0,8 = 4,88 → 0,41 < 0,50 → pas d'arrosage sur sol plein.
+        profile = self._profile(
+            reserve_actuelle_mm=12.0,
+            reserve_stock_mm=12.0,
+            depletion_mm=0.0,
+            depletion_ratio=0.0,
+            et0_mm=6.1,
+            et_elapsed_fraction=0.0,
+            temperature=28.0,
+        )
+        self.assertEqual(profile["mm_final_recommande"], 0.0)
 
     def test_canicule_weekly_cap_follows_etc_not_throttled_to_survival(self):
-        # Régression (06/2026) : en canicule, le plafond hebdo NORMAL (~30 mm) étranglait la
+        # Régression (06/2026) : en forte demande, le plafond hebdo NORMAL (~30 mm) étranglait la
         # recharge sous la demande ETc (~50 mm/sem) → réserve à 0 mais dose bridée à 5 mm de
-        # survie → gazon qui sèche. Désormais le plafond canicule suit l'ETc : avec ~35 mm déjà
-        # arrosés (sous le nouveau plafond ~42), une vraie recharge > plancher de survie passe.
+        # survie → gazon qui sèche. Désormais le plafond suit l'ETc EN CONTINU : avec ~35 mm déjà
+        # arrosés (sous le plafond ≈ demande), une vraie recharge > plancher de survie passe.
         profile = self._profile(
             arrosage_recent_7j=35.5, reserve_actuelle_mm=0.0, depletion_mm=12.0, depletion_ratio=1.0
         )
@@ -2306,9 +2685,28 @@ class TestDepletionWateringModel(unittest.TestCase):
         self.assertGreater(profile["mm_final_recommande"], 0.0)
         self.assertNotEqual(profile.get("block_reason"), "garde_fou_hebdomadaire")
 
+    def test_survie_canicule_active_est_exposee(self):
+        # Aucun attribut ne portait l'information « c'est un arrosage de SURVIE » : les codes
+        # d'action valent `aucune_action`/`surveiller`/`a_faire`/`critique` et `heat_stress_level`
+        # est un score COMPOSITE qui dit déjà « severe » à 30 °C. Un affichage n'avait donc aucun
+        # moyen de distinguer une recharge de routine d'une intervention d'urgence.
+        survie = self._profile(
+            reserve_actuelle_mm=0.0, reserve_stock_mm=0.0, depletion_mm=12.0,
+            depletion_ratio=1.0, arrosage_recent_7j=40.0, temperature=34.0,
+        )
+        self.assertTrue(survie["survie_canicule_active"])
+
+        # 30 °C = journée d'été sèche NORMALE : le score composite dit « severe », mais la
+        # température réelle est sous le seuil → pas de survie (règle 0.16.0 préservée).
+        normale = self._profile(
+            reserve_actuelle_mm=0.0, reserve_stock_mm=0.0, depletion_mm=12.0,
+            depletion_ratio=1.0, arrosage_recent_7j=40.0, temperature=30.0,
+        )
+        self.assertFalse(normale["survie_canicule_active"])
+
     def test_pas_de_survie_a_30_degres_meme_reserve_epuisee(self):
         # 30 °C = journée d'été sèche NORMALE, pas une canicule. Même réserve épuisée + budget
-        # dépassé, la survie ne doit PAS s'armer (le score composite dit "extreme" par l'ET0/air sec,
+        # dépassé, la survie ne doit PAS s'armer (le score composite dit "severe" par l'ET0/air sec,
         # mais on exige une chaleur RÉELLE ≥ 32 °C) → le garde-fou hebdo reste un cap dur.
         profile = self._profile(
             reserve_actuelle_mm=0.0,
@@ -2474,6 +2872,30 @@ class TestDepletionWateringModel(unittest.TestCase):
         self.assertEqual(snapshot["phase_active"], "Sursemis")
         self.assertFalse(snapshot["use_depletion_logic"])
 
+    def test_sans_ledger_sol_on_retombe_sur_le_modele_deficit(self) -> None:
+        # SECOND repli du pilotage par dépletion, distinct du test ci-dessus : ici la phase EST
+        # Normal, mais le bilan sol interne ne fournit aucune réserve (`reserve_from_soil_ledger`
+        # faux) — cas du tout premier cycle ou d'un ledger vide. Le pilotage doit alors retomber
+        # sur le modèle déficit (legacy), condition explicitement protégée par le CLAUDE.md.
+        # Ce test vivait dans tests/test_dose_policy.py, supprimé avec le sous-système `dose_policy`
+        # (0.18.3) alors qu'il n'en testait rien : relogé ici pour ne pas perdre la couverture.
+        snapshot = decision.build_decision_snapshot(
+            history=[],
+            today=date(2026, 5, 15),
+            hour_of_day=8,
+            temperature=20.0,
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            humidite=45.0,
+            type_sol="limoneux",
+            etp_capteur=2.0,
+        )
+        self.assertIn("objectif_mm", snapshot)
+        self.assertIn("mm_final", snapshot)
+        self.assertIn("use_depletion_logic", snapshot)
+        self.assertFalse(snapshot["use_depletion_logic"])
+        self.assertEqual(snapshot["objectif_mm"], snapshot["mm_final"])
+
 
 class TestEveningCoolingWatering(unittest.TestCase):
     """Rafraîchissement du soir en canicule extrême (cooling) malgré une réserve saine."""
@@ -2521,7 +2943,7 @@ class TestEveningCoolingWatering(unittest.TestCase):
         # 18h30, canicule extrême, air sec, coucher dans 3 h, réserve saine → petit cycle de
         # rafraîchissement (EVENING_COOLING_MM), fenêtre "soir", pas de blocage.
         profile = self._cooling_profile()
-        self.assertEqual(profile["heat_stress_level"], "extreme")
+        self.assertEqual(profile["heat_stress_level"], "severe")
         self.assertTrue(profile["watering_evening_allowed"])
         self.assertEqual(profile["fenetre_optimale"], "soir")
         self.assertEqual(profile["mm_final_recommande"], guidance.EVENING_COOLING_MM)
@@ -2547,7 +2969,7 @@ class TestEveningCoolingWatering(unittest.TestCase):
             depletion_mm=10.0,
             depletion_ratio=0.83,
         )
-        self.assertEqual(profile["heat_stress_level"], "extreme")
+        self.assertEqual(profile["heat_stress_level"], "severe")
         self.assertEqual(profile["fenetre_optimale"], "soir")
         # C'est le cooling (3 mm) qui sort, PAS la grosse recharge hydrique du déficit.
         self.assertEqual(profile["mm_final_recommande"], guidance.EVENING_COOLING_MM)
@@ -2590,7 +3012,7 @@ class TestEveningCoolingWatering(unittest.TestCase):
                 weather_profile={"sunset_minute": 1290},
                 history=[],
             )
-        self.assertEqual(profile["heat_stress_level"], "canicule")
+        self.assertEqual(profile["heat_stress_level"], "eleve")
         self.assertEqual(profile["fenetre_optimale"], "soir")
         self.assertEqual(profile["mm_final_recommande"], guidance.EVENING_COOLING_MM)
 
@@ -2668,7 +3090,7 @@ class TestEveningCoolingWatering(unittest.TestCase):
                 weather_profile={"sunset_minute": 1290},
                 history=[],
             )
-        self.assertIn(profile["heat_stress_level"], {"canicule", "extreme"})
+        self.assertIn(profile["heat_stress_level"], {"eleve", "severe"})
         self.assertFalse(profile["evening_cooling"])
         self.assertEqual(profile["mm_final_recommande"], 0.0)
         self.assertEqual(profile["block_reason"], "sol_deja_humide")
@@ -2679,7 +3101,7 @@ class TestEveningCoolingWatering(unittest.TestCase):
         # de RECHARGE ne doit PAS partir le soir — sinon gros arrosage à la tombée de la nuit sans
         # séchage → risque fongique. Elle est reportée au matin.
         profile = self._evening_recharge_profile(temperature=30.0)
-        self.assertIn(profile["heat_stress_level"], {"canicule", "extreme"})
+        self.assertIn(profile["heat_stress_level"], {"eleve", "severe"})
         self.assertNotEqual(profile["fenetre_optimale"], "soir")
         # Le coordinateur ne doit PAS être autorisé à lancer dans la fenêtre du soir.
         self.assertFalse(profile["watering_evening_allowed"])
@@ -2687,7 +3109,7 @@ class TestEveningCoolingWatering(unittest.TestCase):
     def test_no_evening_recharge_when_switch_disabled(self):
         # Même garde-fou quand c'est le switch qui coupe le rafraîchissement.
         profile = self._evening_recharge_profile(temperature=34.0, evening_cooling_enabled=False)
-        self.assertIn(profile["heat_stress_level"], {"canicule", "extreme"})
+        self.assertIn(profile["heat_stress_level"], {"eleve", "severe"})
         self.assertNotEqual(profile["fenetre_optimale"], "soir")
         self.assertFalse(profile["watering_evening_allowed"])
 
@@ -2737,7 +3159,7 @@ class TestEveningCoolingWatering(unittest.TestCase):
                 history=[],
                 evening_cooling_enabled=False,
             )
-        self.assertEqual(profile["heat_stress_level"], "canicule")
+        self.assertEqual(profile["heat_stress_level"], "eleve")
         self.assertEqual(profile["mm_final_recommande"], 0.0)
         self.assertNotEqual(profile["fenetre_optimale"], "soir")
 
@@ -2777,7 +3199,7 @@ class TestEveningCoolingWatering(unittest.TestCase):
                 weather_profile={"sunset_minute": 1290},
                 history=[],
             )
-        self.assertIn(profile["heat_stress_level"], {"canicule", "extreme"})
+        self.assertIn(profile["heat_stress_level"], {"eleve", "severe"})
         self.assertEqual(profile["mm_final_recommande"], 0.0)
         self.assertNotEqual(profile["fenetre_optimale"], "soir")
 
@@ -3098,7 +3520,7 @@ class FungalGuardWiringTests(unittest.TestCase):
     BASE = dict(
         temperature=26.0, humidite=55.0,
         water_balance={"bilan_hydrique_mm": -8.0, "deficit_3j": 8.0, "arrosage_recent": 0.0},
-        objectif_mm=10.0, heat_stress_level="canicule", minutes_to_sunset=25.0,
+        objectif_mm=10.0, heat_stress_level="eleve", minutes_to_sunset=25.0,
     )
 
     def test_risque_eleve_ferme_la_fenetre_du_soir(self):

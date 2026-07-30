@@ -8,7 +8,10 @@ from typing import Any
 try:
     from homeassistant.helpers.storage import Store
 except Exception:  # pragma: no cover - fallback for unit tests / stripped envs
-    class Store:  # type: ignore[too-many-ancestors]
+    # Repli VOLONTAIRE hors Home Assistant (tests, environnement allégé). Le vérificateur
+    # de types y voit une redéfinition du symbole importé au-dessus : c'est exactement
+    # le but du motif try/except, pas une erreur.
+    class Store:  # type: ignore[no-redef, too-many-ancestors]
         def __init__(self, hass, version: int, key: str) -> None:
             self.hass = hass
             self.version = version

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 import importlib
 from pathlib import Path
 import sys
@@ -27,6 +27,232 @@ _ensure_package("custom_components", PACKAGE_DIR.parent)
 _ensure_package("custom_components.gazon_intelligent", PACKAGE_DIR)
 
 soil_balance = importlib.import_module("custom_components.gazon_intelligent.soil_balance")
+
+
+class SoilBalanceHourlyAccumulationTests(unittest.TestCase):
+    """Débit du ledger par intégration du taux HORAIRE mesuré (au lieu du prorata estimé).
+
+    L'ET0 journalière est extrapolée d'un instantané et fait du yo-yo (28/07/2026 : 9 mm/j
+    annoncés à 15 h, 6,9 à 17 h, ~6 mesurés). Le taux horaire mesuré est intégré au fil du
+    temps : le sol sèche au rythme réel. Ces tests verrouillent l'accumulation ET ses
+    garde-fous (amorçage, coupure, horloge non monotone, plafond, repli).
+    """
+
+    TODAY = date(2026, 7, 28)
+    TZ = timezone(timedelta(hours=2))
+
+    def _state_at(self, *, previous_state, hour, minute=0, rate, etp=8.0, fraction=0.5, **kwargs):
+        return soil_balance.update_soil_balance(
+            previous_state=previous_state,
+            today=self.TODAY,
+            pluie_mm=kwargs.pop("pluie_mm", 0.0),
+            arrosage_mm=kwargs.pop("arrosage_mm", 0.0),
+            etp_mm=etp,
+            type_sol="limoneux",
+            et_elapsed_fraction=fraction,
+            etc_hourly_mm_h=rate,
+            now=datetime(2026, 7, 28, hour, minute, tzinfo=self.TZ),
+            **kwargs,
+        )
+
+    def test_le_taux_horaire_est_integre_dans_le_temps(self) -> None:
+        # Amorçage à 12 h : prorata 8 × 0.5 = 4 mm déjà écoulés.
+        first = self._state_at(previous_state=None, hour=12, rate=0.5)
+        self.assertAlmostEqual(first["ledger"][-1]["etp_elapsed_mm"], 4.0, places=3)
+
+        # +2 h à 0.5 mm/h → +1 mm débité (4 → 5), sans dépendre de l'estimation journalière.
+        second = self._state_at(previous_state=first, hour=14, rate=0.5)
+        self.assertAlmostEqual(second["ledger"][-1]["etp_elapsed_mm"], 5.0, places=3)
+
+        # La réserve suit : elle a bien perdu 1 mm de plus entre les deux passages.
+        self.assertAlmostEqual(
+            first["ledger"][-1]["reserve_mm"] - second["ledger"][-1]["reserve_mm"], 1.0, places=1
+        )
+
+    def test_sans_taux_horaire_on_retombe_sur_le_prorata(self) -> None:
+        # Repli intégral sur le modèle historique : aucune régression si le capteur manque.
+        state = soil_balance.update_soil_balance(
+            previous_state=None,
+            today=self.TODAY,
+            pluie_mm=0.0,
+            arrosage_mm=0.0,
+            etp_mm=8.0,
+            type_sol="limoneux",
+            et_elapsed_fraction=0.25,
+        )
+        # 12 − 8 × 0,25 = 10 : prorata inchangé.
+        self.assertAlmostEqual(state["ledger"][-1]["reserve_mm"], 10.0, places=1)
+        # Et l'entrée ne porte PAS de cumul horaire : c'est CE qui fait retomber la clôture de la
+        # veille sur l'ET0 pleine journée (filet anti-sous-débit, cf.
+        # SoilBalanceTests::test_cloture_de_la_veille_debite_l_et0_entiere).
+        self.assertNotIn("etp_elapsed_mm", state["ledger"][-1])
+
+    def test_le_debit_ne_recule_jamais_en_cours_de_journee(self) -> None:
+        # L'estimation journalière peut RETOMBER (9 → 6,9 constaté le 28/07/2026). L'eau déjà
+        # évaporée ne revient pas : la réserve ne doit pas REMONTER sans pluie ni arrosage.
+        first = soil_balance.update_soil_balance(
+            previous_state=None, today=self.TODAY, pluie_mm=0.0, arrosage_mm=0.0,
+            etp_mm=9.0, type_sol="limoneux", et_elapsed_fraction=0.6,
+        )
+        second = soil_balance.update_soil_balance(
+            previous_state=first, today=self.TODAY, pluie_mm=0.0, arrosage_mm=0.0,
+            etp_mm=4.0, type_sol="limoneux", et_elapsed_fraction=0.6,
+        )
+        self.assertLessEqual(
+            second["ledger"][-1]["reserve_mm"], first["ledger"][-1]["reserve_mm"]
+        )
+
+    def test_une_coupure_longue_ne_sur_debite_ni_ne_sous_debite(self) -> None:
+        # Home Assistant arrêté 10 h puis relancé. Appliquer le taux courant sur tout le trou
+        # viderait la réserve d'un coup (sur-débit) ; mais se contenter de borner le pas PERD
+        # définitivement les heures manquées — l'erreur se fige dans la réserve d'ouverture du
+        # lendemain (mesuré : ~2,6 mm d'eau fantôme pour 8 h d'arrêt). On borne donc le pas ET
+        # on se resynchronise sur le prorata, seule estimation qui connaisse la fraction de
+        # journée écoulée pendant l'absence.
+        first = self._state_at(previous_state=None, hour=8, rate=1.0, etp=8.0, fraction=0.1)
+        self.assertAlmostEqual(first["ledger"][-1]["etp_elapsed_mm"], 0.8, places=3)  # amorçage
+
+        after_gap = self._state_at(previous_state=first, hour=18, rate=1.0, etp=8.0, fraction=0.8)
+        elapsed = after_gap["ledger"][-1]["etp_elapsed_mm"]
+        # Pas de sur-débit : bien moins que 10 h × 1 mm/h.
+        self.assertLess(elapsed, 0.8 + 10.0)
+        # Pas de sous-débit non plus : au moins le prorata de la journée écoulée (8 × 0,8 = 6,4),
+        # au lieu des 2,8 mm qu'aurait donnés le simple bornage du pas.
+        self.assertAlmostEqual(elapsed, 6.4, places=3)
+
+    def test_un_blip_de_capteur_ne_detruit_pas_l_accumulation(self) -> None:
+        # DÉFAUT CORRIGÉ : un seul cycle sans taux horaire (capteur `unavailable` — le Netatmo
+        # décroche à CHAQUE redémarrage de Home Assistant) réécrivait l'entrée sans les clés
+        # d'accumulation, qui étaient alors purgées : le cumul repartait du prorata au cycle
+        # suivant. Mesuré : +22 % de sur-débit quand un capteur clignote, l'intégration horaire
+        # étant en pratique remplacée par le prorata — en silence.
+        state = self._state_at(previous_state=None, hour=8, rate=0.5, etp=8.0, fraction=0.2)
+        for _hour in (10, 12, 14):
+            state = self._state_at(previous_state=state, hour=_hour, rate=0.5, etp=8.0, fraction=0.2)
+        avant = state["ledger"][-1]["etp_elapsed_mm"]
+
+        # Cycle en repli : taux indisponible.
+        blip = soil_balance.update_soil_balance(
+            previous_state=state, today=self.TODAY, pluie_mm=0.0, arrosage_mm=0.0,
+            etp_mm=8.0, type_sol="limoneux", et_elapsed_fraction=0.2,
+            etc_hourly_mm_h=None, now=datetime(2026, 7, 28, 14, 2, tzinfo=self.TZ),
+        )
+        entry = blip["ledger"][-1]
+        self.assertIn("etp_elapsed_mm", entry)  # le cumul SURVIT au blip
+        self.assertGreaterEqual(entry["etp_elapsed_mm"], avant)  # et ne recule pas
+        self.assertTrue(entry.get("etp_hourly"))  # le mode horaire reste celui de la journée
+
+        # Reprise : on repart du cumul conservé, pas du prorata.
+        reprise = self._state_at(previous_state=blip, hour=16, rate=0.5, etp=8.0, fraction=0.2)
+        self.assertAlmostEqual(reprise["ledger"][-1]["etp_elapsed_mm"], avant + 1.0, places=2)
+
+    def test_journee_tronquee_se_cloture_sur_l_estimation(self) -> None:
+        # DÉFAUT CORRIGÉ : si le seul cycle de la journée tombe AVANT l'aube, `et_elapsed_fraction`
+        # vaut 0 → cumul 0,0 mm, qui n'est pas None et était donc préféré à l'estimation à la
+        # clôture. Une journée entière d'ETc n'était jamais débitée (~5 mm d'eau fantôme), et le
+        # sol paraissait plein au réveil — précisément quand la décision d'arroser se prend.
+        avant_aube = self._state_at(previous_state=None, hour=0, minute=2, rate=0.0, etp=6.0, fraction=0.0)
+        self.assertAlmostEqual(avant_aube["ledger"][-1]["etp_elapsed_mm"], 0.0, places=3)
+        ouverture_veille = avant_aube["ledger"][-1]["previous_reserve_mm"]
+
+        lendemain = soil_balance.update_soil_balance(
+            previous_state=avant_aube, today=date(2026, 7, 29), pluie_mm=0.0, arrosage_mm=0.0,
+            etp_mm=6.0, type_sol="limoneux", et_elapsed_fraction=0.0,
+            etc_hourly_mm_h=0.0, now=datetime(2026, 7, 29, 1, 0, tzinfo=self.TZ),
+        )
+        # La veille est clôturée sur l'estimation pleine journée (6 mm), pas sur le cumul nul.
+        self.assertAlmostEqual(
+            lendemain["ledger"][-1]["previous_reserve_mm"], max(0.0, ouverture_veille - 6.0), places=1
+        )
+
+    def test_taux_non_fini_ne_gele_pas_le_debit(self) -> None:
+        # DÉFAUT CORRIGÉ : `max(0.0, nan)` renvoie 0.0 → le mode horaire restait actif avec un
+        # taux nul, la réserve cessait de descendre et la journée se clôturait sur cette valeur
+        # figée. Un NaN doit être traité comme ABSENT (repli prorata), jamais comme zéro.
+        state = self._state_at(previous_state=None, hour=10, rate=0.5, etp=8.0, fraction=0.3)
+        avant = state["ledger"][-1]["etp_elapsed_mm"]
+        nan_state = self._state_at(previous_state=state, hour=12, rate=float("nan"), etp=8.0, fraction=0.5)
+        apres = nan_state["ledger"][-1]["etp_elapsed_mm"]
+        # Le débit continue (repli prorata = 8 × 0,5 = 4,0) au lieu de rester figé.
+        self.assertGreater(apres, avant)
+        self.assertAlmostEqual(apres, 4.0, places=3)
+
+    def test_un_redemarrage_ne_fait_pas_chuter_la_reserve(self) -> None:
+        """Signalé par Kévin le 30/07/2026 : « à chaque fois que je redémarre la réserve descend ».
+
+        Le capteur d'ET horaire décroche systématiquement au redémarrage de Home Assistant. Le
+        repli faisait alors `max(prorata, cumul)` : la mesure fine était remplacée par
+        l'estimation, plus grossière et systématiquement plus haute. Mesuré sur l'install :
+        jusqu'à **−1,4 mm en un pas**, là où la dérive normale vaut 0,1 mm.
+
+        NE PAS resynchroniser sur le prorata pour une absence de quelques minutes.
+        """
+        # 10:00 — cumul mesuré normal, bien EN DESSOUS de ce que le prorata estimerait.
+        state = self._state_at(previous_state=None, hour=10, rate=0.2, etp=12.0, fraction=0.4)
+        avant = state["ledger"][-1]["etp_elapsed_mm"]
+        # 10:05 — redémarrage : le capteur est absent (rate=None), 5 minutes se sont écoulées.
+        apres_state = self._state_at(
+            previous_state=state, hour=10, minute=5, rate=None, etp=12.0, fraction=0.42
+        )
+        apres = apres_state["ledger"][-1]["etp_elapsed_mm"]
+        self.assertAlmostEqual(
+            apres, avant, places=3,
+            msg=f"le redémarrage a débité {apres - avant:.2f} mm de plus — le prorata a repris la main",
+        )
+
+    def test_une_vraie_coupure_se_resynchronise_toujours(self) -> None:
+        # Garde-fou inverse : au-delà de la fenêtre de fraîcheur, le prorata doit reprendre la
+        # main, sans quoi une coupure sous-débiterait définitivement (eau fantôme au lendemain).
+        state = self._state_at(previous_state=None, hour=8, rate=0.2, etp=12.0, fraction=0.2)
+        avant = state["ledger"][-1]["etp_elapsed_mm"]
+        apres = self._state_at(
+            previous_state=state, hour=14, rate=None, etp=12.0, fraction=0.7
+        )["ledger"][-1]["etp_elapsed_mm"]
+        self.assertGreater(apres, avant, "une coupure de 6 h n'a pas été rattrapée")
+
+    def test_horloge_non_monotone_ne_debite_rien(self) -> None:
+        # Changement d'heure / resynchro NTP : pas de pas négatif, pas de débit inventé.
+        first = self._state_at(previous_state=None, hour=14, rate=0.5)
+        backwards = self._state_at(previous_state=first, hour=13, rate=0.5)
+        self.assertAlmostEqual(
+            backwards["ledger"][-1]["etp_elapsed_mm"],
+            first["ledger"][-1]["etp_elapsed_mm"],
+            places=3,
+        )
+
+    def test_accumulation_plafonnee(self) -> None:
+        # Un taux aberrant ne peut pas drainer la réserve au-delà du plafond physique journalier.
+        state = self._state_at(previous_state=None, hour=6, rate=99.0, etp=8.0, fraction=0.1)
+        for hour in (8, 10, 12, 14, 16, 18):
+            state = self._state_at(previous_state=state, hour=hour, rate=99.0, etp=8.0, fraction=0.1)
+        self.assertLessEqual(state["ledger"][-1]["etp_elapsed_mm"], soil_balance.ETP_DAILY_CAP_MM)
+
+    def test_cloture_de_la_veille_utilise_l_et_accumulee(self) -> None:
+        # La veille se clôture sur l'ET RÉELLEMENT accumulée (mesurée), pas sur l'estimation
+        # journalière — c'est tout l'intérêt de la bascule.
+        veille = self._state_at(previous_state=None, hour=12, rate=0.5, etp=9.0, fraction=0.4)
+        # Pas de 2 h (borne d'intégration) : au-delà, un « trou » déclencherait la
+        # resynchronisation sur le prorata, ce que couvre test_une_coupure_longue_*.
+        for _hour in (14, 16, 18, 20):
+            veille = self._state_at(previous_state=veille, hour=_hour, rate=0.5, etp=9.0, fraction=1.0)
+        entry_veille = veille["ledger"][-1]
+        ouverture = entry_veille["previous_reserve_mm"]
+        accumulee = entry_veille["etp_elapsed_mm"]
+        self.assertLess(accumulee, 9.0)  # l'accumulation mesurée reste sous l'estimation
+
+        lendemain = soil_balance.update_soil_balance(
+            previous_state=veille,
+            today=date(2026, 7, 29),
+            pluie_mm=0.0,
+            arrosage_mm=0.0,
+            etp_mm=9.0,
+            type_sol="limoneux",
+            et_elapsed_fraction=0.0,
+            etc_hourly_mm_h=0.0,
+            now=datetime(2026, 7, 29, 1, 0, tzinfo=self.TZ),
+        )
+        attendu = max(0.0, ouverture - accumulee)
+        self.assertAlmostEqual(lendemain["ledger"][-1]["previous_reserve_mm"], attendu, places=1)
 
 
 class SoilBalanceTests(unittest.TestCase):
@@ -102,6 +328,47 @@ class SoilBalanceTests(unittest.TestCase):
         # La veille est clôturée à 12 − 8 = 4 mm (ET0 ENTIÈRE), et non aux 10 mm partiels.
         self.assertEqual(lendemain["previous_reserve_mm"], 4.0)
         self.assertEqual(lendemain["reserve_mm"], 4.0)  # rien d'évaporé encore le lendemain
+
+    def test_entree_du_jour_sans_reserve_douverture_ne_casse_pas_le_bilan(self) -> None:
+        # Une entrée du jour peut arriver sans `previous_reserve_mm` : ledger hérité d'une version
+        # antérieure à cette clé, ou `.storage` retouché. Le calcul levait alors un TypeError
+        # (None + float) et le bilan sol s'arrêtait à chaque cycle sans rien dire.
+        state = {
+            "ledger": [
+                {"date": "2026-07-28", "reserve_mm": 9.0, "previous_reserve_mm": 12.0, "etp_mm": 3.0},
+                {"date": "2026-07-29", "reserve_mm": 6.0, "etp_mm": 3.0},  # ouverture manquante
+            ]
+        }
+
+        result = soil_balance.update_soil_balance(
+            previous_state=state,
+            today=date(2026, 7, 29),
+            pluie_mm=0.0,
+            arrosage_mm=0.0,
+            etp_mm=4.0,
+            type_sol="limoneux",
+        )
+
+        # Repli sur la CLÔTURE DE LA VEILLE (9 mm), pas sur la réserve de fin de journée du jour
+        # même (6 mm) qui aurait fait perdre l'ET0 déjà débitée.
+        self.assertEqual(result["previous_reserve_mm"], 9.0)
+        self.assertEqual(result["reserve_mm"], 5.0)  # 9 − 4
+
+    def test_entree_du_jour_orpheline_repli_sur_la_reserve_de_base(self) -> None:
+        # Même cas, mais sans veille exploitable : on doit retomber sur la réserve de base du sol
+        # plutôt que de planter.
+        state = {"ledger": [{"date": "2026-07-29", "reserve_mm": 6.0, "etp_mm": 3.0}]}
+
+        result = soil_balance.update_soil_balance(
+            previous_state=state,
+            today=date(2026, 7, 29),
+            pluie_mm=0.0,
+            arrosage_mm=0.0,
+            etp_mm=2.0,
+            type_sol="limoneux",
+        )
+
+        self.assertEqual(result["previous_reserve_mm"], soil_balance.base_reserve_mm("limoneux"))
 
     def test_update_soil_balance_replaces_same_day_entry(self) -> None:
         initial = soil_balance.update_soil_balance(
@@ -455,3 +722,124 @@ class RainDayEdgeProtectionTests(unittest.TestCase):
     def test_la_pluie_aberrante_reste_clampee(self) -> None:
         etat = self._jour(None, 250.0)
         self.assertEqual(etat["pluie_mm"], 30.0)
+
+
+class RecalageSansGelDeLaJourneeTests(unittest.TestCase):
+    """`freeze_day=False` corrige la réserve SANS figer la journée.
+
+    L'ancre historique (`freeze_day=True`) arrête tout le calcul du jour : ni ET débitée, ni
+    pluie ou arrosage crédités, jauge immobile. C'est voulu pour « j'ai sondé mon sol ce soir ».
+    Pour corriger une comptabilité faussée en cours de journée, il faut l'inverse.
+    """
+
+    def test_le_gel_reste_le_defaut(self) -> None:
+        # Non-régression : l'usage historique ne change pas.
+        state = soil_balance.set_reserve_mm(None, 8.0, today=date(2026, 7, 29), type_sol="limoneux")
+        self.assertTrue(state["ledger"][-1].get("manual_anchor"))
+
+    def test_sans_gel_aucune_ancre_posee(self) -> None:
+        state = soil_balance.set_reserve_mm(
+            None, 7.5, today=date(2026, 7, 29), type_sol="limoneux", freeze_day=False
+        )
+        self.assertNotIn("manual_anchor", state["ledger"][-1])
+
+    def test_sans_gel_la_journee_continue_de_se_calculer(self) -> None:
+        # LE point : après un recalage sans gel, l'ET du jour doit de nouveau être débitée.
+        recale = soil_balance.set_reserve_mm(
+            None, 7.5, today=date(2026, 7, 29), type_sol="limoneux", freeze_day=False
+        )
+
+        suite = soil_balance.update_soil_balance(
+            previous_state=recale,
+            today=date(2026, 7, 29),
+            pluie_mm=0.0,
+            arrosage_mm=0.0,
+            etp_mm=6.0,
+            type_sol="limoneux",
+            et_elapsed_fraction=0.5,  # mi-journée
+        )
+
+        self.assertEqual(suite["previous_reserve_mm"], 7.5)
+        self.assertEqual(suite["reserve_mm"], 4.5)  # 7,5 − 6 × 0,5
+
+    def test_avec_gel_la_journee_reste_immobile(self) -> None:
+        # Le miroir : avec l'ancre, la même ET ne bouge rien.
+        ancre = soil_balance.set_reserve_mm(
+            None, 7.5, today=date(2026, 7, 29), type_sol="limoneux", freeze_day=True
+        )
+
+        suite = soil_balance.update_soil_balance(
+            previous_state=ancre,
+            today=date(2026, 7, 29),
+            pluie_mm=0.0,
+            arrosage_mm=0.0,
+            etp_mm=6.0,
+            type_sol="limoneux",
+            et_elapsed_fraction=0.5,
+        )
+
+        self.assertEqual(suite["reserve_mm"], 7.5)
+
+    def test_sans_gel_en_cours_de_journee_preserve_ce_qui_a_deja_coule(self) -> None:
+        # Si 3 mm ont déjà été débités et qu'on demande 7,5, la réserve COURANTE doit valoir 7,5
+        # — donc l'ouverture doit remonter à 10,5, sinon la correction serait mangée aussitôt.
+        state = {
+            "ledger": [
+                {
+                    "date": "2026-07-29",
+                    "previous_reserve_mm": 12.0,
+                    "pluie_mm": 0.0,
+                    "arrosage_mm": 0.0,
+                    "etp_mm": 6.0,
+                    "etp_elapsed_mm": 3.0,
+                    "etp_hourly": True,
+                    "reserve_mm": 9.0,
+                }
+            ]
+        }
+
+        recale = soil_balance.set_reserve_mm(
+            state, 7.5, today=date(2026, 7, 29), type_sol="limoneux", freeze_day=False
+        )
+
+        self.assertEqual(recale["reserve_mm"], 7.5)
+        self.assertEqual(recale["previous_reserve_mm"], 10.5)  # 7,5 + 3 déjà évaporés
+
+
+class MarqueursSuspectsSurvivantsTests(unittest.TestCase):
+    """Les drapeaux de relevé aberrant doivent SURVIVRE à la normalisation.
+
+    `normalize_soil_balance_state` tourne au début de CHAQUE `update_soil_balance`, pas seulement
+    au rechargement : une clé absente de la liste blanche disparaît donc au cycle suivant, soit
+    ~2 minutes plus tard. Le test historique ne vérifiait que l'état frais et ne pouvait pas le voir.
+    """
+
+    def test_pluie_suspecte_survit_au_cycle_suivant(self) -> None:
+        veille = soil_balance.update_soil_balance(
+            previous_state=None,
+            today=date(2026, 7, 20),
+            pluie_mm=250.0,  # aberrant → écrêté et marqué
+            arrosage_mm=0.0,
+            etp_mm=4.0,
+            type_sol="limoneux",
+        )
+        self.assertTrue(veille["ledger"][-1].get("pluie_suspect"))
+
+        # Un simple passage de normalisation (ce que fait tout cycle suivant) doit le conserver.
+        renormalise = soil_balance.normalize_soil_balance_state(veille)
+        self.assertTrue(
+            renormalise["ledger"][-1].get("pluie_suspect"),
+            "le marqueur disparaissait au cycle suivant",
+        )
+
+    def test_arrosage_suspect_survit_au_cycle_suivant(self) -> None:
+        etat = soil_balance.update_soil_balance(
+            previous_state=None,
+            today=date(2026, 7, 20),
+            pluie_mm=0.0,
+            arrosage_mm=120.0,  # aberrant
+            etp_mm=4.0,
+            type_sol="limoneux",
+        )
+        self.assertTrue(etat["ledger"][-1].get("arrosage_suspect"))
+        self.assertTrue(soil_balance.normalize_soil_balance_state(etat)["ledger"][-1].get("arrosage_suspect"))

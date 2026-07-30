@@ -24,6 +24,13 @@ CONF_CAPTEUR_HAUTEUR_GAZON = "capteur_hauteur_gazon"
 CONF_CAPTEUR_RETOUR_ARROSAGE = "capteur_retour_arrosage"
 CONF_CAPTEUR_TEMPERATURE = "capteur_temperature"
 CONF_CAPTEUR_ETP = "capteur_etp"
+# ET0 HORAIRE FAO-56 Eq. 53 (`water.compute_eto_hourly`, appelée par coordinator) : rayonnement
+# global mesuré (W/m², ex. Open-Meteo) et pression atmosphérique mesurée (hPa, ex. station perso).
+# Sans eux → replis (rayonnement déduit de la couverture nuageuse, pression standard 1013 hPa),
+# nettement moins précis. Ces deux entrées ne concernent PAS `water.compute_etp` (ET0 journalière,
+# qui ne les lit pas) : elles pilotent l'ET horaire intégrée par le bilan sol depuis la 0.19.0.
+CONF_CAPTEUR_RAYONNEMENT = "capteur_rayonnement"
+CONF_CAPTEUR_PRESSION = "capteur_pression"
 CONF_ENTITE_TONDEUSE = "entite_tondeuse"
 CONF_CAPTEUR_TONDEUSE_ERREUR = "capteur_tondeuse_erreur"
 CONF_CAPTEUR_TONDEUSE_BATTERIE = "capteur_tondeuse_batterie"
@@ -46,8 +53,17 @@ SHARED_WEATHER_CONFIG_KEYS = frozenset(
         CONF_CAPTEUR_HUMIDITE,
         CONF_CAPTEUR_VENT,
         CONF_CAPTEUR_ROSEE,
+        CONF_CAPTEUR_RAYONNEMENT,
+        CONF_CAPTEUR_PRESSION,
     }
 )
+
+# Kc gazon de référence en phase Normal (FAO-56). Sert de REPLI quand le Kc réel du cycle n'est
+# pas disponible (bilan sol au démarrage) et de valeur TYPIQUE pour dimensionner le garde-fou
+# hebdomadaire. Partagé pour éviter deux 0,8 indépendants qui divergeraient en silence.
+# ⚠️ Le Kc RÉEL peut dépasser cette valeur : `compute_kc_gazon` ajoute un bonus post-tonte
+# (+15 % pendant 8 jours), soit 0,92 en permanence avec une tondeuse robot.
+KC_GAZON_NORMAL_DEFAUT = 0.8
 
 DEFAULT_MODE = "Normal"
 DEFAULT_TYPE_SOL = "limoneux"
@@ -181,7 +197,7 @@ BLOCK_REASON_DISPLAY_LABELS: dict[str, str] = {
     "sol_non_adapte": "Sol non adapté",
     "pluie_probabilite_elevee": "Pluie probable élevée",
     "surface_non_seche": "Surface non sèche",
-    "cooldown_24h": "Cooldown 24 h",
+    "cooldown_24h": "Déjà arrosé aujourd'hui",
     "humidite_excessive": "Humidité excessive",
     "humidite_elevee": "Humidité élevée",
     "garde_fou_hebdomadaire": "Garde-fou hebdomadaire",

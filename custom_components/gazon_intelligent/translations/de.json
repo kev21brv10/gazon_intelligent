@@ -60,7 +60,9 @@
           "capteur_retour_arrosage": "Rücklaufbewässerung (optional, automatisch oder aus der Zonenhistorie geschätzt)",
           "capteur_humidite_sol": "Bodenfeuchte (%) (empfohlen, wenn verfügbar)",
           "capteur_vent": "Lokaler Wind (optional, wird zuerst genutzt, wenn vorhanden)",
-          "capteur_rosee": "Tau / Blattnässe (optional, automatische Berechnung wenn nicht angegeben)"
+          "capteur_rosee": "Tau / Blattnässe (optional, automatische Berechnung wenn nicht angegeben)",
+          "capteur_rayonnement": "Gemessene Globalstrahlung (optional, W/m² — verbessert die ET0-Berechnung deutlich)",
+          "capteur_pression": "Gemessener Luftdruck (optional, hPa — verfeinert die ET0-Berechnung)"
         }
       }
     },
@@ -97,7 +99,9 @@
           "capteur_retour_arrosage": "Rücklaufbewässerung (optional, automatisch oder aus der Zonenhistorie geschätzt)",
           "capteur_humidite_sol": "Bodenfeuchte (%) (empfohlen, wenn verfügbar)",
           "capteur_vent": "Lokaler Wind (optional, wird zuerst genutzt, wenn vorhanden)",
-          "capteur_rosee": "Tau / Blattnässe (optional, automatische Berechnung wenn nicht angegeben)"
+          "capteur_rosee": "Tau / Blattnässe (optional, automatische Berechnung wenn nicht angegeben)",
+          "capteur_rayonnement": "Gemessene Globalstrahlung (optional, W/m² — verbessert die ET0-Berechnung deutlich)",
+          "capteur_pression": "Gemessener Luftdruck (optional, hPa — verfeinert die ET0-Berechnung)"
         }
       }
     },

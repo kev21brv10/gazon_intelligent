@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from datetime import datetime, timezone
+from math import isfinite
 import asyncio
 import logging
 from collections.abc import Mapping
@@ -34,6 +35,8 @@ from .const import (
     CONF_CAPTEUR_HUMIDITE_SOL,
     CONF_CAPTEUR_VENT,
     CONF_CAPTEUR_ROSEE,
+    CONF_CAPTEUR_RAYONNEMENT,
+    CONF_CAPTEUR_PRESSION,
     CONF_CAPTEUR_HAUTEUR_GAZON,
     CONF_CAPTEUR_RETOUR_ARROSAGE,
     CONF_ENTITE_TONDEUSE,
@@ -67,7 +70,12 @@ from .mower_coordination import build_mower_coordination_context
 from .entity_ids import public_entity_id, resolve_entry_instance_slug
 from .shared_state import get_shared_state, resolve_effective_config
 from .const import SHARED_WEATHER_CONFIG_KEYS
-from .water import compute_recent_watering_mm, _zone_session_surface_mm, _zone_session_total_mm
+from .water import (
+    compute_recent_watering_mm,
+    compute_eto_hourly as water_compute_eto_hourly,
+    _zone_session_surface_mm,
+    _zone_session_total_mm,
+)
 from .weather_adapter import WeatherAdapter
 from .watering_plan import WateringPlan, build_watering_plan, normalize_existing_plan
 from .watering_policy import resolve_semis_stage_program
@@ -99,6 +107,47 @@ AUTO_IRRIGATION_CHECK_INTERVAL = timedelta(minutes=2)
 # boucle observées en canicule (le déclencheur repartait ~10 s après la fin du cycle).
 AUTO_IRRIGATION_RELAUNCH_COOLDOWN = timedelta(hours=6)
 
+# États Home Assistant qui signifient « pas de mesure » et ne doivent JAMAIS être traités comme
+# une valeur (ni exposés en attribut, ni interprétés comme un code d'erreur).
+_UNAVAILABLE_STATES: frozenset[str] = frozenset({"unavailable", "unknown", "none"})
+
+# Motifs de blocage tondeuse qui NE SE RÉSOLVENT PAS d'eux-mêmes : robot à l'arrêt hors station,
+# entité indisponible, tondeuse introuvable ou ambiguë. Seuls ceux-là ouvrent l'arrosage de
+# détresse (cf. `_should_launch_auto_irrigation`) — « tonte en cours » et « retour à la station »
+# en sont volontairement exclus : ils se terminent seuls et arroser alors tremperait le robot en
+# plein cycle, ce que la coordination existe précisément pour éviter.
+# Seuls états de `sun.sun` qui portent une information : tout le reste (`unavailable`, `unknown`)
+# signifie « position du soleil inconnue », pas « il fait nuit ».
+_SUN_KNOWN_STATES: frozenset[str] = frozenset({"above_horizon", "below_horizon"})
+
+_MOWER_BLOCK_REASONS_PERSISTANTS: frozenset[str] = frozenset(
+    {"mower_not_stowed", "mower_unreliable", "ambiguous", "missing", "configured_missing"}
+)
+
+# DURÉE MINIMALE du blocage tondeuse avant que l'arrosage de détresse s'autorise.
+# Le code de motif ne suffit pas à prouver la persistance : au redémarrage de Home Assistant,
+# l'intégration démarre AVANT celle de la tondeuse et lit son entité comme absente pendant
+# quelques secondes — `configured_missing`, donc un motif classé « persistant ».
+# Constaté le 29/07/2026 à 03:11:34 : l'exception s'est armée sur cette absence transitoire, alors
+# que le robot était à la station, batterie à 100 %. Elle contourne à la fois le blocage tondeuse
+# ET la fenêtre horaire (`fenetre_optimale`, cf. `_should_launch_auto_irrigation`) : sans ce délai,
+# un simple redémarrage en pleine nuit avec un déficit critique pouvait déclencher un arrosage à
+# 3 h du matin, à rebours de la règle « toujours arroser à l'aube ».
+# Un robot réellement coincé dehors le reste des heures ; une course au démarrage dure des
+# secondes. 30 minutes séparent les deux sans retarder sensiblement un vrai cas de détresse.
+_MOWER_DISTRESS_MIN_BLOCK_MINUTES: float = 30.0
+
+# Fenêtres pour lesquelles un renoncement à arroser est un vrai REFUS, digne d'être tracé.
+# Doit rester un sous-ensemble de `POSSIBLE_FENETRE_OPTIMALE_VALUES` (decision_models.py) :
+# une valeur inventée ici désactive silencieusement la trace pour cette fenêtre.
+_SKIP_RECORDED_WINDOWS: frozenset[str] = frozenset({"ce_matin", "demain_matin", "maintenant", "soir"})
+
+# Journée civile de repli quand le lever/coucher du soleil est inconnu (`sun.sun` pas encore
+# publié au démarrage). 06:00 → 21:00 : volontairement large, elle n'a qu'à tenir quelques
+# secondes. Voir `_et_elapsed_fraction` pour ce que l'ancien repli à 1.0 a coûté.
+_FALLBACK_DAY_START_MINUTE: int = 6 * 60
+_FALLBACK_DAY_END_MINUTE: int = 21 * 60
+
 _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "mode",
     "phase_active",
@@ -129,6 +178,7 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "hauteur_tonte_recommandee_cm",
     "hauteur_tonte_min_cm",
     "hauteur_tonte_max_cm",
+    "hauteur_tonte_garde_fou_label",
     "tondeuse_source_entity",
     "tondeuse_nom",
     "tondeuse_etat_brut",
@@ -257,7 +307,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._unsub_watering_session_finalize: CALLBACK_TYPE | None = None
         self._zone_tracking_suspended = 0
         self._zone_tracking_resumed_at: datetime | None = None
-        self._irrigation_launch_lock = asyncio.Lock()
+        # Optionnel : `_ensure_irrigation_runtime_bootstrap` le remet à None puis le recrée
+        # quand une boucle asyncio devient disponible.
+        self._irrigation_launch_lock: asyncio.Lock | None = asyncio.Lock()
         self._latest_full_snapshot: dict[str, Any] | None = None
         self._runtime_state: dict[str, Any] = {
             "active_irrigation_session": None,
@@ -349,9 +401,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         plan_type = latest_action.get("plan_type")
         zone_count = latest_action.get("zone_count")
         passages = latest_action.get("passages")
-        source = ""
-        if isinstance(execution, dict):
-            source = str(execution.get("source") or "").strip().lower()
+        # `execution` est garanti dict par la sortie anticipée en tête de fonction, et n'est pas
+        # réaffecté entre-temps : le second `isinstance` était toujours vrai.
+        source = str(execution.get("source") or "").strip().lower()
         reason = fallback_reason
         if not reason:
             if source == "application_technique_auto":
@@ -400,6 +452,10 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     ) -> tuple[float | None, str, float | None, str]:
         forecast_pluie_24h = forecast_summary.get("forecast_pluie_24h")
         forecast_pluie_demain = forecast_summary.get("forecast_pluie_demain")
+        # `pluie_24h` / `pluie_demain` sont OPTIONNELLES : ni capteur ni prévision n'est garanti,
+        # et le libellé de source dit explicitement « non disponible » dans ce cas.
+        pluie_24h: float | None
+        pluie_demain: float | None
         if pluie_24h_sensor is not None:
             pluie_24h = pluie_24h_sensor
             pluie_24h_source = "capteur"
@@ -474,6 +530,104 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         return temperature, temperature_source, temperature_reference_hydrique
 
+    def _compute_hourly_eto(
+        self,
+        *,
+        weather_profile: dict[str, Any],
+        temperature: float | None,
+        humidite: float | None,
+        vent: float | None,
+    ) -> dict[str, Any]:
+        """ET0 de référence HORAIRE (mm/h) — FAO-56 Eq. 53, à partir des capteurs mesurés.
+
+        Renvoie toujours un dict (jamais None) : `value` vaut None quand les entrées
+        indispensables manquent, avec `reason` pour le diagnostic.
+
+        ⚠️ Cette valeur PILOTE l'arrosage depuis la 0.19.0 — ce n'est pas un simple indicateur.
+        Chaîne : `weather_profile["eto_hourly_mm_h"]` → `gazon_brain` (× Kc) → `soil_balance`
+        (`_accumulate_elapsed_etp`, intégration au fil du temps) → réserve du sol → déplétion →
+        seuil MAD → déclenchement et dose. `value = None` fait retomber le ledger sur le prorata
+        de l'ET0 journalière (comportement d'avant la 0.19.0), jamais sur un débit nul.
+        """
+        latitude = weather_profile.get("ha_latitude")
+        longitude = weather_profile.get("ha_longitude")
+        if temperature is None or latitude is None or longitude is None:
+            return {"value": None, "reason": "position ou température indisponible"}
+        humidity = humidite if humidite is not None else weather_profile.get("weather_humidity")
+        if humidity is None:
+            return {"value": None, "reason": "humidité indisponible"}
+        radiation = self._get_float_state(self._get_conf(CONF_CAPTEUR_RAYONNEMENT))
+        pressure = self._get_float_state(self._get_conf(CONF_CAPTEUR_PRESSION))
+        # BORNES DE PLAUSIBILITÉ. Le sélecteur de configuration filtre désormais par device_class,
+        # mais une entrée déjà enregistrée peut porter une autre unité — et l'erreur est
+        # silencieuse ET grave : un rayonnement lu en kW/m² (au lieu de W/m²) divise l'ET0 par ~5,
+        # le sol ne sèche plus et l'arrosage ne part jamais, même en canicule. Hors bornes → on
+        # ignore la valeur et on retombe sur le modèle, ce que le diagnostic rend visible.
+        if radiation is not None and not (0.0 <= radiation <= 1400.0):
+            _LOGGER.warning(
+                "Rayonnement hors bornes (%.1f) — attendu en W/m² (0-1400). Valeur ignorée : "
+                "vérifie l'unité du capteur configuré.",
+                radiation,
+            )
+            radiation = None
+        if pressure is not None and not (800.0 <= pressure <= 1100.0):
+            _LOGGER.warning(
+                "Pression hors bornes (%.1f) — attendue en hPa (800-1100). Valeur ignorée : "
+                "vérifie l'unité du capteur configuré.",
+                pressure,
+            )
+            pressure = None
+        wind = vent if vent is not None else weather_profile.get("weather_wind_speed")
+        cloud = weather_profile.get("weather_cloud_coverage")
+        # Un capteur peut publier `nan` : `_get_float_state` le laisse passer (float("nan") ne lève
+        # pas), et un NaN se propagerait jusqu'au ledger où il gèlerait le débit de la réserve en
+        # silence. On valide donc la finitude de TOUTES les entrées numériques avant de calculer.
+        for _candidate in (temperature, humidity, radiation, pressure, wind, cloud):
+            if _candidate is not None and not isfinite(float(_candidate)):
+                return {"value": None, "reason": "entrée non finie"}
+        if radiation is None and cloud is None:
+            # Ni rayonnement mesuré, ni couverture nuageuse : le modèle supposerait un ciel à
+            # 50 % (soit quasi clair, r_nu ≈ 0,93) et viderait la réserve à ce rythme TOUS LES
+            # JOURS, pluie comprise → arrosage prématuré. Mieux vaut rendre la main au prorata
+            # de l'ET0 journalière, qui tient compte de la météo du jour.
+            return {"value": None, "reason": "rayonnement et nébulosité indisponibles"}
+        now_utc = self._current_datetime().astimezone(timezone.utc)
+        try:
+            value = water_compute_eto_hourly(
+                temperature=float(temperature),
+                humidity=float(humidity),
+                # Pression standard au niveau de la mer si non mesurée : n'intervient que via la
+                # constante psychrométrique, dont l'effet reste faible devant le rayonnement.
+                pressure_hpa=float(pressure) if pressure is not None else 1013.0,
+                wind_kmh=float(wind) if wind is not None else 5.0,
+                # Un capteur de vent configuré est supposé en km/h (standard HA, ex. Netatmo) ;
+                # sinon on transmet l'unité déclarée par l'entité météo, qui peut être en m/s.
+                wind_unit="km/h" if vent is not None else weather_profile.get("weather_wind_speed_unit"),
+                radiation_wm2=float(radiation) if radiation is not None else None,
+                cloud_pct=float(cloud) if cloud is not None else None,
+                latitude=float(latitude),
+                longitude=float(longitude),
+                day_of_year=now_utc.timetuple().tm_yday,
+                hour_utc=now_utc.hour + now_utc.minute / 60.0,
+            )
+        except (TypeError, ValueError, ZeroDivisionError, OverflowError):
+            # Entrées non numériques ou températures absurdes (ZeroDivisionError à −237,3 °C,
+            # OverflowError en dessous) : ce chemin tourne toutes les 2 min, il ne doit JAMAIS
+            # faire tomber le cycle du coordinateur.
+            return {"value": None, "reason": "entrées invalides"}
+        if not isfinite(value):
+            return {"value": None, "reason": "taux non fini"}
+        # NB : un taux NUL est LÉGITIME (la nuit, sans rayonnement) et doit être conservé — le
+        # traiter comme absent ferait retomber le ledger sur le prorata, qui à 21 h vaut la
+        # journée ENTIÈRE estimée et écraserait le cumul mesuré.
+        return {
+            "value": round(value, 4),
+            "radiation_source": "capteur" if radiation is not None else "modele_nuages",
+            "radiation_wm2": radiation,
+            "pressure_source": "capteur" if pressure is not None else "standard_1013",
+            "wind_kmh": wind,
+        }
+
     def _build_public_snapshot_data(
         self,
         snapshot: dict[str, Any],
@@ -484,8 +638,12 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         temperature_reference_hydrique: float | None,
         forecast_summary: dict[str, Any],
         et0_source: str,
+        eto_hourly: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        eto_hourly = eto_hourly or {}
         payload: dict[str, Any] = {
+            "eto_horaire_mm_h": eto_hourly.get("value"),
+            "eto_horaire_diagnostic": eto_hourly,
             "pluie_demain_source": pluie_demain_source,
             "temperature_source": temperature_source,
             "temperature_reference_hydrique": temperature_reference_hydrique,
@@ -523,11 +681,16 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         weather_entity_id = self._get_conf(CONF_ENTITE_METEO)
         weather_profile = self._get_weather_profile(weather_entity_id)
         try:
-            _ha_lat = getattr(getattr(self, "hass", None), "config", None)
-            _ha_lat = getattr(_ha_lat, "latitude", None) if _ha_lat is not None else None
+            _ha_conf = getattr(getattr(self, "hass", None), "config", None)
+            _ha_lat = getattr(_ha_conf, "latitude", None) if _ha_conf is not None else None
+            _ha_lon = getattr(_ha_conf, "longitude", None) if _ha_conf is not None else None
             if _ha_lat is not None:
                 weather_profile["ha_latitude"] = float(_ha_lat)
                 weather_profile["ha_day_of_year"] = self._current_date().timetuple().tm_yday
+            # Longitude : requise par l'ET0 HORAIRE (angle horaire solaire, FAO-56 Eq. 28).
+            # La latitude seule suffit au calcul journalier, pas au pas de temps horaire.
+            if _ha_lon is not None:
+                weather_profile["ha_longitude"] = float(_ha_lon)
         except Exception:  # noqa: BLE001 — ne jamais bloquer le cycle sur une lat manquante
             pass
         pluie_24h_sensor = self._get_float_state(self._get_conf(CONF_CAPTEUR_PLUIE_24H))
@@ -579,6 +742,19 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         rosee = self._get_float_state(self._get_conf(CONF_CAPTEUR_ROSEE))
         if rosee is None:
             rosee = self._estimate_rosee(weather_profile, temperature, humidite)
+        # ET0 HORAIRE (FAO-56 Eq. 53) — ⚠️ ENTRE DANS LA DÉCISION depuis la 0.19.0 : publiée juste
+        # en dessous dans `weather_profile`, elle est convertie en ETc par gazon_brain puis
+        # INTÉGRÉE PAR LE LEDGER pour débiter la réserve du sol (donc la dose et le déclenchement).
+        # Ne pas la traiter comme un simple diagnostic : la retirer casserait le bilan sol.
+        eto_hourly = self._compute_hourly_eto(
+            weather_profile=weather_profile,
+            temperature=temperature,
+            humidite=humidite,
+            vent=vent,
+        )
+        # Transmis au bilan sol (via gazon_brain) : le ledger intègre ce taux au fil du temps
+        # plutôt que d'étaler l'ET0 journalière estimée. Absent → repli prorata (historique).
+        weather_profile["eto_hourly_mm_h"] = eto_hourly.get("value")
         hauteur_gazon = self._get_float_state(self._get_conf(CONF_CAPTEUR_HAUTEUR_GAZON))
         retour_arrosage_sensor = self._get_float_state(self._get_conf(CONF_CAPTEUR_RETOUR_ARROSAGE))
         if retour_arrosage_sensor is not None and retour_arrosage_sensor > 0:
@@ -590,7 +766,8 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             retour_arrosage_today = compute_recent_watering_mm(
                 self.history, today=self._current_date(), days=0, include_external=False
             )
-            retour_arrosage = retour_arrosage_today if retour_arrosage_today > 0 else None
+            # None = aucun retour relevé aujourd'hui (et non « zéro millimètre »).
+            retour_arrosage = retour_arrosage_today if retour_arrosage_today > 0 else None  # type: ignore[assignment]
         type_sol = self._get_conf(CONF_TYPE_SOL) or DEFAULT_TYPE_SOL
         hauteur_min_tondeuse_cm = self._get_float_conf(
             CONF_HAUTEUR_MIN_TONDEUSE_CM,
@@ -644,6 +821,15 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "pluie_valid": pluie_24h_sensor is not None or self._get_conf(CONF_CAPTEUR_PLUIE_24H) is None,
             "etp_valid": etp_capteur is not None or self._get_conf(CONF_CAPTEUR_ETP) is None,
             "humidity_valid": humidite is not None or self._get_conf(CONF_CAPTEUR_HUMIDITE) is None,
+            # QUALITÉ DE L'ET0 HORAIRE (0.19.0) : depuis qu'elle pilote le bilan sol, savoir si
+            # elle tourne sur des valeurs MESURÉES ou sur des replis n'est plus un détail. Le
+            # rayonnement est le plus déterminant (repli = ciel déduit des nuages) ; le vent
+            # compte aussi beaucoup (un vent PRÉVU au lieu de mesuré est ce qui donnait 9 mm/j
+            # au lieu de 6). Exposé ici pour rester au même endroit que le reste de la santé
+            # capteurs, donc visible sans activer les entités de diagnostic.
+            "eto_radiation_measured": eto_hourly.get("radiation_source") == "capteur",
+            "eto_pressure_measured": eto_hourly.get("pressure_source") == "capteur",
+            "eto_hourly_available": eto_hourly.get("value") is not None,
         }
         # LOT E — risque fongique (calculé ici pour garantir la présence dans coordinator.data)
         _fungal = _compute_fungal_risk(
@@ -683,6 +869,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             temperature_reference_hydrique=temperature_reference_hydrique,
             forecast_summary=forecast_summary,
             et0_source=et0_source,
+            eto_hourly=eto_hourly,
         )
 
     @property
@@ -863,19 +1050,35 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         try:
             raw = str(state.state).strip().replace(",", ".")
-            return float(raw)
+            value = float(raw)
         except (TypeError, ValueError):
             _LOGGER.debug("Impossible de convertir l'état de %s en float: %s", entity_id, state.state)
             return None
+        # `float("nan")` et `float("inf")` NE lèvent PAS : un capteur publiant `nan` propagerait
+        # une valeur non finie dans tous les calculs (ET0, bilan sol, scores), où elle contamine
+        # silencieusement chaque opération. Une valeur non finie est une ABSENCE de mesure.
+        if not isfinite(value):
+            _LOGGER.debug("État non fini ignoré pour %s: %s", entity_id, state.state)
+            return None
+        return value
 
     def _get_text_state(self, entity_id: str | None) -> str | None:
-        """Retourne l'état textuel brut d'une entité Home Assistant."""
+        """Retourne l'état textuel d'une entité Home Assistant, ou None si indisponible.
+
+        `unavailable`/`unknown` sont des ABSENCES de mesure, pas des valeurs. Les laisser
+        passer avait deux conséquences réelles : le capteur d'erreur de la tondeuse devenu
+        indisponible (cas courant à chaque redémarrage) était lu comme un CODE D'ERREUR, et la
+        tonte se retrouvait bloquée par un « Robot en erreur » imaginaire ; et l'heure du
+        prochain départ s'affichait littéralement « unavailable » dans les attributs publics.
+        """
         if not entity_id:
             return None
         state = self.hass.states.get(entity_id)
         if state is None:
             return None
         text = str(state.state or "").strip()
+        if text.lower() in _UNAVAILABLE_STATES:
+            return None
         return text or None
 
     def _get_bool_state(self, entity_id: str | None) -> bool | None:
@@ -1286,8 +1489,12 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return {
             "sun_entity_id": "sun.sun",
             "sun_state": sun_state or None,
-            "sun_above_horizon": sun_state == "above_horizon",
-            "sun_below_horizon": sun_state == "below_horizon",
+            # None quand l'état n'est ni l'un ni l'autre (`unavailable` au démarrage) : un `False`
+            # signifierait « il fait nuit », alors que la consigne est « on ne sait pas ». Les
+            # consommateurs testent `is None` pour activer leur repli horaire — le garde-fou de
+            # nuit de la tonte était sinon purement et simplement désactivé.
+            "sun_above_horizon": (sun_state == "above_horizon") if sun_state in _SUN_KNOWN_STATES else None,
+            "sun_below_horizon": (sun_state == "below_horizon") if sun_state in _SUN_KNOWN_STATES else None,
             "sun_next_rising": attrs.get("next_rising"),
             "sun_next_setting": attrs.get("next_setting"),
             "sun_elevation": attrs.get("elevation"),
@@ -1319,13 +1526,29 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _et_elapsed_fraction(self, sun_context: dict[str, Any]) -> float:
         """Fraction de l'évapotranspiration du jour déjà écoulée, d'après le soleil.
 
-        L'ET se produit le jour : 0 avant le lever, monte linéairement jusqu'à 1 au
-        coucher, reste à 1 la nuit. Sert UNIQUEMENT à l'AFFICHAGE de la réserve (descente
-        progressive). Soleil inconnu → 1.0 (repli = comportement historique, sans risque)."""
+        L'ET se produit le jour : 0 avant le lever, monte linéairement jusqu'à 1 au coucher,
+        reste à 1 la nuit.
+
+        Ce n'est PAS un simple confort d'affichage : cette fraction amorce le débit du bilan sol
+        (`etp_prorata` dans `soil_balance.update_soil_balance`) et fixe donc la réserve à partir de
+        laquelle la dose d'arrosage est calculée. Un ancien commentaire la disait « affichage
+        uniquement, sans risque » — c'était faux, et coûteux.
+
+        SOLEIL INCONNU → repli sur une journée civile approximative, JAMAIS sur 1.0.
+        `sun.sun` peut manquer du state machine pendant le démarrage de Home Assistant : le
+        contexte revient vide et le lever/coucher sont `None`. L'ancien repli à 1.0 signifiait
+        alors « toute la journée est écoulée » — le 29/07/2026 à 03:11, un redémarrage a ainsi
+        débité **6,2 mm d'ETc d'un coup à 3 h du matin**, faisant chuter la réserve de 8,0 à
+        1,8 mm alors que rien n'avait évaporé depuis minuit. Et l'accumulation ne recule jamais :
+        l'erreur se fige pour toute la journée et fausse la dose de l'arrosage d'aube.
+        C'était la « falaise de minuit » revenue par une autre porte.
+        """
         sunrise = self._sunrise_minute_from_context(sun_context)
         sunset = self._sunset_minute_from_context(sun_context)
         if sunrise is None or sunset is None or sunset <= sunrise:
-            return 1.0
+            # Fenêtre civile large : volontairement grossière, elle n'a qu'à tenir le temps que
+            # `sun.sun` apparaisse. Toute valeur horaire vaut mieux qu'un « journée finie » à 3 h.
+            sunrise, sunset = _FALLBACK_DAY_START_MINUTE, _FALLBACK_DAY_END_MINUTE
         now = self._current_datetime()
         now_minute = now.hour * 60 + now.minute
         if now_minute <= sunrise:
@@ -1562,9 +1785,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._async_save_state()
         await self.async_request_refresh()
 
-    async def async_recalibrate_reserve(self, reserve_mm: float) -> None:
+    async def async_recalibrate_reserve(self, reserve_mm: float, freeze_day: bool = True) -> None:
         """Recale la réserve hydrique du sol à une valeur connue (calibration manuelle)."""
-        self.brain.recalibrate_soil_reserve(float(reserve_mm), today=self._current_date())
+        self.brain.recalibrate_soil_reserve(
+            float(reserve_mm), today=self._current_date(), freeze_day=bool(freeze_day)
+        )
         await self._async_save_state()
         await self.async_request_refresh()
 
@@ -1599,6 +1824,8 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             CONF_CAPTEUR_HUMIDITE_SOL,
             CONF_CAPTEUR_VENT,
             CONF_CAPTEUR_ROSEE,
+            CONF_CAPTEUR_RAYONNEMENT,
+            CONF_CAPTEUR_PRESSION,
             CONF_CAPTEUR_HAUTEUR_GAZON,
             CONF_CAPTEUR_RETOUR_ARROSAGE,
             CONF_ENTITE_TONDEUSE,
@@ -1849,7 +2076,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         continue
                     duration_seconds = zone.get("duration_seconds")
                     try:
-                        duration_seconds = float(duration_seconds)
+                        duration_seconds = float(duration_seconds)  # type: ignore[arg-type]
                     except (TypeError, ValueError):
                         continue
                     if duration_seconds > 0:
@@ -1894,7 +2121,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         continue
                     duration_seconds = zone.get("duration_seconds")
                     try:
-                        duration_seconds = float(duration_seconds)
+                        duration_seconds = float(duration_seconds)  # type: ignore[arg-type]
                     except (TypeError, ValueError):
                         continue
                     if duration_seconds > 0:
@@ -1993,6 +2220,18 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._async_save_state()
         await self.async_request_refresh()
         return summary
+
+    def _local_date_of(self, moment: datetime) -> date:
+        """Date CIVILE d'un instant, dans le fuseau de l'utilisateur.
+
+        `_parse_datetime_value` normalise tout en UTC ; comparer son `.date()` à
+        `self._current_date()` — une date LOCALE — mélangeait donc deux référentiels. En
+        Europe/Paris l'été, tout ce qui se produit entre 00 h et 02 h locales porte la date de
+        la VEILLE en UTC : un arrosage manuel à 00 h 20 était vu comme « hier », le motif
+        `recent_watering` ne se posait pas, et l'auto pouvait arroser par-dessus le matin même.
+        """
+        as_local = getattr(dt_util, "as_local", None) if dt_util is not None else None
+        return (as_local(moment) if callable(as_local) else moment).date()
 
     def _parse_datetime_value(self, value: Any) -> datetime | None:
         if value in (None, ""):
@@ -2290,8 +2529,21 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         zones_cfg = [(entity_id, rate_mm_min * 60.0) for entity_id, rate_mm_min in self._iter_zones_with_rate()]
         if not zones_cfg:
             return None
-        passages = self.data.get("watering_passages") if isinstance(self.data, Mapping) else 1
-        pause_minutes = self.data.get("watering_pause_minutes") if isinstance(self.data, Mapping) else 0
+        # LE SNAPSHOT D'ABORD, `self.data` seulement en repli.
+        # `_maybe_schedule_auto_irrigation` tourne À L'INTÉRIEUR de `_async_update_data`, donc AVANT
+        # que Home Assistant n'affecte le nouveau `self.data` : pendant tout le lancement, `self.data`
+        # porte encore le cycle PRÉCÉDENT. Or l'objectif, lui, vient du snapshot frais — les deux
+        # sources étaient désynchronisées.
+        # Le biais allait systématiquement dans le mauvais sens : le fractionnement n'existe qu'au-delà
+        # de FRACTIONNEMENT_NORMAL_SEUIL_MM, et c'est justement la transition « dose nulle → grosse
+        # dose » (expiration du cooldown 24 h dans la fenêtre du matin, cas quotidien) qui le perdait.
+        # Résultat mesuré : 11,2 mm délivrés en UN passage sans pause, au lieu de 2 passages + 25 min.
+        _plan_source: Mapping[str, Any] = (
+            snapshot if isinstance(snapshot, Mapping) and "watering_passages" in snapshot
+            else (self.data if isinstance(self.data, Mapping) else {})
+        )
+        passages = _plan_source.get("watering_passages", 1)
+        pause_minutes = _plan_source.get("watering_pause_minutes", 0)
         try:
             passages = max(1, int(passages or 1))
         except (TypeError, ValueError):
@@ -2347,7 +2599,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             recorded = item.get("recorded_at") or item.get("detected_at") or item.get("date")
             recorded_dt = self._parse_datetime_value(recorded)
             if recorded_dt is not None:
-                if recorded_dt.date() == today:
+                if self._local_date_of(recorded_dt) == today:
                     return True
                 continue
             if str(recorded or "").strip().startswith(today.isoformat()):
@@ -2377,7 +2629,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             except (TypeError, ValueError):
                 total_mm_value = 0.0
             if recorded_dt is not None:
-                if recorded_dt.date() == today:
+                if self._local_date_of(recorded_dt) == today:
                     return total_mm_value >= objective
                 return False
             recorded_date = str(recorded_at or "").strip()
@@ -2465,16 +2717,44 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 return True
         return False
 
+    def _mower_block_age_minutes(self, snapshot: dict[str, Any]) -> float:
+        """Depuis combien de minutes le MÊME blocage tondeuse dure-t-il ? 0 si aucun ou s'il change.
+
+        Volontairement NON persisté (absent de `_serialized_runtime_state`) : après un redémarrage
+        de Home Assistant, le compteur repart de zéro et l'arrosage de détresse doit à nouveau
+        observer un blocage continu avant de s'armer. C'est le sens protecteur — ne pas « corriger »
+        en l'ajoutant au stockage, ce serait rouvrir la course au démarrage que ce compteur ferme.
+        """
+        reason = str(snapshot.get("watering_block_reason_code") or "").strip().lower()
+        watch = self._runtime_state.get("mower_block_watch")
+        if not reason or not bool(snapshot.get("watering_blocked_by_mower")):
+            if watch is not None:
+                self._runtime_state["mower_block_watch"] = None
+            return 0.0
+        now = self._current_utc_datetime()
+        if isinstance(watch, dict) and str(watch.get("reason") or "") == reason:
+            since = self._parse_datetime_value(watch.get("since"))
+            if since is not None:
+                return max(0.0, (now - since).total_seconds() / 60.0)
+        self._runtime_state["mower_block_watch"] = {"reason": reason, "since": now.isoformat()}
+        return 0.0
+
     def _should_launch_auto_irrigation(self, snapshot: dict[str, Any]) -> tuple[bool, str]:
+        # Relevé AVANT toute sortie anticipée : sinon l'ancienneté mesurée dépendrait du motif de
+        # sortie du cycle précédent, et un blocage réel pourrait n'être « vu » qu'au moment où
+        # l'arrosage redevient recommandé — soit 30 minutes de retard sur une vraie détresse.
+        mower_block_age_minutes = self._mower_block_age_minutes(snapshot)
         if self._auto_irrigation_safety_lock_active():
             return False, "safety_lock"
         if not self._runtime_state.get("auto_irrigation_bootstrap_complete"):
             return False, "startup_guard"
         if not self.auto_irrigation_enabled:
             return False, "auto_irrigation_disabled"
-        memory = getattr(self, "memory", {}) or {}
-        if isinstance(memory, dict) and memory.get("auto_irrigation_user_confirmed") is False:
-            return False, "user_confirmation_required"
+        # `auto_irrigation_user_confirmed` a été RETIRÉE ici le 29/07/2026 (arbitrage de Kévin) :
+        # jamais écrite dans les 39 modules ni présente dans le stockage réel, elle valait toujours
+        # None et cette garde ne s'est donc jamais déclenchée. L'interrupteur « arrosage
+        # automatique » (`self.auto_irrigation_enabled`, vérifié juste au-dessus) remplit
+        # exactement ce rôle, lui bien câblé. Ne pas la réintroduire.
 
         objectif_mm = float(snapshot.get("objectif_mm") or 0.0)
         if objectif_mm <= 0:
@@ -2499,20 +2779,58 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         block_reason_bloquant = block_reason is not None and not (
             post_application_auto_ready and block_reason == "sol_deja_humide"
         )
-        if (
+        # EXCEPTION DE DÉTRESSE — motif TONDEUSE uniquement.
+        # Le blocage par la tondeuse n'a ni délai d'expiration ni porte de sortie : robot coincé
+        # dehors, batterie à plat hors zone, API du fabricant en panne… `watering_blocked_by_mower`
+        # reste vrai indéfiniment et l'arrosage auto n'est JAMAIS relancé — y compris réserve à sec
+        # en pleine canicule (constaté le 05/07/2026 : réserve 0 mm à 32 °C pendant un blocage
+        # tondeuse). Un robot mouillé est un moindre mal qu'un gazon grillé : il est conçu pour la
+        # pluie et embarque son propre capteur.
+        # L'exception est étroite : elle exige un déficit RÉELLEMENT critique
+        # (`irrigation_blocked_but_critical`) ET un motif tondeuse PERSISTANT. Les états transitoires
+        # (tonte en cours, retour à la station) en sont exclus : ils se résolvent seuls, et arroser
+        # pendant que le robot tond le tremperait en plein cycle. Tous les autres motifs (pluie,
+        # sol détrempé, sécurité, cooldown) restent bloquants, et le switch « arrosage auto » de
+        # l'utilisateur est vérifié bien en amont — cette exception ne peut pas le contourner.
+        mower_reason = str(snapshot.get("watering_block_reason_code") or "").strip().lower()
+        mower_distress_override = (
+            bool(snapshot.get("watering_blocked_by_mower"))
+            and bool(snapshot.get("irrigation_blocked_but_critical"))
+            and mower_reason in _MOWER_BLOCK_REASONS_PERSISTANTS
+            and str(block_reason or "").strip().lower() == mower_reason
+            # Le code de motif dit « ce genre de blocage ne se résout pas seul », pas « celui-ci
+            # dure depuis longtemps ». Il faut les deux : cf. _MOWER_DISTRESS_MIN_BLOCK_MINUTES.
+            and mower_block_age_minutes >= _MOWER_DISTRESS_MIN_BLOCK_MINUTES
+        )
+        if mower_distress_override:
+            _LOGGER.warning(
+                "Arrosage de détresse : le blocage tondeuse (%s, depuis %d min) est contourné car "
+                "le sol est en déficit critique (%s). Vérifie l'état du robot — il est probablement "
+                "bloqué dehors.",
+                mower_reason,
+                int(mower_block_age_minutes),
+                snapshot.get("critical_deficit_mm"),
+            )
+        if not mower_distress_override and (
             type_arrosage == "bloque"
             or bool(snapshot.get("irrigation_blocked"))
             or bool(snapshot.get("watering_blocked_by_mower"))
             or block_reason_bloquant
         ):
             return False, "irrigation_blocked"
-        if not bool(snapshot.get("arrosage_auto_autorise")):
+        if not mower_distress_override and not bool(snapshot.get("arrosage_auto_autorise")):
             return False, "auto_not_allowed"
         if not bool(snapshot.get("irrigation_execution_allowed", True)):
             return False, "execution_not_allowed"
 
         fenetre = str(snapshot.get("fenetre_optimale") or "").strip()
-        if not post_application_auto_ready and fenetre in {"", "unknown", "unavailable", "none", "attendre"}:
+        # Le blocage tondeuse force lui-même `fenetre_optimale = "attendre"` : sans cette
+        # exemption, l'arrosage de détresse resterait bloqué par le verrou qu'il vient de lever.
+        if (
+            not post_application_auto_ready
+            and not mower_distress_override
+            and fenetre in {"", "unknown", "unavailable", "none", "attendre"}
+        ):
             return False, "window_unavailable"
 
         if self._watering_session_active() or self._shared_valve_busy_elsewhere():
@@ -2629,14 +2947,23 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not bool(snapshot.get("arrosage_recommande")):
             return
         fenetre = str(snapshot.get("fenetre_optimale") or "").strip()
-        if fenetre not in {"matin", "soir"}:
+        # DÉFAUT CORRIGÉ (29/07/2026) : le filtre testait `"matin"`, une valeur qui N'EXISTE PAS.
+        # Les fenêtres réelles sont `ce_matin` / `demain_matin` / `maintenant` (cf.
+        # `POSSIBLE_FENETRE_OPTIMALE_VALUES`, contre lequel `DecisionResult` normalise). Seuls les
+        # refus du SOIR étaient donc enregistrés — et le diagnostic « derniers refus » laissait
+        # croire qu'aucun refus matinal n'avait eu lieu, alors que le matin est la fenêtre
+        # décisive. Un diagnostic qui ne couvre que la moitié des cas est pire qu'absent.
+        # `apres_pluie` et `attendre` restent exclus : y renoncer n'est pas un refus, c'est le
+        # comportement attendu.
+        if fenetre not in _SKIP_RECORDED_WINDOWS:
             return
 
         today_str = self._current_date().isoformat()
         skip_key = f"{today_str}:{fenetre}"
+        # `skip_keys_today` n'est JAMAIS restaurée depuis le stockage (absente des deux
+        # constructeurs de `_runtime_state`) et son unique écrivain, plus bas, écrit une liste :
+        # le `or []` suffit, le test de type était inatteignable.
         recorded: list[str] = self._runtime_state.get("skip_keys_today") or []
-        if not isinstance(recorded, list):
-            recorded = []
         if skip_key in recorded:
             return
         recorded.append(skip_key)
@@ -2873,7 +3200,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _build_watering_session_payload(self) -> dict[str, Any] | None:
         session = self._watering_session
         if session is None:
-            return
+            return None
         if session["active_zones"]:
             return None
 
@@ -2886,7 +3213,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if session_duration_seconds < WATERING_SESSION_MIN_DURATION_SECONDS:
             return None
 
-        zones = []
+        zones: list[dict[str, Any]] = []
         for zone_record in sorted(session["zones"].values(), key=lambda item: int(item.get("order", 0))):
             if not isinstance(zone_record, dict):
                 continue
@@ -3331,7 +3658,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     rate_h = self._get_conf(f"debit_zone_{idx}")
                     break
         try:
-            return float(rate_h) / 60.0
+            # `rate_h` peut être absent (zone non configurée) : le `except` le traite, comme il
+            # traite une valeur non numérique. Un débit inconnu vaut zéro → zone neutralisée.
+            return float(rate_h) / 60.0  # type: ignore[arg-type]
         except (TypeError, ValueError):
             return 0.0
 
@@ -3832,7 +4161,10 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             zones_total_mm = round(sum(float(zone.get("mm") or 0.0) for zone in executed_zones), 1)
             surface_mm = round(float(plan.objective_mm), 1)
             semis_strategy = str(plan.watering_strategy or "").strip() == WATERING_STRATEGY_SEMIS_FREQUENT
-            recorded_watering = {
+            # Annotée : sans ça la valeur est inférée comme l'union de TOUS les types du
+            # littéral, et les 13 arguments qu'on en tire plus bas étaient signalés un par un
+            # alors qu'ils sont chacun du bon type à leur clé.
+            recorded_watering: dict[str, Any] = {
                 "date_action": self._current_date().isoformat(),
                 "objectif_mm": float(surface_mm),
                 "objective_mm": float(surface_mm),
@@ -4144,16 +4476,19 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 raise HomeAssistantError("L'arrosage automatique est verrouillé après une erreur critique.")
             if source in AUTO_IRRIGATION_AUTO_SOURCES and not self.auto_irrigation_enabled:
                 raise HomeAssistantError("L'arrosage automatique est désactivé.")
-            memory = getattr(self, "memory", {}) or {}
-            if source in AUTO_IRRIGATION_AUTO_SOURCES and isinstance(memory, dict) and memory.get("auto_irrigation_user_confirmed") is False:
-                raise HomeAssistantError("L'arrosage automatique n'a pas été activé explicitement par l'utilisateur.")
+            # Même garde inerte retirée ici (cf. `_should_launch_auto_irrigation`) : l'exception
+            # qu'elle levait n'a jamais pu se produire.
             if self._watering_session_active():
                 raise HomeAssistantError("Un arrosage est déjà en cours.")
-            if getattr(self, "_auto_irrigation_task", None) and not self._auto_irrigation_task.done():
+            # Relues dans des locales : `getattr(...) and self._attr.done()` garde bien contre
+            # l'absence, mais rend la protection invisible au vérificateur comme au lecteur.
+            _auto_task = getattr(self, "_auto_irrigation_task", None)
+            _sched_task = getattr(self, "_auto_irrigation_scheduler_task", None)
+            if _auto_task is not None and not _auto_task.done():
                 raise HomeAssistantError("Un arrosage automatique est déjà en cours.")
             if (
-                getattr(self, "_auto_irrigation_scheduler_task", None)
-                and not self._auto_irrigation_scheduler_task.done()
+                _sched_task is not None
+                and not _sched_task.done()
                 and source not in AUTO_IRRIGATION_AUTO_SOURCES
             ):
                 raise HomeAssistantError("Un arrosage automatique est déjà programmé.")

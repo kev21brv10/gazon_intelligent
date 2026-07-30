@@ -99,6 +99,30 @@ class MowerAdapterTests(unittest.TestCase):
         self.assertEqual(payload["tondeuse_erreur_libelle"], "Fil périmétrique manquant")
         self.assertFalse(payload["tondeuse_prete"])
 
+    def test_build_mower_context_ignore_les_capteurs_indisponibles(self) -> None:
+        # RÉGRESSION (28/07/2026) : `unavailable`/`unknown` sont des ABSENCES de mesure, pas des
+        # valeurs. Le capteur d'erreur indisponible était lu comme un CODE d'erreur → la tonte
+        # se bloquait sur « Robot en erreur : défaut signalé » alors que le robot allait bien.
+        # Et l'heure du prochain départ s'affichait littéralement « unavailable » en attribut.
+        # Cas quotidien : la plupart des intégrations de tondeuse republient leurs capteurs en
+        # `unavailable` à chaque redémarrage de Home Assistant.
+        for absent in ("unavailable", "unknown"):
+            payload = build_mower_context(
+                entity_id="lawn_mower.esperance_jr",
+                entity_name="Esperance Jr",
+                raw_state="docked",
+                available=True,
+                error_raw=absent,
+                next_schedule_raw=absent,
+            )
+            # Aucun code d'erreur retenu (la clé est simplement absente du payload).
+            self.assertIsNone(payload.get("tondeuse_erreur"), f"« {absent} » n'est pas une panne")
+            self.assertNotEqual(payload.get("tondeuse_statut"), "erreur")
+            self.assertTrue(payload.get("tondeuse_prete"))
+            # Aucun libellé technique ne doit remonter tel quel jusqu'à l'affichage.
+            self.assertNotEqual(payload.get("tondeuse_prochain_depart"), absent)
+            self.assertNotEqual(payload.get("tondeuse_prochain_depart_display"), absent)
+
     def test_build_mower_context_keeps_landroid_activity_labels(self) -> None:
         payload = build_mower_context(
             entity_id="lawn_mower.robot",

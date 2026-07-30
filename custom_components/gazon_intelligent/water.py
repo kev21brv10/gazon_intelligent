@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 from typing import Any
 import logging
 
@@ -14,6 +14,108 @@ except Exception:  # pragma: no cover - standalone fallback
     dt_util = None
 
 
+# ─────────────────────────────────────────────────────────────────────────────────────────
+# Horodatage d'une entrée d'historique — SOURCE UNIQUE, partagée arrosage ↔ tonte.
+#
+# Avant le 29/07/2026, les deux sous-systèmes dataient le MÊME arrosage différemment : la tonte
+# retombait sur 06:00, l'arrosage sur 00:00, et seul le premier lisait `declared_at`. Un arrosage
+# déclaré à la main (date seule) se retrouvait à 6 h d'écart selon qui le regardait.
+#
+# Arbitrage de Kévin : « le déclarer à l'heure où l'arrosage a été déclaré ». `declared_at` porte
+# justement cet instant (écrit par gazon_brain lors de l'appel au service). On l'utilise donc —
+# MAIS uniquement s'il tombe le jour déclaré : sur une déclaration rétroactive (« j'ai arrosé
+# avant-hier »), l'instant de déclaration désigne aujourd'hui et daterait l'arrosage du mauvais
+# jour. C'était le défaut du côté tonte, qui plaçait `declared_at` avant la date.
+# ─────────────────────────────────────────────────────────────────────────────────────────
+
+# Horodatages POSÉS PAR LA MACHINE : exacts, prioritaires, jamais réinterprétés.
+_HISTORY_EXACT_MOMENT_FIELDS: tuple[str, ...] = (
+    "ended_at",
+    "started_at",
+    "recorded_at",
+    "detected_at_utc",
+    "detected_at",
+    "triggered_at",
+    "last_watering_when",
+)
+
+# Heure retenue pour une entrée qui n'a QUE sa date, sans instant de déclaration exploitable.
+# 06:00 et non minuit : la règle de Kévin est d'arroser à l'aube, un arrosage déclaré sans heure
+# a donc eu lieu le matin. Repli plus proche du réel — et plus prudent sur le cooldown 24 h.
+HISTORY_DATE_ONLY_FALLBACK_HOUR = 6
+
+
+def _parse_history_moment_value(value: Any) -> datetime | None:
+    """Parse un horodatage d'historique en UTC. Naïf → supposé UTC."""
+    if value in (None, "", [], {}):
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        text = str(value).strip()
+        if not text:
+            return None
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _history_declared_date(item: dict[str, Any]) -> date | None:
+    """Date déclarée d'une entrée (`date_action` prioritaire sur `date`)."""
+    for key in ("date_action", "date"):
+        raw = item.get(key)
+        if not raw:
+            continue
+        text = str(raw).strip()
+        if not text:
+            continue
+        try:
+            return date.fromisoformat(text[:10])
+        except ValueError:
+            continue
+    return None
+
+
+def resolve_history_moment(
+    item: dict[str, Any],
+    *,
+    fallback_hour: int = HISTORY_DATE_ONLY_FALLBACK_HOUR,
+) -> datetime | None:
+    """Meilleur instant UTC pour une entrée d'historique, ou None si elle n'est pas datable.
+
+    Ordre : horodatage machine exact → heure de déclaration si elle tombe le jour déclaré →
+    date déclarée à `fallback_hour`.
+    """
+    if not isinstance(item, dict):
+        return None
+
+    for field in _HISTORY_EXACT_MOMENT_FIELDS:
+        parsed = _parse_history_moment_value(item.get(field))
+        if parsed is not None:
+            return parsed
+
+    declared_date = _history_declared_date(item)
+    declared_at = _parse_history_moment_value(item.get("declared_at"))
+
+    if declared_at is not None:
+        # Déclaration du jour même → son heure est la meilleure approximation disponible.
+        if declared_date is None or declared_at.date() == declared_date:
+            return declared_at
+        # Déclaration rétroactive → on garde la DATE déclarée, pas l'instant de saisie.
+
+    if declared_date is None:
+        return None
+    return datetime.combine(
+        declared_date, time(fallback_hour % 24, 0), tzinfo=timezone.utc
+    )
+
+
 # JUMEAU : soil_balance.SOIL_RESERVE_BASE_MM — même réserve utile du sol par type de sol.
 # Les deux modules sont volontairement découplés (pas d'import croisé), on garde donc les deux
 # tables identiques à la main (cf. tests/test_soil_balance.py::TestSoilReserveTwins).
@@ -23,6 +125,39 @@ _SOIL_RESERVE_UTILE_MM: dict[str, float] = {
     "argileux": 16.0,
 }
 
+# FRACTION D'ÉPUISEMENT FAO-56 (p) POUR LA PHASE NORMAL.
+# `p` est la part du STOCK TOTAL (TAW) qu'on laisse partir avant d'arroser. La FAO-56 donne
+# p = 0,40 pour un gazon de saison fraîche, ET fournit un ajustement à la demande du jour :
+#
+#     p = p_table + 0,04 × (5 − ETc)
+#
+# Plus il fait chaud, plus `p` DESCEND : sous forte évapotranspiration, la plante souffre avant
+# d'avoir épuisé la même fraction. C'est ce que ne peut pas faire un seuil figé.
+# Adopté le 29/07/2026 (arbitrage de Kévin) : l'ancien calcul empilait deux réductions —
+# `stock × 0,5 → réserve utile × MAD 0,5` — soit 0,25 du stock, nettement en deçà de la
+# référence, et sans lien avec les conditions du jour. Mesuré à ce moment-là : 6 mm autorisés
+# contre 9 mm selon la FAO à l'ETc réelle, et 12,6 mm tolérés par le régime manuel éprouvé.
+# ⚠️ PAS ENCORE BRANCHÉE — et voici pourquoi. La FAO mesure la déplétion depuis la CAPACITÉ AU
+# CHAMP. Ce modèle-ci mesure la sienne depuis la réserve utile : tout stock au-dessus de 12 mm
+# compte comme déplétion NULLE (vérifié : stock 24, 18, 15 et 12 donnent tous 0). Le sol travaille
+# donc entre 6 et 12 mm sur un stock de 24, soit 25 à 50 % de la capacité — là où la FAO
+# déclencherait à un stock de 15 mm. Les deux « déplétions » ne désignent pas la même grandeur, et
+# poser `p × stock` comme seuil revenait à comparer des choux et des carottes.
+# Brancher la FAO proprement suppose de changer AUSSI la cible de recharge (remplir vers la
+# capacité au champ, pas vers 12) — donc la dose, qui passerait de ~6 à ~9-12 mm par apport.
+# C'est cohérent avec le régime manuel éprouvé de Kévin (9-10 mm), mais ça demande de savoir si le
+# sol tient et restitue réellement ses 24 mm aux racines : c'est la mesure au tournevis.
+# Bornes FAO : p reste dans [0,1 ; 0,8].
+# JUMEAU : const.KC_GAZON_NORMAL_DEFAUT — ce module est volontairement découplé (aucun import
+# croisé, cf. l'en-tête), la valeur est donc recopiée et doit rester identique à la main.
+_KC_GAZON_NORMAL = 0.8
+
+FAO_P_TABLE_GAZON = 0.40
+FAO_P_MIN, FAO_P_MAX = 0.1, 0.8
+
+# Les AUTRES phases gardent leur ratio explicite, appliqué à la réserve utile : ce sont des
+# consignes agronomiques délibérées (semis arrosé plus souvent, hivernage plus tolérant), pas
+# des approximations de la FAO. Ne pas les basculer sans raison propre.
 _PHASE_MAD_RATIO: dict[str, float] = {
     "Sursemis": 0.35,
     "Hivernage": 0.6,
@@ -194,46 +329,6 @@ def compute_live_session_water(
     }
 
 
-def _normalize_allowed_zone_ids(allowed_zone_ids: Any) -> set[str]:
-    if not isinstance(allowed_zone_ids, (list, tuple, set)):
-        return set()
-    normalized: set[str] = set()
-    for raw in allowed_zone_ids:
-        text = str(raw or "").strip()
-        if text:
-            normalized.add(text)
-    return normalized
-
-
-def _zone_ids_for_item(item: dict[str, Any] | None) -> set[str]:
-    if not isinstance(item, dict):
-        return set()
-    zones = item.get("zones")
-    if not isinstance(zones, list):
-        return set()
-    zone_ids: set[str] = set()
-    for zone in zones:
-        if not isinstance(zone, dict):
-            continue
-        zone_id = str(zone.get("entity_id") or zone.get("zone") or "").strip()
-        if zone_id:
-            zone_ids.add(zone_id)
-    return zone_ids
-
-
-def _watering_item_matches_zones(
-    item: dict[str, Any] | None,
-    allowed_zone_ids: Any = None,
-) -> bool:
-    allowed = _normalize_allowed_zone_ids(allowed_zone_ids)
-    if not allowed:
-        return True
-    zone_ids = _zone_ids_for_item(item)
-    if not zone_ids:
-        return False
-    return bool(zone_ids & allowed)
-
-
 _SOIL_MODEL_BASES: dict[str, dict[str, float]] = {
     "sableux": {
         "retention_factor": 0.84,
@@ -392,17 +487,31 @@ def build_watering_session_summary(
     return session
 
 
-# Arrosages TECHNIQUES (rafraîchissement du soir en canicule, incorporation post-application) :
-# ils rafraîchissent / incorporent un produit mais NE rechargent PAS la réserve hydrique. Ils
-# sont donc exclus du total d'eau récente → ni comptés dans la recharge de réserve, ni dans le
-# garde-fou hebdomadaire (sinon ce petit arrosage de cooling grignote le budget destiné à la
-# vraie recharge, et la réserve paraît plus pleine qu'en réalité — cause d'un gazon qui sèche en
-# canicule). Même principe que l'exclusion déjà appliquée au cooldown 24 h (cf. guidance.py).
-_TECHNICAL_WATERING_CAUSES = ("rafraichissement_soir", "post_application")
+# RAFRAÎCHISSEMENT DU SOIR : ~3 mm pulvérisés pour faire baisser la température du gazon en
+# canicule. Cette eau s'évapore pour l'essentiel — c'est son but — et ne recharge donc PAS la
+# réserve. L'inclure ferait paraître le sol plus plein qu'il ne l'est, cause connue d'un gazon
+# qui sèche en pleine canicule.
+_COOLING_WATERING_CAUSES = ("rafraichissement_soir",)
+
+# INCORPORATION POST-PRODUIT : 5 à 10 mm dont le BUT EST de faire pénétrer le produit dans le sol
+# (fertigation). Cette eau atteint donc bien la zone racinaire.
+# Décision de Kévin (29/07/2026) : elle CRÉDITE désormais la réserve. Ne pas la compter la
+# sous-estimait de la dose d'incorporation, ce qui provoquait une recharge inutile le lendemain
+# matin — en silence. Le motif historique (« les arrosages techniques ne rechargent pas ») reste
+# vrai pour les 3 mm de rafraîchissement, il ne l'était pas pour 8 mm d'incorporation.
+# Elle reste en revanche HORS du garde-fou hebdomadaire : celui-ci borne la recharge hydrique
+# délibérée, et un produit ne doit pas grignoter le budget d'arrosage du gazon.
+_INCORPORATION_WATERING_CAUSES = ("post_application",)
+
+_TECHNICAL_WATERING_CAUSES = _COOLING_WATERING_CAUSES + _INCORPORATION_WATERING_CAUSES
 
 
 def _is_technical_watering(item: dict[str, Any]) -> bool:
     return str(item.get("watering_cause") or "").strip().lower() in _TECHNICAL_WATERING_CAUSES
+
+
+def _is_incorporation_watering(item: dict[str, Any]) -> bool:
+    return str(item.get("watering_cause") or "").strip().lower() in _INCORPORATION_WATERING_CAUSES
 
 
 # Sources d'arrosage NON pilotées par l'intégration : sessions détectées en passif quand des
@@ -444,6 +553,7 @@ def compute_recent_watering_mm(
     include_external: bool = True,
     include_technical: bool = False,
     include_manual: bool = True,
+    include_incorporation: bool = False,
 ) -> float:
     """Somme des mm arrosés sur la fenêtre.
 
@@ -463,6 +573,7 @@ def compute_recent_watering_mm(
         include_technical=include_technical,
         include_external=include_external,
         include_manual=include_manual,
+        include_incorporation=include_incorporation,
     ):
         mm = _watering_item_mm(item)
         if mm is not None:
@@ -477,12 +588,16 @@ def _iter_recent_watering_items(
     include_technical: bool = True,
     include_external: bool = True,
     include_manual: bool = True,
+    include_incorporation: bool = False,
 ):
     for item in history:
         if not isinstance(item, dict) or item.get("type") != "arrosage":
             continue
         if not include_technical and _is_technical_watering(item):
-            continue
+            # `include_incorporation` rouvre la seule incorporation post-produit : elle pénètre
+            # le sol, contrairement au rafraîchissement du soir qui s'évapore.
+            if not (include_incorporation and _is_incorporation_watering(item)):
+                continue
         if not include_external and _is_external_watering(item):
             continue
         if not include_manual and _is_manual_watering(item):
@@ -543,30 +658,41 @@ def _recent_watering_windows(
     # arrosage manuel de secours → budget plus haut → auto bloqué plus longtemps → jamais de reprise
     # auto. Le crédit de la RÉSERVE sol passe par un autre chemin (gazon_brain, `arrosage_reel_jour`)
     # et reste, lui, alimenté par TOUT l'arrosage réel — manuel inclus (l'eau est bien tombée).
-    arrosage_recent_7j = (
-        recent_watering_mm_override
-        if recent_watering_mm_override is not None
-        else compute_recent_watering_mm(
-            history, today=today, days=7, include_external=False, include_manual=False
-        )
+    # Le garde-fou hebdo a besoin de la VRAIE somme 7 j de l'arrosage AUTO : on la calcule
+    # TOUJOURS depuis l'historique. `recent_watering_mm_override` / `retour_arrosage` (l'arrosage
+    # du JOUR, parfois pas encore dans l'historique) ne servent que de PLANCHER, jamais de
+    # remplacement — sinon l'arrosage du jour ÉCRASE la somme des 6 jours précédents (budget hebdo
+    # faux, garde-fou trop permissif ; constaté 28/07/2026 : 12 mm décomptés au lieu de 36).
+    arrosage_recent_7j = compute_recent_watering_mm(
+        history, today=today, days=6, include_external=False, include_manual=False
     )
     # `days=0` = AUJOURD'HUI SEUL. Le filtre retient `delta <= days`, donc `days=1` ramassait
     # aussi la veille : le bilan journalier créditait alors 2 jours d'arrosage contre 1 seul jour
     # d'ET0 (`_horizon_balance(horizon_days=1)`) → bilan surestimé d'un arrosage entier (vu en
     # réel : 24 mm affichés pour 12 mm réellement appliqués). Le ledger sol, lui, utilise déjà
     # `days=0` (`arrosage_reel_jour`, cf. gazon_brain) : on s'aligne dessus. Les fenêtres 3j/7j
-    # gardent leur sémantique (budget hebdo) et ne sont pas touchées.
+    # suivent la MÊME règle : `days=N` retient `delta <= N`, soit N+1 jours calendaires. Pour une
+    # vraie fenêtre de K jours il faut donc `days = K-1` → jour=0, 3j=2, 7j=6. (Auparavant 3j/7j
+    # passaient days=3/7 = 4/8 jours : le garde-fou hebdo gardait un arrosage un jour de trop
+    # dans le décompte — le budget mettait un jour de plus à retomber sous le plafond.)
     arrosage_recent_jour = compute_recent_watering_mm(
         history, today=today, days=0, include_external=False, include_manual=False
     )
     arrosage_recent_3j = compute_recent_watering_mm(
-        history, today=today, days=3, include_external=False, include_manual=False
+        history, today=today, days=2, include_external=False, include_manual=False
     )
-    if retour_arrosage is not None:
-        retour = float(retour_arrosage)
-        arrosage_recent_jour = max(arrosage_recent_jour, retour)
-        arrosage_recent_3j = max(arrosage_recent_3j, retour)
-        arrosage_recent_7j = max(arrosage_recent_7j, retour)
+    # PLANCHER (jamais un plafond) : l'arrosage du jour peut ne pas encore figurer dans
+    # l'historique — on garantit qu'il est au moins compté. `recent_watering_mm_override` (capteur
+    # « retour arrosage » externe) et `retour_arrosage` désignent la même eau du jour ; on prend le
+    # max des deux, sans jamais RÉDUIRE la somme calculée depuis l'historique.
+    retour_floor = max(
+        (float(v) for v in (retour_arrosage, recent_watering_mm_override) if v is not None),
+        default=0.0,
+    )
+    if retour_floor > 0.0:
+        arrosage_recent_jour = max(arrosage_recent_jour, retour_floor)
+        arrosage_recent_3j = max(arrosage_recent_3j, retour_floor)
+        arrosage_recent_7j = max(arrosage_recent_7j, retour_floor)
     arrosage_recent_3j = max(arrosage_recent_3j, arrosage_recent_jour)
     arrosage_recent_7j = max(arrosage_recent_7j, arrosage_recent_3j)
     # Eau RÉELLEMENT reçue sur 7 j (arrosages techniques INCLUS). Diagnostic : `arrosage_recent_7j`
@@ -574,7 +700,7 @@ def _recent_watering_windows(
     arrosage_applique_7j = max(
         arrosage_recent_7j,
         compute_recent_watering_mm(
-            history, today=today, days=7, include_external=False, include_technical=True
+            history, today=today, days=6, include_external=False, include_technical=True
         ),
     )
     if arrosage_recent_7j > 100:
@@ -615,11 +741,13 @@ def _soil_balance_priority(
     reserve_actuelle_source = None
     if isinstance(soil_balance, dict):
         reserve_actuelle_source = _to_float(soil_balance.get("reserve_mm"))
-    # Réserve issue du bilan sol interne de l'intégration (ledger soil_balance, mis à jour
-    # chaque cycle : réserve += pluie + arrosage − ET0, borné par type de sol). NB : c'est
-    # l'ET0 de référence qui est soustraite, pas l'ETc (= ET0 × Kc gazon) — choix
-    # conservateur (perte légèrement surestimée). Voir audit : appliquer le Kc recalibrerait
-    # la déplétion.
+    # Réserve issue du bilan sol interne de l'intégration (ledger soil_balance, mis à jour chaque
+    # cycle : réserve += pluie + arrosage − ET consommée, borné par type de sol).
+    # ⚠️ Ce commentaire affirmait le contraire jusqu'au 28/07/2026 (« c'est l'ET0 qui est
+    # soustraite, pas l'ETc — choix conservateur »). C'est FAUX depuis la 0.17.3 : le ledger
+    # débite bien l'**ETc** (= ET0 × Kc, cf. gazon_brain), et depuis la 0.19.0 il intègre même le
+    # taux HORAIRE mesuré au fil du temps. Ne pas « re-corriger » en réappliquant un Kc ici : il
+    # serait compté deux fois.
     # Le pilotage par épuisement (MAD) n'est fiable que dans ce cas ; sinon la réserve
     # dérive du bilan court et n'atteint pas le seuil, d'où le repli sur le modèle déficit.
     reserve_from_soil_ledger = reserve_actuelle_source is not None
@@ -634,6 +762,21 @@ def _soil_balance_priority(
         "reserve_stock_max_mm": reserve_stock_max_mm,
         "reserve_from_soil_ledger": reserve_from_soil_ledger,
     }
+
+
+
+def fao_depletion_fraction(etc_mm: float | None, p_table: float = FAO_P_TABLE_GAZON) -> float:
+    """Fraction d'épuisement FAO-56 ajustée à la demande du jour : p = p_table + 0,04 × (5 − ETc).
+
+    Sans ETc connue, on rend la valeur de table — pas d'ajustement inventé sur une donnée absente.
+    """
+    if etc_mm is None:
+        return p_table
+    try:
+        etc = float(etc_mm)
+    except (TypeError, ValueError):
+        return p_table
+    return _bound(p_table + 0.04 * (5.0 - etc), FAO_P_MIN, FAO_P_MAX)
 
 
 def _reserve_metrics(
@@ -662,6 +805,47 @@ def _reserve_metrics(
         "reserve_fill_ratio": reserve_fill_ratio,
         "reserve_available_ratio": reserve_available_ratio,
     }
+
+
+def estimate_days_until_watering(
+    reserve_actuelle_mm: float | None,
+    reserve_minimale_mm: float | None,
+    etc_mm: float | None,
+) -> int | None:
+    """Estimation indicative du nombre de jours avant le prochain arrosage.
+
+    Modèle simple et volontairement conservateur : la réserve du sol baisse d'~ETc par
+    jour (le sol perd son eau au rythme de l'herbe — cf. ledger débité en ETc), et
+    l'arrosage se déclenche quand elle atteint le seuil MAD (``reserve_minimale_mm``).
+    Renvoie le nombre de jours estimé avant d'atteindre ce seuil :
+
+      * ``0``    → réserve déjà au seuil (arrosage imminent) ;
+      * ``n``    → il reste ``n`` jour(s) de séchage estimés ;
+      * ``None`` → non calculable (séchage négligeable/inconnu ou données manquantes).
+
+    Purement indicatif : la météo réelle des prochains jours (pluie, chaleur) n'est pas
+    connue, donc la pluie prévue n'est PAS déduite ici — l'estimation se recale d'elle-même
+    à chaque cycle. Cette valeur n'entre dans AUCUNE décision d'arrosage : affichage seul.
+
+    Le déclenchement réel se fait à l'AUBE sur la déplétion PROJETÉE en fin de journée
+    (``déplétion + ETc restant à s'écouler ≥ seuil MAD``, cf. ``guidance._profile_for_normal``) :
+    l'arrosage part donc le matin du jour où la réserve VA franchir le seuil, pas le lendemain.
+    Sans en tenir compte, l'estimation annonçait « demain » le matin même où l'arrosage partait.
+    On retranche donc une journée de séchage à la marge disponible.
+    """
+    reserve = _to_float(reserve_actuelle_mm)
+    mad = _to_float(reserve_minimale_mm)
+    rate = _to_float(etc_mm)
+    if reserve is None or mad is None or rate is None:
+        return None
+    if rate <= 0.1:
+        return None  # séchage négligeable → pas d'échéance estimable
+    # `- rate` = la journée qui déclenche : dès que la réserve passe sous « seuil + 1 jour d'ETc »,
+    # la projection d'aube franchit le seuil MAD dès le lendemain matin.
+    mm_avant_mad = reserve - mad - rate
+    if mm_avant_mad <= 0.0:
+        return 0  # la projection d'aube franchit déjà le seuil → arrosage imminent
+    return int(math.ceil(mm_avant_mad / rate))
 
 
 def _horizon_balance(
@@ -785,6 +969,26 @@ def _ra_extraterrestrial(latitude_deg: float, day_of_year: int) -> float:
     return max(0.0, Ra)
 
 
+def wind_speed_to_ms(wind: float, unit: str | None) -> float:
+    """Vitesse de vent → m/s (Penman-Monteith l'exige en m/s), plancher 0,5 m/s.
+
+    Les entités météo Home Assistant fournissent le plus souvent des km/h, mais pas toujours :
+    utiliser une valeur en m/s telle quelle (ou la diviser par 3,6 à tort) fausse fortement le
+    terme aérodynamique. On lit donc l'unité déclarée, avec repli km/h (défaut HA) si elle est
+    absente ou inconnue. Partagé par l'ET0 JOURNALIÈRE et l'ET0 HORAIRE : les deux doivent
+    normaliser de la même façon, sans quoi le bilan sol et les seuils divergent.
+    """
+    unit_norm = str(unit or "").strip().lower()
+    wind_ms = float(wind)
+    if unit_norm in ("mph", "mi/h"):
+        wind_ms *= 0.44704
+    elif unit_norm in ("m/s", "ms", "mps"):
+        pass
+    else:  # km/h (défaut des entités météo HA) ou unité inconnue
+        wind_ms /= 3.6
+    return max(0.5, wind_ms)
+
+
 def compute_etp(
     temperature: float | None,
     pluie_24h: float | None,
@@ -882,15 +1086,7 @@ def compute_etp(
         # Vent issu d'un capteur mesuré → on suppose km/h (unité standard des capteurs de
         # vent HA, ex. Netatmo) ; sinon on lit l'unité fournie par l'entité météo.
         wind_unit_raw = "km/h" if vent is not None else weather_profile.get("weather_wind_speed_unit")
-        wind_unit = str(wind_unit_raw or "").strip().lower()
-        wind_ms = float(wind)
-        if wind_unit in ("mph", "mi/h"):
-            wind_ms *= 0.44704
-        elif wind_unit in ("m/s", "ms", "mps"):
-            pass
-        else:  # km/h (défaut des entités météo HA) ou unité inconnue
-            wind_ms /= 3.6
-        u2 = max(0.5, wind_ms)
+        u2 = wind_speed_to_ms(wind, wind_unit_raw)
     else:
         u2 = 1.5  # légère brise par défaut
 
@@ -904,6 +1100,131 @@ def compute_etp(
         et0 *= max(0.85, 1.0 - float(pluie_24h) * 0.015)
 
     return round(et0, 1)
+
+
+# ---------------------------------------------------------------------------
+# ET0 HORAIRE — FAO-56 Penman-Monteith pas de temps horaire (Eq. 53)
+# Port fidèle de la chaîne template `eto_fao56.yaml` (station Netatmo + rayonnement
+# Open-Meteo). Contrairement à `compute_etp` (ET0 JOURNALIÈRE estimée depuis un
+# instantané + radiation ciel-clair), ces fonctions calculent un TAUX horaire
+# (mm/h) à partir de la radiation RÉELLE mesurée → destiné à être accumulé par le
+# ledger sol (fin de l'extrapolation « pic d'après-midi » et de la falaise de minuit).
+# Source de vérité : templates/eto_fao56.yaml (validé le 28/07/2026).
+# ---------------------------------------------------------------------------
+def _ra_hourly(
+    latitude: float, longitude: float, day_of_year: int, hour_utc: float
+) -> float:
+    """Rayonnement extraterrestre horaire Ra (MJ/m²/h) — FAO-56 Eq. 28.
+
+    100 % astronomique (aucune dépendance capteur). `hour_utc` = heure décimale UTC
+    (le calcul en UTC évite le piège de l'heure d'été). Sert de plafond physique et
+    de base au ciel clair Rso.
+    """
+    phi = math.radians(latitude)
+    j = int(day_of_year)
+    dr = 1.0 + 0.033 * math.cos(2 * math.pi * j / 365)
+    dec = 0.409 * math.sin(2 * math.pi * j / 365 - 1.39)
+    b = 2 * math.pi * (j - 81) / 364
+    sc = 0.1645 * math.sin(2 * b) - 0.1255 * math.cos(b) - 0.025 * math.sin(b)
+    w = (math.pi / 12) * ((hour_utc + 0.06667 * longitude + sc) - 12)
+    ra = (
+        (12 * 60 / math.pi)
+        * 0.0820
+        * dr
+        * (
+            (math.pi / 12) * math.sin(phi) * math.sin(dec)
+            + math.cos(phi)
+            * math.cos(dec)
+            * (math.sin(w + math.pi / 24) - math.sin(w - math.pi / 24))
+        )
+    )
+    return max(ra, 0.0)
+
+
+def _rs_hourly(
+    ra: float,
+    radiation_wm2: float | None,
+    cloud_pct: float | None,
+    rso_factor: float = 0.7524,
+) -> tuple[float, float]:
+    """Rayonnement global horaire Rs (MJ/m²/h) + ratio Rs/Rso (pour Rnl).
+
+    Priorité 1 : radiation mesurée `radiation_wm2` (W/m² → × 0.0036).
+    Priorité 2 : Rso × facteur nuages (Kasten-Czeplak) si pas de radiation.
+    Plafond d'absurdité 0.85·Ra (et NON Rso : transmissivité réelle d'un ciel sec
+    ~0.80-0.82, cf. template). `rso_factor` dépend de l'altitude (0.7524 à 120 m).
+    """
+    rso = rso_factor * ra
+    n = min(max(cloud_pct if cloud_pct is not None else 50.0, 0.0), 100.0) / 100.0
+    r_nu = min(max(1.0 - 0.75 * (n**3.4), 0.15), 1.0)
+    if radiation_wm2 is not None and radiation_wm2 >= 0:
+        rs = radiation_wm2 * 0.0036
+    else:
+        rs = rso * r_nu
+    rs = min(max(rs, 0.0), 0.85 * ra)
+    if radiation_wm2 is not None and radiation_wm2 >= 0 and rso > 0.01:
+        ratio = min(max(rs / rso, 0.15), 1.0)
+    else:
+        ratio = r_nu
+    return rs, ratio
+
+
+def compute_eto_hourly(
+    temperature: float,
+    humidity: float,
+    pressure_hpa: float,
+    wind_kmh: float,
+    radiation_wm2: float | None,
+    cloud_pct: float | None,
+    latitude: float,
+    longitude: float,
+    day_of_year: int,
+    hour_utc: float,
+    rso_factor: float = 0.7524,
+    wind_unit: str | None = None,
+) -> float:
+    """ET0 de référence HORAIRE (mm/h) — FAO-56 Penman-Monteith Eq. 53.
+
+        ETo = [0.408·Δ·(Rn−G) + γ·37/(T+273)·u2·(es−ea)] / [Δ + γ·(1 + 0.34·u2)]
+
+    γ = 0.000665·P (pression mesurée), Rns = 0.77·Rs, Rnl via σ horaire (2.04e-10),
+    G = 0.1·Rn le jour / 0.5·Rn la nuit. Albédo 0.23 (gazon de référence).
+    Port fidèle de `sensor.eto_horaire` (templates/eto_fao56.yaml).
+    """
+    ra = _ra_hourly(latitude, longitude, day_of_year, hour_utc)
+    rs, ratio = _rs_hourly(ra, radiation_wm2, cloud_pct, rso_factor)
+    t = float(temperature)
+    rh = min(max(float(humidity), 1.0), 100.0)
+    p_kpa = float(pressure_hpa) / 10.0
+    # `wind_kmh` porte le nom de l'unité ATTENDUE (km/h, défaut HA), mais l'entité météo peut
+    # publier des m/s ou des mph : on normalise comme l'ET0 journalière. Sans ça, un vent en m/s
+    # était divisé par 3,6 en trop → ET0 horaire sous-estimée d'environ 12 %, donc un sol qui
+    # paraît sécher trop lentement (ce taux pilote le ledger depuis la 0.19.0).
+    u2 = wind_speed_to_ms(wind_kmh, wind_unit)
+    es = 0.6108 * math.exp(17.27 * t / (t + 237.3))
+    ea = es * rh / 100.0
+    delta = 4098.0 * es / ((t + 237.3) ** 2)
+    gamma = 0.000665 * p_kpa
+    rns = 0.77 * rs
+    rnl = (
+        2.04e-10
+        * ((t + 273.16) ** 4)
+        * max(0.34 - 0.14 * math.sqrt(ea), 0.0)
+        * max(1.35 * ratio - 0.35, 0.05)
+    )
+    rn = rns - rnl
+    g_flux = 0.1 * rn if ra > 0 else 0.5 * rn
+    numerator = 0.408 * delta * (rn - g_flux) + gamma * (37.0 / (t + 273.0)) * u2 * (es - ea)
+    denominator = delta + gamma * (1.0 + 0.34 * u2)
+    if denominator <= 0:
+        return 0.0
+    result = numerator / denominator
+    # `max(nan, 0.0)` renvoie nan (Python garde le premier argument) : un capteur publiant `nan`
+    # propagerait un taux NaN jusqu'au ledger, où il serait converti en 0 et GÈLERAIT le débit
+    # de la réserve en silence. On renvoie 0.0, que l'appelant traite comme « pas de mesure ».
+    if not math.isfinite(result):
+        return 0.0
+    return max(result, 0.0)
 
 
 def compute_water_balance(

@@ -60,7 +60,9 @@
           "capteur_retour_arrosage": "Terugkeer van besproeiing (optioneel, automatisch of geschat uit zonegeschiedenis)",
           "capteur_humidite_sol": "Bodemvocht (%) (aanbevolen als beschikbaar)",
           "capteur_vent": "Lokale wind (optioneel, wordt eerst gebruikt indien aanwezig)",
-          "capteur_rosee": "Dauw / bladnat (optioneel, automatische berekening als niet ingevuld)"
+          "capteur_rosee": "Dauw / bladnat (optioneel, automatische berekening als niet ingevuld)",
+          "capteur_rayonnement": "Gemeten globale straling (optioneel, W/m² — verbetert de ET0-berekening sterk)",
+          "capteur_pression": "Gemeten luchtdruk (optioneel, hPa — verfijnt de ET0-berekening)"
         }
       }
     },
@@ -97,7 +99,9 @@
           "capteur_retour_arrosage": "Terugkeer van besproeiing (optioneel, automatisch of geschat uit zonegeschiedenis)",
           "capteur_humidite_sol": "Bodemvocht (%) (aanbevolen als beschikbaar)",
           "capteur_vent": "Lokale wind (optioneel, wordt eerst gebruikt indien aanwezig)",
-          "capteur_rosee": "Dauw / bladnat (optioneel, automatische berekening als niet ingevuld)"
+          "capteur_rosee": "Dauw / bladnat (optioneel, automatische berekening als niet ingevuld)",
+          "capteur_rayonnement": "Gemeten globale straling (optioneel, W/m² — verbetert de ET0-berekening sterk)",
+          "capteur_pression": "Gemeten luchtdruk (optioneel, hPa — verfijnt de ET0-berekening)"
         }
       }
     },

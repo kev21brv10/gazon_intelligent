@@ -391,6 +391,49 @@ def _build_update_data_coordinator(*, weather_temperature: float | None) -> obje
     return coordinator
 
 
+class GardeConfirmationUtilisateurRetireTests(unittest.TestCase):
+    """`auto_irrigation_user_confirmed` a été retirée le 29/07/2026 — elle ne doit pas revenir.
+
+    Elle était lue pour refuser l'arrosage automatique, mais n'était écrite NULLE PART dans les
+    39 modules et absente du stockage réel : la clé valait toujours None, et `None is False` est
+    faux. La garde ne s'est donc jamais déclenchée en production.
+
+    Les deux tests qu'elle avait ne prouvaient rien : ils fournissaient la clé À LA MAIN à False,
+    une valeur que la production ne produit jamais. Fausse confiance typique.
+
+    L'interrupteur « arrosage automatique » remplit ce rôle, lui bien câblé et vérifié en amont.
+    """
+
+    def test_une_memoire_sans_confirmation_ne_bloque_plus_l_arrosage(self) -> None:
+        coordinator = _build_coordinator()
+        coordinator.history = []
+        # État RÉEL : la clé n'existe pas. Avant comme après, la garde ne se déclenchait pas —
+        # ce test verrouille qu'on ne la réintroduise pas sous une forme qui, elle, mordrait.
+        coordinator.memory = {"auto_irrigation_enabled": True}
+
+        should_launch, reason = coordinator._should_launch_auto_irrigation(
+            _ready_launch_snapshot(coordinator)
+        )
+
+        self.assertNotEqual(reason, "user_confirmation_required")
+        self.assertTrue(should_launch)
+
+    def test_le_motif_de_refus_n_existe_plus_dans_le_code(self) -> None:
+        # Lecture du FICHIER, pas `inspect.getsource` : dans la suite complète, les stubs
+        # installés par d'autres fichiers de test privent le module de son `__file__` et
+        # l'introspection lève. On cherche le MOTIF DE REFUS et non le nom de la clé, qui
+        # subsiste volontairement dans le commentaire expliquant la suppression.
+        source = (
+            Path(__file__).resolve().parents[1]
+            / "custom_components" / "gazon_intelligent" / "coordinator.py"
+        ).read_text()
+        self.assertNotIn(
+            '"user_confirmation_required"',
+            source,
+            "la garde inerte a été réintroduite",
+        )
+
+
 class WateringSessionMonitoringTests(unittest.TestCase):
     def test_get_conf_prefers_local_option_over_shared_state(self) -> None:
         coordinator = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
@@ -1158,26 +1201,6 @@ class WateringSessionMonitoringTests(unittest.TestCase):
         self.assertFalse(should_launch)
         self.assertEqual(reason, "startup_guard")
 
-    def test_auto_irrigation_requires_explicit_user_confirmation(self) -> None:
-        coordinator = _build_coordinator()
-        coordinator.memory = {
-            "auto_irrigation_enabled": True,
-            "auto_irrigation_user_confirmed": False,
-        }
-
-        should_launch, reason = coordinator._should_launch_auto_irrigation(
-            {
-                "objectif_mm": 1.0,
-                "arrosage_recommande": True,
-                "arrosage_auto_autorise": True,
-                "fenetre_optimale": "maintenant",
-                "watering_target_date": coordinator._current_date().isoformat(),
-            }
-        )
-
-        self.assertFalse(should_launch)
-        self.assertEqual(reason, "user_confirmation_required")
-
     def test_post_application_auto_ready_bypasses_standard_window_checks(self) -> None:
         coordinator = _build_coordinator()
         today = coordinator._current_date()
@@ -1363,25 +1386,6 @@ class WateringSessionMonitoringTests(unittest.TestCase):
                     source="auto_irrigation",
                 )
             )
-
-    def test_auto_irrigation_start_requires_explicit_user_confirmation(self) -> None:
-        coordinator = _build_coordinator()
-        coordinator.memory = {
-            "auto_irrigation_enabled": True,
-            "auto_irrigation_user_confirmed": False,
-        }
-        coordinator._auto_irrigation_task = None
-        coordinator.hass = _FakeHass(states=_FakeStates({}))
-
-        with self.assertRaises(coordinator_mod.HomeAssistantError) as err:
-            asyncio.run(
-                coordinator_mod.GazonIntelligentCoordinator.async_start_auto_irrigation(
-                    coordinator,
-                    1.0,
-                    source="auto_irrigation",
-                )
-            )
-        self.assertIn("explicitement", str(err.exception))
 
     def test_manual_irrigation_service_launches_real_sequence(self) -> None:
         class _ManualIrrigationCoordinator:
@@ -3525,3 +3529,205 @@ class SharedValveMutualExclusionBenchTests(unittest.TestCase):
         should_launch, reason = me._should_launch_auto_irrigation(_ready_launch_snapshot(me))
         self.assertFalse(should_launch)
         self.assertEqual(reason, "watering_in_progress")
+
+
+class MowerDistressOverrideTests(unittest.TestCase):
+    """L'arrosage de détresse contourne le blocage tondeuse ET la fenêtre horaire.
+
+    Un mécanisme capable d'arroser à 3 h du matin méritait des tests : il n'en avait aucun
+    depuis son ajout en 0.20.0.
+    """
+
+    @staticmethod
+    def _blocked_snapshot(coordinator: object, **overrides: object) -> dict[str, object]:
+        snapshot = _ready_launch_snapshot(
+            coordinator,
+            # Le blocage tondeuse force lui-même la fenêtre à « attendre » : c'est la situation
+            # réelle que l'exception doit lever.
+            fenetre_optimale="attendre",
+            arrosage_auto_autorise=False,
+            watering_blocked_by_mower=True,
+            irrigation_blocked_but_critical=True,
+            watering_block_reason_code="mower_not_stowed",
+            block_reason="mower_not_stowed",
+            critical_deficit_mm=-4.8,
+        )
+        snapshot.update(overrides)
+        return snapshot
+
+    def _coordinator_with_block_age(self, minutes: float, reason: str = "mower_not_stowed") -> object:
+        coordinator = _build_coordinator()
+        coordinator.history = []
+        coordinator._runtime_state["mower_block_watch"] = {
+            "reason": reason,
+            "since": (
+                coordinator._current_utc_datetime() - timedelta(minutes=minutes)
+            ).isoformat(),
+        }
+        return coordinator
+
+    def test_blocage_tout_juste_apparu_ne_declenche_pas(self) -> None:
+        # LA course au démarrage du 29/07/2026 : Home Assistant redémarre, l'intégration lit la
+        # tondeuse avant que la sienne ait publié l'entité, et le motif « persistant » s'arme sur
+        # une absence de quelques secondes. Le robot était à la station, batterie 100 %.
+        coordinator = _build_coordinator()
+        coordinator.history = []
+        snapshot = self._blocked_snapshot(coordinator, watering_block_reason_code="configured_missing", block_reason="configured_missing")
+
+        should_launch, reason = coordinator._should_launch_auto_irrigation(snapshot)
+
+        self.assertFalse(should_launch)
+        self.assertEqual(reason, "irrigation_blocked")
+
+    def test_blocage_persistant_declenche_larrosage_de_detresse(self) -> None:
+        # Robot réellement coincé dehors depuis des heures + déficit critique : un robot mouillé
+        # vaut mieux qu'un gazon grillé. L'exception doit bien lever la fenêtre horaire.
+        coordinator = self._coordinator_with_block_age(180.0)
+
+        should_launch, _reason = coordinator._should_launch_auto_irrigation(
+            self._blocked_snapshot(coordinator)
+        )
+
+        self.assertTrue(should_launch)
+
+    def test_changement_de_motif_remet_le_compteur_a_zero(self) -> None:
+        # Un motif qui change n'est pas le même blocage qui dure : le compteur repart.
+        coordinator = self._coordinator_with_block_age(180.0, reason="ambiguous")
+
+        should_launch, reason = coordinator._should_launch_auto_irrigation(
+            self._blocked_snapshot(coordinator)
+        )
+
+        self.assertFalse(should_launch)
+        self.assertEqual(reason, "irrigation_blocked")
+
+    def test_fin_du_blocage_efface_le_compteur(self) -> None:
+        # Le robot rentre : le compteur doit être purgé, sinon un blocage ultérieur hériterait
+        # de l'ancienneté du précédent et déclencherait immédiatement.
+        coordinator = self._coordinator_with_block_age(180.0)
+
+        coordinator._should_launch_auto_irrigation(_ready_launch_snapshot(coordinator))
+
+        self.assertIsNone(coordinator._runtime_state.get("mower_block_watch"))
+
+    def test_motif_transitoire_jamais_contourne_meme_apres_des_heures(self) -> None:
+        # « Tonte en cours » se résout seul : arroser alors tremperait le robot en plein cycle.
+        # L'ancienneté ne doit rien y changer.
+        coordinator = self._coordinator_with_block_age(180.0, reason="mowing_in_progress")
+        snapshot = self._blocked_snapshot(
+            coordinator,
+            watering_block_reason_code="mowing_in_progress",
+            block_reason="mowing_in_progress",
+        )
+
+        should_launch, reason = coordinator._should_launch_auto_irrigation(snapshot)
+
+        self.assertFalse(should_launch)
+        self.assertEqual(reason, "irrigation_blocked")
+
+
+class EtElapsedFractionTests(unittest.TestCase):
+    """La fraction d'ET écoulée amorce le DÉBIT du bilan sol, pas seulement l'affichage.
+
+    Son ancien repli à 1.0 quand le soleil est inconnu a débité 6,2 mm d'ETc d'un coup à
+    03:11 le 29/07/2026, faisant tomber la réserve de 8,0 à 1,8 mm.
+    """
+
+    def _fraction_at(
+        self,
+        hour: int,
+        minute: int,
+        sun_context: dict,
+        *,
+        sunrise: int | None = None,
+        sunset: int | None = None,
+    ) -> float:
+        coordinator = _build_coordinator()
+        coordinator._current_datetime = lambda: datetime(
+            2026, 7, 29, hour, minute, tzinfo=timezone.utc
+        )
+        if sunrise is not None or sunset is not None:
+            # Le stub `dt_util` des tests n'a pas `parse_datetime` : on injecte directement les
+            # minutes, ce qui teste bien la logique de `_et_elapsed_fraction` elle-même.
+            coordinator._sunrise_minute_from_context = lambda _ctx: sunrise
+            coordinator._sunset_minute_from_context = lambda _ctx: sunset
+        return coordinator._et_elapsed_fraction(sun_context)
+
+    def test_soleil_inconnu_en_pleine_nuit_ne_debite_rien(self) -> None:
+        # LE défaut : contexte solaire vide (sun.sun pas encore publié au démarrage) à 3 h du
+        # matin. L'ancien repli répondait 1.0 = « toute la journée est écoulée ».
+        self.assertEqual(self._fraction_at(3, 11, {}), 0.0)
+
+    def test_soleil_inconnu_en_milieu_de_journee_reste_plausible(self) -> None:
+        # Repli sur la journée civile 06:00-21:00 : à 13:30 on attend environ la moitié.
+        fraction = self._fraction_at(13, 30, {})
+        self.assertGreater(fraction, 0.4)
+        self.assertLess(fraction, 0.6)
+
+    def test_soleil_inconnu_apres_la_journee_civile_vaut_bien_un(self) -> None:
+        # Tard le soir, « journée écoulée » redevient la bonne réponse.
+        self.assertEqual(self._fraction_at(22, 30, {}), 1.0)
+
+    def test_soleil_connu_avant_le_lever(self) -> None:
+        # Lever 06:33, coucher 21:35 (le vrai 29/07/2026).
+        self.assertEqual(self._fraction_at(3, 11, {}, sunrise=393, sunset=1295), 0.0)
+
+    def test_soleil_connu_apres_le_coucher(self) -> None:
+        self.assertEqual(self._fraction_at(23, 0, {}, sunrise=393, sunset=1295), 1.0)
+
+    def test_soleil_connu_a_midi(self) -> None:
+        fraction = self._fraction_at(12, 0, {}, sunrise=393, sunset=1295)
+        self.assertAlmostEqual(fraction, (720 - 393) / (1295 - 393), places=3)
+
+
+class PlanCanoniqueSnapshotFraisTests(unittest.TestCase):
+    """Le plan doit lire le fractionnement du snapshot FRAIS, pas du cycle précédent.
+
+    `_maybe_schedule_auto_irrigation` tourne à l'intérieur de `_async_update_data`, donc avant que
+    Home Assistant n'affecte le nouveau `self.data`. Pendant le lancement, `self.data` porte encore
+    le cycle précédent — alors que l'objectif vient du snapshot frais.
+
+    Le biais allait toujours dans le mauvais sens : le fractionnement n'apparaît qu'au-delà du
+    seuil, et c'est la transition « dose nulle → grosse dose » (expiration du cooldown 24 h dans la
+    fenêtre du matin, cas quotidien) qui le perdait.
+    """
+
+    def test_le_fractionnement_frais_prime_sur_le_cycle_precedent(self) -> None:
+        coordinator = _build_coordinator()
+        coordinator.history = []
+        # Cycle PRÉCÉDENT : dose nulle (cooldown actif) → aucun fractionnement publié.
+        coordinator.data = {
+            "objectif_mm": 0.0,
+            "watering_passages": 1,
+            "watering_pause_minutes": 0,
+        }
+        # Cycle qui DÉCLENCHE : cooldown expiré, grosse dose → 2 passages + pause.
+        snapshot = _ready_launch_snapshot(
+            coordinator,
+            objectif_mm=11.2,
+            watering_passages=2,
+            watering_pause_minutes=25,
+        )
+
+        plan = coordinator._get_canonical_watering_plan(objectif_mm=11.2, snapshot=snapshot)
+
+        self.assertIsNotNone(plan, "aucun plan construit")
+        self.assertEqual(plan.passage_count, 2, "le plan a repris le cycle précédent (1 passage)")
+        self.assertEqual(plan.pause_between_passages_s, 25 * 60)
+
+    def test_repli_sur_self_data_quand_le_snapshot_ne_porte_pas_le_fractionnement(self) -> None:
+        # Non-régression : les appelants qui ne passent pas de snapshot doivent continuer à lire
+        # `self.data` (c'est le cas du service d'arrosage manuel).
+        coordinator = _build_coordinator()
+        coordinator.history = []
+        coordinator.data = {
+            "objectif_mm": 11.2,
+            "watering_passages": 2,
+            "watering_pause_minutes": 25,
+        }
+
+        plan = coordinator._get_canonical_watering_plan(objectif_mm=11.2)
+
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan.passage_count, 2)
+        self.assertEqual(plan.pause_between_passages_s, 25 * 60)

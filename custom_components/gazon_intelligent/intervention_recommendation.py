@@ -238,9 +238,12 @@ def _temperature_evaluation(
     score_delta = 0
     delta = 0.0
 
+    # Les bornes sont relues DANS les branches (`lower`/`upper` ne peuvent y être nuls, le booléen
+    # le garantit) : le vérificateur de types ne sait pas affiner à travers une variable
+    # intermédiaire, d'où deux faux signalements de soustraction sur None.
     too_cold = lower is not None and current < lower
     too_hot = upper is not None and current > upper
-    if too_cold:
+    if too_cold and lower is not None:
         # Trop FROID : on ne peut pas réchauffer le moment d'application → pénalité croissante,
         # et blocage si vraiment trop bas.
         matched = False
@@ -258,7 +261,7 @@ def _temperature_evaluation(
             blocking = True
             reason = f"Température trop basse ({current_label} °C, attendu {expected_label})"
             band = "blocked"
-    elif too_hot:
+    elif too_hot and upper is not None:
         # Trop CHAUD en JOURNÉE : un produit s'applique tôt le matin (plus frais). On NE bloque
         # donc PAS sur la température de l'après-midi (sinon les agents mouillants, faits pour
         # l'été, seraient inapplicables toute la canicule). Conseil non bloquant + petite
@@ -292,6 +295,15 @@ def _temperature_evaluation(
 
 def _opportunity_evaluation(application_state: dict[str, Any] | None) -> dict[str, Any]:
     state = application_state if isinstance(application_state, dict) else {}
+    # ⚠️ `application_block_reason` n'est produite NULLE PART — mais ce n'est PAS un nom qui a
+    # dérivé de `block_reason`. Vérifié le 29/07/2026 : `block_reason` du snapshot est le motif
+    # de blocage de l'ARROSAGE (codes machine : "cooldown_24h", "sol_deja_humide",
+    # "pluie_prevue_suffisante"…), pas celui d'une application produit. Le rebranchement a été
+    # tenté puis annulé : il aurait bloqué dur toute recommandation dès que l'arrosage est en
+    # cooldown — l'état le plus courant — en affichant un code interne comme motif.
+    # La vraie famille de cette clé, ce sont ses voisines `application_*` ci-dessous. Elle n'est
+    # qu'un SLOT DE SURCHARGE pour un message sur mesure ; les quatre conditions réelles de
+    # blocage d'application sont couvertes juste en dessous, chacune avec sa phrase en clair.
     block_reason = str(state.get("application_block_reason") or "").strip()
     post_status = _normalize_text(state.get("application_post_watering_status"))
     type_arrosage = _normalize_text(state.get("type_arrosage"))
@@ -326,11 +338,11 @@ def _opportunity_evaluation(application_state: dict[str, Any] | None) -> dict[st
         reserve_raw = state.get("reserve_hydrique_sol_mm")
         if reserve_raw is None:
             reserve_raw = state.get("bilan_hydrique_mm")
-        reserve_sol = float(reserve_raw)
+        reserve_sol = float(reserve_raw)  # type: ignore[arg-type]  # protégé par le except
     except (TypeError, ValueError):
         reserve_sol = None
     try:
-        bilan_hydrique = float(state.get("bilan_hydrique_mm"))
+        bilan_hydrique = float(state.get("bilan_hydrique_mm"))  # type: ignore[arg-type]
     except (TypeError, ValueError):
         bilan_hydrique = None
 
@@ -489,7 +501,7 @@ def _evaluate_product_candidate(
     latest_application = _latest_application_for_product(history, product_id or "", product_name)
     delay_days = None
     try:
-        delay_days = int(float(product.get("reapplication_after_days")))
+        delay_days = int(float(product.get("reapplication_after_days")))  # type: ignore[arg-type]
     except (TypeError, ValueError):
         delay_days = None
     latest_application_date = _parse_date(
@@ -561,6 +573,16 @@ def _evaluate_product_candidate(
         if latest_application_date is None:
             score += 4
             reasons.append("Aucun historique de réapplication")
+        elif next_reapplication_date is None:
+            # Le garde plus haut refuse de calculer une échéance sur un délai NÉGATIF, mais ce bloc
+            # ne testait que `delay_days is not None` : les deux `strftime` ci-dessous s'appliquaient
+            # alors à None et le moteur de recommandation levait un AttributeError — plus aucune
+            # suggestion de produit, pour toute la fiche. Le garde et son consommateur se
+            # contredisaient : l'un des deux avait forcément tort.
+            # Le service `register_product` refuse déjà un délai négatif (vol.Range(min=0)) ; rien
+            # ne protège en revanche un `.storage` retouché ou un catalogue importé à la main.
+            score += 4
+            reasons.append("Délai de réapplication invalide — ignoré")
         elif due:
             score += 18
             reasons.append(
@@ -845,7 +867,9 @@ def _constraints_for_candidate(
             "Ajoute au moins un produit au catalogue pour obtenir une recommandation.",
         )
 
-    constraints: list[dict[str, Any]] = []
+    # Pas de ré-annotation ici : `constraints` est déjà typée dans la branche « catalogue vide »
+    # plus haut, et annoter deux fois le même nom dans la même fonction est une redéfinition.
+    constraints = []
     missing_requirements: list[dict[str, Any]] = []
 
     phase_compatible = candidate.get("phase_compatible") or []
@@ -959,8 +983,9 @@ def _constraints_for_candidate(
             )
         )
 
-    if candidate.get("max_applications_per_year") is not None and candidate.get("annual_limit_reached"):
-        max_applications_per_year = int(candidate.get("max_applications_per_year"))
+    _max_apps_an = candidate.get("max_applications_per_year")
+    if _max_apps_an is not None and candidate.get("annual_limit_reached"):
+        max_applications_per_year = int(_max_apps_an)
         applications_this_year = int(candidate.get("applications_this_year") or 0)
         constraints.append(
             _constraint_entry(
@@ -1299,6 +1324,8 @@ def build_intervention_recommendation(
     block_active = bool(application_state.get("application_block_active"))
     post_watering_pending = bool(application_state.get("application_post_watering_pending"))
     delay_remaining = float(application_state.get("application_post_watering_delay_remaining_minutes") or 0.0)
+    # Même slot de surcharge qu'en haut de ce module — voir le commentaire détaillé là-bas :
+    # NE PAS rebrancher sur `block_reason`, qui est le motif de blocage de l'arrosage.
     block_reason = str(application_state.get("application_block_reason") or "").strip()
     if not block_reason and block_active:
         block_reason = "Une application récente bloque encore toute nouvelle intervention."
@@ -1571,11 +1598,14 @@ def build_intervention_recommendation(
         if state == "preparation"
         else best["blocked_reason"] or "La réapplication n'est pas encore possible."
     )
-    temperature_reason = None
+    # Nom DISTINCT de la variable homonyme utilisée plus haut dans cette même fonction (bloc
+    # « post-application ») : elle y est une chaîne toujours définie, ici une note optionnelle.
+    # Réutiliser le même nom pour deux usages rendait la fonction difficile à suivre.
+    temperature_note = None
     if isinstance(best.get("temperature_evaluation"), dict):
-        temperature_reason = str(best["temperature_evaluation"].get("reason") or "").strip() or None
-    if temperature_reason and temperature_reason not in reason:
-        reason = f"{reason} · {temperature_reason}" if reason else temperature_reason
+        temperature_note = str(best["temperature_evaluation"].get("reason") or "").strip() or None
+    if temperature_note and temperature_note not in reason:
+        reason = f"{reason} · {temperature_note}" if reason else temperature_note
     why_now = reason
     if state == "blocked" and best["blocked_reason"]:
         why_now = best["blocked_reason"]
@@ -1626,9 +1656,9 @@ def build_intervention_recommendation(
         else "select_product"
         if state in {"recommended", "preparation"}
         else "wait"
-        if state == "blocked"
-        else "add_product"
     )
+    # Pas de branche « add_product » : `state` ne vaut ici que recommended / preparation / blocked
+    # (les autres valeurs sortent par un `return` antérieur). Une 4ᵉ branche était inatteignable.
     return {
         "schema_version": 3,
         "status": state,

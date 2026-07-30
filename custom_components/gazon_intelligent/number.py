@@ -5,7 +5,10 @@ from homeassistant.helpers.entity import EntityCategory
 try:
     from homeassistant.helpers.restore_state import RestoreEntity
 except Exception:  # pragma: no cover - fallback for unit tests / stripped envs
-    class RestoreEntity:  # type: ignore[too-many-ancestors]
+    # Repli VOLONTAIRE hors Home Assistant (tests, environnement allégé). Le vérificateur
+    # de types y voit une redéfinition du symbole importé au-dessus : c'est exactement
+    # le but du motif try/except, pas une erreur.
+    class RestoreEntity:  # type: ignore[no-redef, too-many-ancestors]
         async def async_get_last_state(self):
             return None
 
@@ -147,6 +150,10 @@ class GazonMowerCuttingHeightNumber(RestoreEntity, GazonEntityBase, NumberEntity
     # Bornes DYNAMIQUES dérivées des réglages configurables « Hauteur min/max tondeuse » (cm → mm).
     # Générique : chacun règle la plage de SA tondeuse (3-6 cm, 0,5-10 cm…) et le slider suit —
     # aucune valeur codée en dur, donc une tondeuse 0-100 mm fonctionne aussi.
+    # ⚠️ Vrai pour CE curseur seulement. La hauteur CONSEILLÉE, elle, passe par les garde-fous
+    # agronomiques de `decision_mowing._recommended_mowing_height` (plancher 4,0 cm, plafond
+    # 6,5 cm), qui peuvent resserrer la plage configurée. Depuis la 0.25.0 ce resserrage est
+    # visible : bornes publiées = bornes appliquées, + `hauteur_tonte_garde_fou_label`.
     def _configured_bound_mm(self, config_key: str, default_cm: float) -> float:
         value = self.coordinator._get_conf(config_key)
         try:
