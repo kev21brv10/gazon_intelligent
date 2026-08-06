@@ -31,10 +31,28 @@ def get_float_from_attributes(attributes: Mapping[str, Any] | None, *keys: str) 
     return None
 
 
-def extract_weather_profile(attributes: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Extrait un maximum d'informations standard depuis une entité météo."""
-    if not attributes:
+def extract_weather_profile(
+    attributes: Mapping[str, Any] | None,
+    *,
+    condition: str | None = None,
+) -> dict[str, Any]:
+    """Extrait un maximum d'informations standard depuis une entité météo.
+
+    ⚠️ `condition` doit venir de l'ÉTAT de l'entité, pas de ses attributs. Chez Home Assistant,
+    la condition météo d'une entité `weather.*` EST son état (`sunny`, `rainy`, `pouring`…) et
+    n'apparaît PAS dans `attributes`. Ce module lisait pourtant `attributes.get("condition")`,
+    qui vaut donc toujours `None` : le garde « il pleut en ce moment » n'a jamais pu s'armer
+    depuis sa mise en place le 18/03/2026.
+
+    Conséquence mesurée le 30/07/2026 : `weather.forecast_maison` valait `rainy` de 06:43 à
+    09:28, le pluviomètre montait de 1,1 à 2,2 mm — et à 07:38 l'arrosage automatique a versé
+    **5,1 mm sous la pluie**, sans qu'aucun garde ne bronche. Preuve de durée : la clé
+    `derniere_pluie_active` n'est jamais apparue dans l'état persisté, et le libellé
+    « Pluie active » n'apparaît sur aucun des 208 états du capteur de blocage relevés.
+    """
+    if not attributes and condition is None:
         return {}
+    attributes = attributes or {}
 
     return {
         "weather_temperature": get_float_from_attributes(attributes, "temperature", "native_temperature"),
@@ -59,8 +77,21 @@ def extract_weather_profile(attributes: Mapping[str, Any] | None) -> dict[str, A
             "precipitation_probability",
             "native_precipitation_probability",
         ),
-        "weather_condition": attributes.get("condition"),
+        # L'état de l'entité fait foi ; `attributes["condition"]` reste lu en repli pour les
+        # fournisseurs qui le publieraient malgré tout, et pour ne pas casser les appelants
+        # existants qui ne passent que des attributs.
+        "weather_condition": _clean_condition(condition) or attributes.get("condition"),
     }
+
+
+def _clean_condition(condition: str | None) -> str | None:
+    """Normalise l'état d'une entité météo, en écartant les non-valeurs de Home Assistant."""
+    if condition is None:
+        return None
+    valeur = str(condition).strip().lower()
+    if not valeur or valeur in {"unknown", "unavailable", "none"}:
+        return None
+    return valeur
 
 
 def extract_weather_forecast_summary(forecasts: list[Mapping[str, Any]] | None) -> dict[str, Any]:

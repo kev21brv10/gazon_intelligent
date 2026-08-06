@@ -4012,3 +4012,59 @@ class SessionPayloadPorteLeDebutTests(unittest.TestCase):
                          "le début du cycle n'est pas transporté")
         self.assertEqual(payload["ended_at"], fin)
         self.assertEqual(payload["date_action"], fin.date())
+
+
+class LeCoordinateurTransmetLEtatMeteoTests(unittest.TestCase):
+    """Le test de CÂBLAGE — c'est son absence qui a laissé le défaut vivre cinq mois.
+
+    `_get_weather_profile` appelait `profile_from_attributes(state.attributes)` sans jamais
+    transmettre `state.state`. Or chez Home Assistant, la condition d'une entité `weather.*`
+    est son ÉTAT. Des tests existaient bien sur `extract_weather_profile`, mais ils lui
+    passaient un dictionnaire contenant `"condition"` — une forme que la production ne produit
+    jamais. Ils vérifiaient une DÉCLARATION, pas le CHEMIN RÉEL.
+    """
+
+    class _EtatMeteo:
+        """Ce que Home Assistant expose vraiment pour une entité `weather.*`."""
+
+        def __init__(self, etat: str) -> None:
+            self.state = etat
+            self.attributes = {
+                "temperature": 17.0,
+                "humidity": 92,
+                "wind_speed": 11.0,
+                "cloud_coverage": 98,
+            }
+
+    def _coordinateur(self, etat_meteo: str | None):
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        etats = {"weather.forecast_maison": self._EtatMeteo(etat_meteo)} if etat_meteo else {}
+        coord.hass = types.SimpleNamespace(
+            states=types.SimpleNamespace(get=etats.get)
+        )
+        return coord
+
+    def test_la_condition_arrive_jusqu_au_profil(self) -> None:
+        coord = self._coordinateur("rainy")
+        profil = coord._get_weather_profile("weather.forecast_maison")
+        self.assertEqual(
+            profil.get("weather_condition"), "rainy",
+            "l'état de l'entité météo ne traverse pas le coordinateur",
+        )
+
+    def test_le_garde_pluie_s_arme_de_bout_en_bout(self) -> None:
+        """De l'entité Home Assistant jusqu'au booléen qui bloque l'arrosage."""
+        guidance = importlib.import_module("custom_components.gazon_intelligent.guidance")
+        coord = self._coordinateur("rainy")
+        profil = coord._get_weather_profile("weather.forecast_maison")
+        self.assertTrue(guidance.is_active_rain_weather(profil))
+
+        clair = self._coordinateur("sunny")
+        self.assertFalse(
+            guidance.is_active_rain_weather(clair._get_weather_profile("weather.forecast_maison"))
+        )
+
+    def test_une_entite_absente_ne_casse_rien(self) -> None:
+        coord = self._coordinateur(None)
+        self.assertEqual(coord._get_weather_profile("weather.forecast_maison"), {})
+        self.assertEqual(coord._get_weather_profile(None), {})
