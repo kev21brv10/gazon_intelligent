@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.51.0
+
+1016 tests verts. **Le pluviomètre baisse en cours de journée, et la réserve le suivait.**
+
+Mesuré le 04/08/2026 sur le capteur journalier — **dix baisses intra-journée** :
+
+```
+00:48 1,0 → 03:11 2,6 → 04:08 2,5 → 04:20 3,5 → 04:44 2,7 → 17:17 4,2
+      → 19:08 3,4 → 20:11 4,0 → 21:50 2,9 → 23:52 3,1
+```
+
+La réserve les suivait pas pour pas : entre 21:33 et 21:50 elle passe de 9,8 à 8,9 mm pour un
+pluviomètre qui recule de 3,8 à 2,9 — pendant que l'ET0 horaire valait **0,04 mm/h**, quatre-
+vingt-dix fois moins. Le bilan retenait la **dernière** lecture (3,1) quand le maximum du jour
+valait **4,2** : 1,1 mm réellement tombé n'entrait jamais au bilan, un jour de rattrapage.
+
+**L'objection qui avait fait refuser un `max()` reste respectée.** Le capteur se remet à zéro
+plusieurs dizaines de minutes après minuit local : un maximum nu figerait le cumul de la veille
+pour toute la journée. La différence, c'est qu'on détecte désormais la **remise à zéro** — une
+chute vers ~0 — au lieu de se fier à l'heure. Le cliquet se relâche alors de lui-même et repart
+de la nouvelle base.
+
+Ça corrige du même coup la **marche de minuit**, vérifiée deux fois : 31/07, réserve 8,6 mm à
+23:36:27 → **11,2 à 00:00:32** → retour à 8,6 à 00:44:32 ; et 05/08, 9,1 → **12,2** → 9,1.
+
+Le maximum du jour est écrit dans le journal (`pluie_pic_mm`) **et** dans sa liste blanche de
+normalisation — sans quoi le cliquet perdrait sa mémoire à chaque cycle et à chaque
+rechargement du state persisté. C'est le piège que ce fichier documente lui-même.
+
+Les 5 mutations correspondantes sont détectées, dont les deux bornes de la détection de remise
+à zéro : « toute chute est un reset » et « aucune chute n'en est un ».
+
 ## 0.50.0
 
 1010 tests verts. **L'intégration n'est plus aveugle aux blocages de la tondeuse.**
