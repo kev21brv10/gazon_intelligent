@@ -1166,7 +1166,15 @@ def _raisons_par_defaut(
     raisons: list[str] = []
     if block_reason:
         raisons.append(str(block_reason))
-    if heat_stress_level and heat_stress_level not in {"normal", "", None}:
+    # ⚠️ Une raison doit EXPLIQUER le niveau qu'elle accompagne. Sans ce garde, un profil qui
+    # pose « risque faible » par littéral sortait « risque_gazon: faible » avec pour seule
+    # raison « stress hydrique eleve » — mesuré le 01/08/2026 à 15:32:44 et le 06/08 à
+    # 00:00:50. Le lecteur devait alors choisir laquelle des deux sorties croire.
+    if (
+        heat_stress_level
+        and heat_stress_level not in {"normal", "", None}
+        and risque_gazon != "faible"
+    ):
         raisons.append(f"stress hydrique {heat_stress_level}")
     if not raisons:
         raisons.append(
@@ -1302,10 +1310,14 @@ def _build_guidance_window_payload(
         "niveau_action": niveau_action,
         "fenetre_optimale": fenetre_optimale,
         "risque_gazon": risque_gazon,
+        # ⚠️ Cette fonction n'a PAS de `block_reason` dans sa portée : l'appel portait
+        # `block_reason=locals().get("block_reason")`, copié depuis `_build_decision_payload`
+        # où la variable existe vraiment. Ici l'expression valait donc TOUJOURS None — le
+        # motif réel n'arrivait jamais dans les raisons. Retiré plutôt que maquillé : tant
+        # que `compute_action_guidance` ne reçoit pas le motif, il n'y a rien à transmettre.
         "risque_gazon_raisons": list(risque_raisons) if risque_raisons else _raisons_par_defaut(
             risque_gazon=risque_gazon,
             heat_stress_level=heat_stress_level,
-            block_reason=locals().get("block_reason"),
         ),
         "heat_stress_level": heat_stress_level,
         "watering_window_start_minute": optimal_start_minute,
@@ -2766,8 +2778,31 @@ def compute_action_guidance(
         )
 
     if objectif_mm <= 0:
+        # ⚠️ L'ALERTE NE DOIT PAS S'ÉTEINDRE PARCE QUE LE BLOCAGE S'ALLUME.
+        # Ce chemin est pris dès que l'objectif est ramené à 0 — donc chaque fois qu'un
+        # garde-fou retient l'eau. Il posait « risque_gazon: faible » par LITTÉRAL, sans
+        # regarder le sol. Mesuré le 01/08/2026 : à 15:30:35 réserve 2,8 mm → « eleve /
+        # critique » ; à 15:32:44, même réserve, même `hydric_state: critique`, mais
+        # `block_reason: garde_fou_hebdomadaire` → « faible / aucune_action ». Sur la fenêtre
+        # auditée, 19 h 34 sur 239 h d'`etat_hydrique: critique` coexistaient avec un risque
+        # annoncé faible — et comme `risque_gazon` alimente `compute_next_reevaluation`, la
+        # cadence de réévaluation baissait en même temps que l'alerte se taisait. C'est ce qui
+        # a rendu les 31/07-02/08 (réserve à 0 mm) invisibles.
+        # Le NIVEAU D'ACTION reste « aucune_action » : il n'y a effectivement rien à faire
+        # tant que le garde-fou tient. C'est le DIAGNOSTIC du gazon qui doit rester vrai.
+        _risque_bloque, _raisons_bloque = _evaluer_risque_gazon(
+            water_balance=water_balance,
+            bilan_hydrique_mm=bilan_hydrique_mm,
+            pression_hydrique=pression_hydrique,
+            plancher=None if phase_dominante == "Normal" else "modere",
+            vent=vent,
+            hauteur_gazon=hauteur_gazon,
+            heat_stress_level=heat_stress_level,
+            heat_stress_phase=heat_stress_phase,
+        )
         return _build_guidance_window_payload(
-            risque_gazon="faible" if phase_dominante == "Normal" else "modere",
+            risque_gazon=_risque_bloque,
+            risque_raisons=_raisons_bloque,
             niveau_action="aucune_action" if phase_dominante == "Normal" else "surveiller",
             fenetre_optimale="apres_pluie" if pluie_proche else "attendre",
             heat_stress_level=heat_stress_level,

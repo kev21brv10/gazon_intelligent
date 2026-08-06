@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.42.0
+
+949 tests verts. **L'alerte ne s'éteint plus parce que le blocage s'allume.**
+
+Deux sorties publiées se contredisaient exactement les jours où l'eau était retenue — donc
+exactement les jours où il fallait pouvoir lire le diagnostic.
+
+- **Risque du gazon** : le chemin « objectif ramené à 0 » posait `risque_gazon: faible` par
+  LITTÉRAL, sans regarder le sol. Mesuré sur l'installation le 01/08/2026 : à 15:30:35, réserve
+  2,8 mm → « eleve / critique » ; à 15:32:44, **même réserve, même `hydric_state: critique`**,
+  mais `block_reason: garde_fou_hebdomadaire` → « faible / aucune_action ». Sur 239 h auditées,
+  **19 h 34** d'`etat_hydrique: critique` coexistaient avec un risque annoncé faible. Et comme
+  `risque_gazon` alimente `compute_next_reevaluation`, la cadence de réévaluation baissait en
+  même temps que l'alerte se taisait — c'est ce qui a rendu invisibles les trois jours à 0 mm
+  de réserve (31/07 → 02/08). Le risque est désormais calculé même sous blocage ; le niveau
+  d'action, lui, reste `aucune_action` puisqu'il n'y a effectivement rien à faire.
+
+- **Raisons du risque** : `_raisons_par_defaut` ajoutait « stress hydrique {niveau} » sans
+  regarder le niveau qu'elle accompagnait, d'où l'impossible `risque_gazon: faible` justifié par
+  `["stress hydrique eleve"]`, relevé deux fois. Une raison doit expliquer le niveau qu'elle
+  accompagne, sinon le lecteur doit choisir laquelle des deux sorties croire.
+
+- **Code mort retiré** : `_build_guidance_window_payload` lisait
+  `block_reason=locals().get("block_reason")`, copié depuis une fonction où la variable existe
+  vraiment. Cette fonction n'a pas ce paramètre : l'expression valait **toujours** `None`. Le
+  motif réel n'arrivait donc jamais dans `risque_gazon_raisons`.
+
+Les quatre mutations correspondantes ont été vérifiées : remettre le littéral, remettre la
+raison contradictoire, ignorer le motif de blocage, autoriser une raison vide — chacune est
+détectée par la suite.
+
 ## 0.41.1
 
 942 tests verts. **Vérification que les desserrages de la semaine n'ont pas ouvert la porte au
