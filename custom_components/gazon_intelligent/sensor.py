@@ -4438,6 +4438,10 @@ class GazonProchainArrosageSensor(GazonFenetreOptimaleSensor):
         target_date = self._target_date()
         return _human_date_text(target_date) if target_date else None
 
+    def _motif_de_blocage(self) -> str | None:
+        """Motif de blocage courant, ou None. Lu au même endroit que ce qui est publié."""
+        return str(self._decision_value("block_reason") or "").strip() or None
+
     @property
     def native_value(self):
         contextual = self._contextual_watering_state() or {}
@@ -4447,8 +4451,17 @@ class GazonProchainArrosageSensor(GazonFenetreOptimaleSensor):
         window_value = str(self._decision_value("fenetre_optimale") or "").strip().lower()
         window_label = _window_display_label(window_value)
 
-        if status == "termine" and objective_mm <= 0.0:
+        # ⚠️ « NON REQUIS » NE DOIT PAS COUVRIR UN BLOCAGE.
+        # L'objectif tombe à 0 quand un garde-fou retient l'eau : dire « non requis » dans ce
+        # cas, c'est annoncer que le gazon n'a besoin de rien alors qu'on lui refuse justement
+        # ce dont il a besoin. Mesuré le 31/07/2026 à 10:46:50 : état « Non requis », résumé
+        # « Aucun arrosage nécessaire pour le moment » — et dans ses propres attributs
+        # `block_reason: garde_fou_hebdomadaire`. Le mensonge était l'état, pas le motif : on
+        # garde donc le motif et on corrige l'état.
+        if status == "termine" and objective_mm <= 0.0 and not self._motif_de_blocage():
             return "Non requis"
+        if status == "termine" and objective_mm <= 0.0:
+            return "Retenu"
         if status == "bloque":
             return "Bloqué"
         if target_display:
@@ -4505,7 +4518,14 @@ class GazonProchainArrosageSensor(GazonFenetreOptimaleSensor):
             elif block_reason_label:
                 summary = f"Arrosage bloqué: {block_reason_label}"
         elif status == "termine" and objective_mm <= 0.0:
-            summary = "Aucun arrosage nécessaire pour le moment"
+            # Même règle que pour l'état : ne pas annoncer « rien à faire » quand un garde-fou
+            # retient l'eau. Le motif existe déjà dans les attributs, il doit se lire ici aussi.
+            if block_reason_label:
+                summary = f"Arrosage retenu: {block_reason_label}"
+            elif block_reason:
+                summary = "Arrosage retenu par un garde-fou"
+            else:
+                summary = "Aucun arrosage nécessaire pour le moment"
         elif expose_target and target_display:
             if window_value == "apres_pluie":
                 summary = f"Arrosage à reconsidérer après pluie, cible {target_display}"

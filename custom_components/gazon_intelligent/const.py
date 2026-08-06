@@ -220,4 +220,13 @@ BLOCK_REASON_DISPLAY_LABELS: dict[str, str] = {
     "temperature_trop_basse_germination": "Température trop basse (germination)",
     "semis_cycle_daily_target_reached": "Objectif du jour atteint (semis)",
     "semis_cycle_pending": "Cycle de semis en attente",
+    # ⚠️ Ces six codes étaient PUBLIÉS sans libellé : ils s'affichaient en snake_case brut sur
+    # la carte et dans les attributs. Relevé à l'audit du 06/08/2026 en comparant les codes
+    # réellement émis par decision_mowing / guidance / decision_watering à cette table.
+    "machine_unavailable": "Robot indisponible",
+    "mowing_window_blocked": "Hors fenêtre de tonte",
+    "recent_watering": "Arrosage récent",
+    "soil_wet": "Sol détrempé",
+    "upcoming_watering": "Arrosage imminent",
+    "wet_grass": "Herbe mouillée",
 }

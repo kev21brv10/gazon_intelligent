@@ -148,7 +148,17 @@ _ERROR_LABELS: dict[str, str] = {
 
 
 def _status_label(status: str, raw_state: Any) -> str | None:
+    """Libellé lisible du statut. ⚠️ Une PANNE prime sur un état brut anodin.
+
+    Le robot annonce `idle` quand il est immobilisé en plein jardin — soulevé, coincé, roue
+    bloquée, retourné. L'état brut gagnait alors sur le statut dérivé et l'affichage montrait
+    « Au repos » pour une machine en panne. Vérifié sur l'installation : du 02 au 05/08/2026,
+    les 7 arrêts en jardin coïncident À LA SECONDE avec un déclenchement d'erreur, et l'état
+    du robot y vaut `idle`.
+    """
     lowered = str(raw_state or "").strip().lower()
+    if str(status or "").strip().lower() == "erreur" and lowered not in {"error", "erreur"}:
+        return _human_label(status)
     if lowered in _RAW_STATE_LABELS:
         return _RAW_STATE_LABELS[lowered]
     return _human_label(status)
