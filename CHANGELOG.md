@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.47.0
+
+988 tests verts. **Le correctif d'horodatage n'était branché que sur une des trois voies.**
+
+Le 04/08/2026, l'historique d'arrosage a été corrigé pour porter le **début** de la session et
+non sa fin — l'affichage annonçait « arrosé à 05:18 » pour un cycle parti à **03:45:13**,
+vérifié sur les vannes (Z1 03:45→04:18, Z2 04:18→04:51, Z3 04:51→05:18).
+
+Ce correctif n'avait été appliqué qu'à la voie de **détection**. Trois voies enregistrent un
+arrosage dans le coordinateur :
+
+| voie | quand | avant |
+|---|---|---|
+| détection | session repérée sur les vannes | ✅ corrigée le 04/08 |
+| **cycle piloté** | **l'arrosage automatique de tous les matins** | ❌ heure de fin |
+| cycle interrompu | arrêt manuel en cours de cycle | ❌ heure de fin |
+
+Autrement dit, le chemin qui compte — celui qu'emprunte l'arrosage automatique quotidien —
+continuait d'enregistrer l'heure de fin. **Un correctif livré mais non exécuté est pire qu'un
+correctif absent : on le croit fait.**
+
+Les deux voies manquantes transmettent désormais le début de session, et un **invariant de
+source** interdit qu'une quatrième apparaisse sans le faire — c'est exactement le mode de
+défaillance de cette famille, le correctif à moitié appliqué. Les 4 mutations sont détectées.
+
 ## 0.46.0
 
 986 tests verts. **Un arrosage manuel de secours ne réarme plus le blocage qu'il venait de

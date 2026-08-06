@@ -4175,3 +4175,80 @@ class LEtpEcouleeDuJourEstExposeeTests(unittest.TestCase):
             with self.subTest(soil_balance=etat):
                 resultat = self._coord(etat)._etp_ecoulee_du_jour()
                 self.assertEqual(set(resultat), {"etp_ecoulee_mm", "etp_jour_estime_mm"})
+
+
+class LHorodatageEstBrancheSurLesDeuxVoiesTests(unittest.TestCase):
+    """Un correctif livré mais non exécuté est pire qu'un correctif absent : on le croit fait.
+
+    Le correctif du 04/08/2026 — enregistrer le DÉBUT de l'arrosage et non sa fin — n'avait été
+    branché que sur la voie de DÉTECTION. Sur la voie PILOTÉE, celle des cycles lancés par
+    l'intégration donc de l'arrosage automatique de tous les matins, l'historique recevait
+    toujours l'instant de fin : l'affichage annonçait « arrosé à 05:18 » pour un cycle parti à
+    03:45:13. Vérifié sur les vannes : Z1 03:45→04:18, Z2 04:18→04:51, Z3 04:51→05:18.
+    """
+
+    def test_la_voie_pilotee_transmet_le_debut_de_session(self) -> None:
+        plan = watering_plan_mod.build_watering_plan(
+            1.5, [("switch.zone_1", 60.0), ("switch.zone_2", 30.0)]
+        )
+        assert plan is not None
+        coordinator = _build_runtime_ready_coordinator(plan_attrs=plan.as_dict())
+
+        async def _run() -> None:
+            original_sleep = coordinator_mod.asyncio.sleep
+
+            async def _no_sleep(_delay: float) -> None:
+                return None
+
+            coordinator_mod.asyncio.sleep = _no_sleep
+            try:
+                await coordinator_mod.GazonIntelligentCoordinator.async_start_auto_irrigation(
+                    coordinator, 1.5,
+                    plan_arrosage_entity_id="sensor.gazon_intelligent_plan_arrosage",
+                    source="auto_irrigation",
+                )
+                task = coordinator._auto_irrigation_task
+                assert task is not None
+                await task
+            finally:
+                coordinator_mod.asyncio.sleep = original_sleep
+
+        asyncio.run(_run())
+
+        coordinator.async_record_watering.assert_awaited_once()
+        kwargs = coordinator.async_record_watering.await_args.kwargs
+        self.assertIn(
+            "started_at", kwargs,
+            "la voie pilotée n'enregistre toujours que l'instant de fin",
+        )
+        self.assertIsNotNone(
+            kwargs["started_at"],
+            "le début de session est transmis mais vide",
+        )
+
+    def test_aucune_voie_interne_n_oublie_le_debut(self) -> None:
+        """Invariant de source : le défaut de cette famille, c'est le correctif À MOITIÉ appliqué.
+
+        Trois voies enregistrent un arrosage dans le coordinateur (détection, cycle piloté,
+        cycle interrompu). Le correctif n'en couvrait qu'une. Ce test échouera si une
+        quatrième voie apparaît sans transmettre le début — c'est précisément le mode de
+        défaillance qu'on veut interdire.
+        """
+        source = (
+            Path(coordinator_mod.__file__).read_text(encoding="utf-8").split("\n")
+        )
+        oublis: list[int] = []
+        for i, ligne in enumerate(source):
+            if "await self.async_record_watering(" not in ligne:
+                continue
+            bloc: list[str] = []
+            for suite in source[i + 1: i + 40]:
+                bloc.append(suite)
+                if suite.strip() == ")":
+                    break
+            if not any("started_at=" in x for x in bloc):
+                oublis.append(i + 1)
+        self.assertEqual(
+            oublis, [],
+            f"appel(s) à async_record_watering sans `started_at=` aux lignes {oublis}",
+        )

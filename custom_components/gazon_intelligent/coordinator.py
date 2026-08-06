@@ -4414,6 +4414,14 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 total_mm=surface_mm,
                 zones=executed_zones,
                 source=source,
+                # ⚠️ Le correctif d'horodatage du 04/08/2026 n'avait été branché que sur la voie
+                # de DÉTECTION (`_finalize_watering_session`). Sur cette voie-ci, celle des
+                # cycles PILOTÉS par l'intégration — donc l'arrosage automatique de tous les
+                # matins — l'historique ne recevait toujours que l'instant de fin, et
+                # l'affichage annonçait « arrosé à 05:18 » pour un cycle parti à 03:45:13.
+                # Un correctif livré mais non exécuté est pire qu'un correctif absent : on le
+                # croit fait.
+                started_at=runtime_session.get("started_at"),
                 watering_cause=runtime_session.get("watering_cause"),
                 mm_scope=recorded_watering["mm_scope"],
                 mm_interpretation=recorded_watering["mm_interpretation"],
@@ -4763,6 +4771,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 total_mm=applique_mm,
                 zones=zones_faites,
                 source=source,
+                # Même correctif que sur la voie pilotée : un cycle interrompu a bien eu un
+                # début, et c'est lui qui doit figurer dans l'historique.
+                started_at=instantane.get("started_at"),
                 watering_cause="arret_manuel",
                 mm_scope="global_surface",
                 mm_interpretation="surface_uniform",
