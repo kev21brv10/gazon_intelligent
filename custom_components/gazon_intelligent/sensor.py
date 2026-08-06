@@ -3708,6 +3708,12 @@ class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):
             "mower_resolution_state",
             "mower_resolution_reason",
             "mower_resolution_candidate_count",
+            "mower_resolution_probe",
+            # Fiabilité de la machine sur la journée : visible sans requête d'historique.
+            "mower_blocked_minutes_today",
+            "mower_mowing_minutes_today",
+            "mower_block_count_today",
+            "mower_reliability_today",
             "mowing_blocked_by_watering",
             "mowing_blocked",
             "mowing_block_reason_code",

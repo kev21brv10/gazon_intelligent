@@ -4315,3 +4315,123 @@ class LaTraceDuCycleTests(unittest.TestCase):
         trace = coord._tracer_cycle()
         self.assertEqual(set(trace), {"cycle_origine", "cycle_sequence", "cycle_at"})
         self.assertEqual(trace["cycle_origine"], "inconnue")
+
+
+class LaFiabiliteDeLaTondeuseEstSuivieTests(unittest.TestCase):
+    """L'intégration voyait chaque erreur passer sans en garder trace.
+
+    Impossible, sans rejouer l'historique à la main, de découvrir que le robot passait plus de
+    temps coincé qu'à tondre. Mesuré du 02 au 05/08/2026 :
+
+        jour     tondu     bloqué   épisodes
+        02/08    130 min   123 min      3
+        03/08    174 min   318 min      2      ← bloquée ~2× plus qu'elle ne tond
+        04/08    286 min   321 min      6
+        05/08    302 min    53 min      3
+
+    contre ZÉRO blocage les 26, 28 et 30/07.
+    """
+
+    def _coord(self, instant):
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord._runtime_state = {}
+        coord._current_datetime = lambda: instant
+        coord._current_date = lambda: instant.date()
+        coord._parse_datetime_value = (
+            coordinator_mod.GazonIntelligentCoordinator._parse_datetime_value.__get__(coord)
+        )
+        return coord
+
+    def _ctx(self, *, erreur=None, tonte=False, connectee=True):
+        return {
+            "tondeuse_connectee": connectee,
+            "tondeuse_erreur": erreur,
+            "mower_is_mowing": tonte,
+        }
+
+    def _rejouer(self, sequence, *, depart=None):
+        """Rejoue une suite (minutes, contexte) et rend le dernier état publié."""
+        t0 = depart or datetime(2026, 8, 6, 10, 0, tzinfo=timezone.utc)
+        coord = self._coord(t0)
+        sortie = {}
+        for minutes, ctx in sequence:
+            coord._current_datetime = lambda t=t0 + timedelta(minutes=minutes): t
+            coord._current_date = lambda t=t0 + timedelta(minutes=minutes): t.date()
+            sortie = coord._suivre_fiabilite_tondeuse(dict(ctx))
+        return sortie
+
+    def test_le_temps_bloque_et_le_temps_tondu_sont_cumules(self) -> None:
+        r = self._rejouer([
+            (0, self._ctx(tonte=True)),
+            (5, self._ctx(tonte=True)),          # 5 min de tonte
+            (10, self._ctx(erreur="lifted")),    # 5 min de tonte de plus
+            (14, self._ctx(erreur="lifted")),    # 4 min bloquée
+            (18, self._ctx(tonte=True)),         # 4 min bloquée de plus
+        ])
+        self.assertAlmostEqual(r["mower_mowing_minutes_today"], 10.0, places=1)
+        self.assertAlmostEqual(r["mower_blocked_minutes_today"], 8.0, places=1)
+        self.assertEqual(r["mower_block_count_today"], 1)
+
+    def test_chaque_blocage_distinct_est_compte(self) -> None:
+        r = self._rejouer([
+            (0, self._ctx(tonte=True)),
+            (2, self._ctx(erreur="lifted")),
+            (4, self._ctx(tonte=True)),
+            (6, self._ctx(erreur="trapped_timeout")),
+            (8, self._ctx(tonte=True)),
+        ])
+        self.assertEqual(r["mower_block_count_today"], 2)
+
+    def test_bloquee_plus_qu_elle_ne_tond_est_critique(self) -> None:
+        """Le 03/08 : 174 min tondues contre 318 bloquées."""
+        r = self._rejouer([
+            (0, self._ctx(tonte=True)),
+            (10, self._ctx(erreur="wheel_motor_blocked")),
+            (14, self._ctx(erreur="wheel_motor_blocked")),
+            (24, self._ctx(tonte=True)),
+        ])
+        self.assertEqual(r["mower_reliability_today"], "critique")
+
+    def test_une_journee_sans_incident_reste_normale(self) -> None:
+        """Les 26, 28 et 30/07 : zéro blocage."""
+        r = self._rejouer([(0, self._ctx(tonte=True)), (10, self._ctx(tonte=True))])
+        self.assertEqual(r["mower_reliability_today"], "normale")
+        self.assertEqual(r["mower_block_count_today"], 0)
+
+    def test_une_tondeuse_injoignable_n_est_PAS_une_journee_parfaite(self) -> None:
+        """RÈGLE DE LA MAISON : une absence de mesure n'est pas une absence de blocage."""
+        r = self._rejouer([
+            (0, self._ctx(erreur="lifted")),
+            (5, self._ctx(connectee=False)),   # liaison perdue
+            (30, self._ctx(connectee=False)),
+            (35, self._ctx(tonte=True)),
+        ])
+        self.assertAlmostEqual(r["mower_blocked_minutes_today"], 5.0, places=1,
+                               msg="le trou de liaison a été crédité comme du temps sain")
+        self.assertAlmostEqual(r["mower_mowing_minutes_today"], 0.0, places=1)
+
+    def test_un_arret_de_home_assistant_ne_cree_pas_des_heures_fictives(self) -> None:
+        """Au-delà de 15 min entre deux cycles, c'est un trou, pas une durée."""
+        r = self._rejouer([
+            (0, self._ctx(erreur="lifted")),
+            (240, self._ctx(erreur="lifted")),   # 4 h plus tard : redémarrage
+        ])
+        self.assertAlmostEqual(r["mower_blocked_minutes_today"], 0.0, places=1)
+
+    def test_le_compteur_repart_a_zero_le_lendemain(self) -> None:
+        t0 = datetime(2026, 8, 6, 23, 50, tzinfo=timezone.utc)
+        coord = self._coord(t0)
+        coord._suivre_fiabilite_tondeuse(self._ctx(erreur="lifted"))
+        coord._current_datetime = lambda: t0 + timedelta(minutes=20)
+        coord._current_date = lambda: (t0 + timedelta(minutes=20)).date()
+        r = coord._suivre_fiabilite_tondeuse(self._ctx(tonte=True))
+        self.assertEqual(r["mower_block_count_today"], 0)
+        self.assertAlmostEqual(r["mower_blocked_minutes_today"], 0.0, places=1)
+
+    def test_un_compteur_ne_casse_jamais_un_cycle(self) -> None:
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        r = coord._suivre_fiabilite_tondeuse({"tondeuse_connectee": True})
+        self.assertEqual(set(r), {
+            "mower_blocked_minutes_today", "mower_mowing_minutes_today",
+            "mower_block_count_today", "mower_reliability_today",
+        })

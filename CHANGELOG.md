@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.50.0
+
+1010 tests verts. **L'intégration n'est plus aveugle aux blocages de la tondeuse.**
+
+Elle voyait chaque erreur passer et n'en gardait aucune trace. Découvrir que le robot passait
+plus de temps coincé qu'à tondre a demandé de rejouer l'historique de Home Assistant à la main :
+
+```
+jour     tondu     bloqué   épisodes
+02/08    130 min   123 min      3
+03/08    174 min   318 min      2      ← bloquée ~2× plus qu'elle ne tond
+04/08    286 min   321 min      6
+05/08    302 min    53 min      3
+```
+
+contre **zéro blocage** les 26, 28 et 30/07. Ce n'est pas de l'usure : c'est un changement, et
+il faut pouvoir le voir sans requête d'historique.
+
+Quatre attributs sur « État de tonte » : `mower_blocked_minutes_today`,
+`mower_mowing_minutes_today`, `mower_block_count_today` et `mower_reliability_today`
+(`normale` / `degradee` / `critique`). Le seuil critique est celui que les données désignent
+elles-mêmes : **temps bloqué ≥ temps tondu**.
+
+⚠️ **Une absence de mesure n'est PAS une absence de blocage.** Quand la tondeuse est
+injoignable, l'horloge avance sans rien créditer — sinon une panne de liaison se lirait comme
+une journée parfaite. Et au-delà de 15 minutes entre deux cycles, l'écart est traité comme un
+trou (arrêt de Home Assistant) et non comme une durée : sans ce plafond, un redémarrage de
+quatre heures aurait fabriqué quatre heures de blocage fictif.
+
+Les 5 mutations correspondantes sont détectées, dont ces deux replis.
+
 ## 0.49.0
 
 1002 tests verts. **Instrumentation — ce correctif ne corrige rien, il rend mesurable.**
