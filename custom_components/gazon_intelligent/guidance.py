@@ -1427,7 +1427,23 @@ def _build_watering_ctx(
     soil_profile = (type_sol or "limoneux").strip().lower()
     # Garde-fou hebdo : on ne compte que les arrosages pilotés par l'intégration (pas les sessions
     # externes `zone_session`), cohérent avec le budget mm exclu côté water.py.
-    recent_watering_count = compute_recent_watering_count(history, today=today, days=7, include_external=False) if history else 0
+    # ⚠️ LES DEUX TERMES DOIVENT MESURER LA MÊME CHOSE. Ce compteur et `recent_watering_mm_7j`
+    # sont combinés par un `and` dans la retenue hebdomadaire, mais ils portaient sur des
+    # fenêtres DIFFÉRENTES :
+    #   - ici `days=7`, or le filtre retient `delta <= days` → 8 jours calendaires ;
+    #   - côté budget, `days=6` → 7 jours, conformément à la règle `days = K-1` que water.py
+    #     documente et qu'il applique déjà partout ailleurs (jour=0, 3j=2, 7j=6).
+    # Et surtout : ce compteur n'excluait PAS les arrosages manuels, que le budget exclut
+    # depuis le 25/07/2026. Le cercle vicieux que cette exclusion avait supprimé pouvait donc
+    # se refermer par ici — un arrosage manuel de secours faisait passer le compte de 2 à 3 et
+    # RÉARMAIT le blocage qu'il venait précisément de contourner.
+    recent_watering_count = (
+        compute_recent_watering_count(
+            history, today=today, days=6, include_external=False, include_manual=False
+        )
+        if history
+        else 0
+    )
     latest_watering_dt = _latest_watering_datetime(history) if history else None
     now = _current_datetime()
     cooldown_24h_hours: float | None = None
