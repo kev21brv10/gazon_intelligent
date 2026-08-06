@@ -843,3 +843,88 @@ class MarqueursSuspectsSurvivantsTests(unittest.TestCase):
         )
         self.assertTrue(etat["ledger"][-1].get("arrosage_suspect"))
         self.assertTrue(soil_balance.normalize_soil_balance_state(etat)["ledger"][-1].get("arrosage_suspect"))
+
+
+class LeCliquetIntraJourneeDuPluviometreTests(unittest.TestCase):
+    """Le pluviomètre journalier BAISSE en cours de journée, et la réserve le suivait.
+
+    Mesuré le 04/08/2026 sur `sensor.meteo_netatmo_precipitation_aujourd_hui` — dix baisses :
+
+        00:48 1,0 → 03:11 2,6 → 04:08 2,5 → 04:20 3,5 → 04:44 2,7 → 17:17 4,2
+              → 19:08 3,4 → 20:11 4,0 → 21:50 2,9 → 23:52 3,1
+
+    La réserve suivait pas pour pas : 21:33→21:50, réserve 9,8 → 8,9 pour un pluviomètre
+    3,8 → 2,9, pendant que l'ET0 horaire valait 0,04 mm/h — 90 fois moins. Le ledger retenait
+    la DERNIÈRE lecture (3,1) quand le maximum du jour valait 4,2 : **1,1 mm réellement tombé
+    n'entrait jamais au bilan**, un jour de rattrapage.
+    """
+
+    TZ = timezone.utc
+    JOUR = date(2026, 8, 4)
+
+    def _cycle(self, etat, pluie, heure, minute=0):
+        return soil_balance.update_soil_balance(
+            previous_state=etat,
+            today=self.JOUR,
+            pluie_mm=pluie,
+            arrosage_mm=0.0,
+            etp_mm=4.0,
+            type_sol="limoneux",
+            now=datetime(2026, 8, 4, heure, minute, tzinfo=self.TZ),
+        )
+
+    # Séquence réelle du 04/08/2026.
+    RELEVES = [
+        (0, 48, 1.0), (3, 11, 2.6), (4, 8, 2.5), (4, 20, 3.5), (4, 44, 2.7),
+        (17, 17, 4.2), (19, 8, 3.4), (20, 11, 4.0), (21, 50, 2.9), (23, 52, 3.1),
+    ]
+
+    def test_le_maximum_du_jour_est_retenu_et_non_la_derniere_lecture(self) -> None:
+        etat = None
+        for h, m, pluie in self.RELEVES:
+            etat = self._cycle(etat, pluie, h, m)
+        self.assertAlmostEqual(
+            etat["pluie_mm"], 4.2, places=1,
+            msg="le bilan retient encore la dernière lecture — 1,1 mm perdus",
+        )
+
+    def test_sans_cliquet_le_bilan_perdrait_bien_ces_millimetres(self) -> None:
+        """PRÉMISSE : la dernière lecture vaut réellement moins que le maximum."""
+        self.assertLess(self.RELEVES[-1][2], max(p for _, _, p in self.RELEVES))
+        self.assertAlmostEqual(max(p for _, _, p in self.RELEVES) - self.RELEVES[-1][2], 1.1, places=1)
+
+    def test_une_remise_a_zero_relache_le_cliquet(self) -> None:
+        """Le capteur reboucle plusieurs dizaines de minutes après minuit local.
+
+        C'est l'objection qui avait fait refuser un `max()` nu : sans relâchement, le cumul de
+        la veille resterait figé toute la journée. On détecte donc la CHUTE VERS ZÉRO, pas
+        l'heure.
+        """
+        etat = self._cycle(None, 4.2, 0, 2)      # entrée créée avec le cumul de la veille
+        etat = self._cycle(etat, 0.0, 0, 42)     # le Netatmo reboucle
+        self.assertAlmostEqual(etat["pluie_mm"], 0.0, places=1,
+                               msg="le cumul de la veille est resté figé")
+        etat = self._cycle(etat, 1.4, 9, 0)      # la vraie pluie du jour
+        self.assertAlmostEqual(etat["pluie_mm"], 1.4, places=1)
+
+    def test_un_decrochage_vers_une_valeur_non_nulle_est_ignore(self) -> None:
+        etat = self._cycle(None, 3.8, 21, 33)
+        etat = self._cycle(etat, 2.9, 21, 50)    # le décrochage mesuré à 21:50
+        self.assertAlmostEqual(etat["pluie_mm"], 3.8, places=1)
+
+    def test_une_journee_qui_monte_normalement_n_est_pas_affectee(self) -> None:
+        """Garde-fou inverse : le cliquet ne doit rien changer au cas nominal."""
+        etat = None
+        for h, pluie in ((6, 0.0), (9, 1.2), (14, 3.0), (20, 5.5)):
+            etat = self._cycle(etat, pluie, h)
+        self.assertAlmostEqual(etat["pluie_mm"], 5.5, places=1)
+
+    def test_le_pic_survit_a_la_normalisation_du_state(self) -> None:
+        """LISTE BLANCHE : une clé absente est perdue à chaque cycle et au rechargement."""
+        etat = self._cycle(None, 4.2, 17, 17)
+        recharge = soil_balance.normalize_soil_balance_state(etat)
+        self.assertIn("pluie_pic_mm", recharge["ledger"][-1],
+                      "le pic est perdu au rechargement : le cliquet n'a plus de mémoire")
+        # …et il tient encore après le rechargement.
+        apres = self._cycle(recharge, 2.9, 21, 50)
+        self.assertAlmostEqual(apres["pluie_mm"], 4.2, places=1)

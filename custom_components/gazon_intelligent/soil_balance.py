@@ -93,6 +93,9 @@ def _normalize_ledger_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
         "reserve_mm": _to_float(entry.get("reserve_mm")),
         "previous_reserve_mm": _to_float(entry.get("previous_reserve_mm")),
         "pluie_mm": _to_float(entry.get("pluie_mm")),
+        # ⚠️ LISTE BLANCHE : une clé absente d'ici est perdue à chaque passage et à chaque
+        # rechargement du state. Sans elle, le cliquet intra-journée n'aurait aucune mémoire.
+        "pluie_pic_mm": _to_float(entry.get("pluie_pic_mm")),
         "arrosage_mm": _to_float(entry.get("arrosage_mm")),
         "etp_mm": _to_float(entry.get("etp_mm")),
         # ET RÉELLEMENT écoulée (accumulation du taux horaire) + horodatage du dernier cumul.
@@ -441,6 +444,32 @@ def update_soil_balance(
         _pluie_deja_comptee = _to_float(ledger[-1].get("pluie_mm"))
         if _pluie_deja_comptee is not None:
             pluie = _pluie_deja_comptee
+
+    # ── CLIQUET INTRA-JOURNÉE ────────────────────────────────────────────────────────────────
+    # Le pluviomètre journalier BAISSE en cours de journée : mesuré 10 fois le 04/08/2026
+    # (00:48 1,0 → 03:11 2,6 → 04:08 2,5 → 04:20 3,5 → 04:44 2,7 → 17:17 4,2 → 19:08 3,4 →
+    # 20:11 4,0 → 21:50 2,9 → 23:52 3,1), et la réserve suivait pas pour pas — 21:33→21:50,
+    # réserve 9,8 → 8,9 pour un pluviomètre 3,8 → 2,9, pendant que l'ET0 horaire valait
+    # 0,04 mm/h, soit 90 fois moins. Le ledger retenait la DERNIÈRE lecture (3,1) quand le
+    # maximum du jour valait 4,2 : **1,1 mm réellement tombé n'entrait jamais au bilan**.
+    #
+    # L'objection du commentaire ci-dessus est juste et reste respectée : un `max()` nu figerait
+    # le cumul de la VEILLE pour toute la journée, puisque le capteur se remet à zéro plusieurs
+    # dizaines de minutes après minuit local. La différence ici, c'est qu'on détecte la REMISE À
+    # ZÉRO — une chute vers ~0 — au lieu de se fier à l'heure. Le cliquet se relâche alors de
+    # lui-même, et le pic du jour repart de la valeur remise à zéro. Ça corrige du même coup la
+    # « marche de minuit » (31/07 : 8,6 à 23:36 → 11,2 à 00:00:32 → 8,6 à 00:44).
+    _pic_precedent = None
+    if ledger and ledger[-1].get("date") == today_str:
+        _pic_precedent = _to_float(ledger[-1].get("pluie_pic_mm"))
+    pluie_pic = pluie
+    if _pic_precedent is not None and _pic_precedent > pluie:
+        _remise_a_zero = pluie <= max(0.5, _pic_precedent * 0.5) and pluie <= 0.5
+        if _remise_a_zero:
+            pluie_pic = pluie          # le compteur a rebouclé : on repart de la nouvelle base
+        else:
+            pluie = _pic_precedent     # simple décrochage intra-journée : on garde le maximum
+            pluie_pic = _pic_precedent
     # DÉBIT PROGRESSIF DE L'ET0. Débiter toute l'ET0 du jour dès le premier passage après minuit
     # (comportement historique) rendait la réserve ANTICIPÉE : à 00h01 elle chutait d'un coup de
     # toute la demande à venir (« falaise de minuit ») et se trouvait ÉCRASÉE au plancher dès que
@@ -474,6 +503,9 @@ def update_soil_balance(
         "date": today_str,
         "previous_reserve_mm": _round_half_up_1(previous_reserve),
         "pluie_mm": _round_half_up_1(pluie),
+        # Maximum du jour retenu par le cliquet intra-journée. Sans cette clé, le cliquet
+        # perdrait sa mémoire à chaque cycle ET à chaque rechargement du state persisté.
+        "pluie_pic_mm": _round_half_up_1(pluie_pic),
         "arrosage_mm": _round_half_up_1(arrosage),
         "etp_mm": _round_half_up_1(etp),
         # ET effectivement débitée à cet instant, écrite UNIQUEMENT en mode horaire (mesuré) :
