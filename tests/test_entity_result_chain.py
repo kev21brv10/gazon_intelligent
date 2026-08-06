@@ -3384,3 +3384,41 @@ class HorodatageArrosageDebutPasFinTests(unittest.TestCase):
         moment = water.resolve_history_moment(self._session())
         self.assertEqual(moment.hour, 3, "l'espacement est reparti du début du cycle")
         self.assertEqual(moment.minute, 18)
+
+
+class NonRequisNeCouvrePasUnBlocageTests(unittest.TestCase):
+    """« Non requis » ne doit pas s'afficher quand un garde-fou retient l'eau.
+
+    Mesuré le 31/07/2026 à 10:46:50.742 : état « Non requis », résumé « Aucun arrosage
+    nécessaire pour le moment » — et dans ses PROPRES attributs
+    `block_reason: garde_fou_hebdomadaire`, `confidence_reasons: ["stress thermique=eleve",
+    "blocage=garde_fou_hebdomadaire"]`. L'objectif tombe à 0 PARCE QUE le garde-fou l'annule :
+    dire « non requis » revient à annoncer que le gazon n'a besoin de rien alors qu'on lui
+    refuse précisément ce dont il a besoin. Le mensonge est l'état, pas le motif.
+    """
+
+    def _capteur(self, *, block_reason):
+        donnees = {
+            "watering_context_state": {"status": "termine"},
+            "objectif_mm": 0.0,
+            "objective_mm": 0.0,
+            "fenetre_optimale": "attendre",
+        }
+        if block_reason:
+            donnees["block_reason"] = block_reason
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(), data=donnees, result=None, history=[], memory={},
+        )
+        return sensor.GazonProchainArrosageSensor(coordinator)
+
+    def test_sans_blocage_l_etat_reste_non_requis(self) -> None:
+        """PRÉMISSE : le comportement légitime ne change pas."""
+        self.assertEqual(self._capteur(block_reason=None).native_value, "Non requis")
+
+    def test_avec_un_blocage_l_etat_ne_ment_plus(self) -> None:
+        etat = self._capteur(block_reason="garde_fou_hebdomadaire").native_value
+        self.assertNotEqual(
+            etat, "Non requis",
+            "« Non requis » affiché alors qu'un garde-fou retient l'eau",
+        )
+        self.assertEqual(etat, "Retenu")

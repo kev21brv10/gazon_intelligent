@@ -160,17 +160,6 @@ def build_water_bundle(
     # Sans ce plancher, deux attributs publics se contredisaient le jour même d'un arrosage :
     # `block_reason_label` annonçait « Cooldown 24 h » pendant que `date_prochain_arrosage_estime`
     # affichait AUJOURD'HUI (constaté le 29/07/2026, réserve 10,9 mm après l'arrosage de 06:36).
-    if (
-        jours_avant_arrosage_estime is not None
-        and jours_avant_arrosage_estime <= 0
-        and float(water_balance.get("arrosage_recent_jour") or 0.0) > 0.0
-    ):
-        jours_avant_arrosage_estime = 1
-    date_prochain_arrosage_estime = (
-        (context.today + timedelta(days=jours_avant_arrosage_estime)).isoformat()
-        if jours_avant_arrosage_estime is not None
-        else None
-    )
     balance_snapshot = dict(water_balance)
     # ETc (= ET0 × Kc) exposée au bilan : la PROJECTION de déclenchement à l'aube en a besoin.
     # Le sol perd son eau au rythme de l'HERBE, et le ledger débite déjà l'ETc ; projeter avec
@@ -223,6 +212,37 @@ def build_water_bundle(
             hour_of_day=context.hour_of_day if context.hour_of_day is not None else 12,
         ).get("fungal_risk_level"),
     )
+    # PLANCHER À DEMAIN — déplacé ici parce qu'il a besoin de la FENÊTRE, publiée par le profil.
+    # `estimate_days_until_watering` ne raisonne que sur la réserve : elle répond « quand le sol
+    # aura-t-il soif », pas « quand aurai-je le droit ». Son `0` signifie « la projection d'aube
+    # franchit le seuil » — or si l'aube est passée, le prochain déclenchement possible est demain.
+    #
+    # Il ne se déclenchait que si on avait DÉJÀ ARROSÉ aujourd'hui. Or le cas qui compte est
+    # l'inverse : la fenêtre du matin s'est écoulée SANS arrosage (retenu par un garde-fou, ou
+    # conditions défavorables). L'entité annonçait alors « prochain arrosage : aujourd'hui »
+    # à 15 h, pour une fenêtre fermée depuis cinq heures.
+    #
+    # ⚠️ La borne vient du profil, jamais d'un littéral : elle bouge avec la saison et la phase.
+    _fin_fenetre_min = watering_profile.get("watering_window_acceptable_end_minute")
+    _minute_courante = (
+        context.hour_of_day * 60.0 if context.hour_of_day is not None else None
+    )
+    _fenetre_du_matin_ecoulee = (
+        _fin_fenetre_min is not None
+        and _minute_courante is not None
+        and _minute_courante >= float(_fin_fenetre_min)
+    )
+    if jours_avant_arrosage_estime is not None and jours_avant_arrosage_estime <= 0 and (
+        float(water_balance.get("arrosage_recent_jour") or 0.0) > 0.0
+        or _fenetre_du_matin_ecoulee
+    ):
+        jours_avant_arrosage_estime = 1
+    date_prochain_arrosage_estime = (
+        (context.today + timedelta(days=jours_avant_arrosage_estime)).isoformat()
+        if jours_avant_arrosage_estime is not None
+        else None
+    )
+
     hydric_observability = {
         "weekly_guardrail_mm_min": watering_profile.get("weekly_guardrail_mm_min"),
         "weekly_guardrail_mm_max": watering_profile.get("weekly_guardrail_mm_max"),

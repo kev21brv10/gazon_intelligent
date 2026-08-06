@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.48.0
+
+996 tests verts. **Quatre affichages qui rendaient le diagnostic faux.**
+
+Aucun ne change une décision. Tous font perdre du temps au moment où quelque chose cloche —
+c'est-à-dire au pire moment.
+
+- **« Non requis » couvrait un blocage.** L'objectif tombe à 0 *parce qu'*un garde-fou retient
+  l'eau : annoncer « aucun arrosage nécessaire » revient à dire que le gazon n'a besoin de rien
+  alors qu'on lui refuse précisément ce dont il a besoin. Mesuré le 31/07/2026 à 10:46:50 :
+  état « Non requis », résumé « Aucun arrosage nécessaire pour le moment », et dans ses propres
+  attributs `block_reason: garde_fou_hebdomadaire`. **Le mensonge était l'état, pas le motif** —
+  on garde donc le motif et l'état devient « Retenu », avec le résumé qui nomme la cause.
+
+- **Une panne s'affichait « Au repos ».** Le robot annonce `idle` quand il est immobilisé en
+  plein jardin ; l'état brut l'emportait sur le statut dérivé. Vérifié : du 02 au 05/08/2026,
+  les 7 arrêts en jardin coïncident **à la seconde** avec un déclenchement d'erreur, et l'état
+  du robot y vaut `idle`. Une panne prime désormais — sans perdre la précision de l'état brut
+  hors panne.
+
+- **Six codes de blocage n'avaient aucun libellé** et s'affichaient en `snake_case` brut :
+  `machine_unavailable`, `mowing_window_blocked`, `recent_watering`, `soil_wet`,
+  `upcoming_watering`, `wet_grass`. Un test parcourt désormais les modules de décision et
+  **échoue si un code publié n'a pas de libellé**.
+
+- **« Prochain arrosage : aujourd'hui » à 15 h**, pour une fenêtre fermée depuis cinq heures.
+  Un plancher existait mais ne se déclenchait que si on avait *déjà arrosé* ; le cas qui compte
+  est l'inverse — la fenêtre du matin s'est écoulée **sans** arrosage, retenu par un garde-fou
+  ou par les conditions. La borne vient du profil publié, jamais d'un littéral : elle bouge avec
+  la saison et la phase.
+
+Les 6 mutations correspondantes sont détectées.
+
 ## 0.47.0
 
 988 tests verts. **Le correctif d'horodatage n'était branché que sur une des trois voies.**

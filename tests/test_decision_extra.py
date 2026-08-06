@@ -4267,3 +4267,96 @@ class LeGardeFouCompteBienCeQuIlPublieTests(unittest.TestCase):
     def test_trois_arrosages_auto_sont_toujours_comptes(self) -> None:
         compte, _ = self._publie([self._arrosage(0), self._arrosage(2), self._arrosage(4)])
         self.assertEqual(compte, 3)
+
+
+class LesQuatreAffichagesDeLAuditTests(unittest.TestCase):
+    """Quatre défauts d'affichage relevés le 06/08/2026. Aucun ne change une décision —
+    tous rendent le diagnostic faux, ce qui coûte du temps quand quelque chose cloche.
+    """
+
+    def test_une_panne_ne_s_affiche_plus_comme_au_repos(self) -> None:
+        """Le robot annonce `idle` quand il est immobilisé en plein jardin.
+
+        Vérifié : du 02 au 05/08/2026, les 7 arrêts en jardin coïncident À LA SECONDE avec un
+        déclenchement d'erreur, et l'état brut du robot y vaut `idle`.
+        """
+        mower_adapter = importlib.import_module(
+            "custom_components.gazon_intelligent.mower_adapter"
+        )
+        self.assertEqual(mower_adapter._status_label("erreur", "idle"), "Erreur")
+        self.assertEqual(mower_adapter._status_label("erreur", "docked"), "Erreur")
+        # Contrôle négatif : hors panne, l'état brut garde sa précision.
+        self.assertEqual(mower_adapter._status_label("au_repos", "idle"), "Au repos")
+        self.assertEqual(mower_adapter._status_label("au_repos", "docked"), "À la station")
+
+    def test_les_six_codes_orphelins_ont_un_libelle(self) -> None:
+        """Ils étaient publiés en snake_case brut sur la carte et dans les attributs."""
+        const = importlib.import_module("custom_components.gazon_intelligent.const")
+        for code in ("machine_unavailable", "mowing_window_blocked", "recent_watering",
+                     "soil_wet", "upcoming_watering", "wet_grass"):
+            with self.subTest(code=code):
+                libelle = const.BLOCK_REASON_DISPLAY_LABELS.get(code)
+                self.assertIsNotNone(libelle, f"{code} n'a toujours pas de libellé")
+                self.assertNotIn("_", libelle)
+
+    def test_aucun_code_publie_ne_reste_sans_libelle(self) -> None:
+        """Invariant : un code émis sans libellé s'affiche en brut. On l'interdit."""
+        import re as _re
+        from pathlib import Path as _Path
+        racine = _Path(__file__).resolve().parents[1] / "custom_components" / "gazon_intelligent"
+        const = importlib.import_module("custom_components.gazon_intelligent.const")
+        emis: set[str] = set()
+        for nom in ("decision_mowing.py", "guidance.py", "decision_watering.py"):
+            src = (racine / nom).read_text(encoding="utf-8")
+            for motif in (r'reason_code\s*=\s*"([a-z_0-9]+)"',
+                          r'block_reason\s*=\s*"([a-z_0-9]+)"',
+                          r'return True, "([a-z_0-9]+)"'):
+                emis |= set(_re.findall(motif, src))
+        orphelins = sorted(c for c in emis if c not in const.BLOCK_REASON_DISPLAY_LABELS)
+        self.assertEqual(orphelins, [], f"codes publiés sans libellé : {orphelins}")
+
+
+class LePlancherDemainCouvreLaFenetreEcouleeTests(unittest.TestCase):
+    """« Prochain arrosage : aujourd'hui » à 15 h, pour une fenêtre fermée depuis cinq heures.
+
+    `estimate_days_until_watering` ne raisonne que sur la réserve : son `0` signifie « la
+    projection d'aube franchit le seuil », pas « c'est encore possible aujourd'hui ». Un
+    plancher existait, mais uniquement quand on avait DÉJÀ arrosé. Le cas qui compte est
+    l'inverse : la fenêtre du matin s'est écoulée SANS arrosage — retenu par un garde-fou, ou
+    conditions défavorables.
+    """
+
+    def _bundle(self, *, heure, history=None):
+        ctx = decision.DecisionContext.from_legacy_args(
+            history=history or [], today=date(2026, 8, 6), hour_of_day=heure,
+            temperature=28.0, pluie_24h=0, pluie_demain=0, humidite=45,
+            type_sol="limoneux", etp_capteur=6.0,
+            soil_balance={"reserve_mm": 5.5, "reserve_max_mm": 24.0},
+        )
+        phase = decision.build_phase_bundle(ctx)
+        return decision.build_water_bundle(ctx, phase)
+
+    def test_a_l_aube_la_reponse_peut_rester_aujourd_hui(self) -> None:
+        """PRÉMISSE : sans ce cas, le test suivant serait vrai par accident."""
+        b = self._bundle(heure=5)
+        self.assertEqual(
+            b["jours_avant_arrosage_estime"], 0,
+            "prémisse cassée : ce sol doit être déclaré assoiffé dès l'aube",
+        )
+        self.assertEqual(b["date_prochain_arrosage_estime"], "2026-08-06")
+
+    def test_l_apres_midi_la_reponse_bascule_a_demain(self) -> None:
+        b = self._bundle(heure=15)
+        self.assertGreaterEqual(
+            b["jours_avant_arrosage_estime"], 1,
+            "la fenêtre du matin est fermée et l'entité annonce encore aujourd'hui",
+        )
+        self.assertEqual(b["date_prochain_arrosage_estime"], "2026-08-07")
+
+    def test_le_plancher_apres_arrosage_du_jour_fonctionne_toujours(self) -> None:
+        """Le cas d'origine (29/07/2026) ne doit pas régresser."""
+        b = self._bundle(heure=8, history=[{
+            "type": "arrosage", "date": "2026-08-06",
+            "total_mm": 6.0, "source": "auto_irrigation",
+        }])
+        self.assertGreaterEqual(b["jours_avant_arrosage_estime"], 1)
