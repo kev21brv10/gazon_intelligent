@@ -201,6 +201,7 @@ class EntityRegistryTests(unittest.TestCase):
             button.ArroserMaintenantButton(coordinator),
             button.RetourModeNormalButton(coordinator),
             button.DateActionAujourdhuiButton(coordinator),
+            button.ArreterArrosageButton(coordinator),
             select.GazonModeSelect(coordinator),
             select.GazonInterventionProductSelect(coordinator),
             number.GazonDebitZoneNumber(coordinator, 1, "debit_zone_1"),

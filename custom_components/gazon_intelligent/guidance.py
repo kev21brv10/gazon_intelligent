@@ -622,6 +622,7 @@ def _build_profile_payload(
     deficit_mm_ajuste: float,
     mm_cible: float,
     mm_final: float,
+    besoin_mm: float | None = None,
     mm_detected: float,
     type_arrosage: str,
     arrosage_recommande: bool,
@@ -638,6 +639,7 @@ def _build_profile_payload(
     fenetre_optimale: str,
     niveau_action: str,
     risque_gazon: str,
+    risque_raisons: list[str] | None = None,
     heat_stress_level: str,
     heat_stress_phase: str,
     morning_start_minute: int,
@@ -675,6 +677,11 @@ def _build_profile_payload(
         "mm_cible": round(mm_cible, 1),
         "mm_final_recommande": round(mm_final, 1),
         "mm_final": round(mm_final, 1),
+        # ⚠️ BESOIN ≠ DOSE. `mm_final` répond à « combien je vais verser » — donc 0 dès qu'un
+        # blocage existe, ce qui est juste. `besoin_mm` répond à « combien il lui faut », et
+        # ne bouge pas pour un garde-fou ou un démarrage. Sans lui, l'entité affichait 0,0 mm
+        # pendant que ses attributs annonçaient 7,8 mm de déplétion (01/08/2026).
+        "besoin_mm": round(float(besoin_mm), 1) if besoin_mm is not None else round(mm_final, 1),
         "mm_requested": round(mm_cible, 1),
         "mm_applied": round(mm_final, 1),
         "mm_detected": round(mm_detected, 1),
@@ -698,6 +705,11 @@ def _build_profile_payload(
         "fenetre_optimale": fenetre_optimale,
         "niveau_action": niveau_action,
         "risque_gazon": risque_gazon,
+        "risque_gazon_raisons": list(risque_raisons) if risque_raisons else _raisons_par_defaut(
+            risque_gazon=risque_gazon,
+            heat_stress_level=heat_stress_level,
+            block_reason=locals().get("block_reason"),
+        ),
         "heat_stress_level": heat_stress_level,
         "heat_stress_phase": heat_stress_phase,
         "watering_window_start_minute": morning_start_minute,
@@ -1138,6 +1150,136 @@ def _risk_from_rank(rank: int) -> str:
     return {0: "faible", 1: "modere", 2: "eleve"}.get(max(0, min(rank, 2)), "faible")
 
 
+def _raisons_par_defaut(
+    *,
+    risque_gazon: str,
+    heat_stress_level: str | None = None,
+    block_reason: str | None = None,
+) -> list[str]:
+    """Motif de repli pour les chemins qui posent un niveau sans l'expliquer.
+
+    ⚠️ Plusieurs profils (semis, produit, repos…) posent un niveau LITTÉRAL sans raison. Le
+    capteur restait donc muet sur ces chemins-là — et une liste vide, masquée par le rendu,
+    était indistinguable d'un attribut jamais posé : trois déploiements perdus à chercher où
+    la valeur se perdait, le 31/07/2026. Un motif générique vaut mieux que le silence.
+    """
+    raisons: list[str] = []
+    if block_reason:
+        raisons.append(str(block_reason))
+    if heat_stress_level and heat_stress_level not in {"normal", "", None}:
+        raisons.append(f"stress hydrique {heat_stress_level}")
+    if not raisons:
+        raisons.append(
+            "aucun facteur de risque" if risque_gazon == "faible"
+            else f"niveau {risque_gazon} posé par le profil courant"
+        )
+    return raisons
+
+
+def _evaluer_risque_gazon(
+    *,
+    water_balance: dict[str, Any] | None,
+    bilan_hydrique_mm: float,
+    pression_hydrique: float,
+    utiliser_reserve: bool = True,
+    plancher: str | None = None,
+    vent: float | None = None,
+    hauteur_gazon: float | None = None,
+    heat_stress_level: str = "normal",
+    heat_stress_phase: str | None = None,
+    seuil_eleve: float = -1.5,
+    seuil_modere: float = -0.8,
+    seuil_pression_eleve: float = 2.5,
+    seuil_pression_modere: float = 1.2,
+) -> tuple[str, list[str]]:
+    """Niveau de risque du gazon, ET les raisons qui l'expliquent.
+
+    ⚠️ CORRIGÉ le 31/07/2026, sur une question de Kévin (« pourquoi risque élevé ? »).
+
+    Le risque se décidait sur `bilan_hydrique_mm`, qui est le bilan de la JOURNÉE EN COURS
+    (pluie + arrosage du jour − ETc du jour). À 2 h du matin, rien n'a encore été arrosé et
+    l'ETc attendue vaut ~6 mm : le bilan est donc négatif MÉCANIQUEMENT chaque nuit, quel que
+    soit l'état réel du gazon. Mesuré : « risque élevé » la nuit, « faible » à la seconde où
+    l'arrosage du matin partait — trois nuits d'affilée dans l'historique. Et 72 scénarios sur
+    288 (25 %) affichaient « bilan équilibré » ET « risque élevé » au même instant.
+
+    Ce n'était donc pas « ton gazon est en danger » mais « tu n'as pas encore arrosé aujourd'hui ».
+
+    Le risque se décide désormais sur la RÉSERVE DU SOL quand le ledger en fournit une réelle —
+    la vérité physique, qui ne s'effondre pas à minuit. Même recentrage que celui appliqué à
+    `hydric_balance_level` en 0.16.0, dont le correctif n'avait jamais été porté ici.
+    Sans réserve (ledger vide, tout premier cycle), on retombe sur le bilan journalier : c'est
+    le seul signal disponible, et il vaut mieux qu'aucun.
+
+    Les raisons sont retournées pour être exposées en attribut : le capteur n'expliquait pas
+    son niveau, il fallait lire le code.
+    """
+    wb = water_balance or {}
+    raisons: list[str] = []
+
+    # ⚠️ `utiliser_reserve=False` en SURSEMIS : un semis n'a pas de réserve exploitable, et la
+    # règle du projet interdit d'y étendre le pilotage par déplétion (elle y surestime — c'était
+    # la cause du bug d'origine). Le bilan du jour EST le bon signal quand on arrose un semis
+    # plusieurs fois par jour. Un test l'a rattrapé.
+    if utiliser_reserve and bool(wb.get("reserve_from_soil_ledger")):
+        ratio = float(wb.get("depletion_ratio") or 0.0)
+        mad = float(wb.get("mad_ratio") or 0.5)
+        if ratio >= 1.0:
+            niveau = "eleve"
+            raisons.append("réserve du sol épuisée")
+        elif ratio >= mad:
+            niveau = "modere"
+            raisons.append(f"réserve sous le seuil d'épuisement ({ratio:.0%} de déplétion)")
+        else:
+            niveau = "faible"
+    else:
+        if bilan_hydrique_mm <= seuil_eleve or pression_hydrique >= seuil_pression_eleve:
+            niveau = "eleve"
+            raisons.append(f"déficit du jour {bilan_hydrique_mm:.1f} mm (sans réserve sol connue)")
+        elif bilan_hydrique_mm <= seuil_modere or pression_hydrique >= seuil_pression_modere:
+            niveau = "modere"
+            raisons.append(f"déficit du jour {bilan_hydrique_mm:.1f} mm (sans réserve sol connue)")
+        else:
+            niveau = "faible"
+
+    def _monter(motif: str) -> None:
+        nonlocal niveau
+        avant = niveau
+        niveau = _risk_from_rank(min(_risk_rank(niveau) + 1, 2))
+        if niveau != avant:
+            raisons.append(motif)
+
+    if vent is not None and vent >= 20:
+        if niveau != "eleve":
+            raisons.append(f"vent soutenu ({vent:.0f} km/h)")
+        niveau = "eleve"
+    if hauteur_gazon is not None and hauteur_gazon >= 12:
+        if niveau != "eleve":
+            raisons.append(f"gazon très haut ({hauteur_gazon:.0f} cm)")
+        niveau = "eleve"
+    if heat_stress_level == "severe":
+        if niveau != "eleve":
+            raisons.append("stress hydrique sévère")
+        niveau = "eleve"
+    elif heat_stress_level in {"eleve", "vigilance"}:
+        _monter(f"stress hydrique {heat_stress_level}")
+    if heat_stress_phase == "stress_prolonge":
+        _monter("stress prolongé")
+
+    # PLANCHER — en Sursemis, la phase impose « au moins modéré » quoi qu'en dise l'eau : un
+    # semis fragile ne doit jamais être annoncé « sans risque ». Le helper ne peut donc que
+    # MONTER au-dessus de ce niveau, jamais descendre en dessous. En phase Normal, aucun
+    # plancher : c'est là tout l'objet du correctif — pouvoir redescendre à « faible » quand
+    # la réserve du sol est saine.
+    if plancher and _risk_rank(niveau) < _risk_rank(plancher):
+        niveau = plancher
+        raisons.append(f"plancher de phase ({plancher})")
+
+    if not raisons:
+        raisons.append("aucun facteur de risque")
+    return niveau, raisons
+
+
 def _clamp(value: float, minimum: float, maximum: float) -> float:
     return max(minimum, min(maximum, value))
 
@@ -1145,6 +1287,7 @@ def _clamp(value: float, minimum: float, maximum: float) -> float:
 def _build_guidance_window_payload(
     *,
     risque_gazon: str,
+    risque_raisons: list[str] | None = None,
     niveau_action: str,
     fenetre_optimale: str,
     heat_stress_level: str,
@@ -1159,6 +1302,11 @@ def _build_guidance_window_payload(
         "niveau_action": niveau_action,
         "fenetre_optimale": fenetre_optimale,
         "risque_gazon": risque_gazon,
+        "risque_gazon_raisons": list(risque_raisons) if risque_raisons else _raisons_par_defaut(
+            risque_gazon=risque_gazon,
+            heat_stress_level=heat_stress_level,
+            block_reason=locals().get("block_reason"),
+        ),
         "heat_stress_level": heat_stress_level,
         "watering_window_start_minute": optimal_start_minute,
         "watering_window_end_minute": acceptable_end_minute,
@@ -1562,12 +1710,16 @@ def _profile_for_sursemis(ctx: _WateringCtx) -> dict[str, Any]:
         )
         niveau_action = "critique" if ctx.pression_hydrique >= 2.2 or ctx.bilan_hydrique_mm <= -1.5 else "a_faire"
         risque_gazon = "eleve" if ctx.bilan_hydrique_mm <= -1.5 or ctx.pression_hydrique >= 2.5 else "modere"
-    if ctx.heat_stress_level in {"eleve", "severe"}:
-        risque_gazon = _risk_from_rank(min(_risk_rank(risque_gazon) + 1, 2))
-    if ctx.vent is not None and ctx.vent >= 20:
-        risque_gazon = "eleve"
-    if ctx.hauteur_gazon is not None and ctx.hauteur_gazon >= 12:
-        risque_gazon = "eleve"
+    risque_gazon, risque_raisons = _evaluer_risque_gazon(
+        water_balance=ctx.water_balance,
+        bilan_hydrique_mm=ctx.bilan_hydrique_mm,
+        pression_hydrique=ctx.pression_hydrique,
+        utiliser_reserve=False,          # Sursemis
+        plancher=risque_gazon,           # la phase impose son minimum
+        vent=ctx.vent,
+        hauteur_gazon=ctx.hauteur_gazon,
+        heat_stress_level=ctx.heat_stress_level,
+    )
     confidence_score, confidence_level, confidence_reasons = _confidence(ctx, block_reason, mm_final)
     return _build_profile_payload(
         deficit_mm_brut=ctx.deficit_mm_brut,
@@ -1593,6 +1745,7 @@ def _profile_for_sursemis(ctx: _WateringCtx) -> dict[str, Any]:
         fenetre_optimale=fenetre_optimale,
         niveau_action=niveau_action,
         risque_gazon=risque_gazon,
+        risque_raisons=risque_raisons,
         heat_stress_level=ctx.heat_stress_level,
         heat_stress_phase=ctx.heat_stress_phase,
         morning_start_minute=ctx.morning_start_minute,
@@ -1819,8 +1972,27 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
         and _depletion_ratio >= 0.9
         and ctx.heat_stress_level in {"vigilance", "eleve", "severe"}
     )
+    # ⚠️ UNE PRÉVISION NE BLOQUE PAS UN SOL QUI A DÉJÀ SOIF.
+    # Les quatre autres blocages ci-dessous ont tous une échappatoire quand le sol est
+    # réellement sec (`not _reserve_critique_reelle`, `not _ledger_demande_eau`,
+    # `not _survie_canicule`). La pluie était le SEUL à bloquer sans condition — et c'est
+    # le seul qui repose sur une PRÉVISION, donc le moins fiable des cinq.
+    # Nuit du 02/08/2026 : à 03 h 20, la prévision passe de 3,1 à 9,1 mm. L'objectif tombe de
+    # 8,6 à 0,0 et y reste jusqu'à 10 h 13 — TOUTE la fenêtre d'arrosage (03:45–10:00) — alors
+    # que le même cycle publiait `reserve_actuelle_mm: 1,2 sur 12`, `hydric_state: critique`,
+    # `hydric_strategy: arroser rapidement en profondeur` et 34,5 °C prévus. Il est tombé
+    # 3,2 mm effectifs pour 4,8 mm consommés : la réserve a touché ZÉRO à 12 h 09.
+    # Arbitrage de Kévin, 02/08/2026 : « la pluie prévue n'est jamais sûre, je préfère arroser ».
+    # Le seuil retenu est le MAD — le même que celui qui déclenche l'arrosage. Autrement dit :
+    # tant que le sol est confortable, une pluie annoncée fait encore économiser un cycle ;
+    # dès qu'il réclame, la prévision ne décide plus à sa place.
+    # ⚠️ Volontairement SANS la condition `_ledger_reserve` de `_ledger_demande_eau` : ce garde
+    # ne peut que DÉBLOQUER, jamais bloquer. Le faire dépendre d'une source qui peut manquer le
+    # rendrait inerte au pire moment — précisément le défaut qu'on passe la semaine à corriger.
+    _sol_reclame_de_l_eau = _depletion_ratio >= _mad_ratio
+
     block_reason = None
-    if ctx.pluie_compensatrice or ctx.pluie_proche:
+    if (ctx.pluie_compensatrice or ctx.pluie_proche) and not _sol_reclame_de_l_eau:
         block_reason = "pluie_prevue_suffisante"
     elif ctx.cooldown_24h_active and not _critical_depletion and not _reserve_critique_reelle:
         block_reason = "cooldown_24h"
@@ -1832,6 +2004,30 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
         ctx.recent_watering_count >= 3
         and ctx.recent_watering_mm_7j >= ctx.guardrail_min_mm
         and ctx.deficit_mm_ajuste < ctx.guardrail_min_mm
+        # ⚠️ Un déficit INCONNU n'est pas un déficit nul. Sans ET0, `deficit_mm_ajuste` vaut 0
+        # par défaut — la condition ci-dessus devient vraie automatiquement et la retenue se
+        # déclenche sur du vide. Constaté le 01/08/2026 : au premier cycle d'un redémarrage
+        # (capteur de température pas encore là) le motif `garde_fou_hebdomadaire` apparaissait
+        # alors que la réserve était à 3,8 mm pour un seuil à 6,0. Sur une coupure plus longue
+        # du capteur, la même mécanique a supprimé l'objectif pendant 20 min DANS la fenêtre
+        # d'arrosage (30/07, 08 h 13 → 08 h 33). La retenue exige désormais un déficit MESURÉ.
+        and bool(ctx.water_balance.get("etp_connue", True))
+        # ⚠️ LA RETENUE DOIT JUGER SUR LA MÊME GRANDEUR QUE LE DÉCLENCHEMENT.
+        # `deficit_mm_ajuste` vient du modèle LEGACY ; le déclenchement, lui, se fait sur la
+        # déplétion du LEDGER. Les deux divergent, et c'est la retenue qui gagnait.
+        # Matin du 01/08/2026, 04 h 00 : déficit legacy 4,3 mm (« pas besoin », car < plancher
+        # 21) contre déplétion réelle 6,6 mm sur 12 → ratio 0,55, AU-DESSUS du MAD 0,50. Le même
+        # cycle publiait `hydric_state: depletion` et `hydric_strategy: arroser profondément`,
+        # et l'arrosage n'est pas parti. Sans eau ce matin-là, le sol est arrivé au 02/08 à
+        # 1,2 mm, puis à ZÉRO. Le legacy sous-estimait de 2,3 mm.
+        # Ce garde ne vide PAS le garde-fou de son sens : `_depletion_ratio` est la déplétion
+        # RÉELLE, alors que le déclenchement se fait sur la déplétion PROJETÉE (réelle + ETc
+        # restante). Un sol encore confortable à l'aube mais qui aura soif ce soir déclenche
+        # toujours — et reste donc retenable. C'est exactement le cas du 31/07 (ratio réel
+        # 0,283), où le blocage était légitime et le reste.
+        # L'intention écrite du garde-fou est de « plafonner un sur-arrosage HÉRITÉ » : un sol
+        # au-delà du seuil de déclenchement n'est pas du sur-arrosage.
+        and not _sol_reclame_de_l_eau
         and not _survie_canicule
         and not _reserve_critique_reelle
     ):
@@ -1846,6 +2042,10 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
     # alors sur le modèle déficit (legacy), plus prudent. La dépletion reste cantonnée à
     # Normal : en Sursemis elle surestimait (recharge profonde inadaptée au semis), d'où
     # _profile_for_sursemis.
+    # Besoin RÉEL du sol, indépendant des politiques (garde-fou, blocages). Initialisé ici
+    # pour couvrir aussi le cas « sol au-dessus du seuil » : il n'a alors besoin de rien, et
+    # 0 est la bonne réponse — mais elle doit être calculée, pas laissée indéfinie.
+    besoin_mm = 0.0
     reserve_from_ledger = bool(ctx.water_balance.get("reserve_from_soil_ledger"))
     if reserve_from_ledger:
         depletion_ratio = float(ctx.water_balance.get("depletion_ratio") or 0.0)
@@ -1884,6 +2084,12 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
             mm_cible = max(depletion_mm, min_session_mm)
             if max_session_mm is not None:
                 mm_cible = min(mm_cible, max_session_mm)
+            # BESOIN DU SOL, avant toute politique. `mm_cible` va ensuite être rogné par le
+            # garde-fou hebdomadaire puis remis à zéro par un éventuel blocage : la question
+            # « combien il lui faut » n'aurait plus aucune réponse lisible. C'est exactement ce
+            # que Kévin a vu le 01/08/2026 — l'entité « Objectif d'arrosage » affichait 0,0 mm
+            # pendant que ses propres attributs annonçaient 7,8 mm de déplétion.
+            besoin_mm = mm_cible
             weekly_room = max(0.0, guardrail_max_effective - ctx.recent_watering_mm_7j)
             if _survie_canicule:
                 # Réserve à 0 en canicule : garantir la recharge complète (depletion_mm)
@@ -1918,6 +2124,7 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
                     guardrail_min_effective,
                     upper_bound,
                 )
+        besoin_mm = mm_cible
         if block_reason is not None:
             mm_cible = 0.0
         else:
@@ -2037,11 +2244,25 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
         else 0
     )
     confidence_score, confidence_level, confidence_reasons = _confidence(ctx, block_reason, mm_final)
+    # Profil NORMAL — le chemin qu'emprunte une installation en régime courant. Il posait
+    # un niveau littéral sans jamais dire pourquoi : le capteur restait muet là où on le
+    # consulte le plus. Le helper décide sur la réserve du sol et produit les raisons.
+    _risque_n, _raisons_n = _evaluer_risque_gazon(
+    water_balance=ctx.water_balance,
+    bilan_hydrique_mm=ctx.bilan_hydrique_mm,
+    pression_hydrique=ctx.pression_hydrique,
+    vent=ctx.vent,
+    hauteur_gazon=ctx.hauteur_gazon,
+    heat_stress_level=ctx.heat_stress_level,
+    heat_stress_phase=ctx.heat_stress_phase,
+    plancher="modere" if ctx.deficit_mm_brut >= 5 else None,
+    )
     normal_payload = _build_profile_payload(
         deficit_mm_brut=ctx.deficit_mm_brut,
         deficit_mm_ajuste=ctx.deficit_mm_ajuste,
         mm_cible=mm_cible,
         mm_final=mm_final,
+        besoin_mm=besoin_mm,
         mm_detected=float(ctx.water_balance.get("arrosage_recent_jour", 0.0) or 0.0),
         type_arrosage="bloque" if block_reason is not None else ("auto" if mm_final > 0 else "aucune_action"),
         arrosage_recommande=mm_final > 0 and block_reason is None,
@@ -2075,7 +2296,8 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
             else "ce_matin"
         ),
         niveau_action="a_faire" if mm_final > 0 else "surveiller",
-        risque_gazon="modere" if ctx.deficit_mm_brut >= 5 else "faible",
+        risque_gazon=_risque_n,
+        risque_raisons=_raisons_n,
         heat_stress_level=ctx.heat_stress_level,
         heat_stress_phase=ctx.heat_stress_phase,
         morning_start_minute=ctx.morning_start_minute,
@@ -2440,7 +2662,7 @@ def compute_action_guidance(
     temperature: float | None = None,
     etp: float | None = None,
     objectif_mm: float = 0.0,
-    hour_of_day: int | None = None,
+    hour_of_day: float | None = None,
     history: list[dict[str, Any]] | None = None,
     sous_phase_age_days: int | None = None,
     sous_phase_progression: float | None = None,
@@ -2606,14 +2828,23 @@ def compute_action_guidance(
             risque_gazon = "modere" if pression_hydrique < 2.0 else "eleve"
         else:
             risque_gazon = "eleve" if bilan_hydrique_mm <= -1.5 or pression_hydrique >= 2.5 else "modere"
-        if heat_stress_level in {"eleve", "severe"}:
-            risque_gazon = _risk_from_rank(min(_risk_rank(risque_gazon) + 1, 2))
-        if vent is not None and vent >= 20:
-            risque_gazon = "eleve"
-        if hauteur_gazon is not None and hauteur_gazon >= 12:
-            risque_gazon = "eleve"
+        # Le niveau brut ci-dessus reste calculé pour les phases Sursemis (germination,
+        # reprise), où le bilan du jour EST le bon signal : un semis n'a pas de réserve
+        # exploitable. Le helper le reprend, applique la réserve du sol quand elle existe,
+        # et produit les raisons.
+        risque_gazon, risque_raisons = _evaluer_risque_gazon(
+            water_balance=water_balance,
+            bilan_hydrique_mm=bilan_hydrique_mm,
+            pression_hydrique=pression_hydrique,
+            utiliser_reserve=False,      # branche Sursemis (germination / reprise)
+            plancher=risque_gazon,       # la phase impose son minimum
+            vent=vent,
+            hauteur_gazon=hauteur_gazon,
+            heat_stress_level=heat_stress_level,
+        )
         return _build_guidance_window_payload(
             risque_gazon=risque_gazon,
+            risque_raisons=risque_raisons,
             niveau_action=niveau_action,
             fenetre_optimale=fenetre_optimale,
             heat_stress_level=heat_stress_level,
@@ -2668,8 +2899,28 @@ def compute_action_guidance(
         )
 
     if bilan_hydrique_mm <= -4.0:
+        # ⚠️ Ce `return` ANTICIPÉ est LE chemin qui annonçait « risque élevé » chaque nuit.
+        # `bilan_hydrique_mm` est le bilan de la JOURNÉE (pluie + arrosage − ETc du jour) :
+        # à 2 h du matin, rien n'a encore été arrosé et l'ETc attendue vaut ~6 mm, donc le
+        # bilan tombe sous −4 mécaniquement. Il sortait ici avant tous les blocs de
+        # finalisation, d'où un « élevé » que rien n'expliquait — et qui repassait « faible »
+        # à la seconde où l'arrosage du matin partait (trois nuits d'affilée dans l'historique).
+        # `niveau_action="critique"` reste JUSTE : un déficit journalier de 4 mm mérite bien
+        # d'agir. C'est le LIBELLÉ DE RISQUE qui mentait, pas la décision d'arroser.
+        _risque_j4, _raisons_j4 = _evaluer_risque_gazon(
+            water_balance=water_balance,
+            bilan_hydrique_mm=bilan_hydrique_mm,
+            pression_hydrique=pression_hydrique,
+            vent=vent,
+            hauteur_gazon=hauteur_gazon,
+            heat_stress_level=heat_stress_level,
+            heat_stress_phase=heat_stress_phase,
+            seuil_eleve=-4.0,
+            seuil_modere=-4.0,
+        )
         return _build_guidance_window_payload(
-            risque_gazon="eleve",
+            risque_gazon=_risque_j4,
+            risque_raisons=_raisons_j4,
             niveau_action="critique",
             fenetre_optimale="demain_matin" if now_minutes >= acceptable_end_minute else "maintenant",
             heat_stress_level=heat_stress_level,
@@ -2748,24 +2999,22 @@ def compute_action_guidance(
             evening_allowed=evening_allowed,
         )
 
-    risque_gazon = "faible"
-    if bilan_hydrique_mm <= -2.5:
-        risque_gazon = "eleve"
-    elif bilan_hydrique_mm <= -0.8 or pression_hydrique >= 1.2:
-        risque_gazon = "modere"
-    if vent is not None and vent >= 20:
-        risque_gazon = _risk_from_rank(min(_risk_rank(risque_gazon) + 1, 2))
-    if hauteur_gazon is not None and hauteur_gazon >= 12:
-        risque_gazon = _risk_from_rank(min(_risk_rank(risque_gazon) + 1, 2))
-    if heat_stress_level == "severe":
-        risque_gazon = "eleve"
-    elif heat_stress_level in {"eleve", "vigilance"}:
-        risque_gazon = _risk_from_rank(min(_risk_rank(risque_gazon) + 1, 2))
-    if heat_stress_phase == "stress_prolonge":
-        risque_gazon = _risk_from_rank(min(_risk_rank(risque_gazon) + 1, 2))
+    risque_gazon, risque_raisons = _evaluer_risque_gazon(
+        water_balance=water_balance,
+        bilan_hydrique_mm=bilan_hydrique_mm,
+        pression_hydrique=pression_hydrique,
+        vent=vent,
+        hauteur_gazon=hauteur_gazon,
+        heat_stress_level=heat_stress_level,
+        heat_stress_phase=heat_stress_phase,
+        seuil_eleve=-2.5,
+        seuil_modere=-0.8,
+        seuil_pression_modere=1.2,
+    )
 
     return _build_guidance_window_payload(
         risque_gazon=risque_gazon,
+        risque_raisons=risque_raisons,
         niveau_action="a_faire",
         fenetre_optimale="demain_matin",
         heat_stress_level=heat_stress_level,

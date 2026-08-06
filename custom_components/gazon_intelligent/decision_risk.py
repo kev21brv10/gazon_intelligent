@@ -132,6 +132,7 @@ def build_risk_bundle(
         "niveau_action": action_guidance["niveau_action"],
         "fenetre_optimale": action_guidance["fenetre_optimale"],
         "risque_gazon": action_guidance["risque_gazon"],
+        "risque_gazon_raisons": action_guidance.get("risque_gazon_raisons") or [],
         "watering_window_start_minute": action_guidance.get("watering_window_start_minute"),
         "watering_window_end_minute": action_guidance.get("watering_window_end_minute"),
         "watering_window_optimal_start_minute": action_guidance.get("watering_window_optimal_start_minute"),
@@ -187,7 +188,7 @@ def compute_fungal_risk(
     rosee: float | None,
     pluie_24h: float | None,
     pluie_demain: float | None,
-    hour_of_day: int = 12,
+    hour_of_day: float = 12.0,
 ) -> dict[str, Any]:
     """Évalue le risque fongique simplifié (oïdium, rouille, septoriose).
 

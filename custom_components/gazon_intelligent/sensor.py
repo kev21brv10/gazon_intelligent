@@ -1082,6 +1082,9 @@ def _watering_history_entries(history: object, n: int = 7) -> list[dict[str, Any
         entry: dict[str, Any] = {
             "date": item.get("date"),
             "recorded_at": item.get("recorded_at"),
+            # Début du cycle : c'est lui que la liste « dernières sessions » de la carte doit
+            # afficher. `recorded_at` reste publié — l'historique garde les deux bouts.
+            "started_at": item.get("started_at"),
             "source": item.get("source"),
         }
         for key in ("watering_cause", "surface_mm", "total_mm", "zone_count"):
@@ -1144,8 +1147,37 @@ def _public_intervention_attributes(payload: dict[str, Any]) -> dict[str, Any]:
         "summary": ui.get("summary"),
         "hint": ui.get("hint"),
         "action_label": ui.get("action_label"),
+        # `reason` est la concaténation « · » de TOUS les critères, satisfaits et bloquants
+        # mêlés : la carte affichait quatre puces identiques et l'utilisateur devait deviner
+        # laquelle retenait l'intervention. La polarité existe pourtant depuis toujours dans
+        # `constraints` (`met` / `blocking`) — elle n'était simplement jamais publiée.
+        # On expose une forme compacte, prête à l'affichage : pas de `value`, pas de `hint`.
+        "application_constraints": _public_intervention_constraints(payload),
     }
     return _clean_public_attrs(attrs) or {}
+
+
+def _public_intervention_constraints(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Critères d'application, réduits à ce dont un affichage a besoin."""
+    constraints = payload.get("constraints")
+    if not isinstance(constraints, list):
+        return []
+    public: list[dict[str, Any]] = []
+    for constraint in constraints:
+        if not isinstance(constraint, dict):
+            continue
+        label = str(constraint.get("label") or "").strip()
+        if not label:
+            continue
+        public.append(
+            {
+                "code": str(constraint.get("code") or ""),
+                "label": label,
+                "met": bool(constraint.get("met")),
+                "blocking": bool(constraint.get("blocking")),
+            }
+        )
+    return public
 
 
 # Table de présentation des raisons de blocage de l'arrosage automatique.
@@ -1596,6 +1628,9 @@ class GazonHauteurEstimeeSensor(GazonEntityBase, SensorEntity):
             "mowing_overdue_days",
             "mowing_overdue_factor",
             "mowing_is_overdue",
+            # Rend visible ce que l'arrondi au 0,1 cm masque : par forte chaleur la journée
+            # entière ne vaut qu'un cran, et on ne voyait donc rien bouger.
+            "gazon_pousse_jour_cm",
         )
         return attrs or None
 
@@ -1684,6 +1719,14 @@ class GazonObjectifMmSensor(GazonEntityBase, SensorEntity):
             "reserve_minimale_mm",
             "depletion_mm",
             "depletion_allowed_mm",
+            # Ce que le sol RÉCLAME, que l'arrosage soit permis ou non. L'état de l'entité,
+            # lui, reste « ce qui sera versé » — donc 0 pendant un blocage.
+            "besoin_mm",
+            # Les deux COMMUTATEURS qui changent tout le calcul, jusqu'ici invisibles :
+            #  · `reserve_from_soil_ledger` : quel modèle pilote (déplétion vs déficit legacy)
+            #  · `etp_connue` : les déficits sont-ils mesurés, ou nuls par défaut
+            "reserve_from_soil_ledger",
+            "etp_connue",
             "mad_ratio",
             "soil_moisture_override_state",
             "soil_moisture_confidence_adjustment",
@@ -2236,7 +2279,13 @@ class GazonDernierArrosageDetecteSensor(GazonEntityBase, SensorEntity):
 
     @staticmethod
     def _session_when_text(session: dict[str, Any]) -> str | None:
-        for key in ("detected_at", "recorded_at", "date"):
+        # ⚠️ LE DÉBUT, PAS LA FIN. Cet horodatage est ce que l'utilisateur lit — « arrosé à
+        # 05:18 » pour un cycle parti à 03:45:13 lui a fait croire à 1 h 30 de retard qui
+        # n'existait pas (04/08/2026). Les entrées antérieures à la 0.41.0 n'ont pas de
+        # `started_at` : elles retombent sur la fin, comme avant.
+        # ⚠️ NE PAS reporter cette priorité dans `water.resolve_history_moment` : lui sert au
+        # calcul d'espacement (cooldown 24 h), qui doit garder la même référence.
+        for key in ("started_at", "detected_at", "recorded_at", "date"):
             value = session.get(key)
             human = _human_datetime_text(value)
             if human:
@@ -4523,6 +4572,20 @@ class GazonRisqueGazonSensor(GazonEntityBase, SensorEntity):
         #  et ne sont pas dans result.extra — _decision_value ne les trouve pas fiablement)
         data = getattr(self.coordinator, "data", None) or {}
         attrs: dict = {}
+        # ⚠️ Le capteur n'expliquait PAS son niveau : il n'exposait que le risque FONGIQUE,
+        # si bien qu'un état « élevé » était incompréhensible sans lire le code (question de
+        # Kévin le 31/07/2026 : « pourquoi risque gazon élevé ? » — il a fallu vingt minutes
+        # de lecture pour répondre). Les raisons viennent en tête, avant le détail fongique.
+        # ⚠️ `_decision_value` et NON `data.get` : `coordinator.data` ne porte que les champs
+        # injectés APRÈS le snapshot (risque fongique, santé des capteurs). Les raisons, elles,
+        # viennent du snapshot — comme `native_value` juste au-dessus. Posé au mauvais endroit,
+        # l'attribut restait introuvable et le capteur continuait de ne rien expliquer.
+        # ⚠️ Exposé INCONDITIONNELLEMENT. Une liste vide est falsy : la masquer laissait le
+        # capteur muet exactement comme avant le correctif, et rendait impossible de distinguer
+        # « aucune raison fournie par ce chemin » de « attribut jamais posé ». Le capteur doit
+        # toujours s'expliquer — même pour dire qu'il n'a rien à signaler.
+        raisons = self._decision_value("risque_gazon_raisons")
+        attrs["risque_gazon_raisons"] = list(raisons) if raisons else ["aucun motif fourni"]
         # LOT E — risque fongique
         fungal_level = data.get("fungal_risk_level")
         if fungal_level is not None:

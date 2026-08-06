@@ -759,6 +759,10 @@ class TestHydricCoreAndMemory(unittest.TestCase):
         self.assertEqual(snapshot["kc_gazon"], 0.8)
         self.assertGreater(snapshot["etc_mm"], 0.0)
         self.assertEqual(snapshot["reserve_actuelle_mm"], 10.0)
+        # RÉSERVOIR DE RÉFÉRENCE = le stock max du ledger (capacité au champ), pas la réserve
+        # d'ouverture de 12 mm : la déplétion se mesure depuis la capacité au champ (FAO-56).
+        # Avant ce ré-ancrage, tout stock ≥ 12 affichait une déplétion NULLE et le MAD tombait
+        # à 6 mm — l'arrosage revenait chaque jour avec la dose plancher.
         self.assertEqual(snapshot["reserve_utile_mm"], 12.0)
         self.assertEqual(snapshot["depletion_mm"], 2.0)
         self.assertAlmostEqual(snapshot["depletion_ratio"], 0.167, places=3)
@@ -2692,3 +2696,416 @@ class TestIncorporationCrediteLaReserve(unittest.TestCase):
             ),
             17.0,
         )
+
+
+class BesoinMmTraverseLaChaineTests(unittest.TestCase):
+    """`besoin_mm` doit survivre à TOUTE la chaîne, pas seulement être déclaré.
+
+    Une première série de tests ne vérifiait que les DÉCLARATIONS (champ présent dans
+    `DecisionResult`, clé listée par le capteur). Deux mutations coupant le câblage —
+    `besoin_mm=None` dans le bundle d'arrosage, puis dans `decision.py` — passaient au vert.
+    Ce test-ci part du point d'entrée réel, `build_decision_snapshot`.
+    """
+
+    def test_le_snapshot_porte_le_besoin(self) -> None:
+        snapshot = make_snapshot(today=date(2026, 3, 17), hour_of_day=10,
+                                 temperature=20, etp_capteur=3.0)
+        self.assertIn("besoin_mm", snapshot, "la clé se perd avant le snapshot")
+        self.assertIsNotNone(snapshot["besoin_mm"], "la clé arrive vide : câblage coupé")
+        self.assertGreater(snapshot["besoin_mm"], 0.0)
+
+    def test_le_besoin_survit_a_un_blocage(self) -> None:
+        """Le cas de Kévin du 01/08/2026, reproduit de bout en bout.
+
+        ⚠️ Ce test bloquait par le GARDE-FOU HEBDOMADAIRE jusqu'au 02/08/2026. Depuis, celui-ci
+        se lève dès que le sol dépasse le seuil MAD (0.38.0) — c'est-à-dire exactement quand un
+        besoin existe. Il ne peut donc plus servir à démontrer « blocage ⇒ dose nulle, besoin
+        préservé ». On passe par l'humidité de l'air, qui bloque encore indépendamment du sol.
+
+        ⚠️ Première version de ce test : elle bloquait par la PLUIE. Mauvaise fixture — une
+        pluie annoncée ne fait pas que bloquer, elle SUPPRIME le besoin (déficit 1,1 mm).
+        `besoin_mm` valait donc légitimement 0 et le test ne prouvait rien. La retenue
+        hebdomadaire, elle, ne change rien à la soif du sol : c'est le seul cas où les deux
+        valeurs doivent diverger.
+        """
+        historique = [
+            {"type": "arrosage", "date": "2026-07-28", "total_mm": 12.0, "source": "auto_irrigation"},
+            {"type": "arrosage", "date": "2026-07-29", "total_mm": 5.0, "source": "auto_irrigation"},
+            {"type": "arrosage", "date": "2026-07-30", "total_mm": 8.1, "source": "auto_irrigation"},
+        ]
+        snapshot = make_snapshot(
+            history=historique, today=date(2026, 8, 1), hour_of_day=12,
+            temperature=26.1, etp_capteur=5.8, humidite=90.0,
+            soil_balance={"reserve_mm": 4.2, "reserve_max_mm": 24.0},
+        )
+        self.assertTrue(snapshot["water_balance"]["reserve_from_soil_ledger"],
+                        "la fixture ne passe pas par la branche déplétion")
+        self.assertEqual(snapshot["block_reason"], "humidite_excessive")
+        self.assertEqual(snapshot["objectif_mm"], 0.0, "la dose doit rester à zéro")
+        self.assertAlmostEqual(snapshot["besoin_mm"], snapshot["depletion_mm"], places=1,
+                               msg="le besoin a disparu avec le blocage")
+        self.assertGreater(snapshot["besoin_mm"], 7.0)
+
+
+class DeficitInconnuNeDeclenchePasLaRetenueTests(unittest.TestCase):
+    """Un déficit INCONNU n'est pas un déficit nul.
+
+    `compute_water_balance` faisait `etp or 0.0` : sans ET0, tous les déficits tombaient à 0.
+    La retenue hebdomadaire exige `deficit_mm_ajuste < plancher` — condition automatiquement
+    vraie sur du vide. Relevé sur l'installation le 01/08/2026, premier cycle d'un redémarrage :
+    `bilan_hydrique_mm: 0`, `deficit_3j: 0`, `deficit_7j: 0`, motif `garde_fou_hebdomadaire`,
+    alors que la déplétion du ledger valait 8,2 mm pour une réserve de 3,8 sur un seuil de 6,0.
+    Sur une coupure plus longue du capteur, la même mécanique a supprimé l'objectif pendant
+    20 minutes DANS la fenêtre d'arrosage (30/07, 08 h 13 → 08 h 33).
+    """
+
+    HIST = [
+        {"type": "arrosage", "date": "2026-07-28", "total_mm": 12.0, "source": "auto_irrigation"},
+        {"type": "arrosage", "date": "2026-07-29", "total_mm": 5.0, "source": "auto_irrigation"},
+        {"type": "arrosage", "date": "2026-07-30", "total_mm": 8.1, "source": "auto_irrigation"},
+    ]
+    # ⚠️ Réserve 15,0 sur 24 → déplétion 0,375, SOUS le seuil MAD : la retenue hebdomadaire est
+    # légitime et le reste. La fixture précédente (3,8 mm, ratio 0,68) encodait l'ancien
+    # comportement — la retenue s'y appliquait sur un sol qui réclamait de l'eau, ce que la
+    # 0.38.0 interdit. Elle est ensuite passée à 9,0 (« 0,25 sur une référence de 12 »), valeur
+    # qui n'est PLUS confortable depuis que la déplétion se mesure depuis la capacité au champ
+    # (9 sur 24 = 62 % épuisé). Le sol confortable, sur cette échelle, c'est 15 mm.
+    SOL = {"reserve_mm": 15.0, "reserve_max_mm": 24.0}
+
+    def _snap(self, **over):
+        kw = dict(history=self.HIST, today=date(2026, 8, 1), hour_of_day=12,
+                  temperature=26.1, etp_capteur=5.8, humidite=52.0, soil_balance=self.SOL)
+        kw.update(over)
+        return make_snapshot(**kw)
+
+    def test_avec_et0_mesuree_la_retenue_fonctionne_toujours(self) -> None:
+        """Garde-fou : le correctif ne doit pas désarmer la retenue légitime."""
+        snap = self._snap()
+        self.assertTrue(snap["water_balance"]["etp_connue"])
+        self.assertEqual(snap["block_reason"], "garde_fou_hebdomadaire")
+
+    def test_sans_et0_la_retenue_ne_se_declenche_plus(self) -> None:
+        snap = self._snap(temperature=None, etp_capteur=None)
+        self.assertFalse(snap["water_balance"]["etp_connue"],
+                         "la fixture fournit encore une ET0")
+        self.assertEqual(snap["deficit_3j"], 0.0, "prémisse : les déficits retombent à 0")
+        # `to_snapshot` retire les clés nulles : l'absence de `block_reason` VAUT « aucun motif ».
+        self.assertNotEqual(
+            snap.get("block_reason"), "garde_fou_hebdomadaire",
+            "la retenue se déclenche sur un déficit qui vaut 0 par défaut, pas par mesure",
+        )
+        # (Le besoin vaut 0 ici : la fixture décrit un sol CONFORTABLE, sous le seuil MAD.
+        #  La préservation du besoin sous blocage est démontrée par `BesoinMmTraverseLaChaine`.)
+
+    def test_le_commutateur_est_publie(self) -> None:
+        """Sans lui, rien ne permet de savoir si les déficits sont mesurés ou nuls par défaut.
+
+        ⚠️ Ce test ne regardait QUE le sous-dictionnaire `water_balance` et la déclaration dans
+        `_objective_attrs_keys()`. Les deux étaient vraies — et les clés n'apparaissaient
+        pourtant PAS sur l'entité, constaté sur l'installation le 02/08/2026 : les clés du bilan
+        sont recopiées une par une au niveau RACINE du snapshot (`decision.py`), une cinquième
+        liste blanche que personne ne vérifiait. On teste maintenant là où l'entité lit.
+        """
+        snap = self._snap()
+        self.assertIn("etp_connue", snap["water_balance"])
+        self.assertIn("reserve_from_soil_ledger", snap["water_balance"])
+        self.assertIn("etp_connue", snap, "absente du niveau racine : l'entité ne la verra pas")
+        self.assertIn("reserve_from_soil_ledger", snap,
+                      "absente du niveau racine : l'entité ne la verra pas")
+
+    def test_un_bilan_SANS_la_cle_garde_l_ancien_comportement(self) -> None:
+        """Montée de version : un état persisté d'avant 0.36.0 n'a pas `etp_connue`.
+
+        Le défaut par absence doit être VRAI — sinon la retenue hebdomadaire ne se
+        déclencherait plus jamais sur ces états, ce qui serait un sur-arrosage silencieux,
+        pire que le défaut corrigé.
+        """
+        profil = guidance_module.compute_watering_profile(
+            phase_dominante="Normal", sous_phase="Normal",
+            water_balance={
+                "bilan_hydrique_mm": -1.0, "reserve_hydrique_sol_mm": 9.0,
+                "reserve_actuelle_mm": 9.0, "reserve_minimale_mm": 6.0,
+                "reserve_utile_mm": 12.0, "depletion_mm": 3.0, "depletion_ratio": 0.25,
+                "mad_ratio": 0.5, "reserve_from_soil_ledger": True, "et0_mm": 5.8,
+                "etc_mm": 4.6, "reserve_stock_mm": 9.0, "reserve_stock_max_mm": 24.0,
+                "arrosage_recent_7j": 35.0,
+                # PAS de clé `etp_connue` — c'est tout l'objet du test.
+            },
+            today=date(2026, 8, 1), pluie_24h=0.0, pluie_demain=0.0,
+            humidite=52.0, temperature=26.1, etp=5.8, type_sol="limoneux",
+            history=self.HIST,
+        )
+        self.assertEqual(profil["block_reason"], "garde_fou_hebdomadaire",
+                         "un état sans la clé désarme la retenue")
+
+
+class PluiePrevueNeBloquePasUnSolAssoiffeTests(unittest.TestCase):
+    """Rejoue la nuit du 02/08/2026 — celle où le gazon a touché zéro.
+
+    À 03 h 20, la prévision de pluie passe de 3,1 à 9,1 mm. `pluie_prevue_suffisante` se
+    déclenche et l'objectif tombe de 8,6 à 0,0 mm ; il y reste jusqu'à 10 h 13, soit TOUTE la
+    fenêtre d'arrosage (03:45–10:00). Au même instant l'intégration publiait
+    `reserve_actuelle_mm: 1,2 sur 12`, `depletion_ratio: 0,90`, `hydric_state: critique`,
+    `hydric_strategy: arroser rapidement en profondeur`, et 34,5 °C prévus pour la journée.
+    Il est tombé 3,2 mm effectifs pour 4,8 consommés : la réserve a atteint 0,0 mm à 12 h 09.
+
+    La pluie était le SEUL des cinq blocages sans échappatoire sur l'état du sol — et le seul
+    fondé sur une prévision. Arbitrage de Kévin : « la pluie prévue n'est jamais sûre, je
+    préfère arroser ».
+    """
+
+    @staticmethod
+    def _profil(*, reserve_mm, pluie_demain, depletion_mm):
+        wb = {
+            "bilan_hydrique_mm": -0.4, "reserve_hydrique_sol_mm": reserve_mm,
+            "reserve_actuelle_mm": reserve_mm, "reserve_minimale_mm": 6.0,
+            "reserve_utile_mm": 12.0, "depletion_mm": depletion_mm,
+            "depletion_ratio": round(depletion_mm / 12.0, 3), "mad_ratio": 0.5,
+            "deficit_3j": 9.2, "deficit_7j": 3.7, "reserve_from_soil_ledger": True,
+            "et0_mm": 5.4, "etc_mm": 4.3, "etp_connue": True,
+            "reserve_stock_mm": reserve_mm, "reserve_stock_max_mm": 24.0,
+            "et_elapsed_fraction": 0.0, "arrosage_recent_7j": 22.1,
+        }
+        return guidance_module.compute_watering_profile(
+            phase_dominante="Normal", sous_phase="Normal", water_balance=wb,
+            today=date(2026, 8, 2), pluie_24h=0.0, pluie_demain=pluie_demain,
+            humidite=45.7, temperature=20.9, etp=5.4, type_sol="limoneux",
+        )
+
+    def test_la_nuit_du_02_08_le_sol_aurait_du_etre_arrose(self) -> None:
+        p = self._profil(reserve_mm=1.2, pluie_demain=9.1, depletion_mm=10.8)
+        self.assertNotEqual(
+            p["block_reason"], "pluie_prevue_suffisante",
+            "une prévision bloque encore un sol à 10 % de sa réserve",
+        )
+        self.assertGreater(p["mm_final_recommande"], 0.0, "aucune dose n'est prévue")
+
+    def test_sur_un_sol_CONFORTABLE_la_pluie_bloque_toujours(self) -> None:
+        """Garde-fou : le correctif ne doit pas supprimer l'économie d'un cycle inutile."""
+        p = self._profil(reserve_mm=10.0, pluie_demain=9.1, depletion_mm=2.0)
+        self.assertEqual(p["block_reason"], "pluie_prevue_suffisante")
+        self.assertEqual(p["mm_final_recommande"], 0.0)
+
+    def test_le_seuil_est_bien_le_MAD(self) -> None:
+        """Juste sous le seuil : la pluie décide encore. Juste au-dessus : plus jamais."""
+        sous = self._profil(reserve_mm=6.6, pluie_demain=9.1, depletion_mm=5.4)   # ratio 0,45
+        au_dessus = self._profil(reserve_mm=5.4, pluie_demain=9.1, depletion_mm=6.6)  # 0,55
+        self.assertEqual(sous["block_reason"], "pluie_prevue_suffisante")
+        self.assertNotEqual(au_dessus["block_reason"], "pluie_prevue_suffisante")
+
+    def test_le_garde_fonctionne_SANS_ledger(self) -> None:
+        """Il ne peut que débloquer : le rendre dépendant du ledger le rendrait inerte.
+
+        C'est exactement le défaut corrigé toute la semaine — un garde qui disparaît en
+        silence quand sa source manque.
+        """
+        wb = {
+            "bilan_hydrique_mm": -0.4, "reserve_hydrique_sol_mm": 1.2,
+            "reserve_actuelle_mm": 1.2, "reserve_minimale_mm": 6.0,
+            "reserve_utile_mm": 12.0, "depletion_mm": 10.8, "depletion_ratio": 0.9,
+            "mad_ratio": 0.5, "deficit_3j": 9.2, "deficit_7j": 3.7,
+            "reserve_from_soil_ledger": False,   # ← pas de ledger
+            "et0_mm": 5.4, "etc_mm": 4.3, "etp_connue": True,
+            "reserve_stock_mm": 1.2, "reserve_stock_max_mm": 24.0,
+            "et_elapsed_fraction": 0.0, "arrosage_recent_7j": 22.1,
+        }
+        p = guidance_module.compute_watering_profile(
+            phase_dominante="Normal", sous_phase="Normal", water_balance=wb,
+            today=date(2026, 8, 2), pluie_24h=0.0, pluie_demain=9.1,
+            humidite=45.7, temperature=20.9, etp=5.4, type_sol="limoneux",
+        )
+        self.assertNotEqual(p["block_reason"], "pluie_prevue_suffisante")
+
+    def test_une_pluie_DEJA_TOMBEE_bloque_toujours(self) -> None:
+        """On ne touche qu'à la PRÉVISION. La pluie réelle reste un fait, pas un pari."""
+        wb = {
+            "bilan_hydrique_mm": 8.0, "reserve_hydrique_sol_mm": 11.0,
+            "reserve_actuelle_mm": 11.0, "reserve_minimale_mm": 6.0,
+            "reserve_utile_mm": 12.0, "depletion_mm": 1.0, "depletion_ratio": 0.08,
+            "mad_ratio": 0.5, "deficit_3j": 0.0, "deficit_7j": 0.0,
+            "reserve_from_soil_ledger": True, "et0_mm": 5.4, "etc_mm": 4.3,
+            "etp_connue": True, "reserve_stock_mm": 11.0, "reserve_stock_max_mm": 24.0,
+            "et_elapsed_fraction": 0.0, "arrosage_recent_7j": 22.1,
+        }
+        p = guidance_module.compute_watering_profile(
+            phase_dominante="Normal", sous_phase="Normal", water_balance=wb,
+            today=date(2026, 8, 2), pluie_24h=18.0, pluie_demain=0.0,
+            humidite=45.7, temperature=20.9, etp=5.4, type_sol="limoneux",
+        )
+        self.assertEqual(p["mm_final_recommande"], 0.0)
+
+
+class GardeFouNeLaissePasLeSolPasserLeSeuilTests(unittest.TestCase):
+    """Rejoue les matins du 31/07 et du 01/08/2026 — l'enchaînement qui a mené à zéro.
+
+    La retenue hebdomadaire jugeait sur `deficit_mm_ajuste` (modèle LEGACY) alors que le
+    déclenchement se fait sur la déplétion du LEDGER. Les deux divergent, et c'est la retenue
+    qui gagnait :
+
+      31/07 04:00 — réserve 8,6, ratio 0,28 sur 12 → `confort`   → blocage jugé LÉGITIME
+      01/08 04:00 — réserve 5,4, ratio 0,55 sur 12 → `depletion` → blocage FAUTIF
+                    déficit legacy 4,3 mm contre 6,6 mm de déplétion réelle : 2,3 mm d'écart.
+
+    Sans eau le 01/08, le sol est arrivé au 02/08 à 1,2 mm, puis à ZÉRO à 12 h 09.
+
+    ⚠️ RÉ-ANCRAGE. Depuis que la déplétion se mesure depuis la capacité au champ (stock max du
+    ledger, 24 mm en limoneux) et non depuis la réserve d'ouverture de 12 mm, la réserve de
+    8,6 mm du 31/07 n'est PLUS confortable : 15,4 mm de déplétion sur 24, soit 64 % — au-delà
+    du seuil MAD. Le blocage du 31/07 n'était donc pas légitime non plus, et c'est cohérent avec
+    la suite de l'histoire (zéro le 02/08). Le premier test garde son rôle — prouver que la
+    retenue fonctionne encore sur un sol vraiment confortable — avec une réserve qui l'est
+    vraiment sur la bonne échelle (15,0 sur 24 = 37 % de déplétion).
+    """
+
+    HIST = [
+        {"type": "arrosage", "date": "2026-07-26", "total_mm": 12.0, "source": "auto_irrigation"},
+        {"type": "arrosage", "date": "2026-07-28", "total_mm": 12.0, "source": "auto_irrigation"},
+        {"type": "arrosage", "date": "2026-07-30", "total_mm": 8.1, "source": "auto_irrigation"},
+    ]
+
+    def _snap(self, reserve_mm):
+        return make_snapshot(
+            history=self.HIST, today=date(2026, 8, 1), hour_of_day=4,
+            temperature=19.5, etp_capteur=5.5, humidite=62.5,
+            soil_balance={"reserve_mm": reserve_mm, "reserve_max_mm": 24.0},
+        )
+
+    def test_le_31_07_la_retenue_reste_legitime(self) -> None:
+        """Sol à 37 % de déplétion : confortable. Le garde-fou doit encore plafonner."""
+        snap = self._snap(15.0)
+        self.assertLess(snap["water_balance"]["depletion_ratio"],
+                        snap["water_balance"]["mad_ratio"], "prémisse : sol sous le seuil")
+        self.assertEqual(snap.get("block_reason"), "garde_fou_hebdomadaire")
+
+    def test_le_01_08_le_sol_aurait_du_etre_arrose(self) -> None:
+        """Sol à 55 % : au-delà du seuil. La retenue ne peut plus le laisser descendre."""
+        snap = self._snap(5.4)
+        self.assertGreaterEqual(snap["water_balance"]["depletion_ratio"],
+                                snap["water_balance"]["mad_ratio"], "prémisse : sol au-delà")
+        self.assertNotEqual(
+            snap.get("block_reason"), "garde_fou_hebdomadaire",
+            "la retenue bloque encore un sol qui a franchi son seuil de déclenchement",
+        )
+        self.assertGreater(snap["objectif_mm"], 0.0, "aucune dose n'est prévue")
+
+    def test_la_retenue_n_est_PAS_videe_de_son_sens(self) -> None:
+        """Le point délicat du correctif — vérifié à l'aube, pas en fin de journée.
+
+        Le déclenchement se fait sur la déplétion PROJETÉE (réelle + ETc restante), la retenue
+        sur la déplétion RÉELLE. Un sol encore confortable à l'aube mais qui aura soif ce soir
+        déclenche donc — et reste retenable. Si les deux grandeurs coïncidaient, le garde-fou
+        ne bloquerait plus jamais rien et le correctif reviendrait à le supprimer.
+
+        ⚠️ Passe par le profil et non par `make_snapshot` : sans contexte solaire, ce dernier
+        fixe `et_elapsed_fraction` à 1,0 (journée entièrement écoulée), la projection retombe
+        alors sur la déplétion réelle et le test ne démontre plus rien.
+        """
+        wb = {
+            "bilan_hydrique_mm": -1.0, "reserve_hydrique_sol_mm": 8.4,
+            "reserve_actuelle_mm": 8.4, "reserve_minimale_mm": 6.0,
+            "reserve_utile_mm": 12.0, "depletion_mm": 3.6, "depletion_ratio": 0.30,
+            "mad_ratio": 0.5, "deficit_3j": 5.8, "deficit_7j": 15.0,
+            "reserve_from_soil_ledger": True, "et0_mm": 5.5, "etc_mm": 4.4,
+            "etp_connue": True, "reserve_stock_mm": 8.4, "reserve_stock_max_mm": 24.0,
+            "et_elapsed_fraction": 0.0,          # ← à l'aube : toute l'ETc reste à venir
+            "arrosage_recent_7j": 32.1,
+        }
+        projete = (wb["depletion_mm"] + wb["etc_mm"]) / wb["reserve_utile_mm"]
+        self.assertLess(wb["depletion_ratio"], wb["mad_ratio"], "prémisse : sol confortable")
+        self.assertGreaterEqual(projete, wb["mad_ratio"], "prémisse : il aura soif ce soir")
+
+        profil = guidance_module.compute_watering_profile(
+            phase_dominante="Normal", sous_phase="Normal", water_balance=wb,
+            today=date(2026, 8, 1), pluie_24h=0.0, pluie_demain=0.0,
+            humidite=62.5, temperature=19.5, etp=5.5, type_sol="limoneux",
+            history=self.HIST,
+        )
+        self.assertEqual(
+            profil["block_reason"], "garde_fou_hebdomadaire",
+            "la retenue ne bloque plus rien : le correctif l'a vidée de son sens",
+        )
+
+
+class DeuxProprietesQueRienNeDoitCasserTests(unittest.TestCase):
+    """Balayage systématique : les desserrages de la semaine ne font pas sur-arroser.
+
+    Entre le 01/08 et le 04/08, TROIS verrous ont été desserrés — prévision de pluie (0.37.0),
+    retenue hebdomadaire (0.38.0), réduction de dose par la pluie (0.39.0). Chacun a ses tests,
+    aucun ne vérifiait la propriété qui compte vraiment : **on n'a pas ouvert la porte au
+    sur-arrosage**. C'est le risque exact qu'on prend en retirant des blocages.
+
+    Deux invariants, balayés sur 2 100 combinaisons (déplétion × cumul 7 j × pluie annoncée ×
+    température/ET0) :
+
+      P1  une dose n'est versée QUE si la déplétion projetée atteint le seuil MAD
+      P2  la dose ne dépasse jamais la marge hebdomadaire — hors secours documentés
+          (survie canicule ≥ 32 °C, ou réserve réellement vide ≥ 90 %)
+
+    ⚠️ Un balayage qui ne trouve rien doit d'abord prouver qu'il sait trouver. Vérifié :
+    neutraliser le seuil MAD lève 75 violations de P1, neutraliser le plafond hebdo en lève 560.
+    """
+
+    RATIOS = (0.0, 0.15, 0.30, 0.45, 0.49, 0.50, 0.55, 0.70, 0.85, 1.0)
+    SEPT = (0.0, 10.0, 20.0, 25.0, 30.0, 40.0, 60.0)
+    PLUIE = (0.0, 1.0, 2.5, 5.0, 9.0, 15.0)
+    METEO = ((15.0, 2.5), (22.0, 4.0), (28.0, 5.5), (33.0, 7.5), (38.0, 9.0))
+    UTILE = 12.0
+
+    def _profil(self, ratio, sept, pluie, temp, et0):
+        dep = round(self.UTILE * ratio, 2)
+        wb = {
+            "bilan_hydrique_mm": -dep, "reserve_hydrique_sol_mm": self.UTILE - dep,
+            "reserve_actuelle_mm": self.UTILE - dep, "reserve_minimale_mm": 6.0,
+            "reserve_utile_mm": self.UTILE, "depletion_mm": dep, "depletion_ratio": ratio,
+            "mad_ratio": 0.5, "deficit_3j": dep, "deficit_7j": dep * 1.5,
+            "reserve_from_soil_ledger": True, "et0_mm": et0, "etc_mm": et0 * 0.8,
+            "etp_connue": True, "reserve_stock_mm": self.UTILE - dep,
+            "reserve_stock_max_mm": 24.0, "et_elapsed_fraction": 0.0,
+            "arrosage_recent_7j": sept,
+        }
+        return guidance_module.compute_watering_profile(
+            phase_dominante="Normal", sous_phase="Normal", water_balance=wb,
+            today=date(2026, 8, 4), pluie_24h=0.0, pluie_demain=pluie,
+            humidite=55.0, temperature=temp, etp=et0, type_sol="limoneux",
+        )
+
+    def _balayage(self):
+        import itertools
+        for ratio, sept, pluie, (temp, et0) in itertools.product(
+            self.RATIOS, self.SEPT, self.PLUIE, self.METEO
+        ):
+            p = self._profil(ratio, sept, pluie, temp, et0)
+            if p["mm_final_recommande"] > 0:
+                yield ratio, sept, pluie, temp, et0, p
+
+    def test_P1_jamais_d_arrosage_sous_le_seuil(self) -> None:
+        fautes = []
+        for ratio, sept, pluie, temp, et0, p in self._balayage():
+            projete = min(1.0, (self.UTILE * ratio + et0 * 0.8) / self.UTILE)
+            if projete < 0.5:
+                fautes.append(
+                    f"ratio={ratio} 7j={sept} pluie={pluie} T={temp} ET0={et0} "
+                    f"→ {p['mm_final_recommande']} mm pour une projection de {projete:.2f}"
+                )
+        self.assertEqual(fautes, [], f"{len(fautes)} arrosage(s) sous le seuil :\n" + "\n".join(fautes[:5]))
+
+    def test_P2_jamais_au_dela_de_la_marge_hebdomadaire(self) -> None:
+        fautes = []
+        for ratio, sept, pluie, temp, et0, p in self._balayage():
+            marge = max(0.0, p["weekly_guardrail_mm_max"] - sept)
+            secours_autorise = ratio >= 0.9          # survie canicule OU réserve réellement vide
+            if p["mm_final_recommande"] > marge + 0.05 and not secours_autorise:
+                fautes.append(
+                    f"ratio={ratio} 7j={sept} pluie={pluie} T={temp} ET0={et0} "
+                    f"→ {p['mm_final_recommande']} mm pour une marge de {marge:.1f}"
+                )
+        self.assertEqual(fautes, [], f"{len(fautes)} dépassement(s) :\n" + "\n".join(fautes[:5]))
+
+    def test_le_balayage_sait_trouver_quelque_chose(self) -> None:
+        """Sans ceci, deux assertions vides passeraient pour une preuve.
+
+        On vérifie que le balayage produit bien des cas d'arrosage à examiner : s'il n'en
+        trouvait aucun, P1 et P2 seraient vraies par vacuité.
+        """
+        arrosages = sum(1 for _ in self._balayage())
+        self.assertGreater(arrosages, 200, f"seulement {arrosages} cas d'arrosage balayés")

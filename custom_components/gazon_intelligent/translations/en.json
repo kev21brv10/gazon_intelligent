@@ -379,6 +379,16 @@
           "description": "Measured or estimated soil water reserve, in millimetres."
         }
       }
+    },
+    "stop_irrigation": {
+      "name": "Stop watering",
+      "description": "Immediately stops the running watering cycle: closes the open valve, records the water already applied and releases the cycle.",
+      "fields": {
+        "raison": {
+          "name": "Reason",
+          "description": "Why it was stopped, kept in the action log."
+        }
+      }
     }
   },
   "entity": {

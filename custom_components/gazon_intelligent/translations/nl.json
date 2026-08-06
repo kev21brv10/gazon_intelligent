@@ -379,6 +379,16 @@
           "description": "Gemeten of geschatte waterreserve van de bodem, in millimeter."
         }
       }
+    },
+    "stop_irrigation": {
+      "name": "Beregening stoppen",
+      "description": "Stopt de lopende beregeningscyclus onmiddellijk: sluit de open klep, registreert het reeds gegeven water en geeft de cyclus vrij.",
+      "fields": {
+        "raison": {
+          "name": "Reden",
+          "description": "Reden voor het stoppen, bewaard in het actielogboek."
+        }
+      }
     }
   },
   "entity": {

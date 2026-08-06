@@ -94,6 +94,7 @@ _install_homeassistant_stubs()
 
 decision_models = __import__("custom_components.gazon_intelligent.decision_models", fromlist=["DecisionResult"])
 sensor = __import__("custom_components.gazon_intelligent.sensor", fromlist=["GazonPhaseActiveSensor"])
+water = __import__("custom_components.gazon_intelligent.water", fromlist=["resolve_history_moment"])
 binary_sensor = __import__("custom_components.gazon_intelligent.binary_sensor", fromlist=["GazonTonteAutoriseeBinarySensor"])
 select = __import__("custom_components.gazon_intelligent.select", fromlist=["GazonModeSelect"])
 from custom_components.gazon_intelligent.const import PLUIE_SOURCE_NON_DISPONIBLE
@@ -3249,3 +3250,137 @@ class NiveauHydriqueAtteignableTests(unittest.TestCase):
     def test_aucune_donnee_reste_sans_niveau(self) -> None:
         self.assertIsNone(sensor._hydric_balance_level(None, None, None))
 
+
+
+class PublicInterventionConstraintsTests(unittest.TestCase):
+    """`application_constraints` : la POLARITÉ des critères doit sortir de l'intégration.
+
+    Avant, seule la chaîne `reason` était publiée — tous les critères recollés par « · »,
+    satisfaits et bloquants mêlés. La carte affichait donc quatre puces identiques et on
+    devait deviner laquelle retenait l'intervention (constaté le 31/07/2026 sur Kick Pro,
+    où seule la date de réapplication bloquait). `met` / `blocking` existaient depuis
+    toujours dans `constraints`, jamais publiés.
+    """
+
+    @staticmethod
+    def _payload() -> dict[str, object]:
+        return {
+            "recommended_action": "wait",
+            "priority": "blocked",
+            "reason": "Mois compatibles · Réapplication possible à partir du 12/08/2026",
+            "product": {"id": "kick_pro", "name": "Kick Pro"},
+            "constraints": [
+                {"code": "application_months", "label": "Mois compatibles (Avril à Octobre)",
+                 "value": {"months": []}, "hint": "…", "met": True, "blocking": False},
+                {"code": "reapplication_delay", "label": "Réapplication possible à partir du 12/08/2026",
+                 "value": {"days": 12}, "hint": "…", "met": False, "blocking": True},
+            ],
+        }
+
+    def test_la_polarite_de_chaque_critere_est_publiee(self) -> None:
+        attrs = sensor._public_intervention_attributes(self._payload())
+        criteres = attrs["application_constraints"]
+        self.assertEqual([c["label"] for c in criteres],
+                         ["Mois compatibles (Avril à Octobre)",
+                          "Réapplication possible à partir du 12/08/2026"])
+        self.assertEqual([(c["met"], c["blocking"]) for c in criteres],
+                         [(True, False), (False, True)])
+
+    def test_le_bloquant_est_identifiable_sans_relire_la_chaine(self) -> None:
+        criteres = sensor._public_intervention_attributes(self._payload())["application_constraints"]
+        bloquants = [c["label"] for c in criteres if c["blocking"]]
+        self.assertEqual(bloquants, ["Réapplication possible à partir du 12/08/2026"])
+
+    def test_pas_de_charge_utile_interne_dans_l_attribut(self) -> None:
+        # Les attributs HA sont recopiés dans chaque état : on ne publie que l'affichable.
+        for critere in sensor._public_intervention_attributes(self._payload())["application_constraints"]:
+            self.assertEqual(set(critere), {"code", "label", "met", "blocking"})
+
+    def test_critere_sans_libelle_ou_malforme_est_ignore(self) -> None:
+        payload = self._payload()
+        payload["constraints"] = [{"code": "x", "label": "  ", "met": True}, "pas un dict", None]
+        attrs = sensor._public_intervention_attributes(payload)
+        # Liste vide → _clean_public_attrs retire la clé plutôt que publier un attribut vide.
+        self.assertNotIn("application_constraints", attrs)
+
+
+class BesoinMmRemonteJusquALEntiteTests(unittest.TestCase):
+    """`besoin_mm` doit traverser les QUATRE listes blanches jusqu'à l'écran.
+
+    Le piège documenté du projet : une clé publique doit être déclarée dans le producteur
+    de bundle, dans `decision.py`, dans `DecisionResult`, ET dans la liste d'attributs de
+    l'entité. Une seule oubliée et la valeur se perd sans erreur — le calcul est juste, rien
+    ne s'affiche.
+    """
+
+    def test_la_cle_est_declaree_partout(self) -> None:
+        import dataclasses
+        publiees = sensor.GazonObjectifMmSensor._objective_attrs_keys()
+        self.assertIn("besoin_mm", publiees, "absente de la liste d'attributs du capteur Objectif")
+        # Les deux COMMUTATEURS de diagnostic : sans eux, impossible de savoir quel modèle
+        # pilote ni si les déficits sont mesurés. Une mutation les retirant est passée au vert
+        # tant que le test ne regardait que le dict `water_balance`.
+        self.assertIn("reserve_from_soil_ledger", publiees)
+        self.assertIn("etp_connue", publiees)
+        champs = {f.name for f in dataclasses.fields(decision_models.DecisionResult)}
+        self.assertIn("besoin_mm", champs, "absente de DecisionResult")
+
+    def test_l_entite_publie_le_besoin_quand_la_dose_est_bloquee(self) -> None:
+        result = _make_result()
+        object.__setattr__(result, "objectif_arrosage", 0.0)   # bloqué : rien ne sera versé
+        object.__setattr__(result, "besoin_mm", 7.8)           # mais le sol réclame 7,8 mm
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=result,
+                                       last_result=result)
+        entite = sensor.GazonObjectifMmSensor(coordinator)
+        self.assertEqual(entite.native_value, 0.0)
+        self.assertEqual(entite.extra_state_attributes.get("besoin_mm"), 7.8)
+
+
+class HorodatageArrosageDebutPasFinTests(unittest.TestCase):
+    """L'horodatage AFFICHÉ est le début du cycle, pas sa fin.
+
+    Nuit du 04/08/2026, vérifiée sur les vannes :
+        Z1 03:45:13 → 04:18:13   Z2 04:18:13 → 04:51:13   Z3 04:51:13 → 05:18:13
+    L'intégration annonçait « arrosé à 05:18 » — la FIN. Kévin a corrigé : le cycle est parti
+    treize secondes après l'ouverture de la fenêtre (03:45). L'écart faisait croire à 1 h 30 de
+    retard au déclenchement, retard qui n'a jamais existé.
+
+    ⚠️ Seul l'AFFICHAGE change. `water.resolve_history_moment` lit `ended_at` en premier et
+    garde donc la même référence pour l'espacement (cooldown 24 h).
+    """
+
+    @staticmethod
+    def _session(**over):
+        s = {
+            "type": "arrosage",
+            "date": "2026-08-04",
+            "started_at": "2026-08-04T01:45:13+00:00",
+            "ended_at": "2026-08-04T03:18:13+00:00",
+            "detected_at": "2026-08-04T03:18:13+00:00",
+            "recorded_at": "2026-08-04T03:18:13+00:00",
+            "total_mm": 7.7,
+        }
+        s.update(over)
+        return s
+
+    def test_l_affichage_montre_le_debut(self) -> None:
+        texte = sensor.GazonDernierArrosageDetecteSensor._session_when_text(self._session())
+        self.assertIn("03:45", texte, f"la fin est affichée à la place du début : {texte}")
+        self.assertNotIn("05:18", texte)
+
+    def test_une_entree_ANCIENNE_retombe_sur_la_fin(self) -> None:
+        """Montée de version : les sessions d'avant n'ont pas de `started_at`."""
+        ancienne = self._session()
+        del ancienne["started_at"]
+        texte = sensor.GazonDernierArrosageDetecteSensor._session_when_text(ancienne)
+        self.assertIn("05:18", texte, "une entrée ancienne devient illisible")
+
+    def test_l_espacement_garde_la_reference_de_FIN(self) -> None:
+        """Le cooldown 24 h ne doit pas se décaler d'une heure et demie.
+
+        `resolve_history_moment` liste `ended_at` avant `started_at` : le correctif d'affichage
+        ne déplace donc pas la référence du calcul.
+        """
+        moment = water.resolve_history_moment(self._session())
+        self.assertEqual(moment.hour, 3, "l'espacement est reparti du début du cycle")
+        self.assertEqual(moment.minute, 18)

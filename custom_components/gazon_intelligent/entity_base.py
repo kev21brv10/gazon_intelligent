@@ -31,6 +31,10 @@ _LEGACY_POSSIBLE_VALUES_BY_KEY: dict[str, tuple[str, ...]] = {
 
 
 _EXACT_VALUE_PRECISIONS: dict[str, int] = {
+    # ⚠️ La pousse d'une journée se compte en CENTIÈMES de cm (0,02 à 0,05 par heure) : la règle
+    # générique « toute clé en `_cm` au dixième » la ramenait à 0,0, ce qui annulait exactement
+    # l'attribut créé pour rendre visible ce que l'arrondi de la hauteur masque déjà.
+    "gazon_pousse_jour_cm": 2,
     "temperature": 1,
     "forecast_temperature_today": 1,
     "temperature_reference_hydrique": 1,

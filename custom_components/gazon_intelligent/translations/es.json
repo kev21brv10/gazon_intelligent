@@ -379,6 +379,16 @@
           "description": "Reserva hídrica del suelo medida o estimada, en milímetros."
         }
       }
+    },
+    "stop_irrigation": {
+      "name": "Detener el riego",
+      "description": "Detiene inmediatamente el ciclo de riego en curso: cierra la válvula abierta, registra el agua ya aplicada y libera el ciclo.",
+      "fields": {
+        "raison": {
+          "name": "Motivo",
+          "description": "Motivo de la parada, recogido en el registro de acciones."
+        }
+      }
     }
   },
   "entity": {

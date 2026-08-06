@@ -164,9 +164,11 @@ La météo bloque à **toute heure** : pluie en cours/imminente, rosée présent
 | Domaine | Services *(préfixe `gazon_intelligent.`)* |
 |---|---|
 | **Métier** | `set_mode` · `reset_mode` · `set_date_action` |
-| **Arrosage** | `start_manual_irrigation` · `start_auto_irrigation` · `start_application_irrigation` · `declare_watering` · `recalibrate_reserve` |
+| **Arrosage** | `start_manual_irrigation` · `start_auto_irrigation` · `start_application_irrigation` · **`stop_irrigation`** · `declare_watering` · `recalibrate_reserve` |
 | **Tonte** | `declare_mowing` |
 | **Produits** | `declare_intervention` · `remove_last_application` · `register_product` · `remove_product` |
+
+`stop_irrigation` arrête immédiatement le cycle en cours : la vanne ouverte se ferme, l'eau déjà appliquée est enregistrée (y compris la zone interrompue, au prorata) et le cycle est libéré. Également disponible en bouton (`button.gazon_intelligent_arreter_arrosage`), pour l'avoir à portée sur un tableau de bord.
 
 `recalibrate_reserve` recale la réserve hydrique du sol à une valeur connue (calibration manuelle, persistante au redémarrage).
 

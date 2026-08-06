@@ -487,6 +487,8 @@ class GazonBrainTests(unittest.TestCase):
         self.assertEqual(snapshot["forecast_temperature_today"], 24.0)
         self.assertEqual(snapshot["temperature_source"], "capteur")
         self.assertEqual(snapshot["reserve_actuelle_mm"], 10.0)
+        # Réservoir de référence = stock max du ledger (capacité au champ), cf.
+        # water.compute_water_balance / test_decision.py même sujet.
         self.assertEqual(snapshot["reserve_utile_mm"], 12.0)
         self.assertAlmostEqual(snapshot["depletion_ratio"], 0.167, places=3)
 

@@ -290,10 +290,10 @@ class InitModuleTests(unittest.TestCase):
     def test_async_setup_initializes_domain_data_and_registers_services_idempotently(self) -> None:
         self.assertTrue(asyncio.run(self.module.async_setup(self.hass, {})))
         self.assertIn(self.module.DOMAIN, self.hass.data)
-        self.assertEqual(len(self.hass.services.register_calls), 13)
+        self.assertEqual(len(self.hass.services.register_calls), 14)
 
         self.assertTrue(asyncio.run(self.module.async_setup(self.hass, {})))
-        self.assertEqual(len(self.hass.services.register_calls), 13)
+        self.assertEqual(len(self.hass.services.register_calls), 14)
 
     def test_async_setup_entry_handles_empty_hass_data_and_runs_lifecycle_in_order(self) -> None:
         result = asyncio.run(self.module.async_setup_entry(self.hass, self.entry))

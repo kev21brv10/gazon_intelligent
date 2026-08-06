@@ -379,6 +379,16 @@
           "description": "Gemessener oder geschätzter Wasserspeicher des Bodens, in Millimetern."
         }
       }
+    },
+    "stop_irrigation": {
+      "name": "Bewässerung stoppen",
+      "description": "Stoppt den laufenden Bewässerungszyklus sofort: schließt das offene Ventil, erfasst die bereits ausgebrachte Wassermenge und gibt den Zyklus frei.",
+      "fields": {
+        "raison": {
+          "name": "Grund",
+          "description": "Grund für den Abbruch, wird im Aktionsprotokoll festgehalten."
+        }
+      }
     }
   },
   "entity": {

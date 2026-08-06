@@ -201,6 +201,7 @@ def _build_legacy_runtime_bundles(
         "niveau_action": advanced_context.get("niveau_action", "a_faire"),
         "fenetre_optimale": advanced_context.get("fenetre_optimale", "maintenant"),
         "risque_gazon": advanced_context.get("risque_gazon", "modere"),
+        "risque_gazon_raisons": advanced_context.get("risque_gazon_raisons") or [],
         "prochaine_reevaluation": advanced_context.get("prochaine_reevaluation", "dans 24 h"),
         "urgence": advanced_context.get("urgence", "moyenne"),
         "watering_window_start_minute": advanced_context.get("watering_window_start_minute"),
@@ -323,6 +324,13 @@ def _build_decision_extra(
         "reserve_minimale_mm": water_balance.get("reserve_minimale_mm"),
         "depletion_mm": water_balance.get("depletion_mm"),
         "depletion_ratio": water_balance.get("depletion_ratio"),
+        # ⚠️ CINQUIÈME LISTE. Les clés du bilan hydrique ne remontent pas seules au niveau
+        # racine du snapshot : elles sont recopiées ICI, une par une. Déclarer une clé dans
+        # `_objective_attrs_keys()` (sensor.py) ne suffit donc PAS — c'était le cas de ces deux
+        # commutateurs depuis la 0.36.0, absents de l'entité malgré un test qui les croyait
+        # publiés (il vérifiait la déclaration, pas la remontée).
+        "etp_connue": water_balance.get("etp_connue"),
+        "reserve_from_soil_ledger": water_balance.get("reserve_from_soil_ledger"),
         # Réserve AFFICHÉE (descente progressive selon le soleil) — affichage seul.
         "et_elapsed_fraction": water_balance.get("et_elapsed_fraction"),
         "reserve_actuelle_affichee_mm": water_balance.get("reserve_actuelle_affichee_mm"),
@@ -341,6 +349,7 @@ def _build_decision_extra(
         "deficit_mm_ajuste": watering_bundle.get("deficit_mm_ajuste"),
         "mm_cible": watering_bundle.get("mm_cible"),
         "mm_final_recommande": watering_bundle.get("mm_final_recommande"),
+        "besoin_mm": watering_bundle.get("besoin_mm"),
         "mm_final": watering_bundle.get("mm_final"),
         "watering_strategy": watering_bundle.get("watering_strategy"),
         "objective_scope": watering_bundle.get("objective_scope"),
@@ -426,6 +435,9 @@ def _build_decision_extra(
         "mowing_overdue_days": mowing_bundle.get("mowing_overdue_days"),
         "mowing_overdue_factor": mowing_bundle.get("mowing_overdue_factor"),
         "gazon_hauteur_estimee_cm": mowing_bundle.get("gazon_hauteur_estimee_cm"),
+        "gazon_pousse_jour_cm": mowing_bundle.get("gazon_pousse_jour_cm"),
+        "gazon_pousse_state": mowing_bundle.get("gazon_pousse_state"),
+        "pluie_state": mowing_bundle.get("pluie_state"),
         "mowing_cooldown_after_watering_minutes": context.runtime_context.get(
             "mowing_cooldown_after_watering_minutes"
         )
@@ -469,6 +481,9 @@ def _build_decision_extra(
         "niveau_action": watering_bundle.get("niveau_action", risk_bundle.get("niveau_action")),
         "fenetre_optimale": watering_bundle.get("fenetre_optimale", risk_bundle.get("fenetre_optimale")),
         "risque_gazon": watering_bundle.get("risque_gazon", risk_bundle.get("risque_gazon")),
+        "risque_gazon_raisons": watering_bundle.get("risque_gazon_raisons")
+        or risk_bundle.get("risque_gazon_raisons")
+        or [],
         "urgence": watering_bundle.get("urgence", risk_bundle.get("urgence")),
         "prochaine_reevaluation": watering_bundle.get("prochaine_reevaluation", risk_bundle.get("prochaine_reevaluation")),
         "decision_resume": watering_bundle.get("decision_resume"),
@@ -537,6 +552,7 @@ def _build_decision_result_from_bundles(
         deficit_mm_ajuste=watering_bundle.get("deficit_mm_ajuste", watering_bundle["objectif_mm"]),
         mm_cible=watering_bundle.get("mm_cible"),
         mm_final_recommande=watering_bundle.get("mm_final_recommande"),
+        besoin_mm=watering_bundle.get("besoin_mm"),
         mm_final=watering_bundle.get("mm_final", watering_bundle["objectif_mm"]),
         watering_passages=watering_bundle["watering_passages"],
         watering_pause_minutes=watering_bundle["watering_pause_minutes"],
