@@ -56,6 +56,7 @@ decision_phase = importlib.import_module("custom_components.gazon_intelligent.de
 decision_risk = importlib.import_module("custom_components.gazon_intelligent.decision_risk")
 decision_watering = importlib.import_module("custom_components.gazon_intelligent.decision_watering")
 water = importlib.import_module("custom_components.gazon_intelligent.water")
+guidance_mod = importlib.import_module("custom_components.gazon_intelligent.guidance")
 guidance_module = importlib.import_module("custom_components.gazon_intelligent.guidance")
 
 FIXED_NOW_UTC = datetime(2026, 3, 17, 12, 0, tzinfo=timezone.utc)
@@ -3109,3 +3110,143 @@ class DeuxProprietesQueRienNeDoitCasserTests(unittest.TestCase):
         """
         arrosages = sum(1 for _ in self._balayage())
         self.assertGreater(arrosages, 200, f"seulement {arrosages} cas d'arrosage balayés")
+
+
+class AlerteNeSeTaitPasSousBlocageTests(unittest.TestCase):
+    """Le diagnostic du gazon doit rester vrai quand un garde-fou retient l'eau.
+
+    Défaut mesuré sur l'installation le 01/08/2026 : à 15:30:35, réserve 2,8 mm →
+    `risque_gazon: eleve`, `niveau_action: critique`. Deux minutes plus tard, MÊME réserve,
+    MÊME `hydric_state: critique`, mais `block_reason: garde_fou_hebdomadaire` → `faible` /
+    `aucune_action`. Sur la fenêtre auditée, 19 h 34 sur 239 h d'`etat_hydrique: critique`
+    coexistaient avec un risque annoncé faible. C'est ce qui a rendu invisibles les trois
+    jours à 0 mm de réserve (31/07 → 02/08).
+    """
+
+    SOL_ASSOIFFE = {
+        "bilan_hydrique_mm": -6.0,
+        "deficit_3j": 9.0,
+        "deficit_7j": 22.0,
+        "reserve_actuelle_mm": 2.8,
+        "reserve_utile_mm": 12.0,
+        "reserve_minimale_mm": 6.0,
+        "depletion_mm": 9.2,
+        "depletion_ratio": 0.767,
+        "mad_ratio": 0.5,
+        "reserve_stock_mm": 2.8,
+        "reserve_stock_max_mm": 24.0,
+    }
+
+    def _guidance(self, *, objectif_mm: float) -> dict:
+        return decision.compute_action_guidance(
+            phase_dominante="Normal",
+            sous_phase="Normal",
+            water_balance=dict(self.SOL_ASSOIFFE),
+            advanced_context={"vent": 6.0, "rosee": 0.0, "hauteur_gazon": 6.0},
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            humidite=45.0,
+            temperature=30.0,
+            etp=6.5,
+            objectif_mm=objectif_mm,
+            hour_of_day=15,
+        )
+
+    def test_le_risque_reste_vrai_quand_lobjectif_est_ramene_a_zero(self) -> None:
+        """Même sol, seul l'objectif change : le diagnostic ne doit pas basculer."""
+        libre = self._guidance(objectif_mm=9.2)
+        bloque = self._guidance(objectif_mm=0.0)
+
+        self.assertNotEqual(
+            libre["risque_gazon"], "faible",
+            "prémisse cassée : ce sol à 2,8 mm doit être diagnostiqué à risque",
+        )
+        self.assertEqual(
+            bloque["risque_gazon"], libre["risque_gazon"],
+            "le risque du gazon a changé alors que SEUL l'objectif a été ramené à 0 — "
+            "l'alerte s'éteint parce que le blocage s'allume",
+        )
+
+    def test_le_niveau_daction_lui_retombe_bien_a_aucune_action(self) -> None:
+        """Le diagnostic reste vrai, mais il n'y a effectivement rien à faire."""
+        bloque = self._guidance(objectif_mm=0.0)
+        self.assertEqual(bloque["niveau_action"], "aucune_action")
+
+    def test_les_raisons_expliquent_le_niveau_quelles_accompagnent(self) -> None:
+        """Interdit : « risque faible » justifié par « stress hydrique eleve »."""
+        for objectif in (0.0, 9.2):
+            with self.subTest(objectif_mm=objectif):
+                g = self._guidance(objectif_mm=objectif)
+                raisons = " ".join(g.get("risque_gazon_raisons") or [])
+                if g["risque_gazon"] == "faible":
+                    self.assertNotIn(
+                        "stress hydrique", raisons,
+                        f"« faible » justifié par « {raisons} » — les deux sorties se "
+                        "contredisent",
+                    )
+
+    def test_un_sol_confortable_nest_pas_alarme_comme_un_sol_sec(self) -> None:
+        """Garde-fou inverse : on n'a pas simplement rendu tout le monde « eleve ».
+
+        Note : à 30 °C ce sol confortable ressort « modere » et non « faible » — la chaleur
+        pèse dans le diagnostic indépendamment de la réserve. Ce qui compte ici, c'est
+        qu'il soit STRICTEMENT moins alarmant que le sol à 2,8 mm.
+        """
+        confort = dict(self.SOL_ASSOIFFE)
+        confort.update(
+            bilan_hydrique_mm=0.5, deficit_3j=0.0, deficit_7j=0.0,
+            reserve_actuelle_mm=11.5, depletion_mm=0.5, depletion_ratio=0.042,
+            reserve_stock_mm=11.5,
+        )
+        g = decision.compute_action_guidance(
+            phase_dominante="Normal", sous_phase="Normal", water_balance=confort,
+            advanced_context={"vent": 6.0, "rosee": 0.0, "hauteur_gazon": 6.0},
+            pluie_24h=0.0, pluie_demain=0.0, humidite=45.0, temperature=30.0,
+            etp=6.5, objectif_mm=0.0, hour_of_day=15,
+        )
+        GRAVITE = {"faible": 0, "modere": 1, "eleve": 2, "severe": 3}
+        sec = self._guidance(objectif_mm=0.0)["risque_gazon"]
+        self.assertLess(
+            GRAVITE[g["risque_gazon"]], GRAVITE[sec],
+            f"sol confortable ({g['risque_gazon']}) diagnostiqué aussi grave qu'un sol à "
+            f"2,8 mm ({sec}) — le correctif a rendu le risque insensible à la réserve",
+        )
+        self.assertNotEqual(g["risque_gazon"], "eleve")
+
+
+class RaisonsExpliquentLeNiveauTests(unittest.TestCase):
+    """`_raisons_par_defaut` ne doit jamais justifier un niveau par son contraire.
+
+    Relevé sur l'installation le 01/08/2026 à 15:32:44 et le 06/08 à 00:00:50 :
+    `risque_gazon: "faible"` accompagné de `risque_gazon_raisons: ["stress hydrique eleve"]`.
+    Deux sorties publiées côte à côte qui se contredisent — le lecteur doit choisir
+    laquelle croire, et c'est exactement ce qui rend un diagnostic inutilisable.
+    """
+
+    def test_un_risque_faible_nest_jamais_justifie_par_un_stress_eleve(self) -> None:
+        for niveau in ("eleve", "severe", "modere"):
+            with self.subTest(heat_stress_level=niveau):
+                raisons = guidance_mod._raisons_par_defaut(
+                    risque_gazon="faible", heat_stress_level=niveau
+                )
+                self.assertNotIn(
+                    "stress hydrique", " ".join(raisons),
+                    f"« faible » justifié par « {raisons} »",
+                )
+                self.assertTrue(raisons, "une raison vide est indistinguable d'un attribut absent")
+
+    def test_le_stress_reste_publie_quand_il_explique_vraiment_le_niveau(self) -> None:
+        """Garde-fou inverse : on n'a pas simplement supprimé le motif partout."""
+        for risque in ("modere", "eleve", "severe"):
+            with self.subTest(risque_gazon=risque):
+                raisons = guidance_mod._raisons_par_defaut(
+                    risque_gazon=risque, heat_stress_level="eleve"
+                )
+                self.assertIn("stress hydrique eleve", " ".join(raisons))
+
+    def test_le_motif_de_blocage_prime_quand_il_est_fourni(self) -> None:
+        raisons = guidance_mod._raisons_par_defaut(
+            risque_gazon="faible", heat_stress_level="eleve",
+            block_reason="garde_fou_hebdomadaire",
+        )
+        self.assertEqual(raisons, ["garde_fou_hebdomadaire"])
