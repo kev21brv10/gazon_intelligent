@@ -1,5 +1,433 @@
 # Changelog
 
+## 0.41.1
+
+942 tests verts. **Vérification que les desserrages de la semaine n'ont pas ouvert la porte au
+sur-arrosage.**
+
+Trois verrous ont été retirés entre le 01/08 et le 04/08 — prévision de pluie (0.37.0), retenue
+hebdomadaire (0.38.0), réduction de dose par la pluie (0.39.0). Chacun avait ses tests ; aucun
+ne vérifiait la propriété qui compte : **on n'a pas cassé le plafond en enlevant les blocages.**
+C'est le risque exact qu'on prend à desserrer.
+
+Balayage systématique de **2 100 combinaisons** — déplétion × cumul 7 jours × pluie annoncée ×
+température/ET0 — sur deux invariants :
+
+- **P1** — une dose n'est versée que si la déplétion **projetée** atteint le seuil MAD.
+- **P2** — la dose ne dépasse jamais la marge hebdomadaire, hors secours documentés (survie
+  canicule ≥ 32 °C, réserve réellement vide ≥ 90 %).
+
+**Zéro violation.** Et le balayage prouve qu'il sait mordre avant de l'affirmer : neutraliser le
+seuil MAD lève 75 violations de P1, neutraliser le plafond hebdomadaire en lève 560. Un
+troisième test refuse de conclure si le balayage ne produit pas au moins 200 cas d'arrosage —
+sans quoi P1 et P2 seraient vraies par vacuité.
+
+## 0.41.0
+
+939 tests verts. **L'horodatage affiché d'un arrosage est désormais son DÉBUT, pas sa fin.**
+
+Signalé par Kévin le 04/08/2026, et vérifié sur les vannes :
+
+    Zone 1  03:45:13 → 04:18:13      Zone 2  04:18:13 → 04:51:13      Zone 3  04:51:13 → 05:18:13
+
+L'intégration annonçait « arrosé à **05:18** » — la fermeture de la dernière vanne. Le cycle
+était en réalité parti **treize secondes** après l'ouverture de la fenêtre (03:45). L'écart
+faisait croire à 1 h 30 de retard au déclenchement, retard qui n'a jamais existé — j'en avais
+moi-même tiré un faux diagnostic avant que Kévin ne me corrige.
+
+- La session **connaissait** son début : `started_at` servait à calculer la durée, puis était
+  jeté. Il est maintenant enregistré dans l'historique, aux côtés de `ended_at`.
+- L'affichage (`last_watering_when`, et la liste des sessions de la carte) lit le début.
+  Les entrées antérieures n'ont pas ce champ : elles retombent sur la fin, comme avant.
+- **Le calcul d'espacement ne bouge pas.** `water.resolve_history_moment` lit `ended_at` en
+  premier — même instant qu'auparavant. Le cooldown 24 h garde sa référence, et une mutation
+  qui inverse cet ordre fait tomber un test.
+
+Trois mutations. La première série de tests ne vérifiait que la LECTURE : supprimer l'écriture
+côté coordinateur passait au vert. Le trou a été comblé avant de conclure.
+
+## 0.40.0
+
+935 tests verts. **Le motif de blocage de la tonte est enfin le même partout.**
+
+Constaté sur l'écran de Kévin le 03/08/2026 à 14 h 31, robot **en tonte** depuis 14 h 19 :
+
+    binary_sensor.tonte_autorisee  → « Robot déjà en tonte : attendre la fin du cycle. »  juste
+    sensor.hauteur_de_tonte        → « Robot indisponible : attendre qu'elle soit prête. » faux
+
+Même attribut (`mowing_window_reason`), deux valeurs, même instant — vérifié par une lecture
+indépendante côté Home Assistant. Et c'est la fausse que le bandeau de la carte affichait.
+
+La décision publiait le libellé **générique** alors qu'elle calculait le libellé **précis** deux
+lignes plus haut. Chaque plateforme d'entité le rafistolait ensuite de son côté — sauf qu'elles
+ne le faisaient pas toutes. Le raffinement est remonté **à la source** : une seule fois, pour
+tous les consommateurs. Le post-traitement des plateformes devient redondant, et inoffensif.
+
+C'est le schéma du « correctif à moitié appliqué », pour la troisième fois de la semaine :
+corriger là où c'est signalé, sans chercher les autres endroits qui affichent la même chose.
+
+## 0.39.1
+
+935 tests verts. **Les deux commutateurs de diagnostic n'apparaissaient toujours pas.**
+
+Ajoutés en 0.36.0, `etp_connue` et `reserve_from_soil_ledger` étaient bien déclarés dans
+`_objective_attrs_keys()` et bien présents dans le sous-dictionnaire `water_balance` — et
+pourtant absents de l'entité, constaté sur l'installation le 02/08/2026.
+
+**Il existe une CINQUIÈME liste blanche** : les clés du bilan hydrique ne remontent pas seules
+au niveau racine du snapshot, elles y sont recopiées une par une dans `decision.py`. Déclarer
+une clé côté capteur ne suffit donc pas.
+
+Le test qui les couvrait vérifiait la *déclaration* (clé présente dans la liste du capteur, clé
+présente dans `water_balance`) — deux affirmations vraies pendant que la valeur ne sortait pas.
+Il vérifie désormais la *remontée*, au niveau où l'entité lit réellement.
+
+## 0.39.0
+
+935 tests verts. **La prévision de pluie ne rabote plus la dose d'un sol qui a soif — et le
+blocage que la 0.37.0 croyait avoir supprimé venait en fait d'un SECOND endroit.**
+
+Constaté sur l'installation le 02/08/2026 à 22 h 40, sol à **0,0 mm** : le profil calculait
+12,0 mm — `besoin_mm: 12`, `mm_final: 12` jusque dans `evening_cooling_debug` — et l'entité
+publiait **9,6**. Soit 12 × 0,8 : une réduction de 20 % déclenchée par 2,9 mm annoncés.
+
+- **La réduction vit dans `decision_watering`, pas dans `guidance`.** Deux paliers : −60 %
+  (« pluie compensatrice ») et −20 % (≥ 2 mm annoncés demain, ou ≥ 4 mm à J+2/J+3). Aucun des
+  deux ne regardait l'état du sol.
+- **Pire : ce bloc pose aussi `rain_floor_block_reason = "pluie_prevue_suffisante"`** quand la
+  dose réduite passe sous la session minimale. C'est *exactement* le motif que la 0.37.0
+  neutralisait — mais il venait d'ici, donc il subsistait. Un test du dépôt le documentait déjà
+  sans que personne n'y voie un défaut : sol pile au seuil MAD (6/12), 2 mm annoncés, dose
+  ramenée de 6 à 4,8 mm, sous le minimum de 5 → blocage. **Ce test vérifiait le défaut.**
+  Il vérifie désormais l'inverse.
+- Les deux paliers sont bornés au **seuil MAD**, comme les blocages amont. Sous le seuil, la
+  réduction s'applique toujours : économiser un cycle quand le sol est confortable reste juste.
+
+Contrepartie assumée, choisie par Kévin : si la pluie tombe pour de vrai, on aura versé un peu
+trop — l'excédent draine sous les racines. Le sol reste borné par sa capacité.
+
+Quatre mutations. La branche −60 % n'était couverte par aucun test sur sol assoiffé : le trou a
+été comblé avant de conclure.
+
+## 0.38.0
+
+933 tests verts. **La retenue hebdomadaire ne laisse plus le sol passer sous son seuil.**
+
+Deuxième moitié de l'enquête du 02/08 : le gazon n'a pas été arrosé pendant **trois matins**, et
+ce n'est pas le même motif chaque jour.
+
+    31/07 04:00 — réserve 8,6/12, ratio 0,28 → « confort · surveiller »        blocage LÉGITIME
+    01/08 04:00 — réserve 5,4/12, ratio 0,55 → « depletion · arroser           blocage FAUTIF
+                                                 profondément »
+    02/08 03:20 — réserve 1,2/12, ratio 0,90 → « critique »                    pluie (0.37.0)
+
+- **Le 01/08, la retenue jugeait sur la mauvaise grandeur.** Elle lit `deficit_mm_ajuste`, issu
+  du modèle **legacy** (4,3 mm — sous le plancher de 21, donc « pas besoin »), alors que le
+  déclenchement se fait sur la déplétion du **ledger** : 6,6 mm sur 12, soit un ratio de 0,55,
+  **au-dessus du MAD de 0,50**. Le legacy sous-estimait de 2,3 mm. Le même cycle publiait
+  `hydric_state: depletion` et `hydric_strategy: arroser profondément` — et rien n'est parti.
+  Sans eau ce matin-là, le sol est arrivé au 02/08 à 1,2 mm, puis à **ZÉRO** à 12 h 09.
+  La retenue ne s'applique donc plus au-delà du seuil de déclenchement.
+
+**Le garde-fou n'est pas vidé de son sens**, et c'est vérifié par un test dédié : le
+déclenchement se fait sur la déplétion **projetée** (réelle + ETc restante), la retenue sur la
+déplétion **réelle**. Un sol encore confortable à l'aube mais qui aura soif le soir déclenche —
+et reste retenable. C'est exactement le 31/07, dont le blocage reste légitime. Une mutation
+remplaçant la déplétion réelle par la projetée fait tomber six tests.
+
+Son intention écrite est de « plafonner un sur-arrosage HÉRITÉ » : un sol au-delà de son seuil
+de déclenchement n'est pas du sur-arrosage.
+
+Trois mutations, toutes détectées.
+
+## 0.37.0
+
+930 tests verts. **Une prévision de pluie ne bloque plus un sol qui a déjà soif.**
+
+La nuit du 02/08/2026, le gazon a touché **zéro**. À 03 h 20, la prévision de pluie passe de
+3,1 à 9,1 mm : `pluie_prevue_suffisante` se déclenche, l'objectif tombe de 8,6 à **0,0 mm** et y
+reste jusqu'à 10 h 13 — **toute la fenêtre d'arrosage** (03:45–10:00). Au même instant,
+l'intégration publiait `reserve_actuelle_mm: 1,2 sur 12`, `depletion_ratio: 0,90`,
+`hydric_state: critique`, `hydric_strategy: arroser rapidement en profondeur`, et 34,5 °C
+prévus. Il est tombé **3,2 mm effectifs pour 4,8 consommés** : la réserve a atteint 0,0 mm à
+12 h 09 et n'en est pas ressortie. Dernier arrosage : le 30/07.
+
+**La pluie était le seul des cinq blocages sans échappatoire sur l'état du sol** — et le seul
+fondé sur une prévision, donc le moins fiable des cinq. Les quatre autres ont tous leur
+`not _reserve_critique_reelle`, `not _ledger_demande_eau` ou `not _survie_canicule`.
+
+- Le seuil retenu est le **MAD**, celui-là même qui déclenche l'arrosage : tant que le sol est
+  confortable, une pluie annoncée fait encore économiser un cycle ; dès qu'il réclame, la
+  prévision ne décide plus à sa place.
+- **La pluie RÉELLEMENT tombée continue de bloquer** — c'est un fait, pas un pari. Seule la
+  prévision est concernée.
+- Le garde est volontairement **indépendant du ledger** : il ne peut que débloquer, jamais
+  bloquer. Le faire dépendre d'une source qui peut manquer le rendrait inerte au pire moment.
+
+Arbitrage de Kévin, 02/08/2026 : « la pluie prévue n'est jamais sûre, je préfère arroser ».
+Quatre mutations, toutes détectées — dont le retour au blocage inconditionnel et un garde qui
+supprimerait la pluie de tous les cas.
+
+## 0.36.0
+
+925 tests verts. **Un déficit inconnu n'est plus lu comme un déficit nul.**
+
+- **`compute_water_balance` écrasait l'absence d'ET0 en zéro** (`etp or 0.0`). Tous les déficits
+  qui en découlent tombaient alors à 0 — un « pas de besoin » rigoureusement indiscernable d'un
+  vrai. Or la retenue hebdomadaire exige `deficit_mm_ajuste < plancher` : la condition devenait
+  **automatiquement vraie sur du vide**. Mesuré le 01/08/2026, premier cycle d'un redémarrage
+  (capteur de température pas encore là) : `bilan_hydrique_mm: 0`, `deficit_3j: 0`,
+  `deficit_7j: 0`, motif `garde_fou_hebdomadaire` — pendant que la déplétion du ledger valait
+  **8,2 mm** pour une réserve de 3,8 sur un seuil de 6,0. Sur une coupure plus longue du capteur,
+  la même mécanique a supprimé l'objectif **20 minutes DANS la fenêtre d'arrosage** (30/07,
+  08 h 13 → 08 h 33 ; l'arrosage n'est parti qu'à 08 h 40, dès le retour du capteur).
+  La retenue exige désormais un déficit **mesuré**. Le repli à 0 reste pour le calcul — il n'y a
+  rien de mieux — mais l'incertitude est publiée (`etp_connue`) et consommée.
+- **Les deux commutateurs qui changent tout le calcul sont enfin visibles** sur
+  `sensor.objectif_d_arrosage` : `reserve_from_soil_ledger` (quel modèle pilote — déplétion ou
+  déficit legacy) et `etp_connue`. Ils décidaient en silence depuis toujours.
+
+Montée de version couverte : un état persisté sans `etp_connue` garde l'ancien comportement
+(défaut à *vrai*), sinon la retenue ne se déclencherait plus jamais — un sur-arrosage silencieux,
+pire que le défaut corrigé. Sept mutations, toutes détectées.
+
+### Note
+Le signalement de la veille sur `et0_source: fallback_pm_location` contredisant
+`eto_radiation_measured: true` était **erroné** : ce sont deux grandeurs distinctes — l'ET0
+**journalière** (Penman-Monteith depuis la position, mode normal sans capteur ETP) et la chaîne
+ET0 **horaire** (rayonnement mesuré). Aucun défaut de ce côté.
+
+## 0.35.0
+
+921 tests verts. **Le besoin du sol ne disparaît plus derrière un blocage.**
+
+Signalé par Kévin : l'entité « Objectif d'arrosage » affichait **0,0 mm** pendant que ses
+propres attributs annonçaient `depletion_mm: 7,8` et une réserve 1,8 mm SOUS le seuil de
+déclenchement. Relevé **six fois en trois jours**, dont quatre retours à la valeur identique
+(7,4 → 0,0 → 7,4) : un besoin réel ne disparaît pas pour revenir inchangé.
+
+Cause : `if block_reason is not None: mm_cible = 0.0`, écrit dans les deux branches de calcul.
+Zéro est **juste** pour la DOSE — un arrosage bloqué verse bien zéro, et cette valeur sert de
+`target_cycle_mm` au plan d'arrosage. Il est **faux** pour le BESOIN, qu'aucun garde-fou ne
+fait disparaître. Une seule variable portait les deux questions.
+
+- **Nouvel attribut `besoin_mm`** sur `sensor.objectif_d_arrosage` : ce que le sol réclame,
+  insensible aux blocages ET au plafond hebdomadaire (une politique n'est pas un besoin).
+  `objectif_mm` garde son sens exact — aucun changement sur le déclenchement ni sur les doses.
+- La carte (0.24.0) affiche « le sol réclame toujours X mm » sous un arrosage retenu.
+
+Six mutations couvrent la chaîne complète — profil, deux assemblages de bundle, `decision.py`,
+`to_snapshot`, attributs du capteur. Une première série ne vérifiait que les *déclarations* :
+trois de ces mutations passaient au vert. Le test part désormais de `build_decision_snapshot`
+et reproduit le cas réel du 01/08 (retenue hebdomadaire, branche déplétion).
+
+## 0.34.0
+
+913 tests verts. **Le gazon ne dé-pousse plus.** Signalé par Kévin sur l'historique du capteur
+de hauteur : 09 h 10 → 6,0 cm, 11 h 40 → 5,9 cm, sans tonte entre les deux.
+
+- **La pousse déjà acquise n'est plus recalculée.** `pousse_jour = taux × frein × fraction`
+  appliquait le frein du MOMENT à toute la journée : dès que la chaleur montait, la pousse du
+  matin était effacée et la hauteur redescendait. Sur l'installation, le 01/08 —
+  09 h 10 : frein 0,87 × fraction 0,55 = 0,165 cm ; 11 h 40 : frein 0,50 × fraction 0,63 =
+  0,109 cm. **Un tiers de la matinée effacé.** Le frein thermique étant un escalier
+  (≤ 24 °C : 1,0 · > 24 °C : 0,65), franchir 24,0 °C suffisait à en perdre 35 % d'un coup.
+  La pousse du jour s'**accumule** désormais : le frein ne pilote plus que l'incrément à venir.
+  À conditions stables, le total de fin de journée est identique — c'est le chemin qui cesse de
+  reculer, pas le modèle qui change. Même famille que la falaise de minuit (0.31.1) : le passé
+  qu'on recalcule.
+- **Eau inconnue ≠ eau à volonté.** Au redémarrage, le premier cycle tourne sans bilan
+  hydrique : le frein d'eau était silencieusement sauté, donc un frein plus optimiste et une
+  hauteur trop haute publiée pendant ~1 s (relevé : 12:39:34,5 → 6,0 cm puis 12:39:35,4 →
+  5,9 cm, et le même doublet la veille). Sans bilan, le frein ne peut plus dépasser le dernier
+  connu **du jour** — jamais celui d'hier, qui décrirait une autre météo. Même piège que le
+  repli « soleil inconnu → 1.0 » de la 0.21.4.
+
+Huit mutations vérifient les deux garde-fous, dont le retour au recalcul complet, un plafond
+qui relèverait le frein au lieu de le borner, et le retrait du repli de migration. La montée
+depuis 0.33.1 est couverte : l'état persisté n'a pas encore de `fraction`, le premier cycle
+reprend donc la pousse mémorisée telle quelle — ni saut, ni chute — puis accumule.
+
+## 0.33.1
+
+902 tests verts. Deux défauts que la 0.33.0 a rendus VISIBLES en publiant
+`application_constraints` — ils dormaient dans le payload depuis toujours.
+
+- **Une date ISO brute s'affichait à l'écran.** Le libellé du délai de réapplication lisait
+  `next_reapplication_display`… une clé produite par `_selection_details`, pas par le candidat
+  évalué qui arrive là : le repli retombait donc **toujours** sur la date ISO. Résultat sur
+  l'installation, une fois la contrainte affichée : « Réapplication attendue jusqu'au
+  **2026-08-12** ». La date est formatée sur place, sans dépendre d'une clé venue d'ailleurs.
+- **Le même motif bloquant s'affichait deux fois.** `blocked_reason` est un **récapitulatif** :
+  chacune de ses parties (limite annuelle, délai de réapplication, température) a déjà sa propre
+  contrainte. Republié tel quel, il donnait deux puces bloquantes pour un seul fait. Il n'est
+  plus émis quand **toutes** ses parties sont déjà affichées séparément — et reste publié dès
+  qu'une partie n'a pas de contrainte propre, ou qu'il vient d'ailleurs.
+- **Une seule formulation par fait.** Le payload en portait trois pour la même date
+  (« possible à partir du », « attendue jusqu'au », « possible depuis le »).
+
+Note de méthode : le premier correctif dédoublonnait en comparant les **libellés**. Il est passé
+au vert alors que le doublon était toujours là — parce que corriger la formulation avait rendu
+les deux chaînes différentes pour un fait identique. Le garde-fou compare désormais les **codes**
+de critères, et six mutations vérifient qu'il mord.
+
+## 0.33.0
+
+893 tests verts. Le tour complet de la carte : ce qui trompait sur une décision, corrigé
+des deux côtés.
+
+- **Le critère qui BLOQUE une intervention est enfin identifiable.** L'onglet Produits alignait
+  quatre puces rigoureusement identiques — « Phase courante », « Mois compatibles »,
+  « Réapplication possible à partir du 12/08/2026 », « Température compatible » — et rien ne
+  disait laquelle retenait le produit. La polarité existait pourtant depuis toujours dans
+  `constraints` (`met` / `blocking`) : elle n'était simplement jamais publiée, la carte ne
+  recevant que `reason`, la concaténation « · » de tout. Nouvel attribut
+  **`application_constraints`** sur `sensor.prochaine_intervention` : `code`, `label`, `met`,
+  `blocking`, rien d'autre.
+- **« Phase courante : entretien » donnait deux noms à une seule phase.** La phase du gazon est
+  **Normal** ; « entretien » qualifie le PRODUIT, pas la phase. La carte affichait donc
+  « PHASE / Normal » sur un onglet et « Phase courante : entretien » sur l'autre. Le libellé dit
+  maintenant ce qu'il décrit : « Produit d'entretien, compatible en phase Normal ».
+- **On sait enfin QUEL thermomètre a décidé.** L'intégration tranche sur le capteur extérieur,
+  la carte affiche en en-tête l'entité météo : deux mesures justes, ~2 °C d'écart, et on lisait
+  « 23,8 °C » en haut d'écran au-dessus d'un critère à « 25,8 °C », sans explication. Le critère
+  nomme sa source : « 25,8 °C **au capteur** » (ou « selon la météo » / « selon la prévision »).
+- **Ponctuation décimale unifiée.** `_format_temperature_value` sortait « 25.8 » au POINT — ces
+  chaînes partent telles quelles à l'écran, au milieu de valeurs toutes à la virgule.
+
+## 0.32.0
+
+883 tests verts. Les quatre défauts de l'audit du 31/07, corrigés.
+
+- **« Risque gazon élevé » ne se déclenche plus chaque nuit.** Le risque se décidait sur
+  `bilan_hydrique_mm`, le bilan de la JOURNÉE (pluie + arrosage − ETc du jour) : à 2 h du matin,
+  rien n'a encore été arrosé et l'ETc attendue vaut ~6 mm, donc le bilan est négatif
+  MÉCANIQUEMENT. L'historique le prouvait — bascule sur « faible » à la seconde où l'arrosage
+  du matin partait, trois nuits d'affilée. Ce n'était pas « ton gazon est en danger » mais
+  « tu n'as pas encore arrosé aujourd'hui ». Le risque se décide désormais sur la **réserve du
+  sol** quand le ledger en fournit une : même recentrage que celui appliqué à
+  `hydric_balance_level` en 0.16.0, dont le correctif n'avait jamais été porté ici.
+  Contradiction « bilan sain + risque élevé » mesurée : **25 % → 8 %** des scénarios.
+  - Le chemin fautif était un `return` **anticipé** (`bilan <= -4.0`) qui sortait avant tous les
+    blocs de finalisation — les trois premiers branchements n'y changeaient rien.
+  - **Plancher de phase** : en Sursemis, la phase impose « au moins modéré ». Un semis n'a pas
+    de réserve exploitable et ne doit jamais être annoncé sans risque. Un test l'a rattrapé.
+- **Le capteur de risque explique enfin son niveau** — nouvel attribut `risque_gazon_raisons`.
+  Il n'exposait que le risque fongique : un « élevé » était incompréhensible sans lire le code.
+- **La pousse du gazon avance en continu**, plus par paliers d'une heure : `hour_of_day` passe
+  de l'heure entière à l'heure décimale. Mesuré avant : `jour_cm` identique de 01 h 00 à 01 h 59,
+  saut à 02 h. Aucune comparaison d'heure n'est une égalité, le flottant est sans effet de bord.
+- **Délai de ressuyage après la pluie**, symétrique de celui après un arrosage (même réglage).
+  `is_active_rain_weather` ne regarde que la météo de l'instant : il n'existait aucun délai après
+  une averse, alors que le libellé promettait « pluie en cours ou récente ». Chaque constat de
+  pluie est désormais horodaté dans la mémoire persistée, ce qui permet enfin de mesurer
+  « récente ». Traverse minuit ; un horodatage de plus d'un jour est ignoré.
+
+## 0.31.4
+
+870 tests verts. L'attribut créé pour voir la pousse était arrondi au point de la masquer.
+
+- **`gazon_pousse_jour_cm` affichait 0,0 pour 0,025 cm réellement poussés.** Une règle générique
+  d'exposition arrondit toute clé finissant par `_cm` au dixième — sensé pour une hauteur, fatal
+  pour une pousse journalière qui se compte en CENTIÈMES (0,02 à 0,05 par heure). L'attribut
+  existait donc précisément pour rendre visible ce que l'arrondi de la hauteur masque, et il
+  était masqué par le même mécanisme. Exception explicite au centième.
+- **Constaté au passage, non corrigé** : la pousse avance par PALIERS D'UNE HEURE, le
+  coordinateur passant `hour_of_day = current_dt.hour` (un entier). Corriger demanderait de
+  transmettre l'heure décimale, ce qui touche toutes les comparaisons de fenêtres horaires
+  (tonte, arrosage) — changement plus large, laissé à décider.
+
+## 0.31.3
+
+870 tests verts. Un saut de minuit revenu par une autre porte, refermé.
+
+- **Le lendemain d'une tonte héritait d'une journée de pousse qui n'a jamais eu lieu.** Le report
+  de la veille RECONSTITUAIT la pousse (`taux × frein`) au lieu de créditer celle réellement
+  constatée. Or le jour de la tonte, la pousse est nulle par conception : le report lui créditait
+  quand même une journée pleine, et la hauteur bondissait de 5,5 à 5,8 cm à minuit — exactement
+  le défaut corrigé en 0.31.1, réintroduit sous une autre forme par le correctif lui-même.
+- L'état mémorise désormais `jour_cm`, la pousse **constatée** du jour, et le report crédite cette
+  valeur telle quelle. Repli sur l'ancienne reconstitution si l'état vient d'une version
+  antérieure, pour ne pas perdre une journée à la montée de version.
+
+## 0.31.2
+
+869 tests verts. Trois défauts de fond, dont un que j'affirmais faussement dans un commentaire.
+
+- **Le gazon pousse la nuit — et le modèle disait le contraire.** La pousse était bornée à
+  7 h - 20 h au motif que « le gazon ne s'allonge pas la nuit ». C'était faux, par confusion
+  entre deux mécanismes : la PHOTOSYNTHÈSE suit la lumière, mais l'ÉLONGATION cellulaire est
+  poussée par la TURGESCENCE, maximale LA NUIT (le jour, la transpiration vide les cellules
+  plus vite que les racines ne les remplissent). Sur graminées, l'élongation foliaire culmine
+  en fin de nuit et s'effondre au zénith. La pousse est désormais étalée sur 24 h avec un pic
+  vers 3 h ; le total du jour est inchangé (intégrale de la pondération = 1), seule la
+  répartition horaire change. Effet visible : la hauteur n'est plus PLATE de 20 h à 7 h.
+  Question de Kévin : « le gazon pousse la nuit ? ».
+- **La reprise au démarrage ignorait l'arrosage automatique désactivé.** Un cycle interrompu
+  repartait tout seul alors que l'auto avait été coupé avant le redémarrage. Une session
+  MANUELLE, elle, reste légitime à reprendre : l'utilisateur l'a demandée.
+- **L'exécuteur dormait en aveugle sur la vanne.** Pendant chaque segment il attendait la durée
+  prévue sans jamais vérifier que le relais était resté ouvert : s'il retombait, la dose
+  entière était comptée quand même — des millimètres fantômes crédités au bilan du sol pour de
+  l'eau jamais versée. Un veilleur contrôle désormais l'état toutes les 15 s, relance UNE fois,
+  puis abrège en ne comptant que le temps réellement ouvert (dose proratisée).
+  - **Il n'agit que sur preuve** : avoir vu la vanne ouverte PUIS fermée. Sans preuve (état non
+    rapporté, latence après la commande) il ne fait rien — sinon tous les segments seraient
+    abrégés et plus rien ne serait arrosé.
+  - **`unavailable` ne vaut pas `off`** : au redémarrage l'entité disparaît, pas le relais.
+  - Toute lecture d'état qui échoue se lit « ouverte » : le veilleur ne peut pas casser un arrosage.
+- **Libellé de blocage corrigé** : « pluie en cours ou RÉCENTE » promettait un délai de ressuyage
+  qui n'existe pas — `is_active_rain_weather` ne regarde que la météo de l'instant. Devenu
+  « il pleut ». Un vrai délai demanderait l'heure de fin de l'averse, absente du contexte.
+
+## 0.31.1
+
+864 tests verts. La hauteur de gazon monte enfin vraiment au fil de la journée.
+
+- **Le frein de conditions ne saute plus à minuit.** Les journées révolues étaient recomptées
+  au taux NOMINAL alors que la journée en cours était freinée par la chaleur : à 00 h 00, tout
+  ce que la chaleur avait empêché était rendu d'un coup. Mesuré sur l'installation : **+0,30 cm
+  par 30-35 °C, +0,40 cm au-delà de 35 °C**. Le frein — toute la raison d'être du modèle de
+  pousse (0.29.0) — était donc annulé chaque nuit. Repéré par Kévin : « la hauteur ne bouge pas ».
+- **La pousse réellement acquise est mémorisée**, jour par jour, dans la mémoire persistée du
+  cerveau. La journée qui s'achève est créditée avec SON propre frein ; une journée entièrement
+  manquée (intégration arrêtée > 24 h) retombe sur le taux nominal, faute de mieux.
+- **Amorçage sans mémoire** (premier calcul, montée de version, nouvelle tonte) : repli sur
+  l'estimation nominale des journées révolues, comme avant. Repartir de zéro aurait fait chuter
+  la hauteur affichée d'un coup — 6,2 → 4,7 cm mesuré, un défaut pire que celui corrigé.
+- **Nouvel attribut `gazon_pousse_jour_cm`** sur le capteur de hauteur. Par forte chaleur, la
+  journée entière ne vaut que 0,10 cm, soit un seul cran d'arrondi au 0,1 cm : la pousse était
+  réelle mais invisible. L'attribut la montre au centième.
+- Aucune décision n'était affectée : `mowing_is_overdue` se calcule sur les jours écoulés depuis
+  la dernière tonte, pas sur la hauteur estimée (vérifié). Le défaut ne faussait que l'affichage.
+
+## 0.31.0
+
+859 tests verts. Le seul manque avec une conséquence physique est comblé.
+
+- **Nouveau service `stop_irrigation`** : arrête immédiatement le cycle en cours. Jusqu'ici,
+  aucun des 13 services ne pouvait couper un arrosage — il ne restait que l'interrupteur
+  physique ou le disjoncteur.
+- **La vanne se referme** : acquis sans code nouveau, le `sleep` de chaque segment étant déjà
+  enveloppé d'un `try/finally` appelant `_safe_turn_off_zone`, lui-même sous `asyncio.shield`.
+- **La session est purgée**, contrairement à l'annulation d'un arrêt de Home Assistant. Le
+  `finally` de l'exécuteur ne nettoie que `if not cancelled` — voulu, pour que la session
+  survive et soit reprise au redémarrage. Un arrêt volontaire veut l'inverse : sans purge
+  explicite, le cycle serait relancé au prochain démarrage.
+- **L'eau déjà versée est enregistrée**, y compris la zone coupée en plein segment, créditée
+  au prorata du temps réellement écoulé et bornée au segment planifié. Sans cela, le bilan du
+  sol ne verrait pas cette eau et le système réarroserait — c'est la cause racine « le système
+  ne voit pas ce qu'il vient d'arroser ».
+- **Idempotent** : sans arrosage en cours, le service ne fait rien et le dit.
+- Cause `arret_manuel` volontairement absente des listes techniques : cette eau compte au
+  budget hebdomadaire et arme le cooldown, comme n'importe quelle autre.
+- Traduit dans les cinq langues. 7 tests dédiés, dont la vérification qu'ils détectent bien
+  quatre mutations de l'implémentation.
+- **Bouton « Arrêter l'arrosage »** (`button.gazon_intelligent_arreter_arrosage`) : un arrêt
+  qu'il faut aller chercher dans les Outils de développement n'est pas un arrêt d'urgence.
+  Le bouton le met à portée sur n'importe quel tableau de bord, sans dépendre de la carte
+  dont le catalogue de services est codé en dur.
+
 ## 0.30.2
 
 852 tests verts. Un motif de blocage qui se contredisait lui-même.

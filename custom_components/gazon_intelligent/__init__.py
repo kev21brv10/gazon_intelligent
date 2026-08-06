@@ -71,6 +71,7 @@ SERVICE_RESET_MODE = "reset_mode"
 SERVICE_START_MANUAL_IRRIGATION = "start_manual_irrigation"
 SERVICE_START_AUTO_IRRIGATION = "start_auto_irrigation"
 SERVICE_START_APPLICATION_IRRIGATION = "start_application_irrigation"
+SERVICE_STOP_IRRIGATION = "stop_irrigation"
 SERVICE_DECLARE_INTERVENTION = "declare_intervention"
 SERVICE_REMOVE_LAST_APPLICATION = "remove_last_application"
 SERVICE_DECLARE_MOWING = "declare_mowing"
@@ -88,6 +89,7 @@ _ALL_SERVICES = (
     SERVICE_START_MANUAL_IRRIGATION,
     SERVICE_START_AUTO_IRRIGATION,
     SERVICE_START_APPLICATION_IRRIGATION,
+    SERVICE_STOP_IRRIGATION,
     SERVICE_DECLARE_INTERVENTION,
     SERVICE_REMOVE_LAST_APPLICATION,
     SERVICE_DECLARE_MOWING,
@@ -332,6 +334,17 @@ def _async_register_services(hass: HomeAssistant) -> None:
     )
     _register_service_if_missing(
         hass,
+        SERVICE_STOP_IRRIGATION,
+        _handle_stop_irrigation,
+        schema=vol.Schema(
+            {
+                **_SERVICE_TARGET_FIELD,
+                vol.Optional("raison"): vol.Coerce(str),
+            }
+        ),
+    )
+    _register_service_if_missing(
+        hass,
         SERVICE_DECLARE_INTERVENTION,
         _handle_declare_intervention,
         schema=vol.Schema(
@@ -573,6 +586,12 @@ async def _handle_start_application_irrigation(call: ServiceCall) -> None:
     _require_explicit_target_for_multi_instance(call)
     coordinator = await _coordinator_from_call(call)
     await coordinator.async_start_application_irrigation()
+
+
+async def _handle_stop_irrigation(call: ServiceCall) -> None:
+    _require_explicit_target_for_multi_instance(call)
+    coordinator = await _coordinator_from_call(call)
+    await coordinator.async_stop_irrigation(reason=call.data.get("raison"))
 
 
 async def _handle_declare_intervention(call: ServiceCall) -> None:

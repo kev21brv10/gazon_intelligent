@@ -83,6 +83,17 @@ start_application_irrigation:
     entity:
       integration: gazon_intelligent
 
+stop_irrigation:
+  description: "Arrête immédiatement l'arrosage en cours : ferme la vanne ouverte, enregistre l'eau déjà appliquée (y compris la zone interrompue, au prorata) et libère le cycle. Sans effet si aucun arrosage n'est en cours."
+  target:
+    entity:
+      integration: gazon_intelligent
+  fields:
+    raison:
+      required: false
+      selector:
+        text: {}
+
 declare_intervention:
   description: "Déclare une intervention réelle. Les réglages du produit se configurent dans \"Enregistrer un produit\" ; ici, il suffit de choisir le produit déjà enregistré, la date, la zone et une note si besoin. Si plusieurs produits existent et qu'aucun produit explicite n'est fourni, l'intégration peut utiliser la sélection courante de l'UI ou renvoyer une erreur claire."
   target:

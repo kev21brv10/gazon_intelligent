@@ -110,6 +110,9 @@ _MOWING_BUNDLE_CORE_KEYS = (
     "mowing_overdue_days",
     "mowing_overdue_factor",
     "gazon_hauteur_estimee_cm",
+    "gazon_pousse_jour_cm",
+    "gazon_pousse_state",
+    "pluie_state",
     "mowing_watering_coordination",
     "mowing_watering_coordination_msg",
 )
@@ -280,7 +283,8 @@ def _reference_now_utc(context: DecisionContext) -> datetime:
                 parsed = parsed.replace(tzinfo=timezone.utc)
             return parsed.astimezone(timezone.utc)
     reference_hour = context.hour_of_day if context.hour_of_day is not None else 6
-    return datetime.combine(context.today, time(reference_hour % 24, 0), tzinfo=timezone.utc)
+    # `time()` exige un entier : l'heure du contexte est décimale depuis la 0.31.5.
+    return datetime.combine(context.today, time(int(reference_hour) % 24, 0), tzinfo=timezone.utc)
 
 
 def _elapsed_minutes_since_watering(context: DecisionContext) -> int:
@@ -592,6 +596,43 @@ def _machine_unavailable_detail(
     return None
 
 
+_PLUIE_STATE_KEY = "derniere_pluie_active"
+
+
+def _minutes_depuis_derniere_pluie(context: DecisionContext) -> float | None:
+    """Minutes écoulées depuis la dernière pluie CONSTATÉE, ou None si inconnue.
+
+    ⚠️ `is_active_rain_weather` ne regarde que la météo de l'INSTANT : il n'existait donc
+    aucun délai de ressuyage après une averse, alors qu'un arrosage en impose 180. Le libellé
+    promettait pourtant « pluie en cours ou récente ». On horodate désormais chaque constat de
+    pluie dans la mémoire persistée, ce qui permet enfin de mesurer « récente ».
+    """
+    memoire = context.memory if isinstance(context.memory, dict) else {}
+    stamp = memoire.get(_PLUIE_STATE_KEY)
+    if not isinstance(stamp, dict):
+        return None
+    try:
+        jour = date.fromisoformat(str(stamp.get("date")))
+        heure = float(stamp.get("heure") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if context.hour_of_day is None:
+        return None
+    ecart_jours = (context.today - jour).days
+    if ecart_jours < 0 or ecart_jours > 1:
+        return None
+    return (ecart_jours * 24.0 + float(context.hour_of_day) - heure) * 60.0
+
+
+def _etat_pluie(context: DecisionContext, il_pleut: bool) -> dict[str, Any] | None:
+    """Horodatage à persister : mis à jour tant qu'il pleut, conservé ensuite."""
+    if il_pleut and context.hour_of_day is not None:
+        return {"date": context.today.isoformat(), "heure": round(float(context.hour_of_day), 3)}
+    memoire = context.memory if isinstance(context.memory, dict) else {}
+    precedent = memoire.get(_PLUIE_STATE_KEY)
+    return dict(precedent) if isinstance(precedent, dict) else None
+
+
 def _resolve_mowing_block(
     context: DecisionContext,
     phase_bundle: dict[str, Any],
@@ -655,8 +696,33 @@ def _resolve_mowing_block(
         except (TypeError, ValueError):
             pass
 
+    _rt = context.runtime_context if isinstance(context.runtime_context, dict) else {}
+    try:
+        _ressuyage = max(0.0, float(_rt.get("mowing_cooldown_after_watering_minutes", 0) or 0))
+    except (TypeError, ValueError):
+        _ressuyage = 0.0
+    _depuis_pluie = _minutes_depuis_derniere_pluie(context)
+    if _depuis_pluie is not None and 0 <= _depuis_pluie < _ressuyage and not is_active_rain_weather(
+        context.weather_profile
+    ):
+        # RESSUYAGE APRÈS PLUIE — même délai que après un arrosage (symétrie voulue par Kévin :
+        # « c'est l'intégration qui gère le temps de pause de la tondeuse pendant la pluie »).
+        # Il n'existait aucun délai côté pluie, alors que le libellé promettait « ou récente ».
+        return (
+            True,
+            "wet_grass",
+            f"Herbe mouillée: ressuyage après la pluie ({int(_ressuyage - _depuis_pluie)} min restantes).",
+            None,
+            None,
+        )
     if is_active_rain_weather(context.weather_profile):
-        return True, "wet_grass", "Herbe mouillée: pluie en cours ou récente.", None, None
+        # ⚠️ Le libellé disait « pluie en cours ou RÉCENTE ». C'était faux : `is_active_rain_weather`
+        # ne regarde que la météo de l'INSTANT (condition pluvieuse, ou probabilité ≥ 80 %). Aucune
+        # persistance, donc aucun délai de ressuyage — contrairement aux 180 min imposées après un
+        # arrosage. Le ressuyage après pluie est en pratique couvert par les gardes voisins (rosée,
+        # sol humide), mais promettre « récente » envoie chercher un délai qui n'existe pas.
+        # Un vrai délai demanderait l'HEURE DE FIN de l'averse, que le contexte ne transporte pas.
+        return True, "wet_grass", "Herbe mouillée: il pleut.", None, None
     if _soil_is_wet(advanced_context, context):
         return True, "soil_wet", "Sol humide: attendre le ressuyage.", None, None
 
@@ -890,11 +956,26 @@ _GROWTH_RATE_BY_MONTH: dict[int, float] = {
 }
 
 
-# CROISSANCE — fenêtre de pousse dans la journée. Le gazon ne s'allonge pas la nuit : la
-# photosynthèse et l'élongation cellulaire suivent la lumière et la chaleur. Borner la pousse à
-# cette plage évite que la hauteur estimée saute d'un cran à minuit, alors que rien n'a bougé.
-_GROWTH_DAY_START_HOUR = 7.0
-_GROWTH_DAY_END_HOUR = 20.0
+# CROISSANCE — répartition de la pousse sur les 24 heures.
+#
+# ⚠️ CORRIGÉ le 30/07/2026, sur une question de Kévin (« le gazon pousse la nuit ? »). Le modèle
+# bornait la pousse à 7 h - 20 h en affirmant que « le gazon ne s'allonge pas la nuit ». C'était
+# FAUX, par confusion entre deux mécanismes distincts :
+#   - la PHOTOSYNTHÈSE suit la lumière : elle fabrique les sucres, le jour ;
+#   - l'ÉLONGATION cellulaire est poussée par la TURGESCENCE, la pression de l'eau dans les
+#     cellules — et celle-ci est MAXIMALE LA NUIT. Le jour, la transpiration vide les cellules
+#     plus vite que les racines ne les remplissent (surtout aux heures chaudes) et la feuille
+#     s'allonge peu ; la nuit, la transpiration cesse, le potentiel hydrique se rétablit, et
+#     c'est là que la feuille pousse le plus.
+# Sur graminées, le taux d'élongation foliaire culmine donc en fin de nuit et s'effondre au
+# zénith — l'inverse exact de ce que faisait le modèle. Conséquence visible : la hauteur restait
+# PLATE de 20 h à 7 h, onze heures d'immobilité affichée au moment où le gazon pousse le plus.
+#
+# La pousse est désormais étalée sur 24 h par une pondération sinusoïdale culminant vers 3 h.
+# Le TOTAL du jour est inchangé (l'intégrale de la pondération sur 24 h vaut exactement 1) :
+# seule la répartition horaire change.
+_GROWTH_PEAK_HOUR = 3.0        # l'élongation foliaire culmine en fin de nuit
+_GROWTH_AMPLITUDE = 0.6        # 0 = pousse uniforme · 1 = pousse nulle au creux de midi
 
 
 def _growth_day_fraction(hour_of_day: int | float | None) -> float:
@@ -905,16 +986,37 @@ def _growth_day_fraction(hour_of_day: int | float | None) -> float:
         h = float(hour_of_day)
     except (TypeError, ValueError):
         return 1.0
-    if h <= _GROWTH_DAY_START_HOUR:
-        return 0.0
-    if h >= _GROWTH_DAY_END_HOUR:
-        return 1.0
-    return (h - _GROWTH_DAY_START_HOUR) / (_GROWTH_DAY_END_HOUR - _GROWTH_DAY_START_HOUR)
+    h = max(0.0, min(24.0, h))
+    # Intégrale de la pondération 1 + A·cos(2π(t − pic)/24) entre 0 et h, divisée par 24.
+    # Strictement croissante tant que A < 1, nulle en 0 et égale à 1 en 24 : la hauteur ne
+    # recule jamais dans la journée et le total journalier est exactement le taux du jour.
+    k = 24.0 / (2.0 * math.pi)
+    phase = 2.0 * math.pi * (h - _GROWTH_PEAK_HOUR) / 24.0
+    phase0 = 2.0 * math.pi * (0.0 - _GROWTH_PEAK_HOUR) / 24.0
+    return (h + _GROWTH_AMPLITUDE * k * (math.sin(phase) - math.sin(phase0))) / 24.0
+
+
+def _frein_memorise_du_jour(context: DecisionContext) -> float | None:
+    """Dernier frein observé AUJOURD'HUI, ou None.
+
+    Sert de plafond quand le bilan hydrique manque (premier cycle après un redémarrage).
+    Strictement borné au jour courant : celui d'hier décrirait une autre météo, et le
+    reprendre pourrait bloquer la pousse d'une journée fraîche derrière une canicule passée.
+    """
+    memoire = context.memory if isinstance(context.memory, dict) else {}
+    etat = memoire.get(_GROWTH_STATE_KEY)
+    if not isinstance(etat, dict):
+        return None
+    if str(etat.get("date") or "") != context.today.isoformat():
+        return None
+    return _to_float_safe(etat.get("frein"))
 
 
 def _growth_modulation(
     context: DecisionContext,
     water_bundle: dict[str, Any] | None,
+    *,
+    frein_plafond: float | None = None,
 ) -> float:
     """Facteur 0 → 1 appliqué à la vitesse de croissance selon les conditions du jour.
 
@@ -951,15 +1053,25 @@ def _growth_modulation(
             else:
                 facteur *= 0.25         # 30-35 °C : la pousse s'arrête presque
 
+    eau_connue = False
     if isinstance(water_bundle, dict):
         reserve = _to_float_safe(water_bundle.get("reserve_hydrique_sol_mm"))
         seuil = _to_float_safe(water_bundle.get("reserve_minimale_mm"))
         if reserve is not None and seuil is not None and seuil > 0:
+            eau_connue = True
             if reserve <= 0:
                 facteur *= 0.0
             elif reserve < seuil:
                 # Entre 0 et le seuil, la pousse décroît linéairement jusqu'à un plancher.
                 facteur *= max(0.15, reserve / seuil)
+
+    # ⚠️ EAU INCONNUE ≠ EAU À VOLONTÉ. Sans bilan hydrique, le frein d'eau était simplement
+    # sauté : le facteur restait à 1,0 et la pousse repartait comme si le sol était plein.
+    # C'est le même piège que le repli « soleil inconnu → fraction 1.0 » de la 0.21.4. On ne
+    # peut pas deviner la réserve, mais on peut refuser d'être PLUS optimiste que le dernier
+    # état connu du jour.
+    if not eau_connue and frein_plafond is not None:
+        facteur = min(facteur, float(frein_plafond))
 
     return max(0.0, min(1.0, facteur))
 
@@ -988,6 +1100,17 @@ def _estimated_grass_height_cm(
     phase_bundle: dict[str, Any],
     water_bundle: dict[str, Any] | None = None,
 ) -> float | None:
+    """Hauteur seule. Le détail (pousse du jour, état à persister) passe par
+    `_grass_growth_details` — deux autres appelants n'ont besoin que du nombre."""
+    details = _grass_growth_details(context, phase_bundle, water_bundle)
+    return details["hauteur_cm"] if details else None
+
+
+def _grass_growth_details(
+    context: DecisionContext,
+    phase_bundle: dict[str, Any],
+    water_bundle: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
     """Estime la hauteur actuelle du gazon depuis la date de dernière tonte.
 
     Retourne None si la hauteur de coupe ou la date de dernière tonte est inconnue.
@@ -1039,7 +1162,14 @@ def _estimated_grass_height_cm(
         return None
     jours_pleins = max((context.today - last_mowing).days, 0)
     taux = _growth_rate_cm_per_day(phase_bundle, context.today.month)
-    frein = _growth_modulation(context, water_bundle)
+    # Au REDÉMARRAGE, le premier cycle tourne sans bilan hydrique : le frein d'eau était
+    # silencieusement sauté, donc un frein plus OPTIMISTE et une hauteur trop haute publiée
+    # pendant ~1 s (constaté le 01/08/2026 : 6,0 puis 5,9 à 0,9 s d'intervalle, et le même
+    # doublet la veille). On borne par le dernier frein connu DU JOUR — jamais celui d'hier,
+    # qui décrirait une autre météo.
+    frein = _growth_modulation(
+        context, water_bundle, frein_plafond=_frein_memorise_du_jour(context)
+    )
     # Les jours passés utilisent le taux nominal (on n'a pas leurs conditions), la journée en
     # cours utilise les conditions RÉELLES et sa fraction écoulée : c'est elle qui fait monter
     # la valeur au fil des heures.
@@ -1050,11 +1180,128 @@ def _estimated_grass_height_cm(
     # Le JOUR MÊME de la tonte : aucune pousse comptée. On ignore l'heure de la coupe, et
     # afficher « déjà 2 mm repoussés » quelques heures après être passé serait faux.
     if jours_pleins <= 0:
-        pousse = 0.0
+        # Le JOUR MÊME de la tonte : aucune pousse comptée, et le compteur repart de zéro.
+        return {
+            "hauteur_cm": round(cutting_height_cm, 1),
+            "pousse_acquise_cm": 0.0,
+            "pousse_jour_cm": 0.0,
+            "etat": _etat_pousse_neuf(context, last_mowing, frein),
+        }
+
+    acquise, etat = _pousse_acquise_avant_aujourdhui(
+        context, last_mowing=last_mowing, taux=taux, frein=frein, jours_pleins=jours_pleins
+    )
+    fraction = _growth_day_fraction(context.hour_of_day)
+    # ⚠️ LA POUSSE DÉJÀ ACQUISE NE SE RECALCULE PAS. `taux × frein × fraction` appliquait le
+    # frein du MOMENT à toute la journée : quand la chaleur montait, la pousse du matin était
+    # effacée et la hauteur REDESCENDAIT. Mesuré sur l'installation le 01/08/2026 —
+    # 09 h 10 : frein 0,87 × fraction 0,55 = 0,165 cm ; 11 h 40 : frein 0,50 × fraction 0,63 =
+    # 0,109 cm. Un tiers de la matinée effacé, la hauteur passe de 6,0 à 5,9 cm. Le frein
+    # thermique étant un escalier, il suffisait de franchir 24,0 °C pour perdre 35 % d'un coup.
+    # On ACCUMULE donc : le frein ne pilote plus que l'incrément à venir. À conditions stables
+    # le total de fin de journée est identique — c'est le chemin qui cesse de reculer.
+    # Même famille que la falaise de minuit (0.31.1) : le passé qu'on recalcule.
+    jour_precedent = etat.get("jour_cm")
+    if jour_precedent is None:
+        # Premier cycle de la journée (ou amorçage) : rien à prolonger, on estime la fenêtre
+        # déjà écoulée avec les conditions du moment, faute de mieux.
+        pousse_jour = taux * frein * fraction
     else:
-        fraction = _growth_day_fraction(context.hour_of_day)
-        pousse = (jours_pleins - 1) * taux + taux * frein * fraction
-    return round(cutting_height_cm + max(0.0, pousse), 1)
+        fraction_precedente = etat.get("fraction")
+        reference = (
+            float(fraction_precedente) if fraction_precedente is not None else fraction
+        )
+        pousse_jour = float(jour_precedent) + taux * frein * max(0.0, fraction - reference)
+    pousse = acquise + pousse_jour
+    # Mémorisé ICI, une fois la pousse du jour connue : c'est cette valeur que le report du
+    # lendemain créditera, telle quelle.
+    etat["jour_cm"] = round(pousse_jour, 4)
+    etat["fraction"] = round(fraction, 6)
+    return {
+        "hauteur_cm": round(cutting_height_cm + max(0.0, pousse), 1),
+        "pousse_acquise_cm": round(acquise, 2),
+        "pousse_jour_cm": round(pousse_jour, 2),
+        "etat": etat,
+    }
+
+
+_GROWTH_STATE_KEY = "pousse_gazon"
+
+
+def _etat_pousse_neuf(context: DecisionContext, tonte: date, frein: float) -> dict[str, Any]:
+    return {
+        "date": context.today.isoformat(),
+        "tonte": tonte.isoformat(),
+        "acquis_cm": 0.0,
+        "jour_cm": 0.0,
+        "frein": round(float(frein), 3),
+    }
+
+
+def _pousse_acquise_avant_aujourdhui(
+    context: DecisionContext,
+    *,
+    last_mowing: date,
+    taux: float,
+    frein: float,
+    jours_pleins: int,
+) -> tuple[float, dict[str, Any]]:
+    """Pousse réellement acquise AVANT aujourd'hui, et l'état à persister.
+
+    ⚠️ SANS cette mémoire, les journées révolues étaient recomptées au taux NOMINAL alors
+    que la journée en cours était freinée par les conditions. À minuit, tout ce que la
+    chaleur avait retiré était donc rendu d'un coup — mesuré le 30/07/2026 : +0,30 cm par
+    30-35 °C, +0,40 cm au-delà de 35 °C. Le frein, qui est toute la raison d'être du modèle,
+    était annulé chaque nuit. Repéré par Kévin : « la hauteur ne bouge pas ».
+
+    La journée qui vient de s'achever est créditée avec SON propre frein, le dernier observé.
+    Une journée entièrement manquée (intégration arrêtée > 24 h) retombe sur le taux nominal :
+    on ne sait rien de ses conditions, et surestimer un peu vaut mieux que perdre la journée.
+    """
+    memoire = context.memory if isinstance(context.memory, dict) else {}
+    precedent = memoire.get(_GROWTH_STATE_KEY)
+    tonte_iso = last_mowing.isoformat()
+
+    if not isinstance(precedent, dict) or str(precedent.get("tonte") or "") != tonte_iso:
+        # AMORÇAGE — aucune mémoire pour cette tonte : premier calcul, montée de version, ou
+        # nouvelle tonte. On repart de l'estimation nominale des journées révolues, exactement
+        # comme avant la mémoire. Repartir de zéro ferait CHUTER la hauteur affichée d'un coup
+        # (mesuré : 6,2 → 4,7 cm), ce qui serait pire que le défaut corrigé.
+        amorce = taux * max(0, jours_pleins - 1)
+        return amorce, {
+            "date": context.today.isoformat(),
+            "tonte": tonte_iso,
+            "acquis_cm": round(amorce, 4),
+            "frein": round(float(frein), 3),
+        }
+
+    acquis = float(precedent.get("acquis_cm") or 0.0)
+    date_etat = str(precedent.get("date") or "")
+    if date_etat == context.today.isoformat():
+        return acquis, {**precedent, "frein": round(float(frein), 3)}
+
+    try:
+        jours_ecoules = (context.today - date.fromisoformat(date_etat)).days
+    except ValueError:
+        jours_ecoules = 1
+    if jours_ecoules > 0:
+        # ⚠️ On crédite la pousse RÉELLEMENT constatée la veille (`jour_cm`), pas une
+        # reconstitution `taux × frein`. Reconstituer créditait une journée pleine au JOUR DE LA
+        # TONTE, où la pousse est nulle par conception : la hauteur bondissait de 5,5 à 5,8 cm
+        # à minuit — le saut qu'on venait justement de supprimer, revenu par une autre porte.
+        # Repli sur l'ancienne reconstitution si l'état vient d'une version antérieure.
+        veille = precedent.get("jour_cm")
+        if veille is None:
+            acquis += taux * float(precedent.get("frein") or 1.0)
+        else:
+            acquis += float(veille or 0.0)
+        acquis += taux * max(0, jours_ecoules - 1)              # journées entièrement manquées
+    return acquis, {
+        "date": context.today.isoformat(),
+        "tonte": tonte_iso,
+        "acquis_cm": round(acquis, 4),
+        "frein": round(float(frein), 3),
+    }
 
 
 def _mowing_spacing_min_days(
@@ -1698,6 +1945,16 @@ def build_mowing_bundle(
         phase_bundle,
         water_bundle,
     )
+    # ⚠️ LE LIBELLÉ PRÉCIS EST DÉJÀ CALCULÉ, deux lignes plus haut. La décision publiait quand
+    # même le générique « Robot indisponible: attendre qu'elle soit prête. », et chaque
+    # plateforme d'entité le rafistolait de son côté — sauf qu'elles ne le faisaient pas toutes.
+    # Résultat sur l'écran de Kévin le 03/08/2026 à 14 h 31, robot EN TONTE depuis 14 h 19 :
+    #   binary_sensor  → « Robot déjà en tonte : attendre la fin du cycle. »   (juste)
+    #   sensor hauteur → « Robot indisponible : attendre qu'elle soit prête. » (faux)
+    # Même attribut, deux valeurs, même instant — et le bandeau de la carte affichait la fausse.
+    # On corrige ICI : une seule fois, pour tous les consommateurs.
+    if mowing_block_reason_code == "machine_unavailable" and mowing_machine_unavailable_label:
+        mowing_block_reason_label = mowing_machine_unavailable_label
     if mowing_blocked:
         mowing_window_state = "blocked"
         mowing_window_reason = mowing_block_reason_label
@@ -1937,7 +2194,11 @@ def build_mowing_bundle(
     bundle["mowing_is_overdue"] = mowing_is_overdue
     bundle["mowing_overdue_days"] = overdue_days
     bundle["mowing_overdue_factor"] = overdue_factor
-    bundle["gazon_hauteur_estimee_cm"] = _estimated_grass_height_cm(context, phase_bundle, water_bundle)
+    _pousse = _grass_growth_details(context, phase_bundle, water_bundle)
+    bundle["gazon_hauteur_estimee_cm"] = _pousse["hauteur_cm"] if _pousse else None
+    bundle["gazon_pousse_jour_cm"] = _pousse["pousse_jour_cm"] if _pousse else None
+    bundle["gazon_pousse_state"] = _pousse["etat"] if _pousse else None
+    bundle["pluie_state"] = _etat_pluie(context, is_active_rain_weather(context.weather_profile))
     bundle["mowing_watering_coordination"] = watering_coord_level
     bundle["mowing_watering_coordination_msg"] = watering_coord_msg
     mower_context = context.mower_context if isinstance(context.mower_context, dict) else {}

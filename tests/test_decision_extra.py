@@ -1121,7 +1121,19 @@ class TestDecisionSnapshotMowing(unittest.TestCase):
 
         self.assertTrue(mowing_bundle["mowing_blocked"])
         self.assertEqual(mowing_bundle["mowing_block_reason"], "machine_unavailable")
-        self.assertEqual(mowing_bundle["mowing_block_reason_label"], "Robot indisponible: attendre qu'elle soit prête.")
+        # ⚠️ Le libellé PRÉCIS, pas le générique. Jusqu'au 03/08/2026 la décision publiait
+        # « Robot indisponible: attendre qu'elle soit prête. » et chaque plateforme d'entité le
+        # raffinait de son côté — sauf qu'elles ne le faisaient pas toutes, d'où deux valeurs
+        # contradictoires du même attribut au même instant. Le raffinement est remonté ici.
+        self.assertEqual(
+            mowing_bundle["mowing_block_reason_label"],
+            "Robot hors ligne: attendre qu'elle redevienne joignable.",
+        )
+        self.assertEqual(
+            mowing_bundle["mowing_window_reason"],
+            mowing_bundle["mowing_block_reason_label"],
+            "fenêtre et blocage doivent porter le MÊME motif",
+        )
         self.assertTrue(mowing_bundle["tonte_autorisee"])
         self.assertFalse(mowing_bundle["action_possible"])
 
@@ -2197,16 +2209,16 @@ class TestEstimatedGrassHeight(unittest.TestCase):
                 )
 
     def test_estimation_grows_after_mowing(self):
-        # Tonte il y a 4 jours en juin, relevé à 11 h. Depuis la 0.29.0 la pousse du jour est
-        # étalée sur sa fenêtre (7 h - 20 h) au lieu de s'ajouter d'un bloc à minuit : à 11 h
-        # seuls 4/13 de la journée sont acquis, d'où 6,2 au lieu de 6,5. En fin de journée on
-        # retrouve exactement 6,5 (cf. test_la_hauteur_monte_au_fil_de_la_journee).
+        # Tonte il y a 4 jours en juin, relevé à 11 h. Depuis la 0.31.1 la pousse du jour est
+        # étalée sur 24 h avec un pic en fin de nuit (l'élongation foliaire suit la turgescence,
+        # maximale la nuit — cf. _growth_day_fraction) : à 11 h une bonne moitié de la journée
+        # est déjà acquise. Le total du jour n'est atteint qu'à minuit.
         bundle = self._make_bundle(
             history=[{"type": "tonte", "date": "2026-06-03"}],
             today=date(2026, 6, 7),
             mower_context={"tondeuse_hauteur_coupe_mm": 45},
         )
-        self.assertAlmostEqual(bundle["gazon_hauteur_estimee_cm"], 6.2, places=1)
+        self.assertAlmostEqual(bundle["gazon_hauteur_estimee_cm"], 6.3, places=1)
 
     def test_la_hauteur_monte_au_fil_de_la_journee(self):
         """Demandé par Kévin : la hauteur doit progresser dans la journée, pas sauter à minuit."""
@@ -2218,13 +2230,20 @@ class TestEstimatedGrassHeight(unittest.TestCase):
                 mower_context={"tondeuse_hauteur_coupe_mm": 45},
                 hour_of_day=heure,
             )
-            mesures.append((heure, b["gazon_hauteur_estimee_cm"]))
-        valeurs = [v for _, v in mesures]
+            mesures.append((heure, b["gazon_hauteur_estimee_cm"], b["gazon_pousse_jour_cm"]))
+        valeurs = [v for _, v, _ in mesures]
+        # La progression fine se lit sur `gazon_pousse_jour_cm` : la hauteur est arrondie au
+        # 0,1 cm, et par conditions freinées une journée entière ne vaut qu'un cran. C'est
+        # exactement ce que Kévin voyait comme « la hauteur ne bouge pas ».
+        pousses = [p for _, _, p in mesures]
         self.assertEqual(valeurs, sorted(valeurs), f"la hauteur recule dans la journée : {mesures}")
-        self.assertEqual(valeurs[0], valeurs[1], "elle pousse avant 7 h du matin")
-        self.assertAlmostEqual(valeurs[4], 6.5, places=1, msg="le total du jour n'est pas atteint à 20 h")
-        self.assertEqual(valeurs[4], valeurs[5], "elle pousse encore après 20 h")
-        self.assertGreater(valeurs[3], valeurs[2], "elle ne progresse pas entre 11 h et 15 h")
+        # ⚠️ NE PAS réintroduire « elle ne pousse pas avant 7 h ni après 20 h » : c'était l'erreur
+        # corrigée en 0.31.1. L'élongation foliaire suit la TURGESCENCE, maximale la nuit — le
+        # gazon pousse la nuit, et même plus vite qu'au zénith.
+        self.assertEqual(pousses, sorted(pousses), f"la pousse du jour recule : {mesures}")
+        self.assertGreater(pousses[1], pousses[0], "elle ne pousse pas entre 5 h et 7 h (la nuit compte)")
+        self.assertGreater(pousses[5], pousses[4], "elle ne pousse plus après 20 h")
+        self.assertGreater(pousses[3], pousses[2], "elle ne progresse pas entre 11 h et 15 h")
 
     def test_la_canicule_arrete_la_pousse(self):
         """Kévin : « à certain moment la hauteur peut ne pas bouger et c'est normal »."""
@@ -2464,23 +2483,55 @@ class TestNormalRainReductionPropagation(unittest.TestCase):
         # La réduction ×0.8 ne s'applique pas pour une trace : l'objectif reste quasi intact.
         self.assertGreater(trace["objectif_mm"], no_rain["objectif_mm"] * 0.9)
 
-    def test_rain_reduction_below_min_session_zeroes_objective(self):
-        # Réserve sol au seuil MAD (6/12) → la dépletion déclenche une recharge de 6 mm,
-        # mais la réduction pluie (×0.8) la ramène à 4,8 mm, sous min_session_mm (5.0) :
-        # l'objectif bascule à 0 plutôt que de publier une dose sous le minimum utile.
+    def test_un_sol_AU_SEUIL_n_est_plus_reduit_ni_bloque_par_la_prevision(self):
+        """Ce test vérifiait l'INVERSE jusqu'au 02/08/2026 — il encodait le défaut.
+
+        Réserve au seuil MAD (6/12) : la déplétion déclenche une recharge de 6 mm, que la
+        réduction pluie (×0,8) ramenait à 4,8 mm — sous la session minimale de 5,0 — d'où un
+        blocage `pluie_prevue_suffisante` sur un sol pile au seuil de déclenchement, pour 2 mm
+        annoncés.
+
+        ⚠️ Ce chemin vit dans `decision_watering`, PAS dans `guidance` : le garde posé en
+        0.37.0 ne le couvrait pas. Le même motif de blocage venait de deux endroits, un seul
+        était protégé. Arbitrage de Kévin : « la pluie prévue n'est jamais sûre ».
+        """
         snap = self._snapshot(soil_balance={"reserve_mm": 6.0}, etp_capteur=8.0, pluie_demain=2.0)
 
         self.assertEqual(snap["phase_active"], "Normal")
-        self.assertGreater(snap["mm_requested"], 0.0)        # demande brute non nulle
-        self.assertLess(snap["mm_requested"] * 0.8, 5.0)     # mais réduite sous le minimum utile
-        self.assertEqual(snap["objectif_mm"], 0.0)
-        self.assertEqual(snap["mm_final"], 0.0)
-        self.assertEqual(snap["mm_applied"], 0.0)
-        self.assertFalse(snap["arrosage_recommande"])
-        self.assertNotIn("0.0 mm", snap["action_recommandee"])
-        # Le blocage par la pluie porte un motif explicite (cohérence dashboard).
-        self.assertEqual(snap["block_reason"], "pluie_prevue_suffisante")
-        self.assertIn("Motif exact: pluie_prevue_suffisante", snap["raison_decision"])
+        wb = snap["water_balance"]
+        self.assertGreaterEqual(wb["depletion_ratio"], wb["mad_ratio"], "prémisse : sol au seuil")
+        self.assertNotEqual(snap.get("block_reason"), "pluie_prevue_suffisante")
+        self.assertGreater(snap["objectif_mm"], 0.0, "la prévision annule encore la dose")
+        self.assertEqual(snap["objectif_mm"], snap["mm_requested"],
+                         "la dose est encore rabotée par la prévision")
+        self.assertTrue(snap["arrosage_recommande"])
+
+    def test_une_GROSSE_pluie_annoncee_ne_bloque_pas_un_sol_a_sec(self):
+        """La branche « pluie compensatrice » (−60 %), celle du 02/08.
+
+        Ce jour-là la prévision est passée à 9,1 mm et tout s'est arrêté. Sur un sol à ZÉRO,
+        une grosse pluie annoncée ne doit ni raboter la dose ni la bloquer : c'est précisément
+        le pari qui a coûté la journée — il est tombé 3,2 mm pour 4,8 consommés.
+        """
+        snap = self._snapshot(soil_balance={"reserve_mm": 0.0}, etp_capteur=8.0, pluie_demain=12.0)
+        wb = snap["water_balance"]
+        self.assertGreaterEqual(wb["depletion_ratio"], wb["mad_ratio"], "prémisse : sol à sec")
+        self.assertNotEqual(snap.get("block_reason"), "pluie_prevue_suffisante")
+        self.assertEqual(snap["objectif_mm"], snap["mm_requested"],
+                         "la dose est encore rabotée de 60 % par la prévision")
+        self.assertGreater(snap["objectif_mm"], 0.0)
+
+    def test_sous_le_seuil_la_prevision_reduit_toujours(self):
+        """Garde-fou : le correctif ne supprime pas la réduction, il la borne.
+
+        Sol confortable et pluie significative annoncée : économiser un cycle reste le bon
+        choix. C'est le cas couvert par `test_rain_reduction_propagates_to_executed_values`,
+        vérifié ici sur la grandeur qui décide.
+        """
+        rain = self._snapshot(pluie_demain=3.0)
+        wb = rain["water_balance"]
+        self.assertLess(wb["depletion_ratio"], wb["mad_ratio"], "prémisse : sol sous le seuil")
+        self.assertEqual(rain["objectif_mm"], round(rain["mm_requested"] * 0.8, 1))
 
     def test_no_rain_objective_unchanged(self):
         snap = self._snapshot(pluie_demain=0.0, pluie_j2=0.0, pluie_3j=0.0)
@@ -3626,3 +3677,464 @@ class ActionGuidanceEveningGuardsTests(unittest.TestCase):
     def test_marge_de_sechage_insuffisante_ferme_le_soir(self):
         # Hors canicule, un arrosage du soir doit finir >= 90 min avant le coucher.
         self.assertNotEqual(self._fenetre(minutes_to_sunset=30.0), "soir")
+
+
+class TestPousseMemorisee(unittest.TestCase):
+    """La pousse acquise est mémorisée — sinon le frein de conditions saute à minuit.
+
+    Défaut repéré par Kévin le 30/07/2026 (« la hauteur ne bouge pas ») : les journées
+    révolues étaient recomptées au taux NOMINAL alors que la journée en cours était freinée
+    par la chaleur. À 00 h 00, tout ce que la chaleur avait retiré était rendu d'un coup :
+    +0,30 cm par 30-35 °C. Le frein, raison d'être du modèle, était annulé chaque nuit.
+    """
+
+    def _details(self, jour, heure, memoire):
+        context = decision.DecisionContext.from_legacy_args(
+            history=[{"type": "tonte", "date": "2026-07-27", "hauteur_coupe_mm": 55.0}],
+            today=jour,
+            hour_of_day=heure,
+            temperature=32.0,          # 30-35 °C -> frein 0,25
+            memory=memoire,
+        )
+        return decision_mowing._grass_growth_details(
+            context,
+            {"phase_dominante": "Normal"},
+            {"reserve_actuelle_mm": 9.0, "reserve_minimale_mm": 6.0},
+        )
+
+    def test_pas_de_saut_a_minuit(self) -> None:
+        memoire: dict = {}
+        veille = None
+        for jour, heure in ((date(2026, 7, 29), 20), (date(2026, 7, 29), 23), (date(2026, 7, 30), 0)):
+            d = self._details(jour, heure, memoire)
+            memoire["pousse_gazon"] = d["etat"]
+            if veille is not None:
+                self.assertLessEqual(
+                    d["hauteur_cm"] - veille, 0.05,
+                    f"saut à minuit : {veille} -> {d['hauteur_cm']} cm",
+                )
+            veille = d["hauteur_cm"]
+
+    def test_la_pousse_du_jour_est_reportee_telle_quelle(self) -> None:
+        """Ce qui a été acquis hier doit se retrouver à l'identique dans l'acquis du lendemain."""
+        memoire: dict = {}
+        soir = self._details(date(2026, 7, 29), 23, memoire)
+        memoire["pousse_gazon"] = soir["etat"]
+        acquis_attendu = soir["pousse_acquise_cm"] + soir["pousse_jour_cm"]
+
+        lendemain = self._details(date(2026, 7, 30), 0, memoire)
+        self.assertAlmostEqual(lendemain["pousse_acquise_cm"], acquis_attendu, places=1)
+        self.assertEqual(lendemain["pousse_jour_cm"], 0.0)
+
+    def test_la_pousse_du_jour_monte_avec_les_heures(self) -> None:
+        memoire: dict = {}
+        mesures = [self._details(date(2026, 7, 29), h, memoire)["pousse_jour_cm"]
+                   for h in (7, 10, 13, 16, 20)]
+        self.assertEqual(mesures, sorted(mesures), f"la pousse du jour recule : {mesures}")
+        self.assertGreater(mesures[-1], mesures[0])
+
+    def test_amorcage_sans_memoire_ne_fait_pas_chuter_la_hauteur(self) -> None:
+        """Première estimation ou montée de version : sans mémoire on repart du nominal.
+
+        Repartir de zéro ferait chuter la hauteur affichée d'un coup (6,2 -> 4,7 cm mesuré),
+        soit un défaut pire que celui qu'on corrige.
+        """
+        sans_memoire = self._details(date(2026, 7, 30), 12, {})
+        self.assertGreater(sans_memoire["pousse_acquise_cm"], 0.0)
+        self.assertGreater(sans_memoire["hauteur_cm"], 5.5)
+
+    def test_le_jour_de_la_tonte_ne_se_reporte_pas_le_lendemain(self) -> None:
+        """Le jour de la tonte la pousse est nulle — le lendemain ne doit rien en hériter.
+
+        ⚠️ Défaut introduit puis corrigé le 30/07/2026 : le report reconstituait la pousse de la
+        veille (`taux × frein`) au lieu de créditer celle CONSTATÉE. Il créditait donc une
+        journée pleine au jour de la tonte, et la hauteur bondissait de 5,5 à 5,8 cm à minuit —
+        le saut de minuit revenu par une autre porte.
+        """
+        memoire: dict = {}
+        veille = self._details(date(2026, 7, 27), 23, memoire)   # jour de la tonte
+        memoire["pousse_gazon"] = veille["etat"]
+        self.assertEqual(veille["pousse_jour_cm"], 0.0)
+
+        lendemain = self._details(date(2026, 7, 28), 0, memoire)
+        self.assertEqual(
+            lendemain["pousse_acquise_cm"], 0.0,
+            "le jour de la tonte a été crédité alors que rien n'a poussé",
+        )
+        self.assertAlmostEqual(
+            lendemain["hauteur_cm"], veille["hauteur_cm"], places=1,
+            msg="saut à minuit au lendemain de la tonte",
+        )
+
+    def test_une_nouvelle_tonte_remet_le_compteur_a_zero(self) -> None:
+        memoire = {"pousse_gazon": {"date": "2026-07-29", "tonte": "2026-07-20",
+                                    "acquis_cm": 3.0, "frein": 1.0}}
+        d = self._details(date(2026, 7, 30), 12, memoire)
+        # La mémoire porte une AUTRE tonte : elle ne doit pas être réutilisée.
+        self.assertLess(d["pousse_acquise_cm"], 3.0)
+        self.assertEqual(d["etat"]["tonte"], "2026-07-27")
+
+
+class TestRisqueGazonSurReserve(unittest.TestCase):
+    """Le risque se décide sur la RÉSERVE DU SOL, plus sur le bilan de la journée.
+
+    Question de Kévin le 31/07/2026 : « pourquoi risque gazon élevé ? ». Réponse : parce que
+    `bilan_hydrique_mm` est le bilan du JOUR (pluie + arrosage − ETc du jour), donc négatif
+    mécaniquement chaque nuit avant l'arrosage du matin. Ce n'était pas « ton gazon est en
+    danger » mais « tu n'as pas encore arrosé aujourd'hui ». L'historique le prouvait : bascule
+    sur « faible » à la seconde où l'arrosage partait, trois nuits d'affilée.
+    """
+
+    def test_reserve_saine_ne_donne_pas_un_risque_eleve(self) -> None:
+        niveau, raisons = guidance._evaluer_risque_gazon(
+            water_balance={"reserve_from_soil_ledger": True, "depletion_ratio": 0.2, "mad_ratio": 0.5},
+            bilan_hydrique_mm=-5.9,      # bilan du jour très négatif : c'est la nuit
+            pression_hydrique=0.0,
+        )
+        self.assertEqual(niveau, "faible", f"la nuit ne doit plus alarmer : {raisons}")
+
+    def test_reserve_epuisee_donne_un_risque_eleve(self) -> None:
+        niveau, raisons = guidance._evaluer_risque_gazon(
+            water_balance={"reserve_from_soil_ledger": True, "depletion_ratio": 1.0, "mad_ratio": 0.5},
+            bilan_hydrique_mm=0.0,       # bilan du jour neutre, mais le SOL est vide
+            pression_hydrique=0.0,
+        )
+        self.assertEqual(niveau, "eleve")
+        self.assertIn("épuisée", " ".join(raisons))
+
+    def test_sans_ledger_on_retombe_sur_le_bilan(self) -> None:
+        """Tout premier cycle, ledger vide : le bilan du jour est le seul signal disponible."""
+        niveau, raisons = guidance._evaluer_risque_gazon(
+            water_balance={},            # pas de ledger
+            bilan_hydrique_mm=-5.9,
+            pression_hydrique=0.0,
+        )
+        self.assertEqual(niveau, "eleve")
+        self.assertIn("sans réserve sol connue", " ".join(raisons))
+
+    def test_le_niveau_est_toujours_explique(self) -> None:
+        """Le capteur n'exposait AUCUNE raison : un « élevé » était incompréhensible."""
+        for wb in ({"reserve_from_soil_ledger": True, "depletion_ratio": 0.1, "mad_ratio": 0.5}, {}):
+            _, raisons = guidance._evaluer_risque_gazon(
+                water_balance=wb, bilan_hydrique_mm=0.0, pression_hydrique=0.0)
+            self.assertTrue(raisons, "aucune raison exposée")
+
+    def test_le_plancher_de_phase_ne_peut_pas_etre_abaisse(self) -> None:
+        """En Sursemis, la phase impose « au moins modéré » : un semis fragile n'est jamais
+        annoncé sans risque, même si la réserve est saine. Un test existant l'a rattrapé."""
+        niveau, raisons = guidance._evaluer_risque_gazon(
+            water_balance={}, bilan_hydrique_mm=0.0, pression_hydrique=0.0,
+            utiliser_reserve=False, plancher="modere",
+        )
+        self.assertEqual(niveau, "modere")
+        self.assertIn("plancher", " ".join(raisons))
+
+    def test_les_facteurs_externes_montent_toujours_le_niveau(self) -> None:
+        for kw, attendu in (({"vent": 25.0}, "vent"), ({"hauteur_gazon": 14.0}, "haut"),
+                            ({"heat_stress_level": "severe"}, "sévère")):
+            niveau, raisons = guidance._evaluer_risque_gazon(
+                water_balance={"reserve_from_soil_ledger": True, "depletion_ratio": 0.1, "mad_ratio": 0.5},
+                bilan_hydrique_mm=0.0, pression_hydrique=0.0, **kw)
+            self.assertEqual(niveau, "eleve", f"{kw} n'a pas élevé le risque")
+            self.assertIn(attendu, " ".join(raisons))
+
+
+class TestRessuyageApresPluie(unittest.TestCase):
+    """Un délai de ressuyage après la pluie, symétrique de celui après un arrosage.
+
+    `is_active_rain_weather` ne regarde que la météo de l'INSTANT : il n'existait donc AUCUN
+    délai après une averse, alors qu'un arrosage en impose 180 min. Le libellé promettait
+    pourtant « pluie en cours ou récente ». Kévin : « c'est l'intégration qui gère le temps de
+    pause de la tondeuse pendant la pluie » — elle ne le gérait qu'à moitié.
+    """
+
+    def _ctx(self, *, heure, memoire, pluie=False):
+        return decision.DecisionContext.from_legacy_args(
+            history=[], today=date(2026, 7, 31), hour_of_day=heure, temperature=20.0,
+            humidite=60.0, memory=memoire,
+            weather_profile={"weather_condition": "rainy" if pluie else "sunny"},
+            runtime_context={"mowing_cooldown_after_watering_minutes": 180},
+        )
+
+    def test_l_averse_est_horodatee(self) -> None:
+        etat = decision_mowing._etat_pluie(self._ctx(heure=10.0, memoire={}, pluie=True), True)
+        self.assertEqual(etat, {"date": "2026-07-31", "heure": 10.0})
+
+    def test_le_ressuyage_bloque_apres_l_averse(self) -> None:
+        memoire = {"derniere_pluie_active": {"date": "2026-07-31", "heure": 10.0}}
+        # 1 h après : encore 120 min de ressuyage
+        ecoule = decision_mowing._minutes_depuis_derniere_pluie(self._ctx(heure=11.0, memoire=memoire))
+        self.assertAlmostEqual(ecoule, 60.0, places=1)
+
+    def test_le_ressuyage_expire(self) -> None:
+        memoire = {"derniere_pluie_active": {"date": "2026-07-31", "heure": 10.0}}
+        ecoule = decision_mowing._minutes_depuis_derniere_pluie(self._ctx(heure=14.0, memoire=memoire))
+        self.assertAlmostEqual(ecoule, 240.0, places=1)   # > 180 : le garde ne s'applique plus
+
+    def test_l_horodatage_traverse_minuit(self) -> None:
+        memoire = {"derniere_pluie_active": {"date": "2026-07-30", "heure": 23.0}}
+        ecoule = decision_mowing._minutes_depuis_derniere_pluie(self._ctx(heure=1.0, memoire=memoire))
+        self.assertAlmostEqual(ecoule, 120.0, places=1)
+
+    def test_une_pluie_trop_vieille_est_ignoree(self) -> None:
+        """Au-delà de la veille, l'horodatage ne veut plus rien dire."""
+        memoire = {"derniere_pluie_active": {"date": "2026-07-20", "heure": 10.0}}
+        self.assertIsNone(decision_mowing._minutes_depuis_derniere_pluie(self._ctx(heure=12.0, memoire=memoire)))
+
+    def test_sans_horodatage_aucun_blocage(self) -> None:
+        self.assertIsNone(decision_mowing._minutes_depuis_derniere_pluie(self._ctx(heure=12.0, memoire={})))
+
+
+class TestHeureDecimale(unittest.TestCase):
+    """La pousse avançait par PALIERS D'UNE HEURE : `hour_of_day` était un entier.
+
+    Mesuré le 31/07/2026 : `jour_cm` valait exactement 0,0246 à 01 h 56 comme à 01 h 58, puis
+    sautait à 0,0505 à 02 h.
+    """
+
+    def test_la_fraction_de_journee_suit_les_minutes(self) -> None:
+        valeurs = [decision_mowing._growth_day_fraction(h) for h in (1.0, 1.25, 1.5, 1.75, 2.0)]
+        self.assertEqual(valeurs, sorted(valeurs))
+        self.assertTrue(all(a < b for a, b in zip(valeurs, valeurs[1:])),
+                        f"la fraction stagne dans l'heure : {valeurs}")
+
+
+class TestPousseNeRecuiitPas(unittest.TestCase):
+    """La pousse déjà acquise ne se recalcule pas — le gazon ne dé-pousse pas.
+
+    Constaté sur l'installation le 01/08/2026, sur l'historique brut du capteur :
+    09 h 10 → 6,0 cm, 11 h 40 → 5,9 cm, sans tonte. `taux × frein × fraction` appliquait le
+    frein du MOMENT à toute la journée : quand la chaleur monte, la pousse du matin est
+    effacée. Le frein thermique étant un escalier (≤ 24 °C : 1,0 ; > 24 °C : 0,65), franchir
+    24,0 °C suffisait à perdre 35 % de la matinée d'un coup.
+    """
+
+    @staticmethod
+    def _details(jour, heure, memoire, *, temperature, reserve=9.0, water=True):
+        context = decision.DecisionContext.from_legacy_args(
+            history=[{"type": "tonte", "date": "2026-07-27", "hauteur_coupe_mm": 55.0}],
+            today=jour,
+            hour_of_day=heure,
+            temperature=temperature,
+            memory=memoire,
+        )
+        bundle = {"reserve_actuelle_mm": reserve, "reserve_minimale_mm": 6.0,
+                  "reserve_hydrique_sol_mm": reserve} if water else {}
+        return decision_mowing._grass_growth_details(
+            context, {"phase_dominante": "Normal"}, bundle
+        )
+
+    def _journee(self, mesures, memoire=None):
+        """Déroule une journée en réinjectant l'état, comme le fait le coordinateur."""
+        memoire = {} if memoire is None else memoire
+        sorties = []
+        for heure, temp, reserve in mesures:
+            d = self._details(date(2026, 8, 1), heure, memoire,
+                              temperature=temp, reserve=reserve)
+            memoire["pousse_gazon"] = d["etat"]
+            sorties.append(d)
+        return sorties, memoire
+
+    def test_le_scenario_reel_du_01_08(self) -> None:
+        # Conditions relevées : réserve 5,2 → 4,6 → 4,2 mm, température 23 → 26 → 26,1 °C.
+        sorties, _ = self._journee([(9.17, 23.0, 5.2), (11.67, 26.0, 4.6), (12.66, 26.1, 4.2)])
+        hauteurs = [d["hauteur_cm"] for d in sorties]
+        self.assertEqual(hauteurs, sorted(hauteurs), f"la hauteur recule : {hauteurs}")
+
+    def test_le_seuil_des_24_degres_n_efface_pas_la_matinee(self) -> None:
+        # 24,0 °C (frein 1,0) puis 24,1 °C (frein 0,65) : un dixième de degré.
+        sorties, _ = self._journee([(10.0, 24.0, 9.0), (10.5, 24.1, 9.0)])
+        self.assertGreaterEqual(
+            sorties[1]["pousse_jour_cm"], sorties[0]["pousse_jour_cm"],
+            "franchir 24 °C efface la pousse déjà acquise",
+        )
+
+    def test_la_pousse_du_jour_est_monotone_quelles_que_soient_les_conditions(self) -> None:
+        memoire: dict = {}
+        precedent = -1.0
+        # Chaleur qui monte puis retombe, réserve qui s'épuise : rien ne doit reculer.
+        for heure, temp, reserve in [
+            (2.0, 18.0, 11.0), (5.0, 20.0, 10.0), (8.0, 24.0, 8.0), (11.0, 27.0, 6.5),
+            (14.0, 33.0, 5.0), (17.0, 31.0, 4.0), (20.0, 26.0, 3.0), (23.0, 21.0, 2.0),
+        ]:
+            d = self._details(date(2026, 8, 1), heure, memoire,
+                              temperature=temp, reserve=reserve)
+            memoire["pousse_gazon"] = d["etat"]
+            self.assertGreaterEqual(
+                d["pousse_jour_cm"], precedent,
+                f"recul à {heure} h ({temp} °C, {reserve} mm) : "
+                f"{precedent} → {d['pousse_jour_cm']}",
+            )
+            precedent = d["pousse_jour_cm"]
+
+    def test_a_conditions_stables_le_total_du_soir_est_inchange(self) -> None:
+        """L'accumulation ne doit pas déplacer le modèle, seulement l'empêcher de reculer."""
+        sorties, _ = self._journee([(h, 20.0, 9.0) for h in (2, 6, 10, 14, 18, 22)])
+        taux = decision_mowing._growth_rate_cm_per_day({"phase_dominante": "Normal"}, 8)
+        attendu = taux * 1.0 * decision_mowing._growth_day_fraction(22.0)
+        self.assertAlmostEqual(sorties[-1]["pousse_jour_cm"], attendu, places=2)
+
+    def test_le_frein_reste_actif_sur_la_suite_de_la_journee(self) -> None:
+        """Empêcher le recul ne doit pas neutraliser le frein : la CHALEUR doit ralentir."""
+        chaud, _ = self._journee([(8.0, 20.0, 9.0), (20.0, 34.0, 9.0)])
+        doux, _ = self._journee([(8.0, 20.0, 9.0), (20.0, 20.0, 9.0)])
+        self.assertLess(
+            chaud[-1]["pousse_jour_cm"], doux[-1]["pousse_jour_cm"],
+            "la chaleur de l'après-midi ne freine plus rien",
+        )
+
+    def test_migration_depuis_un_etat_sans_fraction(self) -> None:
+        """Le chemin réel de la montée de version 0.33.1 → 0.34.0.
+
+        L'état persisté par l'ancienne version porte `jour_cm` mais pas `fraction`. Le premier
+        cycle doit REPRENDRE la valeur mémorisée telle quelle — ni saut, ni chute — puis
+        accumuler normalement. Sans ce repli, la reprise recalculerait avec le frein du moment
+        et rejouerait exactement le défaut qu'on corrige, une fois, au redémarrage.
+        """
+        memoire = {"pousse_gazon": {"date": "2026-08-01", "tonte": "2026-07-27",
+                                    "acquis_cm": 1.20, "jour_cm": 0.15, "frein": 0.455}}
+        reprise = self._details(date(2026, 8, 1), 12.66, memoire,
+                                temperature=26.1, reserve=4.2)
+        self.assertAlmostEqual(reprise["pousse_jour_cm"], 0.15, places=2,
+                               msg="la reprise recalcule au lieu de prolonger")
+        memoire["pousse_gazon"] = reprise["etat"]
+
+        suite = [reprise["pousse_jour_cm"]]
+        for heure, temp, res in [(15.0, 28.0, 3.7), (18.0, 26.0, 3.2), (21.0, 22.0, 2.9)]:
+            d = self._details(date(2026, 8, 1), heure, memoire,
+                              temperature=temp, reserve=res)
+            memoire["pousse_gazon"] = d["etat"]
+            suite.append(d["pousse_jour_cm"])
+        self.assertEqual(suite, sorted(suite), f"recul après migration : {suite}")
+
+    def test_le_lendemain_repart_de_zero(self) -> None:
+        _sorties, memoire = self._journee([(10.0, 22.0, 9.0), (22.0, 22.0, 9.0)])
+        lendemain = self._details(date(2026, 8, 2), 1.0, memoire, temperature=22.0)
+        self.assertLess(lendemain["pousse_jour_cm"], 0.05,
+                        "la pousse d'hier est recomptée aujourd'hui")
+
+
+class TestFreinSansBilanHydrique(unittest.TestCase):
+    """Eau inconnue ≠ eau à volonté.
+
+    Au redémarrage, le premier cycle tourne sans bilan hydrique. Le frein d'eau était
+    silencieusement sauté : facteur 1,0, hauteur trop haute publiée pendant ~1 s. Relevé sur
+    l'installation le 01/08/2026 — 12:39:34,5 → 6,0 cm, 12:39:35,4 → 5,9 cm ; et le même
+    doublet la veille à 13:58:21. Même piège que le repli « soleil inconnu » de la 0.21.4.
+    """
+
+    @staticmethod
+    def _context(jour, memoire, temperature=20.0):
+        return decision.DecisionContext.from_legacy_args(
+            history=[{"type": "tonte", "date": "2026-07-27", "hauteur_coupe_mm": 55.0}],
+            today=jour, hour_of_day=12.0, temperature=temperature, memory=memoire,
+        )
+
+    def test_sans_bilan_le_frein_ne_depasse_pas_le_dernier_connu_du_jour(self) -> None:
+        memoire = {"pousse_gazon": {"date": "2026-08-01", "tonte": "2026-07-27",
+                                    "acquis_cm": 1.0, "jour_cm": 0.1, "frein": 0.45}}
+        ctx = self._context(date(2026, 8, 1), memoire)
+        sans_eau = decision_mowing._growth_modulation(
+            ctx, {}, frein_plafond=decision_mowing._frein_memorise_du_jour(ctx)
+        )
+        self.assertLessEqual(sans_eau, 0.45)
+
+    def test_le_frein_d_hier_ne_plafonne_PAS_aujourd_hui(self) -> None:
+        """Sinon une canicule d'hier bloquerait la pousse d'une journée fraîche."""
+        memoire = {"pousse_gazon": {"date": "2026-07-31", "tonte": "2026-07-27",
+                                    "acquis_cm": 1.0, "jour_cm": 0.1, "frein": 0.0}}
+        ctx = self._context(date(2026, 8, 1), memoire)
+        self.assertIsNone(decision_mowing._frein_memorise_du_jour(ctx))
+        sans_eau = decision_mowing._growth_modulation(
+            ctx, {}, frein_plafond=decision_mowing._frein_memorise_du_jour(ctx)
+        )
+        self.assertEqual(sans_eau, 1.0)
+
+    def test_le_plafond_ne_releve_jamais_le_frein(self) -> None:
+        # Plafond large, mais 34 °C : le frein thermique doit rester maître.
+        memoire = {"pousse_gazon": {"date": "2026-08-01", "tonte": "2026-07-27",
+                                    "acquis_cm": 1.0, "jour_cm": 0.1, "frein": 1.0}}
+        ctx = self._context(date(2026, 8, 1), memoire, temperature=34.0)
+        self.assertAlmostEqual(
+            decision_mowing._growth_modulation(
+                ctx, {}, frein_plafond=decision_mowing._frein_memorise_du_jour(ctx)),
+            0.25, places=3,
+        )
+
+    def test_avec_bilan_le_plafond_est_ignore(self) -> None:
+        # Quand l'eau est connue, c'est elle qui décide — pas un souvenir.
+        memoire = {"pousse_gazon": {"date": "2026-08-01", "tonte": "2026-07-27",
+                                    "acquis_cm": 1.0, "jour_cm": 0.1, "frein": 0.2}}
+        ctx = self._context(date(2026, 8, 1), memoire)
+        avec_eau = decision_mowing._growth_modulation(
+            ctx, {"reserve_hydrique_sol_mm": 12.0, "reserve_minimale_mm": 6.0},
+            frein_plafond=decision_mowing._frein_memorise_du_jour(ctx),
+        )
+        self.assertEqual(avec_eau, 1.0)
+
+
+class TestBesoinSepareDeLaDose(unittest.TestCase):
+    """« Combien il lui faut » ≠ « combien je vais verser ».
+
+    Signalé par Kévin le 01/08/2026 : l'entité « Objectif d'arrosage » affichait 0,0 mm
+    pendant que ses PROPRES attributs annonçaient `depletion_mm: 7,8` et une réserve 1,8 mm
+    sous le seuil de déclenchement. Cause : `if block_reason is not None: mm_cible = 0.0`,
+    écrit dans les deux branches. Zéro est juste pour la DOSE — un arrosage bloqué verse bien
+    zéro — mais faux pour le BESOIN, qu'aucun garde-fou ne fait disparaître. Relevé six fois
+    en trois jours, dont quatre retours à la valeur identique (7,4 → 0,0 → 7,4).
+
+    `objectif_mm` garde volontairement son sens (la dose : il sert de `target_cycle_mm` au plan
+    d'arrosage). C'est `besoin_mm` qui porte désormais le besoin.
+    """
+
+    WB = {"bilan_hydrique_mm": -4.5, "reserve_hydrique_sol_mm": 4.2, "reserve_actuelle_mm": 4.2,
+          "reserve_minimale_mm": 6.0, "reserve_utile_mm": 12.0, "depletion_mm": 7.8,
+          "depletion_ratio": 0.65, "mad_ratio": 0.5, "deficit_3j": 3.4, "deficit_7j": 9.4,
+          "reserve_from_soil_ledger": True, "et0_mm": 5.8, "etc_mm": 4.6,
+          "reserve_stock_mm": 4.2, "reserve_stock_max_mm": 24.0, "et_elapsed_fraction": 0.52,
+          "arrosage_recent_7j": 22.1, "arrosage_recent_jour": 0.0}
+
+    def _profil(self, **over):
+        kw = dict(phase_dominante="Normal", sous_phase="Normal", water_balance=self.WB,
+                  today=date(2026, 8, 1), pluie_24h=0.0, pluie_demain=0.0,
+                  humidite=52.0, temperature=26.1, etp=5.8, type_sol="limoneux")
+        kw.update(over)
+        return guidance.compute_watering_profile(**kw)
+
+    def test_un_blocage_annule_la_dose_mais_pas_le_besoin(self) -> None:
+        # ⚠️ Cette fixture bloquait par la PLUIE jusqu'au 02/08/2026. Depuis, une prévision ne
+        # bloque plus un sol au-delà du seuil MAD (0.37.0) — donc elle ne bloquait plus rien et
+        # le test ne prouvait plus ce qu'il annonce. On passe par l'humidité de l'air, qui
+        # bloque encore indépendamment de l'état du sol et ne réduit pas le besoin.
+        bloque = self._profil(humidite=90.0)
+        self.assertIsNotNone(bloque["block_reason"])
+        self.assertEqual(bloque["mm_final_recommande"], 0.0, "la dose doit rester à zéro")
+        self.assertAlmostEqual(bloque["besoin_mm"], 7.8, places=1,
+                               msg="le besoin a disparu avec le blocage")
+
+    def test_le_besoin_ne_ment_pas_sur_un_sol_confortable(self) -> None:
+        """Sol au-dessus du seuil : le besoin est réellement nul, et doit être calculé."""
+        confort = {**self.WB, "depletion_mm": 1.0, "depletion_ratio": 0.08,
+                   "reserve_actuelle_mm": 11.0, "reserve_stock_mm": 11.0,
+                   "reserve_hydrique_sol_mm": 11.0}
+        p = self._profil(water_balance=confort)
+        self.assertEqual(p["besoin_mm"], 0.0)
+
+    def test_sans_blocage_besoin_et_dose_coincident(self) -> None:
+        libre = self._profil()
+        self.assertIsNone(libre["block_reason"])
+        self.assertEqual(libre["besoin_mm"], libre["mm_final_recommande"])
+
+    def test_le_besoin_ignore_le_garde_fou_hebdomadaire(self) -> None:
+        """Le plafond hebdo est une POLITIQUE : il rogne la dose, pas le besoin du sol.
+
+        ⚠️ Première version de ce test : 28,5 mm consommés, en croyant épuiser le budget.
+        Le plafond vaut 37,4 mm sur cette fixture — il ne mordait donc jamais, et le test
+        passait au vert même en capturant le besoin APRÈS le plafond. On l'épuise pour de bon.
+        """
+        p = self._profil(water_balance={**self.WB, "arrosage_recent_7j": 35.0})
+        self.assertAlmostEqual(p["besoin_mm"], 7.8, places=1)
+        self.assertLess(
+            p["mm_final_recommande"], p["besoin_mm"],
+            "le plafond ne rogne pas la dose : la fixture ne l'épuise pas",
+        )

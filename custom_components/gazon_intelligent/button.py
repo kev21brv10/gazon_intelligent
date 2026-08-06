@@ -13,6 +13,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
             ArroserMaintenantButton(coordinator),
             RetourModeNormalButton(coordinator),
             DateActionAujourdhuiButton(coordinator),
+            ArreterArrosageButton(coordinator),
         ]
     )
 
@@ -54,3 +55,23 @@ class DateActionAujourdhuiButton(GazonEntityBase, ButtonEntity):
 
     async def async_press(self):
         await self.coordinator.async_set_date_action()
+
+
+class ArreterArrosageButton(GazonEntityBase, ButtonEntity):
+    """Arrêt d'urgence de l'arrosage, joignable depuis n'importe quel tableau de bord.
+
+    Le service `stop_irrigation` suffit fonctionnellement, mais un arrêt qu'il faut aller
+    chercher dans les Outils de développement n'est pas un arrêt d'urgence. Ce bouton le
+    met à portée sans dépendre de la carte, dont le catalogue de services est codé en dur.
+    """
+
+    _attr_name = "Arrêter l'arrosage"
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:water-off"
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._set_entity_identity("button", "arreter_arrosage")
+
+    async def async_press(self):
+        await self.coordinator.async_stop_irrigation(reason="Arrêt depuis le bouton.")

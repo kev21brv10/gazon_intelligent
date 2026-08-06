@@ -258,6 +258,8 @@ def build_water_bundle(
         "application_state": application_state,
         "water_balance": balance_snapshot,
         "objectif_mm": watering_profile["mm_final_recommande"],
+        # Besoin du sol, insensible aux blocages — voir `besoin_mm` dans guidance.py.
+        "besoin_mm": watering_profile.get("besoin_mm"),
         "objectif_mm_brut": watering_profile["deficit_brut_mm"],
         "deficit_mm_brut": watering_profile.get("deficit_mm_brut", watering_profile["deficit_brut_mm"]),
         "deficit_mm_ajuste": watering_profile.get("deficit_mm_ajuste"),
@@ -343,7 +345,7 @@ def _watering_needed_text() -> str:
     return "Éviter tout arrosage inutile."
 
 
-def _watering_window_phrase(window: str, hour_of_day: int) -> str:
+def _watering_window_phrase(window: str, hour_of_day: float) -> str:
     if window == "ce_matin":
         return "ce matin"
     if window == "demain_matin":
@@ -544,6 +546,14 @@ def _build_watering_bundle_base(
         ),
         "mm_cible": float(water_bundle.get("mm_cible") or 0.0),
         "mm_final_recommande": float(water_bundle.get("mm_final_recommande") or water_bundle.get("objectif_mm") or 0.0),
+        # ⚠️ Ce bloc RECOPIE le bundle clé par clé : toute clé oubliée ici se perd en
+        # silence, quel que soit le soin mis en amont. `besoin_mm` s'y était perdu —
+        # le calcul était juste, le snapshot ne le portait pas.
+        "besoin_mm": (
+            float(water_bundle["besoin_mm"])
+            if water_bundle.get("besoin_mm") is not None
+            else None
+        ),
         "mm_final": float(water_bundle.get("mm_final") or water_bundle.get("mm_final_recommande") or 0.0),
         "mm_requested": water_bundle.get("mm_requested"),
         "mm_applied": water_bundle.get("mm_applied"),
@@ -585,6 +595,7 @@ def _build_watering_bundle_base(
             water_bundle.get("fenetre_optimale"), risk_bundle["fenetre_optimale"]
         ),
         "risque_gazon": risk_bundle["risque_gazon"],
+        "risque_gazon_raisons": risk_bundle.get("risque_gazon_raisons") or [],
         "prochaine_reevaluation": risk_bundle["prochaine_reevaluation"],
         "tonte_autorisee": mowing_bundle["tonte_autorisee"],
         "tonte_statut": mowing_bundle["tonte_statut"],
@@ -1820,7 +1831,31 @@ def build_watering_bundle(
                 if normal_execution is not None and normal_execution.min_session_mm is not None
                 else 5.0
             )
-            if pluie_compensatrice:
+            # ⚠️ UNE PRÉVISION NE DÉCIDE PLUS POUR UN SOL QUI A DÉJÀ SOIF — même règle qu'en
+            # amont (0.37.0), appliquée ici au SECOND étage, qui échappait au garde précédent.
+            # Deux mécanismes distincts vivent dans ce bloc :
+            #   · une RÉDUCTION de la dose (−60 % ou −20 %) ;
+            #   · un BLOCAGE, quand la dose réduite passe sous la session minimale — il pose
+            #     `rain_floor_block_reason = "pluie_prevue_suffisante"`, exactement le motif que
+            #     la 0.37.0 croyait avoir neutralisé. Il ne venait pas d'ici, donc il subsistait.
+            # Mesuré le 02/08/2026 à 22 h 40 : le profil calculait 12,0 mm (`besoin_mm: 12`,
+            # `mm_final: 12` jusque dans `evening_cooling_debug`) et l'entité publiait **9,6** —
+            # soit 12 × 0,8, la réduction déclenchée par 2,9 mm annoncés. Sur un sol à ZÉRO.
+            # Arbitrage de Kévin : « la pluie prévue n'est jamais sûre, je préfère arroser ».
+            # Contrepartie assumée : si la pluie tombe pour de vrai, on aura versé un peu trop —
+            # l'excédent draine sous les racines. Le sol reste borné par sa capacité, jamais
+            # au-delà. Seuil retenu : le MAD, le même que le déclenchement.
+            try:
+                _depletion_ratio_sol = float(water_balance.get("depletion_ratio") or 0.0)
+            except (TypeError, ValueError):
+                _depletion_ratio_sol = 0.0
+            try:
+                _mad_ratio_sol = float(water_balance.get("mad_ratio") or 0.5)
+            except (TypeError, ValueError):
+                _mad_ratio_sol = 0.5
+            _sol_reclame_de_l_eau = _depletion_ratio_sol >= _mad_ratio_sol
+
+            if pluie_compensatrice and not _sol_reclame_de_l_eau:
                 reduction_mm = round(objectif_mm * 0.4, 1)
                 conseil_principal = "Réduis ou reporte l'arrosage: la pluie de demain peut compenser une grande partie du déficit."
                 if reduction_mm >= min_session_mm:
@@ -1837,7 +1872,7 @@ def build_watering_bundle(
                 mm_final = min(mm_final, objectif_mm)
                 mm_final_recommande = min(mm_final_recommande, objectif_mm)
                 action_a_eviter = "Lancer un cycle complet avant la pluie."
-            elif pluie_demain >= 2.0 or pluie_j2 >= 4.0 or pluie_3j >= 4.0:
+            elif (pluie_demain >= 2.0 or pluie_j2 >= 4.0 or pluie_3j >= 4.0) and not _sol_reclame_de_l_eau:
                 # On ne réduit l'arrosage que pour une pluie prévue SIGNIFICATIVE. Une
                 # averse de trace (ex. 0,8 mm à J+2) ne doit pas réduire/annuler l'arrosage
                 # d'un sol sec : sinon, quand l'objectif réduit passe sous la dose mini, on

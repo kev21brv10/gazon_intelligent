@@ -1244,6 +1244,13 @@ def compute_water_balance(
     today = today or _current_date()
     advanced_context = advanced_context or {}
     weather_profile = weather_profile or {}
+    # ⚠️ ET0 INCONNUE ≠ ET0 NULLE. `etp or 0.0` écrase l'absence en zéro, et TOUS les déficits
+    # qui en découlent tombent alors à 0 — un « pas de besoin » indiscernable d'un vrai. C'est
+    # ce qui se produit au premier cycle après un redémarrage (capteur de température pas encore
+    # là) et à chaque coupure du capteur : mesuré le 01/08/2026, `bilan_hydrique_mm: 0`,
+    # `deficit_3j: 0`, `deficit_7j: 0` alors que la déplétion du ledger valait 8,2 mm. On garde
+    # le repli à 0 pour le calcul (il n'y a rien de mieux), mais on PUBLIE l'incertitude.
+    etp_connue = etp is not None
     etp_j = max(0.0, etp or 0.0)
     pluie_j = max(0.0, pluie_24h or 0.0)
     pluie_j1 = max(0.0, pluie_demain or 0.0)
@@ -1320,6 +1327,8 @@ def compute_water_balance(
 
     return {
         "et0_mm": _round_half_up_1(max(0.0, etp_j)),
+        # Faux ⇒ les déficits ci-dessous valent 0 par DÉFAUT, pas par mesure.
+        "etp_connue": etp_connue,
         "bilan_hydrique_mm": bilan_hydrique_mm,
         "bilan_hydrique_3j": bilan_hydrique_3j,
         "bilan_hydrique_7j": bilan_hydrique_7j,

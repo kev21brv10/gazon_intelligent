@@ -819,7 +819,7 @@ class GazonBrain:
         weather_profile: dict[str, Any] | None,
         hauteur_min_tondeuse_cm: float | None = None,
         hauteur_max_tondeuse_cm: float | None = None,
-        hour_of_day: int | None = None,
+        hour_of_day: float | None = None,
         pluie_j2: float | None = None,
         pluie_3j: float | None = None,
         pluie_probabilite_max_3j: float | None = None,
@@ -1038,6 +1038,16 @@ class GazonBrain:
             previous_memory=self.memory,
             today=today,
         )
+        # Mémorise la pousse réellement acquise. Sans elle, les journées révolues étaient
+        # recomptées au taux nominal et le frein de conditions était annulé chaque minuit.
+        _pousse_state = snapshot.get("gazon_pousse_state")
+        if isinstance(_pousse_state, dict):
+            self.memory["pousse_gazon"] = dict(_pousse_state)
+        # Horodatage de la dernière pluie constatée : sans lui, le ressuyage après averse
+        # ne peut pas se mesurer et le garde reste inerte.
+        _pluie_state = snapshot.get("pluie_state")
+        if isinstance(_pluie_state, dict):
+            self.memory["derniere_pluie_active"] = dict(_pluie_state)
         snapshot["feedback_observation"] = self.memory.get("feedback_observation")
         if self.last_result is not None:
             self.last_result.extra["feedback_observation"] = self.memory.get("feedback_observation")

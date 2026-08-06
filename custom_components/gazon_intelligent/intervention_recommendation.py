@@ -194,10 +194,17 @@ def _clamp_score(value: int | float | None) -> int:
 
 
 def _format_temperature_value(value: float | int | None) -> str | None:
+    """Température lisible, virgule décimale — ces chaînes partent telles quelles à l'écran.
+
+    Elles ressortent dans `reason` et dans les libellés de contraintes, que la carte affiche
+    sans les retoucher. Avec `:g`, « 25.8 °C » s'affichait au POINT juste à côté des valeurs de
+    la carte, toutes à la virgule (constaté le 31/07/2026 : « 25.8 °C » sous un en-tête à
+    « 23,8 °C »). Une seule ponctuation pour un seul écran.
+    """
     if value is None:
         return None
     try:
-        return f"{float(value):g}"
+        return f"{float(value):g}".replace(".", ",")
     except (TypeError, ValueError):
         return None
 
@@ -214,11 +221,19 @@ def _temperature_range_label(temperature_min: float | None, temperature_max: flo
     return f"≤ {max_label} °C"
 
 
+_TEMPERATURE_SOURCE_LABELS = {
+    "capteur": "au capteur",
+    "weather": "selon la météo",
+    "meteo_forecast": "selon la prévision",
+}
+
+
 def _temperature_evaluation(
     *,
     reference_temperature: float | None,
     temperature_min: float | None,
     temperature_max: float | None,
+    reference_temperature_source: str | None = None,
 ) -> dict[str, Any] | None:
     if reference_temperature is None:
         return None
@@ -232,6 +247,15 @@ def _temperature_evaluation(
 
     current = float(reference_temperature)
     current_label = _format_temperature_value(current) or f"{current:.1f}"
+    # ⚠️ D'OÙ VIENT CE NOMBRE. L'intégration décide sur le capteur extérieur ; la carte affiche
+    # en en-tête la température de l'entité météo. Les deux sont justes et diffèrent de ~2 °C —
+    # on lisait donc « 23,8 °C » en haut d'écran et « 25,8 °C » dans le critère juste dessous,
+    # sans rien pour expliquer l'écart (constaté le 31/07/2026). La source est nommée.
+    source_label = _TEMPERATURE_SOURCE_LABELS.get(str(reference_temperature_source or "").strip())
+    if source_label:
+        current_label = f"{current_label} °C {source_label}"
+    else:
+        current_label = f"{current_label} °C"
     expected_label = _temperature_range_label(lower, upper) or "non disponible"
     matched = True
     blocking = False
@@ -259,7 +283,7 @@ def _temperature_evaluation(
         else:
             score_delta = -35
             blocking = True
-            reason = f"Température trop basse ({current_label} °C, attendu {expected_label})"
+            reason = f"Température trop basse ({current_label}, attendu {expected_label})"
             band = "blocked"
     elif too_hot and upper is not None:
         # Trop CHAUD en JOURNÉE : un produit s'applique tôt le matin (plus frais). On NE bloque
@@ -270,13 +294,13 @@ def _temperature_evaluation(
         delta = current - upper
         score_delta = -5
         reason = (
-            f"Température élevée en journée ({current_label} °C, attendu {expected_label}) "
+            f"Température élevée en journée ({current_label}, attendu {expected_label}) "
             "— à appliquer tôt le matin (plus frais)"
         )
         band = "morning_advised"
     else:
         score_delta = 10
-        reason = f"Température compatible ({current_label} °C, attendu {expected_label})"
+        reason = f"Température compatible ({current_label}, attendu {expected_label})"
         band = "in_range"
 
     return {
@@ -289,7 +313,7 @@ def _temperature_evaluation(
         "band": band,
         "score_delta": score_delta,
         "reason": reason,
-        "label": f"Température {('compatible' if matched else 'hors plage')} ({current_label} °C, attendu {expected_label})",
+        "label": f"Température {('compatible' if matched else 'hors plage')} ({current_label}, attendu {expected_label})",
     }
 
 
@@ -497,6 +521,7 @@ def _evaluate_product_candidate(
         reference_temperature=reference_temperature,
         temperature_min=temperature_min,
         temperature_max=temperature_max,
+        reference_temperature_source=reference_temperature_source,
     )
     latest_application = _latest_application_for_product(history, product_id or "", product_name)
     delay_days = None
@@ -553,7 +578,11 @@ def _evaluate_product_candidate(
             reasons.append(f"Phase compatible ({', '.join(phase_compatible[:3])})")
         elif phase_normal_maintenance:
             score += 2
-            reasons.append("Phase courante : entretien")
+            # ⚠️ Le libellé disait « Phase courante : entretien » alors que la phase courante
+            # est Normal — « entretien » est la cible du PRODUIT, pas la phase du gazon. La
+            # carte affichait donc « PHASE / Normal » sur un onglet et « Phase courante :
+            # entretien » sur l'autre : deux noms pour une seule phase (constaté 31/07/2026).
+            reasons.append("Produit d'entretien, compatible en phase Normal")
         else:
             score -= 12
             reasons.append(f"Phase cible ({', '.join(phase_compatible[:3])})")
@@ -644,19 +673,29 @@ def _evaluate_product_candidate(
             f"Limite annuelle atteinte ({applications_this_year} / {max_applications_per_year})"
         )
 
+    # `blocked_reason` est un RÉCAPITULATIF : chacune de ses parties a déjà sa propre
+    # contrainte, plus bas. On note donc de quels critères il est composé, pour ne pas le
+    # republier en doublon à l'affichage (voir `_constraints_for_candidate`). Comparer les
+    # LIBELLÉS ne marche pas : ils sont formulés différemment des deux côtés — « Réapplication
+    # possible à partir du 12/08 » contre « Réapplication attendue jusqu'au 12/08 ».
     blocked_reason_parts: list[str] = []
+    blocked_reason_codes: list[str] = []
     if annual_limit_reached and max_applications_per_year is not None:
         blocked_reason_parts.append(
             f"Limite annuelle atteinte ({applications_this_year} / {max_applications_per_year} applications cette année)."
         )
+        blocked_reason_codes.append("annual_limit_reached")
     if delay_days is not None and not due and next_reapplication_date is not None:
         blocked_reason_parts.append(
             f"Réapplication attendue jusqu'au {next_reapplication_date.strftime('%d/%m/%Y')}."
         )
+        blocked_reason_codes.append("reapplication_delay")
     if temperature_block_reason:
         blocked_reason_parts.append(temperature_block_reason)
+        blocked_reason_codes.append("temperature_range")
     if opportunity.get("hard_block_reason"):
         blocked_reason_parts.append(str(opportunity["hard_block_reason"]))
+        blocked_reason_codes.append("opportunity_hard_block")
     blocked_reason = _format_reasons(blocked_reason_parts) or None
 
     return {
@@ -680,6 +719,7 @@ def _evaluate_product_candidate(
         "score": _clamp_score(score),
         "reasons": reasons,
         "blocked_reason": blocked_reason,
+        "blocked_reason_codes": blocked_reason_codes,
         "applications_this_year": applications_this_year,
         "annual_limit_reached": annual_limit_reached,
         "temperature_min": temperature_min,
@@ -881,7 +921,9 @@ def _constraints_for_candidate(
         if phase_match:
             phase_constraint_label = f"Phase compatible ({phase_label})"
         elif phase_normal_maintenance:
-            phase_constraint_label = "Phase courante : entretien"
+            # Même correction que dans `reasons` : « entretien » qualifie le PRODUIT,
+            # la phase du gazon est Normal. Ne pas revenir à « Phase courante : entretien ».
+            phase_constraint_label = "Produit d'entretien, compatible en phase Normal"
         else:
             phase_constraint_label = f"Phase cible ({phase_label})"
         constraints.append(
@@ -963,14 +1005,25 @@ def _constraints_for_candidate(
             )
 
     if candidate.get("next_reapplication_date"):
-        next_display = candidate.get("next_reapplication_display") or candidate.get("next_reapplication_date")
+        # ⚠️ `next_reapplication_display` est produit par `_selection_details`, PAS par le
+        # candidat évalué qui arrive ici : le `or` retombait donc TOUJOURS sur la date ISO
+        # brute. Invisible tant que ces libellés n'étaient pas publiés ; le jour où la carte
+        # les a affichés (0.33.0), l'écran a montré « Réapplication attendue jusqu'au
+        # 2026-08-12 ». On formate ici, sans dépendre d'une clé venue d'ailleurs.
+        _next_date = _parse_date(candidate.get("next_reapplication_date"))
+        next_display = (
+            _next_date.strftime("%d/%m/%Y") if _next_date is not None
+            else str(candidate.get("next_reapplication_date"))
+        )
         constraints.append(
             _constraint_entry(
                 code="reapplication_delay",
                 label=(
                     f"Réapplication possible depuis le {next_display}"
                     if candidate.get("due")
-                    else f"Réapplication attendue jusqu'au {next_display}"
+                    # Même formulation que dans `reason` : dire QUAND ça se débloque, pas
+                    # jusqu'à quand ça reste bloqué. Le payload en portait trois différentes.
+                    else f"Réapplication possible à partir du {next_display}"
                 ),
                 value={
                     "due": bool(candidate.get("due")),
@@ -1047,17 +1100,34 @@ def _constraints_for_candidate(
                 )
             )
 
+    # ⚠️ `block_reason` porte SOUVENT le même fait qu'une contrainte déjà émise — sur
+    # l'installation le 31/07/2026, « Réapplication attendue jusqu'au 12/08/2026. » en doublon
+    # exact de `reapplication_delay`. Tant que seule la chaîne `reason` sortait, le doublon
+    # restait invisible ; publié tel quel, il donne DEUX puces bloquantes pour un seul motif.
+    _codes_emis = {
+        str(item.get("code") or "")
+        for item in constraints
+        if isinstance(item, dict)
+    }
+    _recap_de = [str(code) for code in (candidate.get("blocked_reason_codes") or [])]
+    # Le récapitulatif n'apporte rien si TOUTES ses parties sont déjà affichées séparément.
+    # Il reste publié quand il vient d'ailleurs (vrai blocage post-application, liste vide)
+    # ou qu'une de ses parties n'a pas de contrainte propre.
+    _recap_redondant = bool(_recap_de) and all(code in _codes_emis for code in _recap_de)
     if block_reason:
-        constraints.append(
-            _constraint_entry(
-                code="post_application_block",
-                label=block_reason,
-                value={"blocked_reason": block_reason},
-                hint="Le moteur attend la fin du blocage post-application.",
-                blocking=True,
-                met=False,
+        # Seule la CONTRAINTE est filtrée — elle est affichée telle quelle. L'exigence
+        # manquante, elle, reste toujours posée : c'est une autre liste, lue par le moteur.
+        if not _recap_redondant:
+            constraints.append(
+                _constraint_entry(
+                    code="post_application_block",
+                    label=block_reason,
+                    value={"blocked_reason": block_reason},
+                    hint="Le moteur attend la fin du blocage post-application.",
+                    blocking=True,
+                    met=False,
+                )
             )
-        )
         if not missing_requirements or missing_requirements[0]["code"] != "wait":
             missing_requirements.insert(
                 0,

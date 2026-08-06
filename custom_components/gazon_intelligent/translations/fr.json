@@ -379,6 +379,16 @@
           "description": "Valeur mesurée ou estimée de la réserve hydrique, en millimètres."
         }
       }
+    },
+    "stop_irrigation": {
+      "name": "Arrêter l'arrosage",
+      "description": "Arrête immédiatement l'arrosage en cours : ferme la vanne ouverte, enregistre l'eau déjà appliquée et libère le cycle.",
+      "fields": {
+        "raison": {
+          "name": "Raison",
+          "description": "Motif de l'arrêt, repris dans le journal des actions."
+        }
+      }
     }
   },
   "entity": {

@@ -75,6 +75,7 @@ PUBLIC_ENTITY_KEYS: dict[str, tuple[str, str]] = {
     "coordination_tondeuse": ("switch", f"{DOMAIN}_coordination_tondeuse"),
     "rafraichissement_soir": ("switch", f"{DOMAIN}_rafraichissement_soir"),
     "arroser_maintenant": ("button", f"{DOMAIN}_arroser_maintenant"),
+    "arreter_arrosage": ("button", f"{DOMAIN}_arreter_arrosage"),
 }
 
 ACTIVE_ENTITY_SUFFIXES: set[str] = set(PUBLIC_ENTITY_KEYS)

@@ -634,15 +634,21 @@ class MemoryCatalogTests(unittest.TestCase):
         )
 
         # En phase Normal, un produit d'entretien n'est pas "hors phase" : la contrainte de
-        # phase est neutre (met=True, libellé "Phase courante"), sans pénalité, mais le produit
-        # ne passe pas "recommandé" pour autant (phase_match reste False → reste "à préparer").
+        # phase est neutre (met=True), sans pénalité, mais le produit ne passe pas
+        # "recommandé" pour autant (phase_match reste False → reste "à préparer").
         self.assertFalse(recommendation["product"]["phase_match"])
         self.assertNotEqual(recommendation["status"], "recommended")
         phase_constraint = next(
             item for item in recommendation["constraints"] if item.get("code") == "phase_compatibility"
         )
         self.assertTrue(phase_constraint["met"])
-        self.assertIn("courante", phase_constraint["label"].lower())
+        # Le libellé doit qualifier le PRODUIT ("entretien"), pas rebaptiser la phase du gazon,
+        # qui est Normal : "Phase courante : entretien" faisait lire deux phases différentes
+        # sur deux onglets de la carte. Il doit donc nommer la phase réelle.
+        libelle = phase_constraint["label"].lower()
+        self.assertIn("entretien", libelle)
+        self.assertIn("normal", libelle)
+        self.assertNotIn("phase courante", libelle)
         self.assertTrue(recommendation["context"]["current_phase_is_default_normal"])
 
     def test_build_intervention_recommendation_keeps_low_score_candidate_in_preparation(self) -> None:
@@ -1784,3 +1790,248 @@ class PersistedSettingsSurviveComputeMemoryTests(unittest.TestCase):
         for cle in self.REGLAGES_PERSISTES:
             with self.subTest(reglage=cle):
                 self.assertIs(self._cycle({cle: True}).get(cle), True)
+
+
+class TemperatureCriterionReadabilityTests(unittest.TestCase):
+    """Le critère de température doit dire QUEL thermomètre a décidé, et à la virgule.
+
+    L'intégration décide sur le capteur extérieur, la carte affiche en en-tête l'entité météo.
+    Les deux sont justes et diffèrent : on lisait « 23,8 °C » en haut d'écran et « 25.8 °C »
+    dans le critère juste dessous — écart inexpliqué ET ponctuation différente sur le même
+    écran (constaté le 31/07/2026).
+    """
+
+    @staticmethod
+    def _eval(source: str | None):
+        return intervention._temperature_evaluation(
+            reference_temperature=25.8,
+            temperature_min=10.0,
+            temperature_max=30.0,
+            reference_temperature_source=source,
+        )
+
+    def test_virgule_decimale_jamais_de_point(self) -> None:
+        for source in ("capteur", "weather", "meteo_forecast", None):
+            with self.subTest(source=source):
+                reason = self._eval(source)["reason"]
+                self.assertIn("25,8", reason)
+                self.assertNotIn("25.8", reason)
+
+    def test_la_source_est_nommee_quand_elle_est_connue(self) -> None:
+        self.assertIn("au capteur", self._eval("capteur")["reason"])
+        self.assertIn("selon la météo", self._eval("weather")["reason"])
+        self.assertIn("selon la prévision", self._eval("meteo_forecast")["reason"])
+
+    def test_sans_source_connue_le_libelle_reste_correct(self) -> None:
+        # Ni source inventée, ni « °C » perdu, ni double « °C ».
+        for source in (None, "", "non disponible", "source_inconnue"):
+            with self.subTest(source=source):
+                reason = self._eval(source)["reason"]
+                self.assertIn("25,8 °C", reason)
+                self.assertEqual(reason.count("°C"), 2, reason)  # la valeur + la plage attendue
+
+    def test_hors_plage_porte_aussi_la_source(self) -> None:
+        chaud = intervention._temperature_evaluation(
+            reference_temperature=34.0, temperature_min=10.0, temperature_max=30.0,
+            reference_temperature_source="capteur",
+        )
+        self.assertIn("34 °C au capteur", chaud["reason"])
+        froid = intervention._temperature_evaluation(
+            reference_temperature=2.0, temperature_min=10.0, temperature_max=30.0,
+            reference_temperature_source="capteur",
+        )
+        self.assertIn("2 °C au capteur", froid["reason"])
+
+    def test_le_libelle_de_contrainte_suit_la_meme_regle(self) -> None:
+        label = self._eval("capteur")["label"]
+        self.assertIn("25,8 °C au capteur", label)
+        self.assertNotIn("25.8", label)
+
+    def test_la_source_traverse_bien_build_intervention_recommendation(self) -> None:
+        """Le CÂBLAGE, pas seulement la fonction.
+
+        Une mutation qui remplaçait `reference_temperature_source=...` par `None` chez
+        l'appelant passait tous les tests précédents : ils appelaient `_temperature_evaluation`
+        en direct. Ce test-ci part du point d'entrée réel.
+        """
+        recommendation = intervention.build_intervention_recommendation(
+            today=date(2026, 7, 31),
+            phase_active="Normal",
+            phase_source="absence_phase",
+            sous_phase="Normal",
+            selected_product_id=None,
+            selected_product_name=None,
+            temperature=25.8,
+            forecast_temperature_today=31.0,
+            temperature_source="capteur",
+            products={
+                "kick_pro": {
+                    "id": "kick_pro", "nom": "Kick Pro", "type": "Agent Mouillant",
+                    "usage_mode": "preventif", "reapplication_after_days": 21,
+                    "phase_compatible": ["Entretien"],
+                    "application_months": [4, 5, 6, 7, 8, 9, 10],
+                    "temperature_min": 10, "temperature_max": 30,
+                }
+            },
+            history=[],
+            application_state={},
+        )
+        contrainte = next(
+            item for item in recommendation["constraints"]
+            if item.get("code") == "temperature_range"
+        )
+        self.assertIn("25,8 °C au capteur", contrainte["label"])
+        self.assertIn("25,8 °C au capteur", recommendation["reason"])
+
+
+class ApplicationConstraintsAffichablesTests(unittest.TestCase):
+    """Les libellés de contraintes sont AFFICHÉS : ils doivent être présentables.
+
+    Ils dormaient dans le payload sans jamais sortir. Le jour où la carte les a affichés
+    (0.33.0), l'écran de Kévin a montré, sur son vrai catalogue :
+      ⏳ Réapplication attendue jusqu'au **2026-08-12**   ← date ISO brute
+      ⏳ Réapplication attendue jusqu'au 12/08/2026.      ← le MÊME fait, deux fois
+    Reproduit ici sur le scénario réel : Kick Pro, appliqué le 22/07, délai 21 jours.
+    """
+
+    @staticmethod
+    def _kick_pro():
+        return intervention.build_intervention_recommendation(
+            today=date(2026, 7, 31),
+            phase_active="Normal",
+            phase_source="absence_phase",
+            sous_phase="Normal",
+            selected_product_id=None,
+            selected_product_name=None,
+            temperature=28.6,
+            forecast_temperature_today=31.0,
+            temperature_source="capteur",
+            products={
+                "kick_pro": {
+                    "id": "kick_pro", "nom": "Kick Pro", "type": "Agent Mouillant",
+                    "usage_mode": "preventif", "reapplication_after_days": 21,
+                    "phase_compatible": ["Entretien"],
+                    "application_months": [4, 5, 6, 7, 8, 9, 10],
+                    "temperature_min": 10, "temperature_max": 30,
+                }
+            },
+            history=[{
+                "type": "Agent Mouillant", "date": "2026-07-22",
+                "produit_id": "kick_pro", "produit": "Kick Pro",
+                "reapplication_after_days": 21,
+                "produit_catalogue": {"id": "kick_pro", "nom": "Kick Pro"},
+            }],
+            application_state={},
+        )
+
+    def _contraintes(self):
+        return self._kick_pro()["constraints"]
+
+    def test_aucune_date_iso_brute_dans_un_libelle(self) -> None:
+        import re
+        for c in self._contraintes():
+            self.assertIsNone(
+                re.search(r"\d{4}-\d{2}-\d{2}", str(c.get("label") or "")),
+                f"date ISO brute affichée : {c.get('label')!r}",
+            )
+
+    def test_la_date_de_reapplication_est_au_format_francais(self) -> None:
+        delai = next(c for c in self._contraintes() if c["code"] == "reapplication_delay")
+        self.assertIn("12/08/2026", delai["label"])
+        self.assertTrue(delai["blocking"])
+        self.assertFalse(delai["met"])
+
+    def test_un_seul_bloquant_par_motif(self) -> None:
+        """Compare les CODES, pas les libellés.
+
+        Première version de ce test : elle vérifiait l'unicité des chaînes. Elle est passée
+        au vert alors que le doublon était toujours là — parce que les deux entrées disent
+        le même fait dans des mots différents (« possible à partir du 12/08 » contre
+        « attendue jusqu'au 12/08 »). Un test qui compare des chaînes ne peut pas voir ça.
+        """
+        codes = [c["code"] for c in self._contraintes() if c.get("blocking")]
+        self.assertEqual(codes, ["reapplication_delay"],
+                         f"le récapitulatif est republié en doublon : {codes}")
+
+    def test_le_recapitulatif_n_est_pas_republie(self) -> None:
+        contraintes = self._contraintes()
+        self.assertNotIn("post_application_block", {c["code"] for c in contraintes})
+        # …et le motif reste lisible une fois, pas zéro.
+        bloquants = [c["label"] for c in contraintes if c["blocking"]]
+        self.assertEqual(len(bloquants), 1)
+        self.assertIn("12/08/2026", bloquants[0])
+
+    def test_le_blocage_reste_signale_dans_les_exigences_manquantes(self) -> None:
+        # Le filtre ne porte QUE sur l'affichage : le moteur doit toujours voir
+        # « attendre la fin du blocage ».
+        codes = [m["code"] for m in self._kick_pro()["missing_requirements"]]
+        self.assertIn("wait", codes)
+
+    def test_l_attente_reste_prioritaire_hors_etat_bloque(self) -> None:
+        """Le cas où la promotion de « wait » en tête compte réellement.
+
+        En état « bloqué », `wait` est déjà ajouté en premier par un autre chemin : un test
+        bâti là-dessus reste vert même si on casse la promotion — il ne prouve rien. En
+        « préparation », c'est `prepare_declaration` qui arrive d'abord, et c'est cette
+        branche-ci qui remet l'attente devant. Filtrer l'affichage ne doit pas la déplacer.
+        """
+        for etat, attendu in (("preparation", "prepare_declaration"), ("recommended", "select_product")):
+            with self.subTest(etat=etat):
+                _c, manquantes, _e = intervention._constraints_for_candidate(
+                    candidate={"next_reapplication_date": "2026-08-12", "due": True,
+                               "blocked_reason_codes": ["reapplication_delay"]},
+                    state=etat,
+                    block_reason="Un délai post-application est encore en cours.",
+                    selected_ready=False,
+                )
+                codes = [m["code"] for m in manquantes]
+                self.assertEqual(codes[0], "wait", f"attente non prioritaire : {codes}")
+                self.assertIn(attendu, codes)
+
+    def test_un_recapitulatif_PARTIELLEMENT_couvert_reste_affiche(self) -> None:
+        """Le filtre ne doit écarter que le récapitulatif ENTIÈREMENT redondant.
+
+        Version précédente de ce test : elle passait un `application_block_reason` en croyant
+        déclencher `post_application_block`. Faux — pour un candidat complet, le motif vient de
+        `best["blocked_reason"]`, pas de l'état d'application. Le test ne prouvait rien.
+        On teste donc le garde-fou là où il vit.
+        """
+        candidat = {
+            "next_reapplication_date": "2026-08-12",
+            "due": False,
+            "blocked_reason_codes": ["reapplication_delay", "opportunity_hard_block"],
+        }
+        contraintes, _manquantes, _etat = intervention._constraints_for_candidate(
+            candidate=candidat,
+            state="blocked",
+            block_reason="Réapplication attendue jusqu'au 12/08/2026. · Sol gelé.",
+            selected_ready=False,
+        )
+        codes = {c["code"] for c in contraintes}
+        self.assertIn("reapplication_delay", codes)
+        self.assertIn("post_application_block", codes,
+                      "une partie du motif (opportunity_hard_block) n'a aucune contrainte "
+                      "propre : le récapitulatif doit rester affiché")
+
+    def test_un_recapitulatif_ENTIEREMENT_couvert_est_ecarte(self) -> None:
+        candidat = {
+            "next_reapplication_date": "2026-08-12",
+            "due": False,
+            "blocked_reason_codes": ["reapplication_delay"],
+        }
+        contraintes, _m, _e = intervention._constraints_for_candidate(
+            candidate=candidat, state="blocked",
+            block_reason="Réapplication attendue jusqu'au 12/08/2026.", selected_ready=False,
+        )
+        self.assertNotIn("post_application_block", {c["code"] for c in contraintes})
+
+    def test_un_motif_venu_d_ailleurs_est_toujours_affiche(self) -> None:
+        # Aucun code tracé = le motif ne vient pas du récapitulatif du candidat (vrai blocage
+        # post-application). Il doit passer, sinon on perd une information unique.
+        contraintes, _m, _e = intervention._constraints_for_candidate(
+            candidate={"next_reapplication_date": "2026-08-12", "due": False},
+            state="blocked",
+            block_reason="L'arrosage post-application n'est pas encore terminé.",
+            selected_ready=False,
+        )
+        self.assertIn("post_application_block", {c["code"] for c in contraintes})

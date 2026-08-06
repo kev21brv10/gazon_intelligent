@@ -142,7 +142,7 @@ class DecisionContext:
 
     history: list[dict[str, Any]]
     today: date
-    hour_of_day: int | None = None
+    hour_of_day: float | None = None
     temperature: float | None = None
     forecast_temperature_today: float | None = None
     temperature_source: str | None = None
@@ -177,7 +177,7 @@ class DecisionContext:
         cls,
         history: list[dict[str, Any]],
         today: date | None = None,
-        hour_of_day: int | None = None,
+        hour_of_day: float | None = None,
         temperature: float | None = None,
         forecast_temperature_today: float | None = None,
         temperature_source: str | None = None,
@@ -285,6 +285,7 @@ class DecisionResult:
     deficit_mm_ajuste: float | None = None
     mm_cible: float | None = None
     mm_final_recommande: float | None = None
+    besoin_mm: float | None = None
     mm_final: float | None = None
     fractionnement: dict[str, Any] | None = None
     niveau_confiance: str | None = None
@@ -445,6 +446,7 @@ class DecisionResult:
             "deficit_mm_ajuste": self.deficit_mm_ajuste,
             "mm_cible": self.mm_cible,
             "mm_final_recommande": self.mm_final_recommande,
+            "besoin_mm": self.besoin_mm,
             "mm_final": self.mm_final,
             "fractionnement": self.fractionnement,
             "niveau_confiance": self.niveau_confiance,

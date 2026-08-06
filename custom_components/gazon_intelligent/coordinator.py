@@ -169,6 +169,7 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "niveau_action",
     "fenetre_optimale",
     "risque_gazon",
+    "risque_gazon_raisons",
     "phase_dominante",
     "phase_dominante_source",
     "sous_phase",
@@ -228,6 +229,7 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "mowing_overdue_days",
     "mowing_overdue_factor",
     "gazon_hauteur_estimee_cm",
+    "gazon_pousse_jour_cm",
     "mowing_watering_coordination",
     "mowing_watering_coordination_msg",
     "mowing_cooldown_after_watering_minutes",
@@ -274,6 +276,13 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "fungal_risk_evening_block",
     "fungal_risk_reduce_watering",
 )
+
+
+# Veilleur de vanne : cadence de contrôle pendant un segment d'arrosage, et nombre de
+# relances tolérées avant d'abréger. Une seule relance : un relais qui retombe deux fois
+# n'est plus un accident.
+_ZONE_WATCH_INTERVAL_S = 15.0
+_ZONE_WATCH_MAX_RELANCES = 1
 
 
 class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -782,7 +791,12 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         current_dt = self._current_datetime()
         snapshot = self.brain.compute_snapshot(
             today=self._current_date(),
-            hour_of_day=current_dt.hour,
+            # ⚠️ HEURE DÉCIMALE, pas l'heure entière. Avec `current_dt.hour`, la pousse du
+            # gazon et les fenêtres n'avançaient que par PALIERS D'UNE HEURE : mesuré le
+            # 31/07/2026, `jour_cm` valait exactement 0,0246 à 01 h 56 comme à 01 h 58,
+            # puis sautait à 0,0505 à 02 h. Aucune comparaison d'heure n'est une égalité
+            # (uniquement des < et >=), le flottant est donc sans effet de bord.
+            hour_of_day=current_dt.hour + current_dt.minute / 60.0,
             temperature=temperature,
             forecast_temperature_today=forecast_summary.get("forecast_temperature_today"),
             temperature_source=temperature_source,
@@ -838,7 +852,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             rosee=rosee,
             pluie_24h=pluie_24h,
             pluie_demain=pluie_demain,
-            hour_of_day=current_dt.hour,
+            hour_of_day=current_dt.hour + current_dt.minute / 60.0,
         )
         snapshot.update(_fungal)
         if runtime_context.get("active_irrigation_session") is None:
@@ -1744,6 +1758,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         zones: list[dict[str, Any]] | None = None,
         source: str = "service",
         detected_at: datetime | None = None,
+        started_at: datetime | None = None,
         watering_cause: str | None = None,
         mm_scope: str | None = None,
         mm_interpretation: str | None = None,
@@ -1782,6 +1797,12 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         if detected_at is not None:
             payload["detected_at"] = detected_at.isoformat()
+            # `ended_at` explicite : `resolve_history_moment` le lit en PREMIER, et il vaut le
+            # même instant que `detected_at`. Le calcul d'espacement (cooldown 24 h) ne bouge
+            # donc pas — seul l'AFFICHAGE change, en lisant `started_at`.
+            payload["ended_at"] = detected_at.isoformat()
+        if started_at is not None:
+            payload["started_at"] = started_at.isoformat()
         await self._async_save_state()
         await self.async_request_refresh()
 
@@ -3245,6 +3266,13 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         return {
             "date_action": ended_at.date(),
+            # ⚠️ DÉBUT ET FIN, tous les deux. `started_at` servait uniquement à calculer la durée
+            # puis était jeté : l'historique ne gardait que l'instant de FIN, et l'affichage
+            # annonçait donc « arrosé à 05:18 » pour un cycle parti à 03:45:13 — treize secondes
+            # après l'ouverture de la fenêtre. Signalé par Kévin le 04/08/2026, vérifié sur les
+            # vannes : Z1 03:45→04:18, Z2 04:18→04:51, Z3 04:51→05:18.
+            "started_at": started_at,
+            "ended_at": ended_at,
             "objectif_mm": surface_mm,
             "objective_mm": surface_mm,
             "total_mm": surface_mm,
@@ -3285,6 +3313,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             zones=payload["zones"],
             source=payload["source"],
             detected_at=ended_at,
+            started_at=payload.get("started_at"),
         )
 
     async def async_register_product(
@@ -3705,18 +3734,28 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         zone,
         passage: int,
         order: int,
+        effective_duration_s: float | None = None,
     ) -> dict[str, Any]:
-        return {
+        # `effective_duration_s` = temps pendant lequel la vanne a RÉELLEMENT été ouverte.
+        # Sans lui, un relais retombé en cours de segment créditait quand même la dose pleine.
+        prevu_s = float(zone.duration_s)
+        reel_s = prevu_s if effective_duration_s is None else max(0.0, float(effective_duration_s))
+        ratio = 1.0 if prevu_s <= 0 else min(1.0, reel_s / prevu_s)
+        record: dict[str, Any] = {
             "order": order,
             "passage": passage,
             "zone": zone.zone,
             "entity_id": zone.zone,
             "rate_mm_h": round(zone.rate_mm_h, 1),
-            "duration_s": int(zone.duration_s),
-            "duration_seconds": int(zone.duration_s),
-            "duration_min": round(zone.duration_s / 60.0, 1),
-            "mm": round(zone.mm, 1),
+            "duration_s": int(reel_s),
+            "duration_seconds": int(reel_s),
+            "duration_min": round(reel_s / 60.0, 1),
+            "mm": round(zone.mm * ratio, 1),
         }
+        if ratio < 0.995:
+            record["interrupted"] = True
+            record["planned_duration_s"] = int(prevu_s)
+        return record
 
     def _build_active_irrigation_session(
         self,
@@ -3940,6 +3979,90 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
         self._set_last_irrigation_execution(execution)
 
+    def _zone_semble_ouverte(self, entity_id: str) -> bool:
+        """La vanne est-elle (encore) ouverte ?
+
+        ⚠️ `unavailable` / `unknown` ne valent PAS « fermée ». Au redémarrage de Home Assistant
+        l'entité disparaît quelques instants alors que le relais, lui, n'a pas bougé : conclure
+        « fermée » couperait le comptage d'une eau réellement versée. Dans le doute on considère
+        la vanne ouverte — c'est le seul repli qui ne perde pas d'eau réelle.
+        """
+        # Le veilleur ne doit JAMAIS pouvoir faire échouer un arrosage : toute lecture qui
+        # tourne mal se lit « ouverte », c'est-à-dire « on ne change rien au comportement ».
+        try:
+            states = getattr(getattr(self, "hass", None), "states", None)
+            state = states.get(entity_id) if states is not None else None
+        except Exception:  # pragma: no cover - lecture d'état défensive
+            return True
+        if state is None:
+            return True
+        valeur = str(getattr(state, "state", "") or "").strip().lower()
+        if valeur in {"unavailable", "unknown", ""}:
+            return True
+        return valeur == "on"
+
+    async def _attendre_zone_ouverte(
+        self, entity_id: str, duration_s: float, session: dict[str, Any]
+    ) -> float:
+        """Attend la durée du segment EN VÉRIFIANT que la vanne reste ouverte.
+
+        L'exécuteur dormait en AVEUGLE : si le relais retombait — sécurité firmware, coupure,
+        commande externe — il comptait quand même la dose entière. Des millimètres fantômes
+        étaient alors crédités au bilan du sol pour de l'eau jamais versée, et le gazon séchait
+        pendant que le modèle le croyait arrosé.
+
+        Retourne les secondes pendant lesquelles la vanne a RÉELLEMENT été ouverte.
+        """
+        restant = max(0.0, float(duration_s))
+        ouverte_s = 0.0
+        relances = 0
+        vue_ouverte = False
+        while restant > 0:
+            pas = min(_ZONE_WATCH_INTERVAL_S, restant)
+            await asyncio.sleep(pas)
+            restant -= pas
+            if self._zone_semble_ouverte(entity_id):
+                vue_ouverte = True
+                ouverte_s += pas
+                continue
+            if not vue_ouverte:
+                # ⚠️ On n'a JAMAIS constaté l'ouverture de cette vanne. Deux causes possibles :
+                # la commande met un instant à se refléter dans l'état, ou l'entité ne rapporte
+                # pas son état du tout. Dans les deux cas, conclure « elle est retombée »
+                # abrégerait TOUS les segments et plus rien ne serait arrosé. Le veilleur
+                # n'agit donc que sur une preuve : avoir vu la vanne ouverte, PUIS fermée.
+                # Sans preuve, on compte le temps comme avant — pas de régression, seulement
+                # pas d'amélioration.
+                ouverte_s += pas
+                continue
+            if relances >= _ZONE_WATCH_MAX_RELANCES:
+                # Deuxième chute : ce n'est plus un accident. On abrège le segment plutôt que
+                # de dormir sur une vanne fermée, et on ne compte que ce qui a coulé.
+                session.setdefault("zones_failed", []).append(
+                    {
+                        "passage": session.get("current_passage"),
+                        "zone": entity_id,
+                        "status": "zone_dropped",
+                        "error": "La vanne s'est refermée seule pendant l'arrosage.",
+                    }
+                )
+                _LOGGER.warning(
+                    "Zone %s refermée seule pendant l'arrosage : segment abrégé à %.0f s",
+                    entity_id,
+                    ouverte_s,
+                )
+                break
+            relances += 1
+            _LOGGER.warning("Zone %s retombée pendant l'arrosage : relance %d", entity_id, relances)
+            try:
+                await self.hass.services.async_call(
+                    "switch", "turn_on", {"entity_id": entity_id}, blocking=True
+                )
+            except Exception:  # pragma: no cover - on abrège plutôt que d'insister
+                _LOGGER.warning("Relance de la zone %s impossible : segment abrégé", entity_id)
+                break
+        return ouverte_s
+
     async def _safe_turn_off_zone(self, entity_id: str, session: dict[str, Any]) -> None:
         last_error: Exception | None = None
         for attempt in range(3):
@@ -4105,7 +4228,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         raise HomeAssistantError(message) from err
 
                     try:
-                        await asyncio.sleep(sleep_duration_s)
+                        ouverte_s = await self._attendre_zone_ouverte(
+                            zone.zone, sleep_duration_s, runtime_session
+                        )
                     finally:
                         await self._safe_turn_off_zone(zone.zone, runtime_session)
 
@@ -4113,6 +4238,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         zone=zone_segment,
                         passage=passage,
                         order=len(executed_zones) + 1,
+                        effective_duration_s=ouverte_s,
                     )
                     executed_zones.append(record)
                     runtime_session["zones_done"] = executed_zones
@@ -4446,6 +4572,17 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._set_active_irrigation_session(None)
             await self._persist_runtime_state()
             return
+        if not self.auto_irrigation_enabled and str(session.get("source") or "") == "auto_irrigation":
+            # L'arrosage automatique a été COUPÉ avant ce redémarrage : reprendre le cycle
+            # reviendrait à passer outre une décision explicite. La reprise ne consultait pas
+            # ce drapeau — un cycle interrompu repartait donc tout seul, auto désactivé.
+            # Une session MANUELLE, elle, reste légitime : l'utilisateur l'a demandée.
+            session["status"] = "cancelled"
+            session["last_error"] = "auto_irrigation_disabled"
+            self._persist_execution_snapshot(session, status="cancelled", error="auto_irrigation_disabled")
+            self._set_active_irrigation_session(None)
+            await self._persist_runtime_state()
+            return
         if self._auto_irrigation_task and not self._auto_irrigation_task.done():
             return
         if session.get("status") not in {"running", "paused", "recovery_required"}:
@@ -4454,6 +4591,170 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._resume_active_irrigation_session(session),
             "gazon_intelligent_auto_irrigation_resume",
         )
+
+    async def async_stop_irrigation(self, *, reason: str | None = None) -> dict[str, Any]:
+        """Arrête immédiatement le cycle d'arrosage en cours.
+
+        Trois choses doivent arriver ensemble, sinon l'arrêt laisse le système dans un état
+        pire que l'arrosage qu'il interrompt :
+
+        1. **La vanne se referme.** C'est déjà acquis : le `sleep` de chaque segment est
+           enveloppé d'un `try/finally` qui appelle `_safe_turn_off_zone`, lui-même protégé
+           par `asyncio.shield` — la fermeture survit donc à l'annulation de la tâche.
+        2. **La session est effacée.** Le `finally` de `_execute_canonical_watering_plan` ne
+           purge la session que `if not cancelled` : ce choix sert l'arrêt de Home Assistant,
+           où la session DOIT survivre pour être reprise au redémarrage. Un arrêt volontaire
+           veut l'inverse — sans purge explicite ici, la session resterait « en cours » et
+           `_maybe_resume_active_irrigation_session` la relancerait au prochain démarrage.
+        3. **L'eau déjà versée est enregistrée.** Sinon le bilan du sol ne la voit pas et le
+           système réarrose : c'est la cause racine « le système ne voit pas ce qu'il vient
+           d'arroser ». Les zones terminées sont dans `zones_done` ; la zone interrompue en
+           plein segment n'y est PAS (son enregistrement se fait après le `try/finally`), on
+           la reconstitue donc au prorata du temps réellement écoulé.
+
+        Idempotent : sans arrosage en cours, ne fait rien et le dit.
+        """
+        session = self._get_active_irrigation_session()
+        task = getattr(self, "_auto_irrigation_task", None)
+        task_vivante = task is not None and not task.done()
+
+        if not isinstance(session, dict) and not task_vivante:
+            return {"stopped": False, "reason": "aucun_arrosage_en_cours", "applied_mm": 0.0}
+
+        # Relevé AVANT annulation : après, la session peut avoir été rincée par le `finally`.
+        instantane = dict(session) if isinstance(session, dict) else {}
+        zone_en_cours = instantane.get("current_zone")
+        debut_zone = instantane.get("current_zone_started_at")
+        passage = int(instantane.get("current_passage") or 1)
+        index_zone = int(instantane.get("current_zone_index") or 0)
+        source = str(instantane.get("source") or "auto_irrigation")
+
+        if task_vivante and task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # pragma: no cover - la tâche a déjà journalisé son échec
+                _LOGGER.debug("Arrêt d'arrosage : la tâche s'est terminée en erreur", exc_info=True)
+
+        # Relu APRÈS l'annulation : une zone a pu se terminer normalement entre-temps.
+        session_apres = self._get_active_irrigation_session()
+        if isinstance(session_apres, dict):
+            instantane = dict(session_apres)
+        zones_faites: list[dict[str, Any]] = [
+            dict(z) for z in (instantane.get("zones_done") or []) if isinstance(z, dict)
+        ]
+
+        zone_partielle = self._build_interrupted_zone_record(
+            session=instantane,
+            zone=zone_en_cours,
+            started_at=debut_zone,
+            passage=passage,
+            zone_index=index_zone,
+            order=len(zones_faites) + 1,
+        )
+        if zone_partielle is not None:
+            zones_faites.append(zone_partielle)
+
+        applique_mm = self._round_runtime_mm(
+            sum(self._round_runtime_mm(z.get("mm")) for z in zones_faites)
+        )
+
+        if applique_mm > 0:
+            # `source` conservé (auto_irrigation / manual…) pour que les garde-fous existants
+            # comptent cette eau comme n'importe quelle autre ; c'est `watering_cause` qui
+            # porte l'information « cycle interrompu ».
+            await self.async_record_watering(
+                self._current_date(),
+                objectif_mm=applique_mm,
+                total_mm=applique_mm,
+                zones=zones_faites,
+                source=source,
+                watering_cause="arret_manuel",
+                mm_scope="global_surface",
+                mm_interpretation="surface_uniform",
+            )
+
+        self._set_active_irrigation_session(None)
+        self._auto_irrigation_task = None
+        await self._persist_runtime_state()
+
+        motif = str(reason or "").strip() or "Arrêt demandé."
+        self._emit_irrigation_event(
+            "gazon_intelligent_auto_irrigation_stopped",
+            {
+                "reason": motif,
+                "applied_mm": applique_mm,
+                "zone_count": len(zones_faites),
+                "interrupted_zone": zone_en_cours,
+                "source": source,
+            },
+        )
+        await self.async_record_user_action(
+            action="stop_irrigation",
+            state="ok",
+            reason=f"{motif} {applique_mm:.1f} mm déjà appliqués.".strip(),
+        )
+        await self.async_request_refresh()
+        return {
+            "stopped": True,
+            "applied_mm": applique_mm,
+            "zone_count": len(zones_faites),
+            "interrupted_zone": zone_en_cours,
+        }
+
+    def _build_interrupted_zone_record(
+        self,
+        *,
+        session: dict[str, Any],
+        zone: Any,
+        started_at: Any,
+        passage: int,
+        zone_index: int,
+        order: int,
+    ) -> dict[str, Any] | None:
+        """Reconstitue au prorata la zone coupée en plein segment.
+
+        Sans elle, arrêter un cycle à mi-zone perdrait cette eau pour le bilan du sol.
+        On borne au segment planifié : une horloge qui aurait sauté ne doit pas créditer
+        plus que ce que la vanne pouvait physiquement délivrer.
+        """
+        if not zone or not isinstance(started_at, datetime):
+            return None
+        segment = next(
+            (
+                s
+                for s in (session.get("zones_pending") or [])
+                if isinstance(s, dict)
+                and str(s.get("zone")) == str(zone)
+                and int(s.get("passage") or 0) == passage
+                and int(s.get("zone_index") or -1) == zone_index
+            ),
+            None,
+        )
+        if segment is None:
+            return None
+        duree_prevue_s = float(segment.get("duration_s") or 0.0)
+        mm_prevus = float(segment.get("mm") or 0.0)
+        if duree_prevue_s <= 0 or mm_prevus <= 0:
+            return None
+        ecoule_s = (self._current_utc_datetime() - started_at).total_seconds()
+        ecoule_s = max(0.0, min(ecoule_s, duree_prevue_s))
+        mm = self._round_runtime_mm(mm_prevus * (ecoule_s / duree_prevue_s))
+        if mm <= 0:
+            return None
+        return {
+            "order": order,
+            "passage": passage,
+            "zone": str(zone),
+            "entity_id": str(zone),
+            "duration_s": int(ecoule_s),
+            "duration_seconds": int(ecoule_s),
+            "duration_min": round(ecoule_s / 60.0, 1),
+            "mm": mm,
+            "interrupted": True,
+        }
 
     async def async_start_auto_irrigation(
         self,
