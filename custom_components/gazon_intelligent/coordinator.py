@@ -199,6 +199,7 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "tondeuse_resolution_state",
     "tondeuse_resolution_reason",
     "tondeuse_resolution_candidate_count",
+    "tondeuse_resolution_probe",
     "mower_coordination_enabled",
     "mower_coordination_ready",
     "mower_presence_state",
@@ -217,6 +218,7 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "mower_resolution_state",
     "mower_resolution_reason",
     "mower_resolution_candidate_count",
+    "mower_resolution_probe",
     "watering_blocked_by_mower",
     "watering_block_reason_code",
     "watering_block_reason_label",
@@ -287,6 +289,11 @@ _ZONE_WATCH_MAX_RELANCES = 1
 
 class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Coordinateur principal de l'intégration Gazon Intelligent."""
+
+    # Traçage du cycle (instrumentation pure). Annoté au niveau de la classe : mypy déduisait
+    # sinon le type `None` de la première affectation et refusait l'origine textuelle.
+    _cycle_origine_demandee: str | None = None
+    _cycle_sequence: int = 0
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         """Initialise le coordinateur."""
@@ -835,6 +842,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         snapshot.update(runtime_context)
         # LOT A — santé capteurs (calculé ici pour garantir la présence dans coordinator.data)
+        snapshot["decision_cycle"] = self._tracer_cycle()
         snapshot["sensor_health"] = self._build_sensor_health(
             temperature_source=temperature_source,
             humidite_capteur=humidite_capteur,
@@ -1142,7 +1150,20 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 hass = getattr(self, "hass", None)
                 states = getattr(hass, "states", None)
                 get_state = getattr(states, "get", None)
-                mower_state = get_state(configured) if callable(get_state) else None
+                # ⚠️ INSTRUMENTATION (aucun changement de comportement).
+                # « Je n'ai pas pu interroger » et « l'entité n'existe pas » produisaient le
+                # MÊME verdict `configured_missing`. C'est la signature de la famille : une
+                # incapacité devient une affirmation. Or on a mesuré le 06/08/2026 à 13:41:44
+                # un `configured_missing` publié alors que `lawn_mower.esperance_jr` était
+                # `docked` SANS un seul changement d'état de 13:40 à 13:47 (requête
+                # `significant_changes_only=false`). Le transitoire est donc INTERNE.
+                # `resolution_probe` sépare enfin les deux cas — à lire avant de corriger.
+                if not callable(get_state):
+                    probe = "machine_etats_injoignable"
+                    mower_state = None
+                else:
+                    mower_state = get_state(configured)
+                    probe = "entite_absente" if mower_state is None else "ok"
                 state_exists = mower_state is not None
                 return {
                     "entity_id": configured,
@@ -1150,6 +1171,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "resolution_reason": (
                         "Tondeuse configurée explicitement." if state_exists else "Tondeuse configurée introuvable."
                     ),
+                    "resolution_probe": probe,
                     "resolution_candidate_count": len(self._discover_mower_candidates()),
                 }
 
@@ -1160,6 +1182,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "entity_id": candidates[0],
                 "resolution_state": "fallback_single",
                 "resolution_reason": "Tondeuse découverte automatiquement.",
+                "resolution_probe": "ok",
                 "resolution_candidate_count": candidate_count,
             }
         if candidate_count == 0:
@@ -1167,12 +1190,14 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "entity_id": None,
                 "resolution_state": "missing",
                 "resolution_reason": "Aucune tondeuse détectée.",
+                "resolution_probe": "aucun_candidat",
                 "resolution_candidate_count": 0,
             }
         return {
             "entity_id": None,
             "resolution_state": "ambiguous",
             "resolution_reason": "Plusieurs tondeuses détectées. Configure une tondeuse explicitement.",
+            "resolution_probe": "plusieurs_candidats",
             "resolution_candidate_count": candidate_count,
         }
 
@@ -1208,6 +1233,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         resolution_state = mower_selection.get("resolution_state")
         resolution_reason = mower_selection.get("resolution_reason")
         resolution_candidate_count = mower_selection.get("resolution_candidate_count")
+        resolution_probe = mower_selection.get("resolution_probe")
         if not isinstance(mower_entity_id, str) or not mower_entity_id:
             raw_context = build_mower_context(
                 entity_id=None,
@@ -1218,6 +1244,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 resolution_state=resolution_state,
                 resolution_reason=resolution_reason,
                 resolution_candidate_count=resolution_candidate_count,
+                resolution_probe=resolution_probe,
             )
             raw_context.update(
                 {
@@ -1250,6 +1277,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 resolution_state=resolution_state,
                 resolution_reason=resolution_reason,
                 resolution_candidate_count=resolution_candidate_count,
+                resolution_probe=resolution_probe,
             )
             raw_context["tondeuse_raison"] = resolution_reason
             return {
@@ -1311,6 +1339,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             resolution_state=resolution_state,
             resolution_reason=resolution_reason,
             resolution_candidate_count=resolution_candidate_count,
+            resolution_probe=resolution_probe,
         )
         return {
             **raw_context,
@@ -1592,6 +1621,28 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if weather_profile.get("weather_condition") in {"fog", "rainy", "pouring"}:
             return 1.0
         return None
+
+    def _tracer_cycle(self) -> dict[str, Any]:
+        """Origine et numéro du cycle courant. Trace pure, aucune décision n'en dépend.
+
+        `origine` vaut `capteur:<entity_id>` / `vanne:<entity_id>` quand un changement d'état a
+        déclenché le rafraîchissement, `intervalle` quand c'est le cycle périodique de 2 min.
+        Deux publications consécutives portant la même seconde mais des origines différentes
+        signent une concurrence entre les deux chemins — l'hypothèse à confirmer ou à écarter
+        pour l'objectif non reproductible.
+        """
+        try:
+            origine = getattr(self, "_cycle_origine_demandee", None) or "intervalle"
+            self._cycle_origine_demandee = None
+            seq = int(getattr(self, "_cycle_sequence", 0)) + 1
+            self._cycle_sequence = seq
+            return {
+                "cycle_origine": origine,
+                "cycle_sequence": seq,
+                "cycle_at": self._current_datetime().isoformat(),
+            }
+        except Exception:  # noqa: BLE001 - une trace ne doit jamais casser une décision
+            return {"cycle_origine": "inconnue", "cycle_sequence": None, "cycle_at": None}
 
     def _build_sensor_health(
         self,
@@ -2022,8 +2073,33 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if asyncio.iscoroutine(maybe_schedule):
             await maybe_schedule
 
+    def _marquer_origine_cycle(self, origine: str) -> None:
+        """Note ce qui a demandé le prochain cycle. Purement descriptif.
+
+        ⚠️ Défensif : les tests instancient le coordinateur par `object.__new__`, donc sans
+        `__init__`. Une exception ici ferait tomber tout le cycle de décision pour une trace.
+        """
+        try:
+            if getattr(self, "_cycle_origine_demandee", None) is None:
+                self._cycle_origine_demandee = origine
+        except Exception:  # noqa: BLE001 - une trace ne doit jamais casser une décision
+            pass
+
     @callback
     def _handle_source_state_change(self, event: Event) -> None:
+        # ⚠️ INSTRUMENTATION. `objectif_d_arrosage` est passé de 5,0 à 0,0 le 06/08/2026 avec
+        # réserve, déficits, ETP, température, `depletion_ratio` et `block_reason` TOUS
+        # identiques — 9 bascules en une heure, aucun `unavailable` dans la fenêtre. La sortie
+        # n'est donc pas reconstructible depuis ce que le système publie. Deux passes
+        # concurrentes (événement de capteur / intervalle de 2 min) sont la piste, mais rien
+        # ne permettait de savoir LAQUELLE avait produit une publication donnée.
+        # On mesure d'abord. Corriger sans mesurer a déjà produit de faux diagnostics ici.
+        try:
+            self._marquer_origine_cycle(
+                f"capteur:{(event.data or {}).get('entity_id') or '?'}"
+            )
+        except Exception:  # noqa: BLE001
+            pass
         if self._source_refresh_task and not self._source_refresh_task.done():
             return
 
@@ -2040,6 +2116,12 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @callback
     def _handle_zone_state_change(self, event: Event) -> None:
+        try:
+            self._marquer_origine_cycle(
+                f"vanne:{(event.data or {}).get('entity_id') or '?'}"
+            )
+        except Exception:  # noqa: BLE001
+            pass
         if self._zone_tracking_suspended > 0:
             return
 
