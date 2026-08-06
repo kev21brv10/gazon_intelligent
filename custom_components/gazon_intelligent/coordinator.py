@@ -739,13 +739,22 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             et0_source = "fallback_pm_location"
         else:
             et0_source = "fallback_pm"
-        humidite = self._validate_sensor_value(
+        # ⚠️ On conserve la valeur DU CAPTEUR avant tout repli météo : les drapeaux de santé
+        # testaient la valeur RÉSOLUE, donc post-repli, et ne pouvaient pratiquement jamais être
+        # faux. Mesuré sur 144 h : `temperature_valid` faux 0,08 h et `humidity_valid` 0,08 h,
+        # contre 2,19 h pour `pluie_valid` — qui teste bien son capteur — alors que les trois
+        # sont alimentés par LA MÊME station. Instant citable : le 29/07/2026 à 17:57:46,
+        # `temperature_valid: true` alors que le capteur était indisponible depuis 17:52:53 et
+        # que l'ET0 tournait sur le repli météo.
+        humidite_capteur = self._validate_sensor_value(
             self._get_float_state(self._get_conf(CONF_CAPTEUR_HUMIDITE)), "humidite"
         )
+        humidite = humidite_capteur
         if humidite is None:
             humidite = weather_profile.get("weather_humidity")
         humidite_sol = self._get_float_state(self._get_conf(CONF_CAPTEUR_HUMIDITE_SOL))
-        vent = self._get_float_state(self._get_conf(CONF_CAPTEUR_VENT))
+        vent_capteur = self._get_float_state(self._get_conf(CONF_CAPTEUR_VENT))
+        vent = vent_capteur
         if vent is None:
             vent = weather_profile.get("weather_wind_speed")
         rosee = self._get_float_state(self._get_conf(CONF_CAPTEUR_ROSEE))
@@ -826,25 +835,15 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         snapshot.update(runtime_context)
         # LOT A — santé capteurs (calculé ici pour garantir la présence dans coordinator.data)
-        snapshot["sensor_health"] = {
-            "temperature_valid": temperature is not None,
-            # Tester le CAPTEUR, pas la valeur résolue : `pluie_24h` reprend la valeur du capteur
-            # quand il en a une, et retombe sur la prévision sinon — l'expression d'origine
-            # (`pluie_24h is not None or pluie_24h_sensor is None`) était donc toujours vraie et le
-            # voyant ne pouvait jamais signaler un capteur pluie en panne. Même forme que etp_valid.
-            "pluie_valid": pluie_24h_sensor is not None or self._get_conf(CONF_CAPTEUR_PLUIE_24H) is None,
-            "etp_valid": etp_capteur is not None or self._get_conf(CONF_CAPTEUR_ETP) is None,
-            "humidity_valid": humidite is not None or self._get_conf(CONF_CAPTEUR_HUMIDITE) is None,
-            # QUALITÉ DE L'ET0 HORAIRE (0.19.0) : depuis qu'elle pilote le bilan sol, savoir si
-            # elle tourne sur des valeurs MESURÉES ou sur des replis n'est plus un détail. Le
-            # rayonnement est le plus déterminant (repli = ciel déduit des nuages) ; le vent
-            # compte aussi beaucoup (un vent PRÉVU au lieu de mesuré est ce qui donnait 9 mm/j
-            # au lieu de 6). Exposé ici pour rester au même endroit que le reste de la santé
-            # capteurs, donc visible sans activer les entités de diagnostic.
-            "eto_radiation_measured": eto_hourly.get("radiation_source") == "capteur",
-            "eto_pressure_measured": eto_hourly.get("pressure_source") == "capteur",
-            "eto_hourly_available": eto_hourly.get("value") is not None,
-        }
+        snapshot["sensor_health"] = self._build_sensor_health(
+            temperature_source=temperature_source,
+            humidite_capteur=humidite_capteur,
+            vent_capteur=vent_capteur,
+            etp_capteur=etp_capteur,
+            pluie_24h_sensor=pluie_24h_sensor,
+            weather_profile=weather_profile,
+            eto_hourly=eto_hourly,
+        )
         # LOT E — risque fongique (calculé ici pour garantir la présence dans coordinator.data)
         _fungal = _compute_fungal_risk(
             temperature=temperature,
@@ -1593,6 +1592,95 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if weather_profile.get("weather_condition") in {"fog", "rainy", "pouring"}:
             return 1.0
         return None
+
+    def _build_sensor_health(
+        self,
+        *,
+        temperature_source: str,
+        humidite_capteur: float | None,
+        vent_capteur: float | None,
+        etp_capteur: float | None,
+        pluie_24h_sensor: float | None,
+        weather_profile: dict[str, Any],
+        eto_hourly: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Voyants de santé des ENTRÉES. Extrait pour être testable directement.
+
+        ⚠️ Chaque drapeau doit tester sa SOURCE, jamais la valeur résolue : une valeur résolue
+        l'est aussi par un repli, et le voyant reste alors au vert pendant que la mesure manque.
+        """
+        return {
+            # Teste la SOURCE, pas la valeur résolue (cf. le commentaire sur `humidite_capteur`).
+            # `temperature_source` vaut « capteur » uniquement quand la mesure vient du capteur
+            # configuré ; « weather », « meteo_forecast » et « non disponible » sont des replis.
+            "temperature_valid": (
+                temperature_source == "capteur"
+                or self._get_conf(CONF_CAPTEUR_TEMPERATURE) is None
+            ),
+            # Tester le CAPTEUR, pas la valeur résolue : `pluie_24h` reprend la valeur du capteur
+            # quand il en a une, et retombe sur la prévision sinon — l'expression d'origine
+            # (`pluie_24h is not None or pluie_24h_sensor is None`) était donc toujours vraie et le
+            # voyant ne pouvait jamais signaler un capteur pluie en panne. Même forme que etp_valid.
+            "pluie_valid": pluie_24h_sensor is not None or self._get_conf(CONF_CAPTEUR_PLUIE_24H) is None,
+            "etp_valid": etp_capteur is not None or self._get_conf(CONF_CAPTEUR_ETP) is None,
+            "humidity_valid": (
+                humidite_capteur is not None or self._get_conf(CONF_CAPTEUR_HUMIDITE) is None
+            ),
+            # ⚠️ LE VENT N'AVAIT AUCUN DRAPEAU — alors que c'est le levier majeur de l'ET0.
+            # Mesuré sur 757 échantillons appariés : vent mesuré médiane 4,7 km/h contre vent
+            # PRÉVU médiane 10,1, le prévu supérieur dans 97 % des cas. En rejouant le calcul
+            # sur les entrées réelles du 29/07 : capteurs 8,9 mm, vent seul replié 12,1 (+36 %),
+            # température seule repliée 8,8 (−1 %). Ce jour-là, DEUX SECONDES de repli ont posé
+            # le pic d'ET0 du jour à 12,4, et le cliquet `max(etp, etp_pic_jour)` l'a figé.
+            "wind_measured": vent_capteur is not None,
+            "wind_valid": vent_capteur is not None or self._get_conf(CONF_CAPTEUR_VENT) is None,
+            # L'entité météo elle-même : indisponible 64 min le 03/08/2026 HORS redémarrage,
+            # avec tous les drapeaux au vert pendant ce temps. Sans ce voyant, une panne de la
+            # source de repli est parfaitement invisible.
+            "weather_profile_available": bool(weather_profile),
+            # QUALITÉ DE L'ET0 HORAIRE (0.19.0) : depuis qu'elle pilote le bilan sol, savoir si
+            # elle tourne sur des valeurs MESURÉES ou sur des replis n'est plus un détail. Le
+            # rayonnement est le plus déterminant (repli = ciel déduit des nuages) ; le vent
+            # compte aussi beaucoup (un vent PRÉVU au lieu de mesuré est ce qui donnait 9 mm/j
+            # au lieu de 6). Exposé ici pour rester au même endroit que le reste de la santé
+            # capteurs, donc visible sans activer les entités de diagnostic.
+            "eto_radiation_measured": eto_hourly.get("radiation_source") == "capteur",
+            "eto_pressure_measured": eto_hourly.get("pressure_source") == "capteur",
+            "eto_hourly_available": eto_hourly.get("value") is not None,
+            # ⚠️ L'ET RÉELLEMENT DÉBITÉE DU JOUR, exposée pour la première fois. C'est elle qui
+            # vide la réserve, et elle n'était visible nulle part : seule `etp_mm` (estimation
+            # PLEINE JOURNÉE, majorante) l'était. L'écart n'est pas anecdotique — sur 8 jours,
+            # 36,7 mm débités contre 49,1 mm estimés, soit +33,8 %, 8 jours sur 8 dans le même
+            # sens. Et c'est ce chiffre qui aurait montré d'un coup d'œil la marche du 29/07 :
+            # +1,0 mm en 68 secondes, soit 53 mm/h, quand l'ET0 horaire réelle plafonne à 0,6.
+            **self._etp_ecoulee_du_jour(),
+        
+        }
+
+    def _etp_ecoulee_du_jour(self) -> dict[str, Any]:
+        """ET réellement débitée aujourd'hui, lue dans le journal du bilan sol.
+
+        Défensif par construction : ce bloc alimente `sensor_health`, qui doit rester présent
+        même si le journal est absent, vide, corrompu, ou daté d'hier. Une exception ici
+        priverait l'utilisateur de TOUS les voyants de santé.
+        """
+        vide: dict[str, Any] = {"etp_ecoulee_mm": None, "etp_jour_estime_mm": None}
+        try:
+            state = self.soil_balance or {}
+            ledger = state.get("ledger") or []
+            if not ledger:
+                return vide
+            entree = ledger[-1]
+            if not isinstance(entree, dict):
+                return vide
+            if str(entree.get("date") or "") != self._current_date().isoformat():
+                return vide
+            return {
+                "etp_ecoulee_mm": entree.get("etp_elapsed_mm"),
+                "etp_jour_estime_mm": entree.get("etp_mm"),
+            }
+        except (AttributeError, TypeError, ValueError, IndexError):
+            return vide
 
     def _extract_block_reason(self, snapshot: dict[str, Any]) -> str | None:
         reason = str(snapshot.get("block_reason") or snapshot.get("raison_decision") or "").strip()
