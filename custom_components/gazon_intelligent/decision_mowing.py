@@ -478,6 +478,18 @@ def _resolve_mowing_window(
         return "blocked", "Température trop élevée pour tondre."
     if vent is not None and vent > _MOWING_WINDOW_BLOCK_WIND:
         return "blocked", "Vent trop fort pour tondre."
+    # ⚠️ L'HEURE PASSE AVANT LES VERDICTS « À ÉVITER ».
+    # Ces deux bornes-là sont BLOQUANTES ; le vent soutenu et la chaleur, eux, ne font que
+    # déconseiller. Les tester après laissait un simple « à éviter » l'emporter sur un refus
+    # ferme : par nuit d'été tiède (25-30 °C) ou par vent soutenu, la fenêtre publiait
+    # « Température élevée : à éviter » au lieu de « Nuit : attendre le lever du soleil ».
+    # Mesuré le 05/08/2026 à 21:38 et 21:40, soleil couché depuis 21:26.
+    # ⚠️ Et le défaut ne touchait pas que la nuit : à 3 h du matin par 27 °C, le refus
+    # « Matin trop tôt » tombait de la même façon. Toute la plage 22 h → 10 h était concernée.
+    if hour < _MOWING_WINDOW_IDEAL_START:
+        return "blocked", "Matin trop tôt: attendre le ressuyage."
+    if hour >= _MOWING_WINDOW_NIGHT_END:
+        return "blocked", "Nuit: attendre le lever du soleil."
     if vent is not None and vent >= _MOWING_WINDOW_DISCOURAGED_WIND:
         return "discouraged", "Vent soutenu: à éviter."
     if (
@@ -485,8 +497,6 @@ def _resolve_mowing_window(
         and _MOWING_WINDOW_DISCOURAGED_TEMP_MIN <= float(temperature) <= _MOWING_WINDOW_BLOCK_TEMP_MIN
     ):
         return "discouraged", "Température élevée: à éviter."
-    if hour < _MOWING_WINDOW_IDEAL_START:
-        return "blocked", "Matin trop tôt: attendre le ressuyage."
     if _MOWING_WINDOW_IDEAL_START <= hour < _MOWING_WINDOW_IDEAL_END:
         return "ideal", "Fenêtre idéale du matin."
     if soir_debut <= hour < soir_fin:
@@ -1955,11 +1965,24 @@ def build_mowing_bundle(
     # On corrige ICI : une seule fois, pour tous les consommateurs.
     if mowing_block_reason_code == "machine_unavailable" and mowing_machine_unavailable_label:
         mowing_block_reason_label = mowing_machine_unavailable_label
+    # ⚠️ LE VERDICT DE L'HORLOGE, CAPTURÉ AVANT QU'UN MOTIF MACHINE NE L'ÉCRASE.
+    # Les deux lignes ci-dessous remplacent l'état de la fenêtre par le motif machine — c'est
+    # voulu POUR L'AFFICHAGE (une panne prime sur « créneau intermédiaire »). Mais le calcul
+    # d'autorisation lisait ensuite cet état déjà réécrit, et `mowing_window_blocked_by_schedule`
+    # ajoutait `and not mowing_blocked` : dès qu'une panne survenait, le « Nuit : attendre le
+    # lever du soleil » de la fenêtre était purement et simplement perdu.
+    # Mesuré le 05/08/2026 : à 21:38, soleil couché depuis 21:26, `machine_unavailable` →
+    # `tonte_autorisee` passe à `on`. Et le 06/08 à 13:41:44, DOUZE MILLISECONDES sans voir le
+    # robot suffisaient à publier « tonte autorisée aujourd'hui » alors que le modèle disait
+    # « repos jusqu'au 08/08 ».
+    mowing_window_blocked_by_clock = mowing_window_state == "blocked"
     if mowing_blocked:
         mowing_window_state = "blocked"
         mowing_window_reason = mowing_block_reason_label
     mowing_window_label = _mowing_window_label(mowing_window_state)
-    mowing_window_blocked_by_schedule = mowing_window_state == "blocked" and not mowing_blocked
+    # Inchangé — c'est le drapeau d'AFFICHAGE : on n'ajoute le message de fenêtre que si rien
+    # d'autre ne bloque déjà. Le drapeau qui AUTORISE, lui, est `mowing_window_blocked_by_clock`.
+    mowing_window_blocked_by_schedule = mowing_window_blocked_by_clock and not mowing_blocked
 
     reason, reason_code, height_rule_blocked = _select_mowing_block_reason(
         context=context,
@@ -2096,8 +2119,18 @@ def build_mowing_bundle(
         extended_threshold = 65 if overdue_factor < 2.0 else 70
         overdue_relaxed_baseline = score_tonte < extended_threshold and score_stress < 70
 
-    tonte_ok = (baseline_tonte_ok or overdue_relaxed_baseline) and not mowing_window_blocked_by_schedule and (
-        reason_code not in agronomic_block_codes or soil_wet_is_permissive or overdue_relaxed_baseline
+    # ⚠️ LE GAZON N'A PAS CHANGÉ D'AVIS PARCE QUE LE ROBOT A DISPARU DE LA VUE.
+    # `reason_code` est le motif AFFICHÉ : quand la machine tombe, il est délibérément remplacé
+    # par `machine_unavailable` (une panne prime sur un délai — voir plus haut). Mais ce test-ci
+    # est le verdict du GAZON, et il lisait le code déjà réécrit : comme `machine_unavailable`
+    # n'est pas dans `agronomic_block_codes`, la porte s'ouvrait. Un `mowing_spacing` ou un
+    # `mowing_night` parfaitement valide était effacé par une seconde d'inattention du robot.
+    # Sur la fenêtre auditée, `tonte_autorisee` a été à `on` 49,77 h sur 241,28 h (20,6 %),
+    # en 82 épisodes dont 58 sous la minute — et 99 % de ce temps sous `machine_unavailable`.
+    # `selected_reason_code` est ce même motif, capturé AVANT tout écrasement (voir plus haut).
+    gate_reason_code = selected_reason_code if machine_failure_first else reason_code
+    tonte_ok = (baseline_tonte_ok or overdue_relaxed_baseline) and not mowing_window_blocked_by_clock and (
+        gate_reason_code not in agronomic_block_codes or soil_wet_is_permissive or overdue_relaxed_baseline
     )
     if reason is None:
         if mowing_window_state == "discouraged" and mowing_window_reason:

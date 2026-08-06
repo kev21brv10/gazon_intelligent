@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.43.0
+
+962 tests verts. **Une panne du robot ne transforme plus un « non » du gazon en « oui ».**
+
+Mesuré sur l'installation le 06/08/2026, **douze millisecondes d'écart** :
+
+```
+13:41:44.040  tondeuse vue (1 candidat)  mowing_spacing       off  · prochaine 08/08
+13:41:44.052  0 candidat                 machine_unavailable  ON   · prochaine 06/08
+13:41:54.177  tondeuse revue             mowing_spacing       off  · prochaine 08/08
+```
+
+Sur la fenêtre auditée, `tonte_autorisee` a été à `on` **49,77 h sur 241,28 h (20,6 %)**, en
+82 épisodes dont 58 sous la minute — et **99 % de ce temps sous `machine_unavailable`**.
+
+**Trois mécanismes indépendants, tous les trois corrigés.** Le correctif part d'un bloc :
+n'en appliquer qu'une partie laisserait une des deux défenses tomber seule.
+
+- **La porte agronomique relisait un motif déjà réécrit.** Quand la machine tombe,
+  `reason_code` est délibérément remplacé par `machine_unavailable` (une panne prime sur un
+  délai à l'affichage — comportement voulu, conservé). Mais le test d'autorisation lisait ce
+  code réécrit : comme `machine_unavailable` n'est pas dans `agronomic_block_codes`, la porte
+  s'ouvrait. Un `mowing_spacing` ou un `mowing_night` valide était effacé par une seconde
+  d'inattention du robot. Le test porte désormais sur `selected_reason_code`, capturé avant
+  tout écrasement.
+
+- **Le verdict de la fenêtre horaire était annulé par un autre blocage.**
+  `mowing_window_blocked_by_schedule = ... and not mowing_blocked` : dès qu'une panne
+  survenait, le « Nuit : attendre le lever du soleil » ne comptait plus. Le drapeau
+  d'affichage est inchangé ; un drapeau distinct, `mowing_window_blocked_by_clock`, porte
+  désormais le verdict de l'horloge pour l'autorisation.
+
+- **Et ce verdict était écrasé avant même d'être lu** — l'état de la fenêtre est remplacé par
+  le motif machine deux lignes plus haut. Il est maintenant capturé avant.
+
+- **L'heure passe avant les verdicts « à éviter »** (`_resolve_mowing_window`). Les bornes
+  horaires sont BLOQUANTES ; le vent soutenu et la chaleur ne font que déconseiller. Testées
+  après, un simple « à éviter » l'emportait sur un refus ferme : par nuit d'été tiède la
+  fenêtre publiait « Température élevée : à éviter » au lieu de « Nuit ». Relevé le 05/08 à
+  21:38 et 21:40, soleil couché depuis 21:26. **Le défaut ne touchait pas que la nuit** : à
+  3 h du matin par 27 °C, « Matin trop tôt » tombait pareillement — toute la plage 22 h → 10 h.
+
+**Le contrat des deux axes est préservé, et testé dans les deux sens** : en pleine journée sur
+un gazon prêt, une panne du robot ne fait PAS passer `tonte_autorisee` à non — c'est
+`machine_permet_tonte` qui porte le matériel et `action_possible` qui combine.
+
+Les quatre mutations correspondantes sont détectées par la suite, vérifié après purge des
+caches de bytecode — une première passe donnait deux faux « non détecté » à cause de `.pyc`
+périmés que les permutations de fichier n'invalidaient pas.
+
 ## 0.42.0
 
 949 tests verts. **L'alerte ne s'éteint plus parce que le blocage s'allume.**

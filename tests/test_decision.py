@@ -3250,3 +3250,186 @@ class RaisonsExpliquentLeNiveauTests(unittest.TestCase):
             block_reason="garde_fou_hebdomadaire",
         )
         self.assertEqual(raisons, ["garde_fou_hebdomadaire"])
+
+
+class LaMachineNEffacePasLeVerdictDuGazonTests(unittest.TestCase):
+    """Une panne du robot ne doit pas transformer un « non » du gazon en « oui ».
+
+    Mesuré sur l'installation le 06/08/2026, DOUZE MILLISECONDES d'écart :
+        13:41:44.040  tondeuse vue      · mowing_spacing      · off · prochaine 08/08
+        13:41:44.052  0 candidat        · machine_unavailable · ON  · prochaine 06/08
+        13:41:54.177  tondeuse revue    · mowing_spacing      · off · prochaine 08/08
+    Sur la fenêtre auditée, `tonte_autorisee` a été à `on` 49,77 h sur 241,28 h (20,6 %),
+    en 82 épisodes dont 58 sous la minute, et 99 % de ce temps sous `machine_unavailable`.
+
+    Deux mécanismes indépendants, tous deux corrigés ici :
+      1. `reason_code` est remplacé par le motif MACHINE (voulu pour l'affichage), et le test
+         d'autorisation lisait ce code déjà réécrit ;
+      2. le verdict BLOQUANT de la fenêtre horaire était annulé par `and not mowing_blocked`,
+         puis carrément écrasé par le motif machine juste avant d'être lu.
+    """
+
+    # Reproduit le cas du 06/08 13:41:44.052 : la tondeuse configurée n'est plus résolue,
+    # donc la coordination n'est plus prête. C'est `tondeuse_prete` / `mower_coordination_ready`
+    # que lit `_machine_unavailable_detail`, pas `mower_ready`.
+    ROBOT_ABSENT = {
+        "mower_resolution_state": "configured_missing",
+        "mower_resolution_candidate_count": 0,
+        "mower_presence_state": "inconnue",
+        "mower_operation_state": "unknown",
+        "mower_is_docked": False,
+        "mower_is_outside": False,
+        "mower_coordination_ready": False,
+        "tondeuse_prete": False,
+    }
+
+    def _bundle(self, *, hour, mower_context=None, temperature=22.0, history=None):
+        ctx = decision.DecisionContext.from_legacy_args(
+            history=history if history is not None else [
+                {"type": "tonte", "date": "2026-08-06"},
+            ],
+            today=date(2026, 8, 6),
+            hour_of_day=hour,
+            temperature=temperature,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=55,
+            type_sol="limoneux",
+            etp_capteur=4.0,
+        )
+        if mower_context is not None:
+            ctx.mower_context = dict(mower_context)
+        phase = decision.build_phase_bundle(ctx)
+        water = decision.build_water_bundle(ctx, phase)
+        risk = decision.build_risk_bundle(ctx, phase, water)
+        return decision.build_mowing_bundle(ctx, phase, water, risk)
+
+    def test_le_fixture_declenche_bien_machine_unavailable(self) -> None:
+        """PRÉMISSE. Sans ça, tous les tests de cette classe seraient verts sans rien exercer."""
+        absent = self._bundle(hour=13, mower_context=self.ROBOT_ABSENT)
+        self.assertEqual(absent.get("mowing_block_reason_code"), "machine_unavailable")
+
+    def test_un_espacement_de_tonte_survit_a_la_perte_de_vue_du_robot(self) -> None:
+        """Tondu aujourd'hui : le gazon dit non. Perdre le robot ne doit rien y changer."""
+        vu = self._bundle(hour=13)
+        absent = self._bundle(hour=13, mower_context=self.ROBOT_ABSENT)
+
+        self.assertFalse(vu["tonte_autorisee"], "prémisse : tondu aujourd'hui → non autorisé")
+        self.assertFalse(
+            absent["tonte_autorisee"],
+            "le robot a disparu de la vue et le gazon s'est mis à dire oui — "
+            f"motif publié : {absent.get('mowing_block_reason_code')}",
+        )
+
+    def test_la_nuit_bloque_meme_quand_le_robot_est_introuvable(self) -> None:
+        """21:38, soleil couché, robot perdu : c'est la nuit qui doit l'emporter."""
+        nuit = self._bundle(hour=23, mower_context=self.ROBOT_ABSENT, history=[])
+        self.assertFalse(
+            nuit["tonte_autorisee"],
+            "tonte autorisée en pleine nuit parce que le robot était introuvable",
+        )
+
+    def test_le_motif_machine_reste_bien_celui_qui_est_AFFICHE(self) -> None:
+        """On n'a pas inversé la priorité d'affichage : une panne prime sur un délai."""
+        absent = self._bundle(hour=13, mower_context=self.ROBOT_ABSENT)
+        self.assertTrue(absent.get("mowing_blocked"))
+        self.assertIn("Robot", absent.get("mowing_block_reason_label") or "")
+
+    def test_le_petit_matin_bloque_meme_sans_motif_agronomique(self) -> None:
+        """Le cas que SEUL le garde de fenêtre peut attraper.
+
+        À 8 h, le gazon n'a aucun motif de refus (pas de tonte récente, rien à redire) : le
+        refus vient uniquement de la FENÊTRE (« Matin trop tôt »). Or ce verdict était annulé
+        deux fois quand la machine tombait — `and not mowing_blocked` d'abord, puis
+        l'écrasement de l'état de fenêtre par le motif machine. Sans robot visible, la tonte
+        devenait donc autorisée à 8 h du matin sur un sol non ressuyé.
+        """
+        tot = self._bundle(hour=8, mower_context=self.ROBOT_ABSENT, history=[])
+        self.assertEqual(
+            tot.get("mowing_window_state"), "blocked",
+            "prémisse : à 8 h la fenêtre doit être bloquée",
+        )
+        self.assertFalse(
+            tot["tonte_autorisee"],
+            "tonte autorisée à 8 h parce que le robot était introuvable — "
+            "le verdict de la fenêtre a été perdu",
+        )
+
+    def test_le_gazon_dit_toujours_oui_pendant_que_la_machine_dit_non(self) -> None:
+        """LE CONTRAT DES DEUX AXES, dans l'autre sens — on n'a pas tout bloqué.
+
+        `tonte_autorisee` est le verdict du GAZON. En pleine journée, sur un gazon prêt, une
+        panne du robot ne doit PAS le faire passer à non : c'est `machine_permet_tonte` qui
+        porte l'état matériel, et `action_possible` qui combine les deux. Confondre les deux
+        rendrait le capteur inutilisable dans l'autre sens.
+        """
+        absent = self._bundle(hour=11, temperature=20.0, mower_context=self.ROBOT_ABSENT,
+                              history=[{"type": "tonte", "date": "2026-07-28"}])
+        self.assertTrue(absent.get("mowing_blocked"), "prémisse : la machine bloque bien")
+        self.assertTrue(
+            absent["tonte_autorisee"],
+            "le gazon s'est mis à dire non parce que le robot est en panne — "
+            "les deux axes ont été confondus",
+        )
+        self.assertFalse(absent.get("action_possible"),
+                         "action_possible doit rester faux : la machine ne suit pas")
+
+    def test_un_gazon_qui_dit_oui_reste_autorise_quand_le_robot_va_bien(self) -> None:
+        """Garde-fou inverse : on n'a pas simplement tout bloqué."""
+        ok = self._bundle(hour=11, temperature=20.0, history=[
+            {"type": "tonte", "date": "2026-07-28"},
+        ])
+        self.assertTrue(
+            ok["tonte_autorisee"],
+            f"gazon prêt et robot sain, pourtant refusé : {ok.get('raison_blocage_tonte')}",
+        )
+
+
+class LHeurePasseAvantLesVerdictsAEviterTests(unittest.TestCase):
+    """`_resolve_mowing_window` : un « à éviter » ne doit pas couvrir un refus ferme.
+
+    Les bornes horaires (avant 10 h, après 22 h) sont BLOQUANTES ; le vent soutenu et la
+    chaleur ne font que déconseiller. Elles étaient testées APRÈS, donc par nuit d'été tiède
+    la fenêtre publiait « Température élevée : à éviter » au lieu de « Nuit ».
+    Relevé le 05/08/2026 à 21:38 et 21:40, soleil couché depuis 21:26.
+    """
+
+    def _fenetre(self, *, hour, temperature=None, vent=None):
+        ctx = decision_mowing.DecisionContext(
+            history=[], today=date(2026, 8, 6), hour_of_day=hour,
+            temperature=temperature, vent=vent,
+        )
+        return decision_mowing._resolve_mowing_window(ctx, weather_profile={})
+
+    def test_la_nuit_bloque_meme_par_temps_chaud(self) -> None:
+        etat, motif = self._fenetre(hour=23, temperature=27.0)
+        self.assertEqual(etat, "blocked")
+        self.assertIn("Nuit", motif)
+
+    def test_la_nuit_bloque_meme_par_vent_soutenu(self) -> None:
+        etat, motif = self._fenetre(hour=23, vent=25.0)
+        self.assertEqual(etat, "blocked")
+        self.assertIn("Nuit", motif)
+
+    def test_le_petit_matin_bloque_aussi_par_temps_chaud(self) -> None:
+        """Le défaut ne touchait pas que la nuit : toute la plage 22 h → 10 h."""
+        etat, motif = self._fenetre(hour=3, temperature=27.0)
+        self.assertEqual(etat, "blocked")
+        self.assertIn("Matin trop tôt", motif)
+
+    def test_en_journee_la_chaleur_deconseille_toujours(self) -> None:
+        """Garde-fou inverse : on n'a pas supprimé les verdicts « à éviter »."""
+        etat, motif = self._fenetre(hour=13, temperature=27.0)
+        self.assertEqual(etat, "discouraged")
+        self.assertIn("Température élevée", motif)
+
+    def test_une_fenetre_ideale_le_reste(self) -> None:
+        etat, motif = self._fenetre(hour=11, temperature=20.0, vent=5.0)
+        self.assertEqual(etat, "ideal")
+        self.assertIn("idéale", motif)
+
+    def test_un_blocage_dur_prime_toujours_sur_l_heure(self) -> None:
+        """Ordre préservé : les refus fermes météo restent avant les bornes horaires."""
+        etat, motif = self._fenetre(hour=23, temperature=35.0)
+        self.assertEqual(etat, "blocked")
+        self.assertIn("trop élevée", motif)
