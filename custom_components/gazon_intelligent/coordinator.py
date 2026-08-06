@@ -65,6 +65,7 @@ from .decision_models import DecisionResult
 from .gazon_brain import GazonBrain
 from .decision_risk import compute_fungal_risk as _compute_fungal_risk
 from .memory import compute_application_state
+from .decision_mowing import _NO_ERROR_CODES
 from .mower_adapter import build_mower_context, derive_related_entity_id
 from .mower_coordination import build_mower_coordination_context
 from .entity_ids import public_entity_id, resolve_entry_instance_slug
@@ -219,6 +220,13 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "mower_resolution_reason",
     "mower_resolution_candidate_count",
     "mower_resolution_probe",
+    # ⚠️ FIABILITÉ DE LA MACHINE — cumul de la journée. Sans ces clés, il faut rejouer
+    # l'historique à la main pour découvrir que le robot passe plus de temps coincé qu'à
+    # tondre (03/08/2026 : 174 min tondues contre 318 bloquées).
+    "mower_blocked_minutes_today",
+    "mower_mowing_minutes_today",
+    "mower_block_count_today",
+    "mower_reliability_today",
     "watering_blocked_by_mower",
     "watering_block_reason_code",
     "watering_block_reason_label",
@@ -803,6 +811,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             DEFAULT_HAUTEUR_MAX_TONDEUSE_CM,
         )
         mower_context = self._build_mower_snapshot()
+        mower_context.update(self._suivre_fiabilite_tondeuse(mower_context))
         runtime_context = self._build_runtime_context()
         current_dt = self._current_datetime()
         snapshot = self.brain.compute_snapshot(
@@ -1621,6 +1630,84 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if weather_profile.get("weather_condition") in {"fog", "rainy", "pouring"}:
             return 1.0
         return None
+
+    def _suivre_fiabilite_tondeuse(self, mower_context: dict[str, Any]) -> dict[str, Any]:
+        """Cumule le temps bloqué et le temps tondu de la journée, et en tire un état.
+
+        ⚠️ L'intégration voyait chaque erreur passer sans en garder aucune trace : impossible
+        de savoir, sans rejouer l'historique à la main, que le robot passait plus de temps
+        coincé qu'à tondre. Mesuré du 02 au 05/08/2026 :
+
+            jour     tondu     bloqué   épisodes
+            02/08    130 min   123 min      3
+            03/08    174 min   318 min      2      ← bloquée ~2× plus qu'elle ne tond
+            04/08    286 min   321 min      6
+            05/08    302 min    53 min      3
+
+        contre **zéro blocage** les 26, 28 et 30/07. Ce n'est pas de l'usure, c'est un
+        changement — et il faut pouvoir le voir sans requête d'historique.
+
+        ⚠️ RÈGLE DE LA MAISON : une absence de mesure n'est PAS « pas de blocage ». Quand la
+        tondeuse est injoignable, on avance l'horloge sans rien créditer — sinon une panne de
+        liaison se lirait comme une journée parfaite.
+        """
+        vide = {
+            "mower_blocked_minutes_today": None,
+            "mower_mowing_minutes_today": None,
+            "mower_block_count_today": None,
+            "mower_reliability_today": None,
+        }
+        try:
+            maintenant = self._current_datetime()
+            aujourd_hui = self._current_date().isoformat()
+            etat = self._runtime_state.get("mower_health")
+            if not isinstance(etat, dict) or etat.get("date") != aujourd_hui:
+                etat = {
+                    "date": aujourd_hui, "blocked_minutes": 0.0, "mowing_minutes": 0.0,
+                    "block_count": 0, "last_seen_at": None, "last_kind": None,
+                }
+
+            connectee = mower_context.get("tondeuse_connectee") is True
+            erreur = str(mower_context.get("tondeuse_erreur") or "").strip().lower()
+            en_erreur = connectee and bool(erreur) and erreur not in _NO_ERROR_CODES
+            en_tonte = connectee and bool(mower_context.get("mower_is_mowing"))
+            genre = "bloquee" if en_erreur else ("tonte" if en_tonte else ("repos" if connectee else None))
+
+            precedent = self._parse_datetime_value(etat.get("last_seen_at"))
+            if precedent is not None and etat.get("last_kind") in {"bloquee", "tonte"}:
+                ecoule = (maintenant - precedent).total_seconds() / 60.0
+                # Plafond : au-delà, c'est un trou (arrêt de Home Assistant), pas une durée.
+                if 0.0 < ecoule <= 15.0:
+                    cle = "blocked_minutes" if etat["last_kind"] == "bloquee" else "mowing_minutes"
+                    etat[cle] = round(float(etat.get(cle) or 0.0) + ecoule, 2)
+
+            if genre == "bloquee" and etat.get("last_kind") != "bloquee":
+                etat["block_count"] = int(etat.get("block_count") or 0) + 1
+
+            etat["last_seen_at"] = maintenant.isoformat()
+            etat["last_kind"] = genre
+            self._runtime_state["mower_health"] = etat
+
+            bloque = float(etat.get("blocked_minutes") or 0.0)
+            tondu = float(etat.get("mowing_minutes") or 0.0)
+            episodes = int(etat.get("block_count") or 0)
+            if bloque <= 0.0 and episodes == 0:
+                fiabilite = "normale"
+            elif tondu > 0.0 and bloque >= tondu:
+                fiabilite = "critique"
+            elif episodes >= 3 or (tondu > 0.0 and bloque >= 0.2 * tondu):
+                fiabilite = "degradee"
+            else:
+                fiabilite = "normale"
+
+            return {
+                "mower_blocked_minutes_today": round(bloque, 1),
+                "mower_mowing_minutes_today": round(tondu, 1),
+                "mower_block_count_today": episodes,
+                "mower_reliability_today": fiabilite,
+            }
+        except Exception:  # noqa: BLE001 - un compteur ne doit jamais casser un cycle
+            return vide
 
     def _tracer_cycle(self) -> dict[str, Any]:
         """Origine et numéro du cycle courant. Trace pure, aucune décision n'en dépend.
