@@ -622,12 +622,26 @@ def compute_recent_watering_count(
     today: date | None = None,
     days: int = 7,
     include_external: bool = True,
+    include_manual: bool = True,
 ) -> int:
+    """Nombre d'arrosages sur la fenêtre demandée.
+
+    ⚠️ `include_manual` a été ajouté pour que le garde-fou hebdomadaire puisse compter la MÊME
+    chose que le budget en millimètres. Voir `_recent_watering_totals` : le manuel y est exclu
+    depuis le 25/07/2026 parce que le compter créait un cercle vicieux — réserve à sec → auto
+    bloqué → arrosage manuel de secours → budget plus haut → auto bloqué plus longtemps. Le
+    compteur, lui, n'avait pas de quoi l'exclure : le cercle pouvait donc se refermer par cette
+    porte-là, un arrosage manuel réarmant le blocage qu'il venait de contourner.
+    """
     today = today or _current_date()
     return sum(
         1
         for _ in _iter_recent_watering_items(
-            history, today=today, days=days, include_external=include_external
+            history,
+            today=today,
+            days=days,
+            include_external=include_external,
+            include_manual=include_manual,
         )
     )
 

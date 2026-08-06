@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.46.0
+
+986 tests verts. **Un arrosage manuel de secours ne réarme plus le blocage qu'il venait de
+contourner.**
+
+La retenue hebdomadaire combine deux termes par un `and` : le nombre d'arrosages récents et le
+budget en millimètres. Ils portaient sur des fenêtres **différentes**.
+
+| | fenêtre | arrosages manuels |
+|---|---|---|
+| budget mm (`water.py`) | `days=6` → **7 jours** | **exclus** depuis le 25/07/2026 |
+| compteur (`guidance.py`) | `days=7` → **8 jours** | **comptés** |
+
+Le filtre retient `delta <= days` : `days=N` couvre donc N+1 jours calendaires. `water.py`
+documente cette règle et l'applique partout ailleurs (jour = 0, 3 j = 2, 7 j = 6) — le
+compteur avait été oublié.
+
+Et surtout, `compute_recent_watering_count` **n'avait pas de quoi exclure le manuel** : le
+paramètre n'existait pas. Or c'est précisément cette exclusion qui avait supprimé, le
+25/07/2026, un cercle vicieux documenté dans le code : réserve à sec → arrosage auto bloqué →
+arrosage manuel de secours → budget plus haut → auto bloqué plus longtemps → jamais de reprise.
+Le cercle pouvait donc se refermer par l'autre porte : le manuel faisait passer le compte de 2
+à 3 et **réarmait la retenue**.
+
+Le compteur accepte désormais `include_manual`, et l'appelant lui passe la même fenêtre et le
+même filtre que le budget.
+
+Deux niveaux de test, parce que le premier ne suffisait pas : les tests du helper seul
+laissaient passer **deux mutations sur trois** — on peut très bien avoir une fonction correcte
+et un appelant qui lui donne la mauvaise fenêtre, ce qui était exactement le cas. Le second
+part de l'historique et lit ce que la chaîne **publie**. Les 4 mutations sont détectées.
+
 ## 0.45.0
 
 978 tests verts. **Les voyants de santé tombent enfin quand le capteur tombe — et l'ET

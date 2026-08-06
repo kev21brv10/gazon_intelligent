@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import unittest
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import importlib
 from pathlib import Path
 import sys
@@ -4138,3 +4138,132 @@ class TestBesoinSepareDeLaDose(unittest.TestCase):
             p["mm_final_recommande"], p["besoin_mm"],
             "le plafond ne rogne pas la dose : la fixture ne l'épuise pas",
         )
+
+
+class LesDeuxTermesDuGardeFouMesurentLaMemeChoseTests(unittest.TestCase):
+    """`recent_watering_count` et `recent_watering_mm_7j` sont combinés par un `and` dans la
+    retenue hebdomadaire, mais portaient sur des fenêtres DIFFÉRENTES :
+
+      - le compteur : `days=7`, or le filtre retient `delta <= days` → **8 jours calendaires**,
+        et il ne pouvait PAS exclure les arrosages manuels ;
+      - le budget mm : `days=6` → **7 jours**, manuels exclus depuis le 25/07/2026.
+
+    Conséquence : le cercle vicieux que cette exclusion avait supprimé pouvait se refermer par
+    la porte du compteur — réserve à sec → auto bloqué → arrosage manuel de secours → le compte
+    passe de 2 à 3 → le blocage que l'arrosage manuel venait de contourner est RÉARMÉ.
+    """
+
+    AUJOURD_HUI = date(2026, 8, 6)
+
+    def _arrosage(self, jours, *, source="auto_irrigation", mm=6.0):
+        return {
+            "type": "arrosage",
+            "date": (self.AUJOURD_HUI - timedelta(days=jours)).isoformat(),
+            "total_mm": mm,
+            "source": source,
+        }
+
+    def _compte(self, history):
+        return water.compute_recent_watering_count(
+            history, today=self.AUJOURD_HUI, days=6,
+            include_external=False, include_manual=False,
+        )
+
+    def _budget(self, history):
+        return water.compute_recent_watering_mm(
+            history, today=self.AUJOURD_HUI, days=6,
+            include_external=False, include_manual=False,
+        )
+
+    def test_un_arrosage_manuel_ne_rearme_pas_le_blocage(self) -> None:
+        """LE cas qui compte : deux arrosages auto, plus un manuel de secours."""
+        history = [self._arrosage(1), self._arrosage(3),
+                   self._arrosage(0, source="manual_irrigation")]
+        self.assertEqual(
+            self._compte(history), 2,
+            "l'arrosage manuel de secours fait passer le compte à 3 et réarme la retenue",
+        )
+
+    def test_les_deux_termes_couvrent_exactement_la_meme_fenetre(self) -> None:
+        """Le 8e jour ne doit être vu ni par l'un ni par l'autre."""
+        for age in range(0, 10):
+            with self.subTest(jours=age):
+                h = [self._arrosage(age)]
+                vu_par_le_compte = self._compte(h) > 0
+                vu_par_le_budget = self._budget(h) > 0
+                self.assertEqual(
+                    vu_par_le_compte, vu_par_le_budget,
+                    f"à J-{age}, compte={vu_par_le_compte} mais budget={vu_par_le_budget}",
+                )
+
+    def test_le_huitieme_jour_est_bien_hors_fenetre(self) -> None:
+        self.assertEqual(self._compte([self._arrosage(7)]), 0)
+        self.assertEqual(self._compte([self._arrosage(6)]), 1)
+
+    def test_trois_vrais_arrosages_auto_comptent_toujours(self) -> None:
+        """Garde-fou inverse : on n'a pas neutralisé la retenue."""
+        history = [self._arrosage(0), self._arrosage(2), self._arrosage(4)]
+        self.assertEqual(self._compte(history), 3)
+        self.assertGreater(self._budget(history), 0.0)
+
+    def test_le_compteur_sait_encore_tout_compter_quand_on_le_lui_demande(self) -> None:
+        """Le paramètre reste optionnel : les autres appelants ne changent pas de comportement."""
+        history = [self._arrosage(1), self._arrosage(0, source="manual_irrigation")]
+        self.assertEqual(
+            water.compute_recent_watering_count(history, today=self.AUJOURD_HUI, days=6), 2
+        )
+
+
+class LeGardeFouCompteBienCeQuIlPublieTests(unittest.TestCase):
+    """Test de CÂBLAGE — les tests du helper seul ne voient pas l'appel.
+
+    `compute_recent_watering_count` peut être parfaitement correct et l'appelant lui passer
+    quand même la mauvaise fenêtre : c'est exactement ce qui se passait
+    (`days=7` et manuels comptés côté guidance, `days=6` et manuels exclus côté budget).
+    On part donc de l'historique et on lit ce que la chaîne PUBLIE.
+    """
+
+    AUJOURD_HUI = date(2026, 8, 6)
+
+    def _arrosage(self, jours, *, source="auto_irrigation", mm=6.0):
+        return {
+            "type": "arrosage",
+            "date": (self.AUJOURD_HUI - timedelta(days=jours)).isoformat(),
+            "total_mm": mm,
+            "source": source,
+        }
+
+    def _publie(self, history):
+        ctx = decision.DecisionContext.from_legacy_args(
+            history=history, today=self.AUJOURD_HUI, hour_of_day=5,
+            temperature=24.0, pluie_24h=0, pluie_demain=0, humidite=55,
+            type_sol="limoneux", etp_capteur=4.0,
+        )
+        phase = decision.build_phase_bundle(ctx)
+        water_b = decision.build_water_bundle(ctx, phase)
+        # ⚠️ Les deux clés vivent dans le WATER bundle (`build_water_bundle`), pas dans le
+        # watering bundle : ce dernier recopie les clés une par une. Se tromper de bundle donne
+        # un KeyError franc — mieux qu'un test qui passerait sur autre chose.
+        return water_b["recent_watering_count_7j"], water_b["recent_watering_mm_7j"]
+
+    def test_l_arrosage_manuel_de_secours_ne_gonfle_pas_le_compte_publie(self) -> None:
+        compte, budget = self._publie([
+            self._arrosage(1), self._arrosage(3),
+            self._arrosage(0, source="manual_irrigation", mm=8.0),
+        ])
+        self.assertEqual(compte, 2, "l'arrosage manuel est compté et réarme la retenue")
+        self.assertAlmostEqual(budget, 12.0, places=1,
+                               msg="prémisse : le budget mm exclut déjà le manuel")
+
+    def test_le_compte_et_le_budget_publies_voient_la_meme_fenetre(self) -> None:
+        for age in (5, 6, 7, 8):
+            with self.subTest(jours=age):
+                compte, budget = self._publie([self._arrosage(age)])
+                self.assertEqual(
+                    compte > 0, budget > 0,
+                    f"à J-{age} : compte={compte}, budget={budget} — fenêtres divergentes",
+                )
+
+    def test_trois_arrosages_auto_sont_toujours_comptes(self) -> None:
+        compte, _ = self._publie([self._arrosage(0), self._arrosage(2), self._arrosage(4)])
+        self.assertEqual(compte, 3)
