@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.51.1
+
+1020 tests verts. **Le cumul de fiabilité de la tondeuse survit enfin aux redémarrages.**
+
+Découvert en relisant l'état persisté **juste après le déploiement de la 0.51.0** :
+`mower_health` accumulait en mémoire et n'atteignait jamais le disque.
+`_serialized_runtime_state` est une liste blanche clé par clé — une clé absente n'est jamais
+persistée. Or c'est un cumul de la **journée**, et les redémarrages sont fréquents sur cette
+installation : le compteur repartait de zéro à chaque fois, ce qui le rendait inutile
+précisément les jours agités.
+
+Sérialisation **et** restauration ajoutées, avec un test d'aller-retour complet : sérialiser
+sans relire aurait été pire qu'absent, puisqu'invisible.
+
+C'est le piège que ce projet documente depuis des semaines, et il s'est refermé sur le
+correctif écrit une heure plus tôt. Vérifier après déploiement, pas seulement avant.
+
 ## 0.51.0
 
 1016 tests verts. **Le pluviomètre baisse en cours de journée, et la réserve le suivait.**
