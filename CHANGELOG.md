@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.44.0
+
+971 tests verts. **Le garde « il pleut en ce moment » s'arme enfin — il n'avait jamais
+fonctionné depuis le 18/03/2026.**
+
+Chez Home Assistant, la condition d'une entité `weather.*` **EST son état** (`sunny`, `rainy`,
+`pouring`…) et n'apparaît pas dans ses attributs. Le coordinateur ne transmettait que les
+attributs : `weather_condition` valait donc **toujours `None`**, et avec lui tout le garde de
+pluie active.
+
+**Ce que ça a coûté, mesuré le 30/07/2026** : `weather.forecast_maison` valait `rainy` de
+06:43 à 09:28, le pluviomètre montait de 1,1 à 2,2 mm — et à **07:38 l'arrosage automatique a
+versé 5,1 mm sous la pluie**, le capteur de blocage affichant « Prêt ».
+
+Preuve de durée, pas d'anecdote : la clé `derniere_pluie_active` n'apparaît nulle part dans
+l'état persisté (37 clés de mémoire), et le libellé « Pluie active » n'apparaît sur **aucun**
+des 208 états du capteur de blocage relevés sur la période auditée.
+
+**Ce que le correctif rallume** — le garde alimente plus de chemins que le seul arrosage :
+
+- blocage de l'arrosage pendant la pluie (`pluie_active`) ;
+- blocage de la **fenêtre de tonte**, et surtout le **ressuyage après averse**, dont la 0.32.0
+  annonçait la correction sans qu'il ait jamais pu s'appliquer ;
+- rosée forcée à 1,0 sous pluie ou brouillard, côté coordinateur ;
+- facteur de sol relevé à 0,95 sous la pluie ;
+- et un **malus de confiance de −2 qui s'appliquait en permanence**, puisqu'il pénalisait une
+  condition météo « manquante » qui ne pouvait pas arriver.
+
+⚠️ **À déployer en connaissance de cause.** Ce garde n'a jamais tourné : personne ne sait
+combien de fois il va bloquer. À mettre en service un matin où l'on peut observer, avec une
+semaine de recul — pas en aveugle.
+
+Le test qui manquait était un test de **câblage** : ceux qui existaient passaient à
+`extract_weather_profile` un dictionnaire contenant `"condition"`, une forme que la production
+ne produit jamais. Ils vérifiaient une déclaration, pas le chemin réel. Le nouveau part de
+l'entité Home Assistant et va jusqu'au booléen. Les 4 mutations correspondantes sont détectées.
+
+**Reste ouvert, non corrigé ici** : `weather_precipitation_probability` est lui aussi
+toujours nul (la probabilité vit dans les prévisions, pas dans l'état), donc le second bras de
+`is_active_rain_weather` (≥ 80 %) reste inerte, et le repli à 0,0 de `guidance.py` continue de
+faire passer « inconnu » pour « 0 % de chances de pluie » — inoffensif en phase Normal,
+permissif en Sursemis.
+
 ## 0.43.0
 
 962 tests verts. **Une panne du robot ne transforme plus un « non » du gazon en « oui ».**

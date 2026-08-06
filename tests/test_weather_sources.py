@@ -168,3 +168,76 @@ class WeatherSourcesTests(unittest.TestCase):
         self.assertEqual(summary["forecast_temperature_today"], 19.4)
         self.assertEqual(summary["forecast_pluie_24h"], 0.8)
         self.assertEqual(summary["forecast_pluie_demain"], 3.1)
+
+
+class LaConditionMeteoVientDeLEtatPasDesAttributsTests(unittest.TestCase):
+    """Chez Home Assistant, la condition d'une entité `weather.*` EST son état.
+
+    `extract_weather_profile` lisait `attributes.get("condition")` — toujours `None`. Le garde
+    « il pleut en ce moment » n'a donc jamais pu s'armer depuis sa mise en place le 18/03/2026.
+    Conséquence mesurée le 30/07/2026 : `weather.forecast_maison` = `rainy` de 06:43 à 09:28,
+    pluviomètre de 1,1 à 2,2 mm, et **5,1 mm versés à 07:38 sous la pluie**.
+    """
+
+    # Les attributs réels d'une entité météo Home Assistant : aucune clé `condition`.
+    ATTRIBUTS_REELS = {
+        "temperature": 17.0,
+        "humidity": 92,
+        "wind_speed": 11.0,
+        "pressure": 1004.0,
+        "cloud_coverage": 98,
+    }
+
+    def test_la_condition_est_lue_depuis_l_etat(self) -> None:
+        profil = weather_sources.extract_weather_profile(
+            self.ATTRIBUTS_REELS, condition="rainy"
+        )
+        self.assertEqual(profil["weather_condition"], "rainy")
+
+    def test_sans_l_etat_la_condition_reste_introuvable(self) -> None:
+        """La preuve du défaut : avec les seuls attributs, la condition est nulle."""
+        profil = weather_sources.extract_weather_profile(self.ATTRIBUTS_REELS)
+        self.assertIsNone(profil["weather_condition"])
+
+    def test_les_non_valeurs_de_home_assistant_sont_ecartees(self) -> None:
+        for etat in ("unknown", "unavailable", "", "  ", None):
+            with self.subTest(etat=etat):
+                profil = weather_sources.extract_weather_profile(
+                    self.ATTRIBUTS_REELS, condition=etat
+                )
+                self.assertIsNone(profil["weather_condition"])
+
+    def test_l_attribut_reste_lu_en_repli(self) -> None:
+        """Un fournisseur qui publierait quand même l'attribut continue de fonctionner."""
+        profil = weather_sources.extract_weather_profile(
+            {**self.ATTRIBUTS_REELS, "condition": "pouring"}, condition=None
+        )
+        self.assertEqual(profil["weather_condition"], "pouring")
+
+    def test_un_profil_purement_etat_reste_exploitable(self) -> None:
+        """Attributs vides mais état connu : on ne doit pas retourner un dict vide."""
+        profil = weather_sources.extract_weather_profile({}, condition="rainy")
+        self.assertEqual(profil["weather_condition"], "rainy")
+
+    def test_le_garde_pluie_s_arme_enfin(self) -> None:
+        """Le bout de la chaîne : c'est ce booléen qui bloque arrosage et tonte."""
+        guidance = importlib.import_module("custom_components.gazon_intelligent.guidance")
+        for etat in ("rainy", "pouring", "lightning-rainy", "snowy-rainy"):
+            with self.subTest(condition=etat):
+                profil = weather_sources.extract_weather_profile(
+                    self.ATTRIBUTS_REELS, condition=etat
+                )
+                self.assertTrue(guidance.is_active_rain_weather(profil))
+        # Contrôle négatif, et preuve du défaut d'origine.
+        self.assertFalse(
+            guidance.is_active_rain_weather(
+                weather_sources.extract_weather_profile(self.ATTRIBUTS_REELS)
+            )
+        )
+        self.assertFalse(
+            guidance.is_active_rain_weather(
+                weather_sources.extract_weather_profile(
+                    self.ATTRIBUTS_REELS, condition="sunny"
+                )
+            )
+        )

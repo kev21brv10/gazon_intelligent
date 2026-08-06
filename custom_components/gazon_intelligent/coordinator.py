@@ -1487,7 +1487,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if state is None:
             return {}
 
-        return WeatherAdapter.profile_from_attributes(state.attributes)
+        # ⚠️ `state.state` EN PLUS des attributs : chez Home Assistant la condition météo est
+        # l'ÉTAT de l'entité `weather.*`, jamais un attribut. Ne transmettre que les attributs
+        # rendait `weather_condition` systématiquement nul, et avec lui tout le garde
+        # « il pleut en ce moment » — arrosage comme tonte. Voir `extract_weather_profile`.
+        return WeatherAdapter.profile_from_attributes(state.attributes, condition=state.state)
 
     def _get_sun_context(self) -> dict[str, Any]:
         """Retourne le contexte solaire courant utilisé comme garde-fou jour/nuit."""
