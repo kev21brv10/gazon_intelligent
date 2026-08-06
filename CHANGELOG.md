@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.45.0
+
+978 tests verts. **Les voyants de santé tombent enfin quand le capteur tombe — et l'ET
+réellement débitée devient visible.**
+
+Sans ces deux points, aucun des défauts trouvés par l'audit du 06/08 n'aurait été observable
+la prochaine fois. C'est de l'outillage, pas du confort.
+
+- **Les drapeaux testaient la valeur RÉSOLUE, donc post-repli.** Trois voyants alimentés par
+  la même station physique, sur 144 h : `pluie_valid` faux **2,19 h** (il teste bien son
+  capteur), `temperature_valid` **0,08 h**, `humidity_valid` **0,08 h**. Instant citable :
+  le 29/07/2026 à 17:57:46, `temperature_valid: true` alors que le capteur était indisponible
+  depuis 17:52:53 et que l'ET0 tournait sur le repli météo. Les deux testent désormais leur
+  source, comme `pluie_valid`.
+
+- **Le vent n'avait aucun drapeau** — alors que c'est le levier majeur de l'ET0. Mesuré sur
+  757 échantillons appariés : vent mesuré médiane 4,7 km/h contre vent **prévu** médiane 10,1,
+  le prévu supérieur dans **97 %** des cas. En rejouant le calcul sur les entrées réelles du
+  29/07 : capteurs 8,9 mm · **vent seul replié 12,1 (+36 %)** · température seule repliée 8,8
+  (−1 %). Ce jour-là, **deux secondes** de repli ont posé le pic d'ET0 du jour à 12,4, et le
+  cliquet l'a figé pour la journée entière. Nouveaux : `wind_measured` et `wind_valid`.
+
+- **L'entité météo elle-même n'avait aucun voyant** : indisponible 64 min le 03/08 **hors
+  redémarrage**, tous les drapeaux au vert pendant ce temps. Nouveau :
+  `weather_profile_available`.
+
+- **`etp_ecoulee_mm` et `etp_jour_estime_mm` sont exposés.** L'ET qui vide réellement la
+  réserve n'était visible nulle part ; seule l'estimation pleine journée l'était. L'écart n'est
+  pas anecdotique : sur 8 jours, **36,7 mm débités contre 49,1 mm estimés, +33,8 %, 8 jours sur
+  8 dans le même sens**. C'est ce chiffre qui aurait montré d'un coup d'œil la marche du 29/07
+  — +1,0 mm en 68 secondes, soit 53 mm/h, quand l'ET0 horaire réelle plafonne vers 0,6.
+
+Le calcul des voyants est extrait dans `_build_sensor_health`, appelable directement : la
+première version des tests **reproduisait l'expression** au lieu d'appeler le code, ce qui les
+rendait aveugles à toute modification du coordinateur — le même piège déclaration/câblage que
+celui qui a laissé vivre le défaut de condition météo. Les 6 mutations sont détectées.
+
+La lecture du journal est défensive par construction : elle alimente `sensor_health`, et une
+exception y priverait l'utilisateur de **tous** ses voyants. Sept formes dégradées sont testées.
+
 ## 0.44.0
 
 971 tests verts. **Le garde « il pleut en ce moment » s'arme enfin — il n'avait jamais

@@ -4,7 +4,7 @@ import asyncio
 import importlib
 import unittest
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 import sys
 import types
@@ -4068,3 +4068,110 @@ class LeCoordinateurTransmetLEtatMeteoTests(unittest.TestCase):
         coord = self._coordinateur(None)
         self.assertEqual(coord._get_weather_profile("weather.forecast_maison"), {})
         self.assertEqual(coord._get_weather_profile(None), {})
+
+
+class LesDrapeauxDeSanteTestentLaSourceTests(unittest.TestCase):
+    """Les voyants doivent tomber quand le CAPTEUR tombe, pas quand le repli tombe aussi.
+
+    Mesuré sur 144 h, trois drapeaux alimentés par LA MÊME station physique :
+    `pluie_valid` faux 2,19 h · `eto_pressure_measured` 1,16 h · `temperature_valid` **0,08 h**
+    · `humidity_valid` **0,08 h**. Les deux derniers testaient la valeur RÉSOLUE, donc
+    post-repli. Instant citable : 29/07/2026 17:57:46, `temperature_valid: true` alors que le
+    capteur de température était indisponible depuis 17:52:53 et que l'ET0 tournait sur le
+    repli météo.
+    """
+
+    def _sante(self, *, temperature_source, humidite_capteur, vent_capteur, weather_profile,
+               conf=("sensor.t", "sensor.h", "sensor.v")):
+        """Appelle la VRAIE méthode du coordinateur, pas une reproduction de son expression."""
+        conf_t, conf_h, conf_v = conf
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord._get_conf = lambda cle: {
+            "capteur_temperature": conf_t,
+            "capteur_humidite": conf_h,
+            "capteur_vent": conf_v,
+            "capteur_pluie_24h": "sensor.pluie",
+            "capteur_etp": "sensor.etp",
+        }.get(cle)
+        coord._etp_ecoulee_du_jour = lambda: {"etp_ecoulee_mm": None, "etp_jour_estime_mm": None}
+        return coord._build_sensor_health(
+            temperature_source=temperature_source,
+            humidite_capteur=humidite_capteur,
+            vent_capteur=vent_capteur,
+            etp_capteur=3.0,
+            pluie_24h_sensor=0.0,
+            weather_profile=weather_profile,
+            eto_hourly={"radiation_source": "capteur", "pressure_source": "capteur", "value": 0.3},
+        )
+
+    def test_le_repli_meteo_ne_maintient_plus_les_voyants_au_vert(self) -> None:
+        """Le cas du 29/07 : capteur tombé, valeur résolue depuis la météo."""
+        s = self._sante(temperature_source="weather", humidite_capteur=None,
+                        vent_capteur=None, weather_profile={"weather_temperature": 24.0})
+        self.assertFalse(s["temperature_valid"])
+        self.assertFalse(s["humidity_valid"])
+        self.assertFalse(s["wind_measured"])
+
+    def test_les_capteurs_sains_restent_au_vert(self) -> None:
+        s = self._sante(temperature_source="capteur", humidite_capteur=55.0,
+                        vent_capteur=6.0, weather_profile={"weather_temperature": 24.0})
+        for drapeau in ("temperature_valid", "humidity_valid", "wind_measured", "wind_valid",
+                        "weather_profile_available", "pluie_valid", "etp_valid"):
+            with self.subTest(drapeau=drapeau):
+                self.assertTrue(s[drapeau], f"{drapeau} au rouge alors que tout est mesuré")
+
+    def test_une_installation_sans_capteur_configure_nest_pas_en_alarme(self) -> None:
+        """Sans capteur déclaré, le repli est le fonctionnement NORMAL, pas une panne."""
+        s = self._sante(temperature_source="weather", humidite_capteur=None, vent_capteur=None,
+                        weather_profile={"x": 1}, conf=(None, None, None))
+        self.assertTrue(s["temperature_valid"])
+        self.assertTrue(s["humidity_valid"])
+        self.assertTrue(s["wind_valid"])
+        self.assertFalse(s["wind_measured"], "wind_measured reste factuel : rien n'est mesuré")
+
+    def test_la_perte_de_l_entite_meteo_est_visible(self) -> None:
+        """03/08/2026 : indisponible 64 min hors redémarrage, tous les voyants au vert."""
+        self.assertFalse(
+            self._sante(temperature_source="capteur", humidite_capteur=55.0,
+                        vent_capteur=6.0, weather_profile={})["weather_profile_available"]
+        )
+
+
+class LEtpEcouleeDuJourEstExposeeTests(unittest.TestCase):
+    """L'ET réellement débitée n'était visible nulle part — seule l'estimation l'était.
+
+    Sur 8 jours : 36,7 mm débités contre 49,1 mm estimés, +33,8 %, 8 jours sur 8 dans le même
+    sens. C'est ce chiffre qui aurait montré d'un coup d'œil la marche du 29/07 (+1,0 mm en
+    68 secondes, soit 53 mm/h, quand l'ET0 horaire réelle plafonne vers 0,6).
+    """
+
+    def _coord(self, soil_balance):
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord.brain = types.SimpleNamespace(soil_balance=soil_balance)
+        coord._current_date = lambda: date(2026, 8, 6)
+        return coord
+
+    def test_l_entree_du_jour_est_lue(self) -> None:
+        c = self._coord({"ledger": [
+            {"date": "2026-08-05", "etp_elapsed_mm": 3.1, "etp_mm": 5.0},
+            {"date": "2026-08-06", "etp_elapsed_mm": 4.237, "etp_mm": 6.1},
+        ]})
+        self.assertEqual(
+            c._etp_ecoulee_du_jour(),
+            {"etp_ecoulee_mm": 4.237, "etp_jour_estime_mm": 6.1},
+        )
+
+    def test_une_entree_d_hier_n_est_pas_presentee_comme_celle_du_jour(self) -> None:
+        c = self._coord({"ledger": [{"date": "2026-08-05", "etp_elapsed_mm": 3.1, "etp_mm": 5.0}]})
+        self.assertEqual(
+            c._etp_ecoulee_du_jour(),
+            {"etp_ecoulee_mm": None, "etp_jour_estime_mm": None},
+        )
+
+    def test_un_journal_absent_ou_corrompu_ne_prive_pas_des_autres_voyants(self) -> None:
+        """Ce bloc alimente sensor_health : une exception ici masquerait TOUS les voyants."""
+        for etat in (None, {}, {"ledger": None}, {"ledger": []}, {"ledger": ["pas un dict"]},
+                     {"ledger": [{"date": None}]}, "pas un dict"):
+            with self.subTest(soil_balance=etat):
+                resultat = self._coord(etat)._etp_ecoulee_du_jour()
+                self.assertEqual(set(resultat), {"etp_ecoulee_mm", "etp_jour_estime_mm"})
