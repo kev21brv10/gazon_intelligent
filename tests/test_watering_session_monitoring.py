@@ -4435,3 +4435,58 @@ class LaFiabiliteDeLaTondeuseEstSuivieTests(unittest.TestCase):
             "mower_blocked_minutes_today", "mower_mowing_minutes_today",
             "mower_block_count_today", "mower_reliability_today",
         })
+
+
+class LeCumulTondeuseSurvitAuRedemarrageTests(unittest.TestCase):
+    """Un cumul de la JOURNÉE qui ne survit pas au redémarrage ne vaut rien.
+
+    `_serialized_runtime_state` est une liste blanche clé par clé : une clé absente n'atteint
+    jamais le disque. `mower_health` (0.50.0) y manquait — découvert en relisant l'état persisté
+    juste après le déploiement de la 0.51.0. Le compteur accumulait en mémoire et repartait de
+    zéro à chaque redémarrage, or les redémarrages sont fréquents sur cette installation.
+    """
+
+    ETAT = {
+        "date": "2026-08-07", "blocked_minutes": 123.4, "mowing_minutes": 130.0,
+        "block_count": 3, "last_seen_at": "2026-08-07T13:41:44+00:00", "last_kind": "bloquee",
+    }
+
+    def _coord(self):
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord._runtime_state = {
+            "active_irrigation_session": None,
+            "last_irrigation_execution": None,
+            "last_auto_irrigation_reason": None,
+            "last_auto_irrigation_completed_at": None,
+            "auto_irrigation_safety_lock": False,
+            "mower_health": dict(self.ETAT),
+        }
+        coord._ensure_irrigation_runtime_bootstrap = lambda: None
+        return coord
+
+    def test_le_cumul_atteint_le_disque(self) -> None:
+        serialise = self._coord()._serialized_runtime_state()
+        self.assertIn("mower_health", serialise,
+                      "le cumul du jour n'est jamais persisté")
+        self.assertEqual(serialise["mower_health"]["block_count"], 3)
+        self.assertAlmostEqual(serialise["mower_health"]["blocked_minutes"], 123.4, places=1)
+
+    def test_le_cumul_est_relu_au_demarrage(self) -> None:
+        """Sérialiser sans relire serait pire qu'absent : invisible."""
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord._restore_runtime_state({"mower_health": dict(self.ETAT)})
+        self.assertEqual(
+            coord._runtime_state.get("mower_health", {}).get("block_count"), 3,
+            "le cumul est écrit sur le disque puis ignoré au rechargement",
+        )
+
+    def test_aller_retour_complet(self) -> None:
+        serialise = self._coord()._serialized_runtime_state()
+        relu = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        relu._restore_runtime_state(serialise)
+        self.assertEqual(relu._runtime_state["mower_health"], self.ETAT)
+
+    def test_un_etat_absent_ne_casse_pas_la_restauration(self) -> None:
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord._restore_runtime_state({})
+        self.assertIsNone(coord._runtime_state.get("mower_health"))

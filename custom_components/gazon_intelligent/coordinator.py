@@ -2594,6 +2594,15 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "auto_irrigation_safety_lock": bool(
                 self._runtime_state.get("auto_irrigation_safety_lock")
             ),
+            # ⚠️ LISTE BLANCHE clé par clé : une clé absente d'ici n'est JAMAIS persistée et
+            # disparaît à chaque redémarrage de Home Assistant. Le suivi de fiabilité de la
+            # tondeuse (0.50.0) est un cumul de la JOURNÉE : sans persistance, il repartait de
+            # zéro à chaque redémarrage — et les redémarrages sont fréquents sur cette install.
+            # Constaté en relisant le state persisté juste après le déploiement de la 0.51.0 :
+            # `mower_health` accumulait en mémoire et n'atteignait jamais le disque.
+            "mower_health": self._serialize_runtime_value(
+                self._runtime_state.get("mower_health")
+            ),
             "persisted_watering_session": persisted_watering_session,
             "last_irrigation_execution_persisted": self._serialize_runtime_value(last_execution),
         }
@@ -2651,6 +2660,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "last_auto_irrigation_reason": last_auto_irrigation_reason,
             "last_auto_irrigation_completed_at": runtime.get("last_auto_irrigation_completed_at"),
             "auto_irrigation_safety_lock": bool(runtime.get("auto_irrigation_safety_lock")),
+            # Symétrique de la sérialisation : sans cette ligne le cumul du jour serait écrit
+            # sur le disque puis ignoré au rechargement — pire qu'absent, car invisible.
+            "mower_health": runtime.get("mower_health"),
         }
 
     def _get_active_irrigation_session(self) -> dict[str, Any] | None:
