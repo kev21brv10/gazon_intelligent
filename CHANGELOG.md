@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.49.0
+
+1002 tests verts. **Instrumentation — ce correctif ne corrige rien, il rend mesurable.**
+
+Deux phénomènes de l'audit du 06/08/2026 restaient **inexpliqués**. Les corriger à l'aveugle
+aurait reproduit exactement l'erreur commise la nuit précédente sur le réservoir : trancher sur
+un diagnostic non vérifié. On mesure d'abord.
+
+- **L'objectif d'arrosage n'est pas reproductible.** Le 06/08, il passe de **5,0 à 0,0** avec
+  réserve, déficits, ETP, température, `depletion_ratio` et `block_reason` **tous identiques** —
+  9 bascules en une heure, aucun `unavailable` dans la fenêtre, donc pas un redémarrage. Même
+  signature *pendant* des sessions (04/08, 30/07). Aucune dose fausse n'en est résultée, et
+  c'est vérifié : les vannes du 04/08 (33 / 33 / 27 min) donnent bien 7,7 mm. Mais c'est la
+  variable de décision, et elle n'est pas reconstructible depuis ce que le système publie.
+
+  Nouveau bloc `decision_cycle` : `cycle_origine` (`capteur:<entity_id>`, `vanne:<entity_id>`
+  ou `intervalle`), `cycle_sequence`, `cycle_at`. Deux publications de la même seconde portant
+  des origines différentes signeront la concurrence entre le rafraîchissement sur événement et
+  le cycle périodique de 2 min — l'hypothèse à confirmer **ou à écarter**.
+
+- **`configured_missing` publié sur une tondeuse présente et à la station**, sans un seul
+  changement d'état de 13:40 à 13:47. La cause est interne, pas externe. En lisant le code :
+  si la machine d'états de Home Assistant n'est pas interrogeable, `mower_state` vaut `None` —
+  et **« je n'ai pas pu interroger » produisait le même verdict que « l'entité n'existe pas »**.
+  C'est la signature exacte de la famille de défauts : une incapacité devient une affirmation.
+
+  Nouveau champ `mower_resolution_probe` : `ok`, `entite_absente`,
+  `machine_etats_injoignable`, `aucun_candidat`, `plusieurs_candidats`. Il traverse les deux
+  listes blanches de clés tondeuse — le piège documenté du projet, vérifié de bout en bout.
+
+Aucune décision ne dépend de ces traces, et les deux échouent en silence si quoi que ce soit
+manque : une instrumentation qui casse un cycle de décision serait pire que le défaut qu'elle
+observe. Les 4 mutations correspondantes sont détectées.
+
 ## 0.48.0
 
 996 tests verts. **Quatre affichages qui rendaient le diagnostic faux.**

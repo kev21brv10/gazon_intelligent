@@ -286,6 +286,7 @@ def build_mower_context(
     resolution_state: str | None = None,
     resolution_reason: str | None = None,
     resolution_candidate_count: int | None = None,
+    resolution_probe: str | None = None,
 ) -> dict[str, Any]:
     """Construit un contexte tondeuse standardisé depuis des entités HA hétérogènes."""
 
@@ -334,5 +335,8 @@ def build_mower_context(
         "tondeuse_resolution_state": _clean_text(resolution_state),
         "tondeuse_resolution_reason": _clean_text(resolution_reason),
         "tondeuse_resolution_candidate_count": resolution_candidate_count,
+        # ⚠️ INSTRUMENTATION — sépare « je n'ai pas pu interroger la machine d'états » de
+        # « l'entité n'existe pas ». Les deux donnaient le même `configured_missing`.
+        "tondeuse_resolution_probe": _clean_text(resolution_probe),
     }
     return {key: value for key, value in payload.items() if value is not None}

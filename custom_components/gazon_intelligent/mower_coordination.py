@@ -220,5 +220,9 @@ def build_mower_coordination_context(
         "mower_resolution_state": _text(context.get("tondeuse_resolution_state")) or None,
         "mower_resolution_reason": _text(context.get("tondeuse_resolution_reason")) or None,
         "mower_resolution_candidate_count": context.get("tondeuse_resolution_candidate_count"),
+        # ⚠️ INSTRUMENTATION : distingue « machine d'états injoignable » de « entité absente ».
+        # Les deux produisaient le même `configured_missing`, ce qui rendait indiscernable une
+        # panne réelle d'une course au démarrage interne.
+        "mower_resolution_probe": _text(context.get("tondeuse_resolution_probe")) or None,
     }
     return {key: value for key, value in payload.items() if value not in (None, "")}

@@ -4252,3 +4252,66 @@ class LHorodatageEstBrancheSurLesDeuxVoiesTests(unittest.TestCase):
             oublis, [],
             f"appel(s) à async_record_watering sans `started_at=` aux lignes {oublis}",
         )
+
+
+class LaTraceDuCycleTests(unittest.TestCase):
+    """Instrumentation de l'objectif non reproductible — on mesure avant de corriger.
+
+    Le 06/08/2026, `objectif_d_arrosage` est passé de 5,0 à 0,0 avec réserve, déficits, ETP,
+    température, `depletion_ratio` et `block_reason` **tous identiques** : 9 bascules en une
+    heure, aucun `unavailable` dans la fenêtre. La sortie n'est donc pas reconstructible depuis
+    ce que le système publie. Deux passes concurrentes (événement de capteur / intervalle de
+    2 min) sont la piste — encore faut-il savoir laquelle a produit une publication donnée.
+    """
+
+    def _coord(self):
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord._current_datetime = lambda: datetime(2026, 8, 6, 13, 41, 44, tzinfo=timezone.utc)
+        return coord
+
+    def test_sans_evenement_l_origine_est_l_intervalle(self) -> None:
+        trace = self._coord()._tracer_cycle()
+        self.assertEqual(trace["cycle_origine"], "intervalle")
+        self.assertEqual(trace["cycle_sequence"], 1)
+        self.assertTrue(trace["cycle_at"])
+
+    def test_un_changement_de_capteur_est_nomme(self) -> None:
+        coord = self._coord()
+        coord._marquer_origine_cycle("capteur:sensor.meteo_netatmo_temperature")
+        self.assertEqual(
+            coord._tracer_cycle()["cycle_origine"],
+            "capteur:sensor.meteo_netatmo_temperature",
+        )
+
+    def test_l_origine_est_consommee_une_seule_fois(self) -> None:
+        """Sinon un événement unique teinterait tous les cycles suivants."""
+        coord = self._coord()
+        coord._marquer_origine_cycle("capteur:sensor.x")
+        self.assertEqual(coord._tracer_cycle()["cycle_origine"], "capteur:sensor.x")
+        self.assertEqual(coord._tracer_cycle()["cycle_origine"], "intervalle")
+
+    def test_le_premier_evenement_gagne(self) -> None:
+        """Plusieurs capteurs peuvent bouger avant que le cycle ne parte."""
+        coord = self._coord()
+        coord._marquer_origine_cycle("capteur:sensor.a")
+        coord._marquer_origine_cycle("capteur:sensor.b")
+        self.assertEqual(coord._tracer_cycle()["cycle_origine"], "capteur:sensor.a")
+
+    def test_la_sequence_s_incremente(self) -> None:
+        """Deux publications de la même seconde se distinguent par leur numéro."""
+        coord = self._coord()
+        self.assertEqual(
+            [coord._tracer_cycle()["cycle_sequence"] for _ in range(3)], [1, 2, 3]
+        )
+
+    def test_une_trace_ne_casse_jamais_un_cycle(self) -> None:
+        """Aucune décision ne dépend de cette trace : elle doit échouer en silence."""
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+
+        def _horloge_cassee():
+            raise RuntimeError("horloge indisponible")
+
+        coord._current_datetime = _horloge_cassee
+        trace = coord._tracer_cycle()
+        self.assertEqual(set(trace), {"cycle_origine", "cycle_sequence", "cycle_at"})
+        self.assertEqual(trace["cycle_origine"], "inconnue")
