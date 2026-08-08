@@ -2,7 +2,7 @@
 
 ## 0.52.0
 
-1051 tests verts. **L'intégration déclare elle-même la tonte du jour, sans attendre 23:50** — et
+1056 tests verts. **L'intégration déclare elle-même la tonte du jour, sans attendre 23:50** — et
 un réglage utilisateur qui s'effaçait tout seul depuis sa livraison est réparé au passage.
 
 Jusqu'ici la tonte n'était inscrite que par un flow Node-RED externe, une fois par jour à
@@ -61,10 +61,10 @@ n'apporte rien.
   (le délai de reprise, plus les deux nouveaux) sont désormais reconduits, via un helper
   `_reglage_entier` qui fait retomber une valeur illisible sur le défaut au lieu de la
   propager jusqu'au curseur.
-- **Vérification** : 31 nouveaux tests, dont un test de **prémisse** (le montage déclare bien
+- **Vérification** : 36 nouveaux tests, dont un test de **prémisse** (le montage déclare bien
   quand tout est réuni — sans lui, un montage qui n'atteint jamais le code rendrait les autres
   verts pour rien) et deux tests de **câblage** (l'appel existe dans le cycle, et il précède
-  `compute_snapshot`). Les **13 mutations** du banc sont détectées. Le test de robustesse a
+  `compute_snapshot`). Les **15 mutations** du banc sont détectées. Le test de robustesse a
   trouvé un vrai trou pendant l'écriture : le seuil se lisait hors du `try`, donc un
   coordinator dégradé faisait remonter l'exception dans le cycle.
 
