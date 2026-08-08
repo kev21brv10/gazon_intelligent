@@ -4490,3 +4490,305 @@ class LeCumulTondeuseSurvitAuRedemarrageTests(unittest.TestCase):
         coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
         coord._restore_runtime_state({})
         self.assertIsNone(coord._runtime_state.get("mower_health"))
+
+
+class AutoDeclarationTonteTests(unittest.TestCase):
+    """L'intégration inscrit elle-même la tonte du jour, sans attendre un déclarant externe.
+
+    ⚠️ CE QUE CES TESTS PROTÈGENT. Jusqu'en 0.52.0 la tonte n'était déclarée que par un flow
+    Node-RED, à 23:50. Deux défauts vécus :
+
+    - le nœud qui déclarait est resté DÉSACTIVÉ du 30/07 au 06/08/2026 — sept jours de retard
+      accumulés sans un seul signal ;
+    - le 08/08/2026 la tondeuse a franchi le seuil vers 12 h et l'intégration a affiché
+      « 2 jours de retard » jusqu'au soir, alors que le retard PILOTE des décisions
+      (`overdue_relaxed_baseline`, decision_mowing.py, relâche les blocages agronomiques).
+
+    Une déclaration est une ÉCRITURE : une fausse tonte inscrite remet le compteur de retard à
+    zéro et endort la surveillance. C'est plus grave qu'une tonte non déclarée, d'où les gardes.
+    """
+
+    JOUR = date(2026, 8, 6)
+
+    def _coord(self, *, active=True, seuil=None, historique=None):
+        brain_mod = importlib.import_module("custom_components.gazon_intelligent.gazon_brain")
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord.brain = brain_mod.GazonBrain()
+        coord.brain.memory["auto_mowing_declaration_enabled"] = active
+        if seuil is not None:
+            coord.brain.memory["auto_mowing_declaration_minutes"] = seuil
+        if historique:
+            coord.brain.history = list(historique)
+        coord._current_date = lambda: self.JOUR
+        return coord
+
+    def _ctx(self, minutes, *, hauteur=None):
+        return {"mower_mowing_minutes_today": minutes, "tondeuse_hauteur_coupe_mm": hauteur}
+
+    def _tontes(self, coord):
+        return [i for i in coord.brain.history if i.get("type") == "tonte"]
+
+    # ---- PRÉMISSE : le montage mord vraiment -------------------------------------------
+    def test_premisse_le_montage_declare_bien_quand_tout_est_reuni(self) -> None:
+        """Sans ce test, un montage qui n'atteint jamais le code testé rendrait tous les
+        autres verts pour rien — l'erreur commise deux fois sur ce projet."""
+        coord = self._coord()
+        self.assertEqual(self._tontes(coord), [], "l'historique de départ n'était pas vierge")
+        trace = coord._declarer_tonte_du_jour(self._ctx(120.0))
+        self.assertEqual(trace["mower_auto_declaration_state"], "declaree")
+        self.assertEqual(len(self._tontes(coord)), 1)
+
+    # ---- Le seuil ----------------------------------------------------------------------
+    def test_le_seuil_franchi_inscrit_la_tonte_du_jour(self) -> None:
+        """Le 08/08/2026 : 126,6 min tondues, largement au-dessus des 90 min."""
+        coord = self._coord()
+        coord._declarer_tonte_du_jour(self._ctx(126.6))
+        self.assertEqual(self._tontes(coord)[0]["date"], self.JOUR.isoformat())
+
+    def test_sous_le_seuil_rien_n_est_inscrit(self) -> None:
+        """Une sortie avortée (le 08/08 à 13:59 : 3 secondes) n'est pas une tonte."""
+        coord = self._coord()
+        trace = coord._declarer_tonte_du_jour(self._ctx(12.0))
+        self.assertEqual(trace["mower_auto_declaration_state"], "sous_seuil")
+        self.assertEqual(self._tontes(coord), [])
+
+    def test_la_borne_exacte_du_seuil_declare(self) -> None:
+        coord = self._coord(seuil=90)
+        self.assertEqual(
+            coord._declarer_tonte_du_jour(self._ctx(90.0))["mower_auto_declaration_state"],
+            "declaree",
+        )
+
+    def test_juste_en_dessous_de_la_borne_ne_declare_pas(self) -> None:
+        coord = self._coord(seuil=90)
+        self.assertEqual(
+            coord._declarer_tonte_du_jour(self._ctx(89.9))["mower_auto_declaration_state"],
+            "sous_seuil",
+        )
+
+    def test_le_seuil_est_reellement_configurable(self) -> None:
+        coord = self._coord(seuil=30)
+        trace = coord._declarer_tonte_du_jour(self._ctx(45.0))
+        self.assertEqual(trace["mower_auto_declaration_state"], "declaree")
+        self.assertEqual(trace["mower_auto_declaration_threshold_minutes"], 30)
+
+    # ---- Les gardes contre une FAUSSE déclaration ----------------------------------------
+    def test_l_interrupteur_coupe_interdit_toute_ecriture(self) -> None:
+        coord = self._coord(active=False)
+        trace = coord._declarer_tonte_du_jour(self._ctx(600.0))
+        self.assertEqual(trace["mower_auto_declaration_state"], "desactivee")
+        self.assertEqual(self._tontes(coord), [])
+
+    def test_une_tondeuse_injoignable_n_inscrit_RIEN(self) -> None:
+        """RÈGLE DE LA MAISON : `None` est une absence de mesure, PAS zéro minute — et surtout
+        pas une raison d'écrire quoi que ce soit."""
+        coord = self._coord()
+        trace = coord._declarer_tonte_du_jour(self._ctx(None))
+        self.assertEqual(trace["mower_auto_declaration_state"], "sans_mesure")
+        self.assertEqual(self._tontes(coord), [])
+
+    def test_un_booleen_n_est_pas_une_duree(self) -> None:
+        """`True` vaut 1 en Python : sans garde explicite il passerait pour une mesure."""
+        coord = self._coord(seuil=1)
+        trace = coord._declarer_tonte_du_jour(self._ctx(True))
+        self.assertEqual(trace["mower_auto_declaration_state"], "sans_mesure")
+        self.assertEqual(self._tontes(coord), [])
+
+    def test_une_journee_deja_declaree_ne_l_est_pas_deux_fois(self) -> None:
+        """Le filet Node-RED de 23:50 peut avoir devancé l'intégration."""
+        coord = self._coord(historique=[{"type": "tonte", "date": self.JOUR.isoformat()}])
+        trace = coord._declarer_tonte_du_jour(self._ctx(200.0))
+        self.assertEqual(trace["mower_auto_declaration_state"], "deja_declaree")
+        self.assertEqual(len(self._tontes(coord)), 1)
+
+    def test_dix_cycles_au_dessus_du_seuil_n_ecrivent_qu_une_ligne(self) -> None:
+        """Le cycle tourne toutes les 2 min : sans idempotence, ~300 lignes par après-midi."""
+        coord = self._coord()
+        for _ in range(10):
+            coord._declarer_tonte_du_jour(self._ctx(126.6))
+        self.assertEqual(len(self._tontes(coord)), 1)
+
+    def test_une_tonte_de_la_veille_n_empeche_pas_celle_du_jour(self) -> None:
+        veille = (self.JOUR - timedelta(days=1)).isoformat()
+        coord = self._coord(historique=[{"type": "tonte", "date": veille}])
+        coord._declarer_tonte_du_jour(self._ctx(126.6))
+        self.assertEqual(
+            sorted(i["date"] for i in self._tontes(coord)),
+            [veille, self.JOUR.isoformat()],
+        )
+
+    # ---- Les deux horloges ---------------------------------------------------------------
+    def test_la_date_inscrite_est_celle_du_compteur_pas_l_horloge_systeme(self) -> None:
+        """⚠️ Le cumul est indexé sur `_current_date()`, mais `record_mowing` retombe sinon sur
+        `dt_util.now().date()`. Deux horloges pour un même fait = une tonte déclarée le mauvais
+        jour. La date est passée EXPLICITEMENT."""
+        coord = self._coord()
+        coord._declarer_tonte_du_jour(self._ctx(126.6))
+        self.assertEqual(self._tontes(coord)[0]["date"], "2026-08-06")
+        self.assertNotEqual(
+            self._tontes(coord)[0]["date"],
+            date.today().isoformat(),
+            msg="le montage doit distinguer la date du compteur de la date réelle",
+        )
+
+    # ---- Ce qui est inscrit ---------------------------------------------------------------
+    def test_la_hauteur_de_coupe_du_moment_est_conservee(self) -> None:
+        coord = self._coord()
+        coord._declarer_tonte_du_jour(self._ctx(126.6, hauteur=60.0))
+        self.assertAlmostEqual(self._tontes(coord)[0]["hauteur_coupe_mm"], 60.0)
+
+    # ---- Robustesse -----------------------------------------------------------------------
+    def test_une_declaration_ratee_ne_casse_jamais_un_cycle(self) -> None:
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        trace = coord._declarer_tonte_du_jour({"mower_mowing_minutes_today": 120.0})
+        self.assertEqual(set(trace), {
+            "mower_auto_declaration_state",
+            "mower_auto_declaration_threshold_minutes",
+            "mower_auto_declared_today",
+        })
+
+
+class RecordMowingIdempotentTests(unittest.TestCase):
+    """`_append_history` ne déduplique pas : deux déclarations le même jour faisaient deux lignes.
+
+    Sans gravité pour `derniere_tonte` (qui prend la plus récente), mais PAS neutre pour
+    `_count_tonte_events_since_latest_phase_start` (guidance.py), qui COMPTE les entrées pour
+    décider de la transition de sursemis : un doublon y valait une tonte qui n'a jamais eu lieu.
+    """
+
+    def _brain(self):
+        brain_mod = importlib.import_module("custom_components.gazon_intelligent.gazon_brain")
+        return brain_mod.GazonBrain()
+
+    def test_deux_declarations_le_meme_jour_ne_font_qu_une_entree(self) -> None:
+        brain = self._brain()
+        brain.record_mowing(date(2026, 8, 6))
+        brain.record_mowing(date(2026, 8, 6))
+        self.assertEqual(len([i for i in brain.history if i.get("type") == "tonte"]), 1)
+
+    def test_la_derniere_ecriture_precise_la_hauteur(self) -> None:
+        """L'auto-déclaration peut inscrire sans hauteur, le filet de 23:50 la préciser après."""
+        brain = self._brain()
+        brain.record_mowing(date(2026, 8, 6))
+        brain.record_mowing(date(2026, 8, 6), hauteur_coupe_mm=55.0)
+        tontes = [i for i in brain.history if i.get("type") == "tonte"]
+        self.assertEqual(len(tontes), 1)
+        self.assertAlmostEqual(tontes[0]["hauteur_coupe_mm"], 55.0)
+
+    def test_une_hauteur_deja_connue_n_est_pas_effacee_par_un_appel_nu(self) -> None:
+        brain = self._brain()
+        brain.record_mowing(date(2026, 8, 6), hauteur_coupe_mm=55.0)
+        brain.record_mowing(date(2026, 8, 6))
+        tontes = [i for i in brain.history if i.get("type") == "tonte"]
+        self.assertAlmostEqual(tontes[0]["hauteur_coupe_mm"], 55.0)
+
+    def test_deux_jours_distincts_font_bien_deux_entrees(self) -> None:
+        brain = self._brain()
+        brain.record_mowing(date(2026, 8, 5))
+        brain.record_mowing(date(2026, 8, 6))
+        self.assertEqual(len([i for i in brain.history if i.get("type") == "tonte"]), 2)
+
+    def test_la_dedup_ne_touche_pas_les_autres_types(self) -> None:
+        brain = self._brain()
+        brain.history = [{"type": "arrosage", "date": "2026-08-06", "total_mm": 5.7}]
+        brain.record_mowing(date(2026, 8, 6))
+        self.assertEqual(len(brain.history), 2)
+
+
+class AutoDeclarationCablageTests(unittest.TestCase):
+    """⚠️ LE PIÈGE DU PROJET : une clé qui n'est pas dans TOUTES les listes blanches disparaît
+    en silence. `mower_health` (0.50.0) n'atteignait jamais le disque faute d'y figurer.
+
+    Et un correctif branché nulle part est un correctif qui n'existe pas : la déclaration doit
+    être APPELÉE dans le cycle, pas seulement définie.
+    """
+
+    CLES = (
+        "mower_auto_declaration_state",
+        "mower_auto_declaration_threshold_minutes",
+        "mower_auto_declared_today",
+    )
+
+    def test_les_cles_traversent_la_liste_blanche_du_coordinator(self) -> None:
+        for cle in self.CLES:
+            with self.subTest(cle=cle):
+                self.assertIn(cle, coordinator_mod._COORDINATOR_SNAPSHOT_KEYS)
+
+    def test_les_cles_traversent_REELLEMENT_toute_la_chaine(self) -> None:
+        """⚠️ LE TEST QUI MANQUAIT, ET LE DÉFAUT QU'IL A ATTRAPÉ.
+
+        Les trois clés s'appelaient d'abord `mowing_auto_*`. Elles étaient bien déclarées dans
+        `_COORDINATOR_SNAPSHOT_KEYS` ET dans la liste d'attributs du capteur — et elles
+        n'arrivaient JAMAIS : deux filtres successifs ne recopient du contexte tondeuse que les
+        préfixes `tondeuse_` et `mower_` (decision_mowing.py et decision.py). Tout ce qui
+        commence par `mowing_` y meurt en silence.
+
+        Vérifier qu'une clé est DÉCLARÉE quelque part ne prouve rien. Ce test la suit du
+        contexte tondeuse jusqu'au snapshot publié.
+        """
+        decision = importlib.import_module("custom_components.gazon_intelligent.decision")
+        contexte = decision.DecisionContext.from_legacy_args(
+            history=[{"type": "tonte", "date": "2026-08-06"}],
+            today=date(2026, 8, 6),
+            hour_of_day=13,
+            temperature=22.0,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=55,
+            type_sol="limoneux",
+            etp_capteur=4.0,
+        )
+        # ⚠️ Les clés viennent de la SORTIE RÉELLE du coordinator, jamais recopiées à la main :
+        # un test qui se donne lui-même les noms survivrait à un renommage du code, donc ne
+        # testerait plus rien.
+        brain_mod = importlib.import_module("custom_components.gazon_intelligent.gazon_brain")
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord.brain = brain_mod.GazonBrain()
+        coord.brain.memory["auto_mowing_declaration_enabled"] = True
+        coord._current_date = lambda: date(2026, 8, 6)
+        trace = coord._declarer_tonte_du_jour({"mower_mowing_minutes_today": 126.6})
+        self.assertEqual(trace["mower_auto_declaration_state"], "declaree",
+                         msg="prémisse : la trace exercée doit être celle d'une déclaration")
+
+        contexte.mower_context = dict(trace)
+        snapshot = decision.build_decision_result(contexte).to_snapshot()
+        for cle in trace:
+            with self.subTest(cle=cle):
+                self.assertIn(
+                    cle,
+                    snapshot,
+                    msg=f"{cle} n'atteint pas le snapshot — filtre de préfixe ?",
+                )
+
+    def test_le_prefixe_des_cles_est_celui_qui_passe_les_filtres(self) -> None:
+        """Garde explicite : renommer une clé en `mowing_…` la ferait disparaître en silence."""
+        for cle in self.CLES:
+            with self.subTest(cle=cle):
+                self.assertTrue(cle.startswith(("mower_", "tondeuse_")))
+
+    def test_les_cles_atteignent_les_attributs_du_capteur_de_tonte(self) -> None:
+        source = (PACKAGE_DIR / "sensor.py").read_text(encoding="utf-8")
+        for cle in self.CLES:
+            with self.subTest(cle=cle):
+                self.assertIn(f'"{cle}"', source)
+
+    def test_la_declaration_est_appelee_dans_le_cycle_de_mise_a_jour(self) -> None:
+        """Vérifie le CÂBLAGE, pas la déclaration : sans cet appel, tout le reste est mort."""
+        import inspect
+
+        source = inspect.getsource(
+            coordinator_mod.GazonIntelligentCoordinator._async_update_data
+        )
+        self.assertIn("_declarer_tonte_du_jour(mower_context)", source)
+
+    def test_la_declaration_precede_le_calcul_du_snapshot(self) -> None:
+        """Déclarer APRÈS `compute_snapshot` repousserait la correction du retard d'un cycle."""
+        import inspect
+
+        source = inspect.getsource(
+            coordinator_mod.GazonIntelligentCoordinator._async_update_data
+        )
+        self.assertLess(
+            source.index("_declarer_tonte_du_jour"),
+            source.index("self.brain.compute_snapshot"),
+        )

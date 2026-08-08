@@ -79,6 +79,9 @@ _SNAPSHOT_KEYS: tuple[str, ...] = (
     "mowing_block_reason",
     "mowing_cooldown_remaining_minutes",
     "mowing_post_application_active",
+    "mower_auto_declaration_state",
+    "mower_auto_declared_today",
+    "mower_auto_declaration_threshold_minutes",
     "tondeuse_resolution_state",
     "tondeuse_resolution_reason",
     "tondeuse_resolution_candidate_count",
@@ -121,6 +124,10 @@ _MEMORY_KEYS: tuple[str, ...] = (
     "prochaine_reapplication",
     "date_derniere_mise_a_jour",
     "auto_irrigation_enabled",
+    # Sans ces deux-là, un diagnostic joint à une issue ne dit pas si l'auto-déclaration
+    # était armée — donc ne permet pas de trancher entre « n'a pas agi » et « était coupée ».
+    "auto_mowing_declaration_enabled",
+    "auto_mowing_declaration_minutes",
 )
 
 _HISTORY_KEYS: tuple[str, ...] = (

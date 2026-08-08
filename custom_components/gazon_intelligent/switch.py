@@ -16,6 +16,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
             GazonAutoIrrigationSwitch(coordinator),
             GazonEveningCoolingSwitch(coordinator),
             GazonMowerCoordinationSwitch(coordinator),
+            GazonAutoMowingDeclarationSwitch(coordinator),
         ]
     )
 
@@ -81,3 +82,30 @@ class GazonMowerCoordinationSwitch(GazonEntityBase, SwitchEntity):
 
     async def async_turn_off(self, **kwargs):
         await self.coordinator.async_set_mower_coordination_enabled(False)
+
+
+class GazonAutoMowingDeclarationSwitch(GazonEntityBase, SwitchEntity):
+    """Laisse l'intégration inscrire elle-même la tonte du jour.
+
+    Coupé, l'historique de tonte ne dépend plus que d'un déclarant externe — c'est la
+    situation qui a laissé passer sept jours de retard du 30/07 au 06/08/2026.
+    """
+
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_icon = "mdi:clipboard-check-outline"
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._attr_name = "Déclaration auto de la tonte"
+        self._set_entity_identity("switch", "declaration_tonte_auto")
+
+    @property
+    def is_on(self):
+        return bool(self.coordinator.auto_mowing_declaration_enabled)
+
+    async def async_turn_on(self, **kwargs):
+        await self.coordinator.async_set_auto_mowing_declaration_enabled(True)
+
+    async def async_turn_off(self, **kwargs):
+        await self.coordinator.async_set_auto_mowing_declaration_enabled(False)

@@ -1,5 +1,73 @@
 # Changelog
 
+## 0.52.0
+
+1051 tests verts. **L'intégration déclare elle-même la tonte du jour, sans attendre 23:50** — et
+un réglage utilisateur qui s'effaçait tout seul depuis sa livraison est réparé au passage.
+
+Jusqu'ici la tonte n'était inscrite que par un flow Node-RED externe, une fois par jour à
+23:50, qui resommait l'historique de Home Assistant. Deux défauts vécus sur cette
+installation :
+
+- **le fil se débranche en silence** : le nœud qui déclarait est resté désactivé du 30/07 au
+  06/08/2026, soit sept jours de retard de tonte accumulés sans le moindre signal ;
+- **onze heures d'écart entre le fait et sa prise en compte** : le 08/08/2026 la tondeuse a
+  franchi le seuil vers 12 h, et l'intégration a continué d'afficher « 2 jours de retard »
+  jusqu'au soir. Ce n'est pas cosmétique — `overdue_relaxed_baseline` (`decision_mowing.py`)
+  ouvre une voie alternative vers `tonte_ok` **et** contourne les blocages agronomiques. Se
+  croire en retard alors qu'on vient de tondre relâche des gardes qui devaient tenir.
+
+Le compteur `mower_mowing_minutes_today` (0.50.0, persistant depuis 0.51.1) suffit : une fois
+le seuil franchi, tondre davantage ne peut pas le dé-franchir, donc la fin de journée
+n'apporte rien.
+
+- **Tonte** : nouvelle auto-déclaration dans le cycle, placée **avant** `compute_snapshot` pour
+  que le retard soit corrigé dès le cycle courant. Écriture synchrone dans le cerveau — jamais
+  `async_record_mowing`, qui redemanderait un rafraîchissement depuis l'intérieur du cycle.
+- **Gardes** : une déclaration est une **écriture**, et une fausse tonte inscrite est pire
+  qu'une tonte manquante (elle remet le retard à zéro et endort la surveillance). Quatre
+  gardes : interrupteur explicite, mesure réellement présente (`None` = tondeuse injoignable,
+  ce n'est **pas** zéro minute — les booléens sont rejetés au passage), seuil franchi, journée
+  pas déjà inscrite. La date est passée **explicitement** : le cumul est indexé sur
+  `_current_date()` quand `record_mowing` retomberait sinon sur `dt_util.now().date()`, et deux
+  horloges pour un même fait donnent une tonte déclarée le mauvais jour.
+- **Historique** : `record_mowing` devient idempotent par journée. `_append_history` ne
+  dédupliquait pas ; sans gravité pour `derniere_tonte`, mais **pas** neutre pour
+  `_count_tonte_events_since_latest_phase_start` (`guidance.py`), qui **compte** les entrées
+  pour décider de la transition de sursemis — un doublon y valait une tonte qui n'a jamais eu
+  lieu. Le filet Node-RED de 23:50 peut donc rester en place sans dédoubler quoi que ce soit.
+- **Réglages** : `switch.…_declaration_tonte_auto` (désactivé par défaut, comme les deux autres
+  automatismes) et `number.…_seuil_declaration_tonte` (90 min par défaut, la valeur qu'appliquait
+  Node-RED). Le seuil est un **plancher de crédibilité**, pas une durée normale : en dessous, le
+  robot est sorti sans faire le tour et l'inscrire remettrait le retard à zéro pour rien.
+- **⚠️ Le piège du projet s'est refermé une fois de plus, et sur le diagnostic.** Les trois clés
+  s'appelaient d'abord `mowing_auto_*`. Elles étaient déclarées dans `_COORDINATOR_SNAPSHOT_KEYS`
+  **et** dans la liste d'attributs du capteur — et elles n'arrivaient **jamais** : deux filtres
+  successifs (`decision_mowing.py`, `decision.py`) ne recopient du contexte tondeuse que les
+  préfixes `tondeuse_` et `mower_`. Tout ce qui commence par `mowing_` y meurt en silence.
+  Renommées en `mower_auto_*`, vérifiées **du contexte jusqu'au snapshot publié**. Le test qui
+  manquait suit désormais la sortie réelle du coordinator jusqu'au bout — un test qui se donne
+  lui-même les noms de clés survivrait à un renommage, donc ne testerait plus rien.
+- **Diagnostic** : `mower_auto_declaration_state` dit **pourquoi** rien n'a été inscrit
+  (`desactivee` · `sans_mesure` · `sous_seuil` · `deja_declaree` · `declaree`), avec le seuil
+  appliqué. Un automatisme muet qui n'agit pas est indiscernable d'un automatisme cassé.
+- **Réglages effacés — défaut DISTINCT et PRÉEXISTANT, trouvé en câblant les deux nouveaux.**
+  `compute_memory` **reconstruit** la mémoire à chaque cycle et `compute_snapshot` la
+  **remplace** : tout réglage absent de ce dict est perdu au bout de deux minutes. La garde
+  existait, avec son commentaire et son test — mais **elle ne couvrait que les booléens**
+  (`assertIs(..., False)`). Résultat, le curseur **« Délai reprise tonte après arrosage »
+  revenait à 180 min deux minutes après chaque réglage, depuis le jour de sa livraison**.
+  Vérifié en exécution le 08/08/2026 avant et après correction. Les trois réglages
+  (le délai de reprise, plus les deux nouveaux) sont désormais reconduits, via un helper
+  `_reglage_entier` qui fait retomber une valeur illisible sur le défaut au lieu de la
+  propager jusqu'au curseur.
+- **Vérification** : 31 nouveaux tests, dont un test de **prémisse** (le montage déclare bien
+  quand tout est réuni — sans lui, un montage qui n'atteint jamais le code rendrait les autres
+  verts pour rien) et deux tests de **câblage** (l'appel existe dans le cycle, et il précède
+  `compute_snapshot`). Les **13 mutations** du banc sont détectées. Le test de robustesse a
+  trouvé un vrai trou pendant l'écriture : le seuil se lisait hors du `try`, donc un
+  coordinator dégradé faisait remonter l'exception dans le cycle.
+
 ## 0.51.1
 
 1020 tests verts. **Le cumul de fiabilité de la tondeuse survit enfin aux redémarrages.**
