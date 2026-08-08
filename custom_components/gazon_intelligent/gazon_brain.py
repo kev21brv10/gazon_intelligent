@@ -8,6 +8,8 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     DEFAULT_AUTO_IRRIGATION_ENABLED,
+    DEFAULT_AUTO_MOWING_DECLARATION_ENABLED,
+    DEFAULT_AUTO_MOWING_DECLARATION_MINUTES,
     DEFAULT_MOWER_COORDINATION_ENABLED,
     DEFAULT_MODE,
     INTERVENTIONS_ACTIONS,
@@ -54,6 +56,8 @@ class GazonBrain:
             "date_derniere_mise_a_jour": None,
             "auto_irrigation_enabled": DEFAULT_AUTO_IRRIGATION_ENABLED,
             "mower_coordination_enabled": DEFAULT_MOWER_COORDINATION_ENABLED,
+            "auto_mowing_declaration_enabled": DEFAULT_AUTO_MOWING_DECLARATION_ENABLED,
+            "auto_mowing_declaration_minutes": DEFAULT_AUTO_MOWING_DECLARATION_MINUTES,
         }
         self.products: dict[str, dict[str, Any]] = {}
         self.soil_balance: dict[str, Any] = {}
@@ -163,6 +167,8 @@ class GazonBrain:
             "date_derniere_mise_a_jour": None,
             "auto_irrigation_enabled": DEFAULT_AUTO_IRRIGATION_ENABLED,
             "mower_coordination_enabled": DEFAULT_MOWER_COORDINATION_ENABLED,
+            "auto_mowing_declaration_enabled": DEFAULT_AUTO_MOWING_DECLARATION_ENABLED,
+            "auto_mowing_declaration_minutes": DEFAULT_AUTO_MOWING_DECLARATION_MINUTES,
         }
 
     def _normalize_loaded_memory(self, memory: Any) -> dict[str, Any]:
@@ -173,6 +179,17 @@ class GazonBrain:
             normalized["auto_irrigation_enabled"] = DEFAULT_AUTO_IRRIGATION_ENABLED
         if not isinstance(normalized.get("mower_coordination_enabled"), bool):
             normalized["mower_coordination_enabled"] = DEFAULT_MOWER_COORDINATION_ENABLED
+        if not isinstance(normalized.get("auto_mowing_declaration_enabled"), bool):
+            normalized["auto_mowing_declaration_enabled"] = DEFAULT_AUTO_MOWING_DECLARATION_ENABLED
+        # ⚠️ Un état persisté abîmé ne doit pas pouvoir ARMER l'écriture automatique ni la
+        # déclencher trop tôt : un seuil illisible retombe sur 90 min, pas sur zéro.
+        seuil_brut = normalized.get(
+            "auto_mowing_declaration_minutes", DEFAULT_AUTO_MOWING_DECLARATION_MINUTES
+        )
+        try:
+            normalized["auto_mowing_declaration_minutes"] = max(1, int(float(seuil_brut)))
+        except (TypeError, ValueError):
+            normalized["auto_mowing_declaration_minutes"] = DEFAULT_AUTO_MOWING_DECLARATION_MINUTES
         normalized["historique_total"] = len(self.history)
         normalized["catalogue_produits"] = len(self.products)
         normalized["derniere_phase_active"] = normalized.get("derniere_phase_active") or self.mode

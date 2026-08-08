@@ -1133,3 +1133,51 @@ class LedgerOnlyCountsMeasuredRainTests(unittest.TestCase):
 
     def test_source_indisponible_nest_pas_creditee(self) -> None:
         self.assertEqual(self._reserve(pluie=8.0, source="non disponible"), 0.0)
+
+
+class MemoireReglagesAutoDeclarationTests(unittest.TestCase):
+    """Un état persisté abîmé ne doit ni ARMER l'écriture automatique, ni la déclencher trop tôt.
+
+    Les deux autres interrupteurs ont chacun leur garde de type dans `_normalize_loaded_memory` ;
+    les réglages d'auto-déclaration n'en avaient aucune — ils se seraient contentés de ce qui
+    traînait dans le `.storage`.
+    """
+
+    def _charge(self, memoire):
+        brain = GazonBrain()
+        return brain._normalize_loaded_memory(memoire)
+
+    def test_les_reglages_ont_un_defaut_sans_etat_persiste(self) -> None:
+        memoire = self._charge({})
+        self.assertIs(memoire["auto_mowing_declaration_enabled"], False)
+        self.assertEqual(memoire["auto_mowing_declaration_minutes"], 90)
+
+    def test_un_interrupteur_abime_ne_peut_pas_armer_l_ecriture(self) -> None:
+        for valeur in ("oui", 1, None, [], {}):
+            with self.subTest(valeur=valeur):
+                memoire = self._charge({"auto_mowing_declaration_enabled": valeur})
+                self.assertIs(memoire["auto_mowing_declaration_enabled"], False)
+
+    def test_un_seuil_illisible_retombe_sur_le_defaut(self) -> None:
+        for valeur in ("quatre-vingt-dix", None, [], {}):
+            with self.subTest(valeur=valeur):
+                memoire = self._charge({"auto_mowing_declaration_minutes": valeur})
+                self.assertEqual(memoire["auto_mowing_declaration_minutes"], 90)
+
+    def test_un_seuil_nul_ou_negatif_ne_declenche_pas_sur_zero_minute(self) -> None:
+        """⚠️ Un seuil à 0 déclarerait une tonte chaque jour, sans que rien n'ait tondu."""
+        for valeur in (0, -30, 0.4):
+            with self.subTest(valeur=valeur):
+                self.assertGreaterEqual(
+                    self._charge({"auto_mowing_declaration_minutes": valeur})[
+                        "auto_mowing_declaration_minutes"
+                    ],
+                    1,
+                )
+
+    def test_un_reglage_valide_est_conserve(self) -> None:
+        memoire = self._charge(
+            {"auto_mowing_declaration_enabled": True, "auto_mowing_declaration_minutes": 120}
+        )
+        self.assertIs(memoire["auto_mowing_declaration_enabled"], True)
+        self.assertEqual(memoire["auto_mowing_declaration_minutes"], 120)
