@@ -78,6 +78,17 @@ DEFAULT_MOWER_COORDINATION_ENABLED = False
 DEFAULT_EVENING_COOLING_ENABLED = True
 DEFAULT_MOWING_COOLDOWN_AFTER_WATERING_MINUTES = 180
 
+# ⚠️ AUTO-DÉCLARATION DE LA TONTE — désactivée par défaut, comme les deux autres automatismes
+# ci-dessus. Une déclaration est une ÉCRITURE dans l'historique : sur une installation neuve
+# dont la tondeuse n'est pas encore correctement câblée, mieux vaut ne rien inscrire du tout.
+#
+# Le seuil de 90 min reprend celui que le flow Node-RED appliquait à 23:50. Il ne s'agit PAS
+# d'une durée de tonte « normale » mais d'un plancher de crédibilité : en dessous, le robot est
+# sorti sans faire le tour du jardin (sortie avortée, demi-tour immédiat), et compter ça comme
+# une tonte ferait repartir le compteur de retard à tort.
+DEFAULT_AUTO_MOWING_DECLARATION_ENABLED = False
+DEFAULT_AUTO_MOWING_DECLARATION_MINUTES = 90
+
 WATERING_STRATEGY_ADULT_DEEP = "adult_deep"
 WATERING_STRATEGY_SEMIS_FREQUENT = "semis_frequent"
 

@@ -550,15 +550,34 @@ class GazonBrain:
         date_action: date | None = None,
         hauteur_coupe_mm: float | None = None,
     ) -> dict[str, Any]:
-        item: dict[str, Any] = {
-            "type": "tonte",
-            "date": (date_action or dt_util.now().date()).isoformat(),
-        }
+        jour = (date_action or dt_util.now().date()).isoformat()
+        item: dict[str, Any] = {"type": "tonte", "date": jour}
         if hauteur_coupe_mm is not None:
             try:
                 item["hauteur_coupe_mm"] = float(hauteur_coupe_mm)
             except (TypeError, ValueError):
                 pass
+
+        # ⚠️ UNE TONTE PAR JOUR, PAS UNE LIGNE PAR APPEL. `_append_history` ne déduplique pas :
+        # deux déclarations le même jour créaient deux entrées. Sans gravité pour
+        # `derniere_tonte` (qui prend la plus récente), mais PAS neutre pour
+        # `_count_tonte_events_since_latest_phase_start` (guidance.py), qui COMPTE les
+        # entrées pour décider de la transition de sursemis : un doublon y valait une tonte
+        # supplémentaire qui n'a jamais eu lieu.
+        #
+        # Cette dédup rend aussi les deux déclarants inoffensifs l'un pour l'autre :
+        # l'auto-déclaration de l'intégration en journée et le filet Node-RED de 23:50
+        # peuvent viser le même jour sans se dédoubler. La dernière écriture gagne, donc une
+        # hauteur de coupe plus précise arrivée après coup remplace bien la première.
+        for existant in reversed(self.history):
+            if (
+                isinstance(existant, dict)
+                and existant.get("type") == "tonte"
+                and existant.get("date") == jour
+            ):
+                existant.update(item)
+                return existant
+
         self._append_history(item)
         return item
 

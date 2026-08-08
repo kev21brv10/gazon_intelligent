@@ -23,6 +23,7 @@ from .const import (
     CONF_DEBIT_ZONE_5,
     DEFAULT_HAUTEUR_MAX_TONDEUSE_CM,
     DEFAULT_HAUTEUR_MIN_TONDEUSE_CM,
+    DEFAULT_AUTO_MOWING_DECLARATION_MINUTES,
     DEFAULT_MOWING_COOLDOWN_AFTER_WATERING_MINUTES,
     DOMAIN,
 )
@@ -67,6 +68,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
             ),
             GazonMowerCuttingHeightNumber(coordinator),
             GazonMowingCooldownNumber(coordinator),
+            GazonAutoMowingDeclarationThresholdNumber(coordinator),
         ]
     )
 
@@ -265,3 +267,36 @@ class GazonMowingCooldownNumber(GazonEntityBase, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         await self.coordinator.async_set_mowing_cooldown_after_watering_minutes(value)
+
+
+class GazonAutoMowingDeclarationThresholdNumber(GazonEntityBase, NumberEntity):
+    """Minutes de tonte cumulées à partir desquelles la journée compte comme tondue.
+
+    Plancher de crédibilité, pas durée « normale » : en dessous, le robot est sorti sans
+    faire le tour (sortie avortée, demi-tour immédiat) et l'inscrire remettrait le compteur
+    de retard à zéro pour rien.
+    """
+
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_native_min_value = 5.0
+    _attr_native_max_value = 720.0
+    _attr_native_step = 5.0
+    _attr_native_unit_of_measurement = "min"
+    _attr_icon = "mdi:timer-check-outline"
+
+    def __init__(self, coordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_name = "Seuil de déclaration de tonte"
+        self._set_entity_identity("number", "seuil_declaration_tonte")
+
+    @property
+    def native_value(self):
+        value = self.coordinator.auto_mowing_declaration_minutes
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(DEFAULT_AUTO_MOWING_DECLARATION_MINUTES)
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self.coordinator.async_set_auto_mowing_declaration_minutes(value)

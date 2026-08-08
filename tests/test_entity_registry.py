@@ -198,6 +198,7 @@ class EntityRegistryTests(unittest.TestCase):
             switch.GazonAutoIrrigationSwitch(coordinator),
             switch.GazonEveningCoolingSwitch(coordinator),
             switch.GazonMowerCoordinationSwitch(coordinator),
+            switch.GazonAutoMowingDeclarationSwitch(coordinator),
             button.ArroserMaintenantButton(coordinator),
             button.RetourModeNormalButton(coordinator),
             button.DateActionAujourdhuiButton(coordinator),
@@ -229,6 +230,7 @@ class EntityRegistryTests(unittest.TestCase):
             ),
             number.GazonMowerCuttingHeightNumber(coordinator),
             number.GazonMowingCooldownNumber(coordinator),
+            number.GazonAutoMowingDeclarationThresholdNumber(coordinator),
         ]
         suffixes = {
             entity._attr_unique_id.split("_", 1)[1]  # noqa: SLF001

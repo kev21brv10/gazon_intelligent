@@ -21,6 +21,8 @@ from homeassistant.util import dt as dt_util
 from .const import (
     DOMAIN,
     DEFAULT_AUTO_IRRIGATION_ENABLED,
+    DEFAULT_AUTO_MOWING_DECLARATION_ENABLED,
+    DEFAULT_AUTO_MOWING_DECLARATION_MINUTES,
     DEFAULT_EVENING_COOLING_ENABLED,
     DEFAULT_MOWER_COORDINATION_ENABLED,
     DEFAULT_MOWING_COOLDOWN_AFTER_WATERING_MINUTES,
@@ -227,6 +229,12 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "mower_mowing_minutes_today",
     "mower_block_count_today",
     "mower_reliability_today",
+    # ⚠️ AUTO-DÉCLARATION — sans ces clés, impossible de savoir POURQUOI une tonte n'a pas été
+    # inscrite (interrupteur coupé ? sous le seuil ? tondeuse injoignable ?). Un automatisme
+    # muet qui n'agit pas est indiscernable d'un automatisme cassé.
+    "mower_auto_declaration_state",
+    "mower_auto_declaration_threshold_minutes",
+    "mower_auto_declared_today",
     "watering_blocked_by_mower",
     "watering_block_reason_code",
     "watering_block_reason_label",
@@ -812,6 +820,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         mower_context = self._build_mower_snapshot()
         mower_context.update(self._suivre_fiabilite_tondeuse(mower_context))
+        # Déclarée AVANT `compute_snapshot` : le retard de tonte est alors corrigé dès ce
+        # cycle-ci. La placer après repousserait la correction de deux minutes pour rien.
+        mower_context.update(self._declarer_tonte_du_jour(mower_context))
         runtime_context = self._build_runtime_context()
         current_dt = self._current_datetime()
         snapshot = self.brain.compute_snapshot(
@@ -1010,6 +1021,50 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except (TypeError, ValueError):
             normalized = DEFAULT_MOWING_COOLDOWN_AFTER_WATERING_MINUTES
         self.memory["mowing_cooldown_after_watering_minutes"] = normalized
+        await self._async_save_state()
+        await self.async_request_refresh()
+
+    @property
+    def auto_mowing_declaration_enabled(self) -> bool:
+        """L'intégration déclare-t-elle elle-même la tonte du jour ?"""
+        memory = self.memory
+        if isinstance(memory, dict):
+            return bool(
+                memory.get(
+                    "auto_mowing_declaration_enabled",
+                    DEFAULT_AUTO_MOWING_DECLARATION_ENABLED,
+                )
+            )
+        return DEFAULT_AUTO_MOWING_DECLARATION_ENABLED
+
+    async def async_set_auto_mowing_declaration_enabled(self, enabled: bool) -> None:
+        """Autorise ou coupe l'auto-déclaration de la tonte."""
+        self.memory["auto_mowing_declaration_enabled"] = bool(enabled)
+        await self._async_save_state()
+        await self.async_request_refresh()
+
+    @property
+    def auto_mowing_declaration_minutes(self) -> int:
+        """Minutes de tonte cumulées à partir desquelles la journée compte comme tondue."""
+        memory = self.memory
+        if isinstance(memory, dict):
+            raw_value = memory.get(
+                "auto_mowing_declaration_minutes",
+                DEFAULT_AUTO_MOWING_DECLARATION_MINUTES,
+            )
+            try:
+                return max(1, int(float(raw_value)))
+            except (TypeError, ValueError):
+                return DEFAULT_AUTO_MOWING_DECLARATION_MINUTES
+        return DEFAULT_AUTO_MOWING_DECLARATION_MINUTES
+
+    async def async_set_auto_mowing_declaration_minutes(self, minutes: float) -> None:
+        """Met à jour le plancher de crédibilité de l'auto-déclaration."""
+        try:
+            normalized = max(1, int(round(float(minutes))))
+        except (TypeError, ValueError):
+            normalized = DEFAULT_AUTO_MOWING_DECLARATION_MINUTES
+        self.memory["auto_mowing_declaration_minutes"] = normalized
         await self._async_save_state()
         await self.async_request_refresh()
 
@@ -1708,6 +1763,94 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             }
         except Exception:  # noqa: BLE001 - un compteur ne doit jamais casser un cycle
             return vide
+
+    def _declarer_tonte_du_jour(self, mower_context: dict[str, Any]) -> dict[str, Any]:
+        """Inscrit la tonte du jour dès que le cumul mesuré franchit le seuil.
+
+        ⚠️ POURQUOI CE CODE EXISTE. Jusqu'ici la tonte n'était déclarée que par un flow
+        Node-RED externe, à 23:50, qui resommait l'historique de Home Assistant. Deux défauts :
+
+        1. **Le fil se débranche en silence.** Le nœud qui déclarait est resté désactivé du
+           30/07 au 06/08/2026 : sept jours de retard de tonte accumulés sans que rien ne
+           l'annonce. L'intégration a désormais tout ce qu'il faut pour se passer de lui.
+        2. **Onze heures d'écart entre le fait et sa prise en compte.** Le 08/08/2026 la
+           tondeuse a franchi le seuil vers 12 h et l'intégration a continué d'afficher
+           « 2 jours de retard » jusqu'au soir. Ce n'est pas cosmétique : le retard est un
+           LEVIER DE DÉCISION — `overdue_relaxed_baseline` (decision_mowing.py) ouvre une voie
+           alternative vers `tonte_ok` ET contourne les blocages agronomiques. Se croire en
+           retard alors qu'on vient de tondre relâche des gardes qui devaient tenir.
+
+        Le seuil n'a pas besoin de la fin de journée : une fois 90 min cumulées, tondre
+        davantage ne peut pas les dé-cumuler. La décision est disponible dès le franchissement.
+
+        ⚠️ UNE DÉCLARATION EST UNE ÉCRITURE. Une fausse tonte déclarée est pire qu'une tonte
+        non déclarée — elle remet le compteur de retard à zéro et endort la surveillance. D'où
+        quatre gardes, dans cet ordre : interrupteur explicite, mesure réellement présente
+        (`None` = tondeuse injoignable, ce n'est PAS « zéro minute »), seuil franchi, et
+        journée pas déjà inscrite.
+        """
+        # Le seuil se lit DANS le try : la lecture elle-même passe par `self.memory`, donc par
+        # le cerveau. Hors du try, un coordinator dégradé faisait remonter l'exception dans le
+        # cycle de mise à jour au lieu de renvoyer une trace inerte.
+        trace: dict[str, Any] = {
+            "mower_auto_declaration_state": "desactivee",
+            "mower_auto_declaration_threshold_minutes": DEFAULT_AUTO_MOWING_DECLARATION_MINUTES,
+            "mower_auto_declared_today": False,
+        }
+        try:
+            seuil = self.auto_mowing_declaration_minutes
+            trace["mower_auto_declaration_threshold_minutes"] = seuil
+            if not self.auto_mowing_declaration_enabled:
+                return trace
+
+            minutes = mower_context.get("mower_mowing_minutes_today")
+            if not isinstance(minutes, (int, float)) or isinstance(minutes, bool):
+                # Absence de mesure : tondeuse injoignable, ou non configurée. Ne rien inscrire.
+                trace["mower_auto_declaration_state"] = "sans_mesure"
+                return trace
+
+            if float(minutes) < float(seuil):
+                trace["mower_auto_declaration_state"] = "sous_seuil"
+                return trace
+
+            # ⚠️ MÊME JOURNÉE des deux côtés. Le cumul est indexé sur `_current_date()` ; la
+            # date est passée EXPLICITEMENT à `record_mowing`, qui retomberait sinon sur
+            # `dt_util.now().date()`. Deux horloges pour un même fait, c'est une tonte
+            # déclarée la veille de celle qu'on a mesurée.
+            aujourd_hui = self._current_date()
+            jour = aujourd_hui.isoformat()
+            historique = self.history if isinstance(self.history, list) else []
+            for item in historique:
+                if (
+                    isinstance(item, dict)
+                    and item.get("type") == "tonte"
+                    and item.get("date") == jour
+                ):
+                    trace["mower_auto_declaration_state"] = "deja_declaree"
+                    trace["mower_auto_declared_today"] = True
+                    return trace
+
+            # Écriture SYNCHRONE dans le cerveau, jamais `async_record_mowing` : celle-ci
+            # appelle `async_request_refresh()`, or on est à l'intérieur du cycle de mise à
+            # jour. La persistance est assurée par le `_async_save_state()` de fin de cycle,
+            # et déclarer AVANT `compute_snapshot` fait que le retard est corrigé dès ce
+            # cycle-ci, pas au suivant.
+            self.brain.record_mowing(
+                aujourd_hui,
+                hauteur_coupe_mm=mower_context.get("tondeuse_hauteur_coupe_mm"),
+            )
+            _LOGGER.info(
+                "Tonte du %s déclarée automatiquement : %.1f min tondues (seuil %d min)",
+                jour,
+                float(minutes),
+                seuil,
+            )
+            trace["mower_auto_declaration_state"] = "declaree"
+            trace["mower_auto_declared_today"] = True
+            return trace
+        except Exception:  # noqa: BLE001 - une déclaration ratée ne doit pas casser un cycle
+            trace["mower_auto_declaration_state"] = "erreur"
+            return trace
 
     def _tracer_cycle(self) -> dict[str, Any]:
         """Origine et numéro du cycle courant. Trace pure, aucune décision n'en dépend.

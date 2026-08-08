@@ -1746,6 +1746,17 @@ class PersistedSettingsSurviveComputeMemoryTests(unittest.TestCase):
         "auto_irrigation_enabled",
         "mower_coordination_enabled",
         "evening_cooling_enabled",
+        "auto_mowing_declaration_enabled",
+    )
+
+    # ⚠️ CETTE LISTE MANQUAIT, ET AVEC ELLE TOUT UN TYPE DE RÉGLAGE. Les tests ci-dessus
+    # n'acceptent que des booléens (`assertIs(..., False)`) : les réglages NUMÉRIQUES
+    # n'étaient couverts par rien, et `mowing_cooldown_after_watering_minutes` se perdait
+    # depuis sa livraison — le curseur « Délai reprise tonte après arrosage » revenait à
+    # 180 min deux minutes après chaque réglage. Vérifié en exécution le 08/08/2026.
+    REGLAGES_NUMERIQUES = (
+        ("mowing_cooldown_after_watering_minutes", 45),
+        ("auto_mowing_declaration_minutes", 30),
     )
 
     def _cycle(self, previous_memory):
@@ -1790,6 +1801,46 @@ class PersistedSettingsSurviveComputeMemoryTests(unittest.TestCase):
         for cle in self.REGLAGES_PERSISTES:
             with self.subTest(reglage=cle):
                 self.assertIs(self._cycle({cle: True}).get(cle), True)
+
+    # ---- Réglages numériques : le type que la garde d'origine ne couvrait pas -------------
+    def test_un_reglage_numerique_regle_reste_regle(self) -> None:
+        """Le défaut confirmé le 08/08/2026 : le curseur revenait à sa valeur d'usine."""
+        for cle, valeur in self.REGLAGES_NUMERIQUES:
+            with self.subTest(reglage=cle):
+                self.assertEqual(self._cycle({cle: valeur}).get(cle), valeur)
+
+    def test_un_reglage_numerique_survit_a_plusieurs_cycles(self) -> None:
+        """Le coordinateur rafraîchit toutes les 2 min : la perte se voyait au cycle suivant."""
+        etat = {cle: valeur for cle, valeur in self.REGLAGES_NUMERIQUES}
+        for cycle in range(5):
+            etat = self._cycle(etat)
+            for cle, valeur in self.REGLAGES_NUMERIQUES:
+                with self.subTest(reglage=cle, cycle=cycle):
+                    self.assertEqual(etat.get(cle), valeur)
+
+    def test_chaque_reglage_numerique_est_toujours_present(self) -> None:
+        resultat = self._cycle({})
+        for cle, _ in self.REGLAGES_NUMERIQUES:
+            with self.subTest(reglage=cle):
+                self.assertIn(cle, resultat)
+
+    def test_une_valeur_illisible_retombe_sur_le_defaut(self) -> None:
+        """Mieux vaut la valeur d'usine qu'une saleté propagée jusqu'au curseur."""
+        for cle, _ in self.REGLAGES_NUMERIQUES:
+            with self.subTest(reglage=cle):
+                obtenu = self._cycle({cle: "quarante-cinq"}).get(cle)
+                self.assertIsInstance(obtenu, int)
+
+    def test_les_defauts_numeriques_sappliquent_sans_memoire_prealable(self) -> None:
+        resultat = self._cycle(None)
+        self.assertEqual(
+            resultat["mowing_cooldown_after_watering_minutes"],
+            const.DEFAULT_MOWING_COOLDOWN_AFTER_WATERING_MINUTES,
+        )
+        self.assertEqual(
+            resultat["auto_mowing_declaration_minutes"],
+            const.DEFAULT_AUTO_MOWING_DECLARATION_MINUTES,
+        )
 
 
 class TemperatureCriterionReadabilityTests(unittest.TestCase):

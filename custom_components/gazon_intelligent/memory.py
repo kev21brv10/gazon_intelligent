@@ -23,8 +23,11 @@ from .const import (
     DEFAULT_APPLICATION_IRRIGATION_MODE,
     DEFAULT_APPLICATION_POST_WATERING_MM,
     DEFAULT_AUTO_IRRIGATION_ENABLED,
+    DEFAULT_AUTO_MOWING_DECLARATION_ENABLED,
+    DEFAULT_AUTO_MOWING_DECLARATION_MINUTES,
     DEFAULT_EVENING_COOLING_ENABLED,
     DEFAULT_MOWER_COORDINATION_ENABLED,
+    DEFAULT_MOWING_COOLDOWN_AFTER_WATERING_MINUTES,
     POST_APPLICATION_STATUS_ALIASES,
     POST_APPLICATION_STATUS_INDISPONIBLE,
     POST_APPLICATION_STATUS_NON_REQUIS,
@@ -920,6 +923,27 @@ def build_feedback_observation(
     return {key: value for key, value in feedback.items() if value is not None}
 
 
+def _reglage_entier(
+    previous_memory: dict[str, Any] | None,
+    cle: str,
+    defaut: int,
+    *,
+    minimum: int,
+) -> int:
+    """Reconduit un réglage utilisateur ENTIER d'un cycle à l'autre.
+
+    Même rôle que les `bool(previous_memory.get(...))` voisins, mais pour un nombre : une
+    valeur illisible (None, texte, NaN) retombe sur le défaut plutôt que de propager une
+    saleté qu'un curseur afficherait ensuite.
+    """
+    if not previous_memory:
+        return defaut
+    try:
+        return max(minimum, int(float(previous_memory.get(cle, defaut))))
+    except (TypeError, ValueError):
+        return defaut
+
+
 def compute_memory(
     history: list[dict[str, Any]],
     current_phase: str | None = None,
@@ -1036,6 +1060,31 @@ def compute_memory(
             )
             if previous_memory
             else DEFAULT_EVENING_COOLING_ENABLED
+        ),
+        "auto_mowing_declaration_enabled": bool(
+            previous_memory.get(
+                "auto_mowing_declaration_enabled",
+                DEFAULT_AUTO_MOWING_DECLARATION_ENABLED,
+            )
+            if previous_memory
+            else DEFAULT_AUTO_MOWING_DECLARATION_ENABLED
+        ),
+        # ⚠️ LES RÉGLAGES NUMÉRIQUES SE PERDAIENT AUSSI — et personne ne l'avait vu, parce que
+        # la garde ci-dessus (et son test) ne couvrait que des booléens.
+        # `mowing_cooldown_after_watering_minutes` est dans ce cas DEPUIS SA LIVRAISON : le
+        # curseur « Délai reprise tonte après arrosage » revenait à 180 min au cycle suivant,
+        # soit deux minutes après chaque réglage. Vérifié en exécution le 08/08/2026.
+        "mowing_cooldown_after_watering_minutes": _reglage_entier(
+            previous_memory,
+            "mowing_cooldown_after_watering_minutes",
+            DEFAULT_MOWING_COOLDOWN_AFTER_WATERING_MINUTES,
+            minimum=0,
+        ),
+        "auto_mowing_declaration_minutes": _reglage_entier(
+            previous_memory,
+            "auto_mowing_declaration_minutes",
+            DEFAULT_AUTO_MOWING_DECLARATION_MINUTES,
+            minimum=1,
         ),
         "feedback_observation": feedback_observation,
         "prochaine_reapplication": compute_next_reapplication_date(history, today=today),
