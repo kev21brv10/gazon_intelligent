@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.53.0
+
+1076 tests verts. **La tondeuse tient un carnet de bord de ses passes** — et l'intégration
+apprend, sur les faits, ce qu'est un cycle de tonte sur CE jardin.
+
+Le cumul de minutes de la journée ne dit pas si le jardin a été tondu. Mesuré du 30/07 au
+08/08/2026 :
+
+| jour | passes | minutes | blocages |
+|---|---|---|---|
+| 30/07 | 1 | 49 | 0 |
+| 02/08 | 2 | 130 | 1 |
+| 05/08 | 4 | **302** | 3 |
+| 08/08 | 2 | **127** | 0 |
+
+**Plus la machine se bloque, plus elle repart, plus elle accumule de minutes.** Le pire jour
+affiche le plus gros total, la journée parfaite en affiche moitié moins. N'importe quel seuil
+calculé sur ces minutes hérite de la distorsion.
+
+L'unité de travail réelle, c'est la **passe** : un aller-retour garage → garage. Et sa fin dit
+ce qui s'est passé — rentrer à 10 % de batterie après 109 min n'a rien à voir avec rentrer à
+96 % après 18 min, ce que la tondeuse a fait trois jours sur quatre avant de repartir 9 secondes
+plus tard. Dans le second cas elle a décidé toute seule que c'était fini.
+
+- **Carnet** : chaque passe est journalisée avec sa durée réellement tondue, son temps
+  immobilisé, ses batteries de départ et d'arrivée, et son motif de fin — `batterie_vide`,
+  `retour_autonome` (elle a décidé), `bloquee`, `inconnue`. Soixante passes conservées,
+  persistées : un carnet qui s'accumule sur des semaines et repart vide à chaque redémarrage
+  n'apprend jamais rien.
+- **Profil appris** : durée médiane d'une passe pleine, batterie médiane des retours
+  autonomes, nombre médian de passes abouties par jour. **Médiane et non moyenne** — une seule
+  journée à trois blocages emporterait la moyenne. Rien n'est publié sous trois observations :
+  une « valeur apprise » tirée de deux passes ressemble à une mesure sans en être une.
+- **⚠️ Les faits bruts sont écrits, pas seulement leur interprétation.** `fin_motif` n'est
+  qu'une étiquette de confort ; les durées et les batteries sont journalisées telles quelles.
+  Si le seuil de classement se révèle mauvais, tout se rejoue sur le journal sans rien perdre.
+  C'est la différence entre observer et présumer.
+- **⚠️ CE CARNET N'ALIMENTE AUCUNE DÉCISION**, et un test le verrouille : aucune des clés
+  apprises n'apparaît dans `decision_mowing.py`, `guidance.py` ni `decision.py`. Le seuil de
+  déclaration reste celui réglé par l'utilisateur tant qu'on n'a pas mesuré ce qu'est un cycle
+  complet ici. Le jour où une décision voudra lire ces clés, ce test tombera et forcera la
+  discussion.
+- **Facteur commun** : le plafond d'échantillon (au-delà, l'écart entre deux cycles est un
+  arrêt de Home Assistant, pas une durée) est désormais partagé entre le cumul de fiabilité et
+  le carnet. Deux implémentations de la même règle finiraient par diverger, et l'une des deux
+  mentirait sans qu'on sache laquelle.
+- **Vérification** : 20 nouveaux tests, dont le rejeu de la **vraie journée du 08/08** —
+  deux passes, deux motifs de fin sans rapport. Les **14 mutations** du banc sont détectées.
+  Le banc a trouvé deux vrais défauts pendant l'écriture : une garde qu'aucune mutation ne
+  pouvait tuer (donc morte, supprimée), et un test de persistance qui sérialisait la valeur à
+  la main au lieu de passer par `_serialized_runtime_state` — il survivait à la suppression de
+  la clé de la liste blanche. Encore le piège « déclaration au lieu de câblage ».
+
+
 ## 0.52.0
 
 1056 tests verts. **L'intégration déclare elle-même la tonte du jour, sans attendre 23:50** — et
