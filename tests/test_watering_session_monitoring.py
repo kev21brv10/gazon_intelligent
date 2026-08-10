@@ -4792,3 +4792,330 @@ class AutoDeclarationCablageTests(unittest.TestCase):
             source.index("_declarer_tonte_du_jour"),
             source.index("self.brain.compute_snapshot"),
         )
+
+
+class CarnetDePassesTondeuseTests(unittest.TestCase):
+    """Le carnet des passes garage → garage : l'unité de travail réelle du robot.
+
+    ⚠️ POURQUOI IL EXISTE. Le cumul de minutes de la journée ne dit pas si le jardin a été
+    tondu — plus la machine se bloque, plus elle repart, plus elle accumule. Mesuré du 30/07
+    au 08/08/2026 : 302 min le jour à trois blocages, 127 min la journée parfaite.
+
+    ⚠️ CE CARNET N'ALIMENTE AUCUNE DÉCISION. Il observe. Les tests le vérifient aussi.
+    """
+
+    def _coord(self, instant, runtime=None):
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord._runtime_state = runtime if runtime is not None else {}
+        coord._current_datetime = lambda: instant
+        coord._current_date = lambda: instant.date()
+        coord._parse_datetime_value = (
+            coordinator_mod.GazonIntelligentCoordinator._parse_datetime_value.__get__(coord)
+        )
+        coord._minutes_creditables = (
+            coordinator_mod.GazonIntelligentCoordinator._minutes_creditables.__get__(coord)
+        )
+        return coord
+
+    def _ctx(self, *, garage=False, tonte=False, batterie=None, erreur=None, connectee=True):
+        return {
+            "tondeuse_connectee": connectee,
+            "tondeuse_erreur": erreur,
+            "mower_is_mowing": tonte,
+            "mower_is_docked": garage,
+            "mower_battery": batterie,
+        }
+
+    def _rejouer(self, sequence, *, depart=None, coord=None):
+        """Rejoue une suite (minutes, contexte) et rend la dernière sortie publiée."""
+        t0 = depart or datetime(2026, 8, 8, 10, 30, tzinfo=timezone.utc)
+        coord = coord or self._coord(t0)
+        sortie = {}
+        for minutes, ctx in sequence:
+            instant = t0 + timedelta(minutes=minutes)
+            coord._current_datetime = lambda t=instant: t
+            coord._current_date = lambda t=instant: t.date()
+            sortie = coord._suivre_passes_tondeuse(dict(ctx))
+        return sortie, coord
+
+    def _journal(self, coord):
+        return coord._runtime_state["mower_passes"]["journal"]
+
+    # ---- PRÉMISSE ------------------------------------------------------------------------
+    def test_premisse_une_passe_se_ferme_bien(self) -> None:
+        """Sans ça, tous les tests de cette classe seraient verts sans rien exercer."""
+        sortie, coord = self._rejouer([
+            (0, self._ctx(garage=True, batterie=100)),
+            (1, self._ctx(tonte=True, batterie=100)),
+            (20, self._ctx(tonte=True, batterie=90)),
+            (21, self._ctx(garage=True, batterie=90)),
+        ])
+        self.assertEqual(len(self._journal(coord)), 1, "aucune passe n'a été enregistrée")
+        self.assertEqual(sortie["mower_passes_observed"], 1)
+        self.assertFalse(sortie["mower_pass_in_progress"])
+
+    # ---- LA VRAIE JOURNÉE DU 08/08/2026 ---------------------------------------------------
+    def test_la_journee_du_8_aout_donne_deux_passes_de_natures_differentes(self) -> None:
+        """Le fait qui a motivé tout ce carnet.
+
+            10:35 → 10:55   18 min, retour à ~96 %   → la machine a décidé
+            10:55 → 12:44  109 min, retour à  10 %   → batterie vide
+
+        Deux retours au garage, deux causes sans rapport. Le cumul de minutes les confond.
+        """
+        sequence = [(0, self._ctx(garage=True, batterie=100))]
+        for m in range(5, 24):                       # 10:35 → 10:54, tonte, batterie ~96 %
+            sequence.append((m, self._ctx(tonte=True, batterie=100 if m < 15 else 96)))
+        sequence.append((25, self._ctx(garage=True, batterie=96)))       # rentrée à 96 %
+        for m in range(26, 134):                     # repart, tonte jusqu'à vider
+            batt = max(10, 100 - (m - 26))
+            sequence.append((m, self._ctx(tonte=True, batterie=batt)))
+        sequence.append((135, self._ctx(garage=True, batterie=10)))      # rentrée à 10 %
+
+        sortie, coord = self._rejouer(sequence)
+        journal = self._journal(coord)
+        self.assertEqual(len(journal), 2, "les deux passes doivent être distinguées")
+
+        courte, longue = journal
+        self.assertEqual(courte["fin_motif"], "retour_autonome",
+                         msg="rentrer à 96 % n'est PAS un retour batterie")
+        self.assertAlmostEqual(courte["minutes_tondues"], 19.0, delta=2.0)
+        self.assertEqual(courte["batterie_fin"], 96)
+
+        self.assertEqual(longue["fin_motif"], "batterie_vide")
+        self.assertAlmostEqual(longue["minutes_tondues"], 108.0, delta=3.0)
+        self.assertEqual(longue["batterie_fin"], 10)
+        self.assertEqual(sortie["mower_pass_count_today"], 2)
+
+    def test_une_passe_bloquee_est_etiquetee_comme_telle(self) -> None:
+        """Une passe immobilisée en plein jardin n'est pas un tour de jardin."""
+        sortie, coord = self._rejouer([
+            (0, self._ctx(garage=True, batterie=100)),
+            (1, self._ctx(tonte=True, batterie=100)),
+            (10, self._ctx(erreur="lifted", batterie=95)),
+            (20, self._ctx(erreur="lifted", batterie=95)),
+            (21, self._ctx(garage=True, batterie=95)),
+        ])
+        passe = self._journal(coord)[0]
+        self.assertEqual(passe["fin_motif"], "bloquee")
+        self.assertGreater(passe["minutes_bloquees"], 0.0)
+
+    def test_le_blocage_prime_sur_la_batterie_pleine(self) -> None:
+        """Sinon une passe bloquée à 95 % passerait pour une décision de la machine."""
+        _, coord = self._rejouer([
+            (0, self._ctx(garage=True, batterie=100)),
+            (1, self._ctx(tonte=True, batterie=100)),
+            (5, self._ctx(erreur="trapped_timeout", batterie=98)),
+            (6, self._ctx(garage=True, batterie=98)),
+        ])
+        self.assertEqual(self._journal(coord)[0]["fin_motif"], "bloquee")
+
+    # ---- CE QUI NE DOIT PAS DEVENIR UNE PASSE ---------------------------------------------
+    def test_une_passe_en_cours_n_est_pas_comptee(self) -> None:
+        sortie, coord = self._rejouer([
+            (0, self._ctx(garage=True, batterie=100)),
+            (1, self._ctx(tonte=True, batterie=100)),
+            (30, self._ctx(tonte=True, batterie=80)),
+        ])
+        self.assertTrue(sortie["mower_pass_in_progress"])
+        self.assertEqual(self._journal(coord), [])
+        self.assertEqual(sortie["mower_pass_count_today"], 0)
+
+    def test_une_tondeuse_injoignable_n_ouvre_pas_de_passe(self) -> None:
+        """RÈGLE DE LA MAISON : une absence de mesure n'est pas une sortie au jardin."""
+        sortie, coord = self._rejouer([
+            (0, self._ctx(connectee=False)),
+            (10, self._ctx(connectee=False)),
+        ])
+        self.assertFalse(sortie["mower_pass_in_progress"])
+        self.assertEqual(self._journal(coord), [])
+
+    def test_un_arret_de_home_assistant_ne_gonfle_pas_la_passe(self) -> None:
+        """Au-delà du plafond d'échantillon, l'écart est un trou, pas du temps tondu."""
+        _, coord = self._rejouer([
+            (0, self._ctx(garage=True, batterie=100)),
+            (1, self._ctx(tonte=True, batterie=100)),
+            (241, self._ctx(tonte=True, batterie=40)),   # 4 h plus tard : redémarrage
+            (242, self._ctx(garage=True, batterie=40)),
+        ])
+        self.assertLess(self._journal(coord)[0]["minutes_tondues"], 10.0)
+
+    # ---- LE PROFIL APPRIS ------------------------------------------------------------------
+    def test_rien_n_est_appris_avant_d_avoir_assez_observe(self) -> None:
+        """⚠️ Une médiane tirée de deux passes ressemble à une mesure sans en être une."""
+        sortie, _ = self._rejouer([
+            (0, self._ctx(garage=True, batterie=100)),
+            (1, self._ctx(tonte=True, batterie=100)),
+            (60, self._ctx(tonte=True, batterie=10)),
+            (61, self._ctx(garage=True, batterie=10)),
+        ])
+        self.assertIsNone(sortie["mower_full_pass_minutes_median"])
+        self.assertIsNone(sortie["mower_passes_per_day_median"])
+
+    def test_la_duree_d_une_passe_pleine_s_apprend(self) -> None:
+        coord = self._coord(datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc))
+        journal = [
+            {"date": f"2026-08-0{j}", "minutes_tondues": duree, "batterie_debut": 100,
+             "batterie_fin": 10, "fin_motif": "batterie_vide"}
+            for j, duree in enumerate((109.0, 134.0, 113.0, 133.0), start=2)
+        ]
+        profil = coord._profil_appris_tondeuse(journal)
+        self.assertAlmostEqual(profil["mower_full_pass_minutes_median"], 123.0, places=1)
+
+    def test_la_mediane_resiste_a_une_journee_aberrante(self) -> None:
+        """La moyenne suivrait la valeur folle ; la médiane non. C'est le but."""
+        coord = self._coord(datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc))
+        journal = [
+            {"date": f"2026-08-0{j}", "minutes_tondues": duree, "batterie_debut": 100,
+             "batterie_fin": 10, "fin_motif": "batterie_vide"}
+            for j, duree in enumerate((110.0, 112.0, 111.0, 900.0), start=2)
+        ]
+        profil = coord._profil_appris_tondeuse(journal)
+        self.assertLess(profil["mower_full_pass_minutes_median"], 200.0)
+
+    def test_la_batterie_du_retour_autonome_s_apprend(self) -> None:
+        """La réponse mesurée à « à quel niveau décide-t-elle que c'est fini ? »."""
+        coord = self._coord(datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc))
+        journal = [
+            {"date": f"2026-08-0{j}", "minutes_tondues": 18.0, "batterie_debut": 100,
+             "batterie_fin": batt, "fin_motif": "retour_autonome"}
+            for j, batt in enumerate((96.0, 95.0, 97.0), start=2)
+        ]
+        profil = coord._profil_appris_tondeuse(journal)
+        self.assertAlmostEqual(profil["mower_autonomous_return_battery_median"], 96.0, places=1)
+
+    def test_les_passes_bloquees_ne_comptent_pas_dans_le_rythme_quotidien(self) -> None:
+        """Kévin décrit deux sorties par jour ; une passe bloquée n'en est pas une."""
+        coord = self._coord(datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc))
+        journal = []
+        for jour in ("2026-08-02", "2026-08-03", "2026-08-04"):
+            journal += [
+                {"date": jour, "minutes_tondues": 110.0, "batterie_fin": 10, "fin_motif": "batterie_vide"},
+                {"date": jour, "minutes_tondues": 115.0, "batterie_fin": 12, "fin_motif": "batterie_vide"},
+                {"date": jour, "minutes_tondues": 5.0, "batterie_fin": 90, "fin_motif": "bloquee"},
+            ]
+        profil = coord._profil_appris_tondeuse(journal)
+        self.assertAlmostEqual(profil["mower_passes_per_day_median"], 2.0, places=1)
+
+    # ---- PERSISTANCE ------------------------------------------------------------------------
+    def test_le_carnet_survit_a_un_redemarrage(self) -> None:
+        """⚠️ Le carnet s'accumule sur des SEMAINES : non persisté, il n'apprend jamais rien.
+        C'est exactement le défaut qui avait rendu `mower_health` inutile en 0.50.0."""
+        _, coord = self._rejouer([
+            (0, self._ctx(garage=True, batterie=100)),
+            (1, self._ctx(tonte=True, batterie=100)),
+            (60, self._ctx(tonte=True, batterie=10)),
+            (61, self._ctx(garage=True, batterie=10)),
+        ])
+        # ⚠️ On passe par `_serialized_runtime_state()`, la VRAIE méthode qui construit le dict
+        # persisté — pas par `_serialize_runtime_value` sur la valeur. Sérialiser la valeur à la
+        # main prouve qu'elle est sérialisable, PAS qu'elle figure dans la liste blanche : mon
+        # premier test faisait ça et il survivait à la suppression de la clé.
+        coord._ensure_irrigation_runtime_bootstrap = lambda: None
+        coord._runtime_state.setdefault("active_irrigation_session", None)
+        coord._runtime_state.setdefault("last_irrigation_execution", None)
+        serialise = coord._serialized_runtime_state()
+        self.assertIn("mower_passes", serialise, "le carnet n'atteint pas le disque")
+
+        relu = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        relu._restore_runtime_state(serialise)
+        self.assertEqual(
+            len(relu._runtime_state["mower_passes"]["journal"]), 1,
+            msg="le carnet a été écrit puis ignoré au rechargement — pire qu'absent",
+        )
+
+    def test_le_journal_ne_grossit_pas_sans_fin(self) -> None:
+        coord = self._coord(datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc))
+        coord._runtime_state["mower_passes"] = {
+            "en_cours": None,
+            "journal": [{"date": "2026-07-01", "minutes_tondues": 1.0, "fin_motif": "bloquee"}] * 200,
+        }
+        self._rejouer([
+            (0, self._ctx(garage=True, batterie=100)),
+            (1, self._ctx(tonte=True, batterie=100)),
+            (30, self._ctx(tonte=True, batterie=50)),
+            (31, self._ctx(garage=True, batterie=50)),
+        ], coord=coord)
+        self.assertLessEqual(len(self._journal(coord)), 60)
+
+    # ---- ROBUSTESSE ET NON-INGÉRENCE --------------------------------------------------------
+    def test_un_carnet_ne_casse_jamais_un_cycle(self) -> None:
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        sortie = coord._suivre_passes_tondeuse({"tondeuse_connectee": True})
+        self.assertIn("mower_pass_in_progress", sortie)
+        self.assertIsNone(sortie["mower_pass_in_progress"])
+
+    def test_un_carnet_persiste_abime_ne_casse_rien(self) -> None:
+        coord = self._coord(datetime(2026, 8, 8, 10, 0, tzinfo=timezone.utc))
+        coord._runtime_state["mower_passes"] = "n'importe quoi"
+        sortie = coord._suivre_passes_tondeuse(self._ctx(garage=True, batterie=100))
+        self.assertEqual(sortie["mower_passes_observed"], 0)
+
+    def test_le_carnet_n_alimente_AUCUNE_decision(self) -> None:
+        """Promesse explicite : il observe, il ne tranche pas. Le jour où une décision lira
+        ces clés, ce test doit tomber et forcer une discussion."""
+        source = (PACKAGE_DIR / "decision_mowing.py").read_text(encoding="utf-8")
+        source += (PACKAGE_DIR / "guidance.py").read_text(encoding="utf-8")
+        source += (PACKAGE_DIR / "decision.py").read_text(encoding="utf-8")
+        for cle in ("mower_full_pass_minutes_median", "mower_passes_per_day_median",
+                    "mower_last_pass_end_reason", "mower_pass_count_today"):
+            with self.subTest(cle=cle):
+                self.assertNotIn(cle, source)
+
+
+class CarnetDePassesCablageTests(unittest.TestCase):
+    """⚠️ Vérifier qu'une clé est DÉCLARÉE dans une liste ne prouve rien — c'est ce qui a
+    laissé passer le défaut de préfixe des clés d'auto-déclaration le 08/08/2026. Ce test
+    part de la sortie RÉELLE du coordinator et la suit jusqu'au snapshot publié.
+    """
+
+    def _trace(self):
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        instant = datetime(2026, 8, 8, 10, 0, tzinfo=timezone.utc)
+        coord._runtime_state = {}
+        coord._current_datetime = lambda: instant
+        coord._current_date = lambda: instant.date()
+        coord._parse_datetime_value = (
+            coordinator_mod.GazonIntelligentCoordinator._parse_datetime_value.__get__(coord)
+        )
+        coord._minutes_creditables = (
+            coordinator_mod.GazonIntelligentCoordinator._minutes_creditables.__get__(coord)
+        )
+        return coord._suivre_passes_tondeuse({
+            "tondeuse_connectee": True, "mower_is_docked": True, "mower_battery": 100,
+        })
+
+    def test_les_cles_traversent_reellement_jusqu_au_snapshot(self) -> None:
+        decision = importlib.import_module("custom_components.gazon_intelligent.decision")
+        trace = self._trace()
+        # Les valeurs `None` sont légitimement filtrées en route : on n'exige la traversée
+        # que des clés réellement renseignées.
+        renseignees = {k: v for k, v in trace.items() if v is not None}
+        self.assertTrue(renseignees, "prémisse : la trace exercée est entièrement vide")
+
+        contexte = decision.DecisionContext.from_legacy_args(
+            history=[{"type": "tonte", "date": "2026-08-06"}],
+            today=date(2026, 8, 6), hour_of_day=13, temperature=22.0,
+            pluie_24h=0, pluie_demain=0, humidite=55, type_sol="limoneux", etp_capteur=4.0,
+        )
+        contexte.mower_context = dict(renseignees)
+        snapshot = decision.build_decision_result(contexte).to_snapshot()
+        for cle in renseignees:
+            with self.subTest(cle=cle):
+                self.assertIn(cle, snapshot, msg=f"{cle} n'atteint pas le snapshot")
+
+    def test_toutes_les_cles_portent_le_prefixe_qui_passe_les_filtres(self) -> None:
+        for cle in self._trace():
+            with self.subTest(cle=cle):
+                self.assertTrue(
+                    cle.startswith(("mower_", "tondeuse_")),
+                    msg="une clé `mowing_…` meurt en silence dans les filtres de recopie",
+                )
+
+    def test_le_carnet_est_appele_dans_le_cycle(self) -> None:
+        import inspect
+
+        source = inspect.getsource(
+            coordinator_mod.GazonIntelligentCoordinator._async_update_data
+        )
+        self.assertIn("_suivre_passes_tondeuse(mower_context)", source)

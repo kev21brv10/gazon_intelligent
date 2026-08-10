@@ -97,6 +97,26 @@ def _clean_empty_attrs(attrs: dict[str, Any]) -> dict[str, Any] | None:
     return clean or None
 
 
+def _to_float_or_none(value: Any) -> float | None:
+    """Nombre lisible, ou `None`. ⚠️ `None` reste `None` : une absence n'est pas un zéro."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        nombre = float(value)
+    except (TypeError, ValueError):
+        return None
+    return nombre if nombre == nombre else None  # NaN != NaN
+
+
+def _mediane(valeurs: list[float]) -> float:
+    """Médiane, et non moyenne : une seule journée à trois blocages fausserait la moyenne."""
+    ordonnees = sorted(valeurs)
+    milieu = len(ordonnees) // 2
+    if len(ordonnees) % 2:
+        return ordonnees[milieu]
+    return (ordonnees[milieu - 1] + ordonnees[milieu]) / 2.0
+
+
 AUTO_IRRIGATION_AUTO_SOURCES = {
     "auto_irrigation",
     "application_technique",
@@ -139,6 +159,33 @@ _MOWER_BLOCK_REASONS_PERSISTANTS: frozenset[str] = frozenset(
 # Un robot réellement coincé dehors le reste des heures ; une course au démarrage dure des
 # secondes. 30 minutes séparent les deux sans retarder sensiblement un vrai cas de détresse.
 _MOWER_DISTRESS_MIN_BLOCK_MINUTES: float = 30.0
+
+# Plafond d'un échantillon : au-delà, l'écart entre deux cycles est un arrêt de Home Assistant,
+# pas une durée vécue. Le cycle tourne toutes les 2 min, donc 15 min laisse largement la place
+# à quelques cycles ratés sans jamais avaler un redémarrage.
+_ECHANTILLON_MAX_MINUTES: float = 15.0
+
+# ── CARNET DE PASSES ──────────────────────────────────────────────────────────────────────
+# Une « passe » = un aller-retour garage → garage. C'est l'unité de travail réelle du robot,
+# celle que le cumul de minutes de la journée ne sait pas voir : mesuré du 30/07 au 08/08/2026,
+# une journée à trois blocages affiche 302 min tondues quand une journée parfaite en affiche
+# 127 — parce qu'elle repart après chaque blocage. Le nombre de minutes ne dit pas si le gazon
+# a été tondu ; le nombre de passes ABOUTIES, si.
+#
+# ⚠️ CE CARNET N'ALIMENTE AUCUNE DÉCISION. Il observe, il ne tranche pas. Le seuil de
+# déclaration reste celui réglé par l'utilisateur tant qu'on n'a pas mesuré ce qu'est
+# réellement un cycle complet sur CE jardin.
+_PASSES_JOURNAL_MAX: int = 60
+# Sous ce niveau, un retour est un retour BATTERIE. Au-dessus, elle a décidé elle-même que
+# c'était fini. Mesuré le 08/08/2026 : retour à 10 % après 109 min (batterie), et retour à
+# ~96 % après 18 min (décision de la machine, elle est repartie 9 s plus tard).
+# ⚠️ Ce seuil ne sert QU'À ÉTIQUETER : les batteries brutes sont écrites telles quelles dans
+# le journal, donc un mauvais classement se rejoue sans rien perdre.
+_BATTERIE_RETOUR_VIDE_PCT: float = 20.0
+# En dessous de ce nombre de passes observées, aucune médiane n'est publiée : une « valeur
+# apprise » tirée de deux observations est exactement le défaut « valeur fixe là où la réalité
+# varie » que ce projet traque.
+_PASSES_MIN_POUR_APPRENDRE: int = 3
 
 # Fenêtres pour lesquelles un renoncement à arroser est un vrai REFUS, digne d'être tracé.
 # Doit rester un sous-ensemble de `POSSIBLE_FENETRE_OPTIMALE_VALUES` (decision_models.py) :
@@ -235,6 +282,19 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "mower_auto_declaration_state",
     "mower_auto_declaration_threshold_minutes",
     "mower_auto_declared_today",
+    # ⚠️ CARNET DE PASSES — observation pure, aucune décision n'en dépend. Préfixe `mower_`
+    # obligatoire : deux filtres de recopie (decision_mowing, decision) ne laissent passer du
+    # contexte tondeuse que `tondeuse_` et `mower_`. Une clé `mowing_…` y meurt en silence.
+    "mower_pass_in_progress",
+    "mower_pass_count_today",
+    "mower_last_pass_minutes",
+    "mower_last_pass_battery_start",
+    "mower_last_pass_battery_end",
+    "mower_last_pass_end_reason",
+    "mower_passes_observed",
+    "mower_full_pass_minutes_median",
+    "mower_autonomous_return_battery_median",
+    "mower_passes_per_day_median",
     "watering_blocked_by_mower",
     "watering_block_reason_code",
     "watering_block_reason_label",
@@ -820,6 +880,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         mower_context = self._build_mower_snapshot()
         mower_context.update(self._suivre_fiabilite_tondeuse(mower_context))
+        mower_context.update(self._suivre_passes_tondeuse(mower_context))
         # Déclarée AVANT `compute_snapshot` : le retard de tonte est alors corrigé dès ce
         # cycle-ci. La placer après repousserait la correction de deux minutes pour rien.
         mower_context.update(self._declarer_tonte_du_jour(mower_context))
@@ -1686,6 +1747,23 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return 1.0
         return None
 
+    def _minutes_creditables(self, precedent_iso: Any, maintenant: datetime) -> float:
+        """Minutes à créditer entre deux échantillons — 0.0 si le trou est trop grand.
+
+        ⚠️ Au-delà du plafond, l'écart n'est PAS une durée : c'est un arrêt de Home Assistant.
+        Créditer un trou de quatre heures comme du temps de tonte transformerait un
+        redémarrage en journée de travail. Le plafond est partagé par le cumul de fiabilité
+        et par le carnet de passes : deux implémentations de la même règle finiraient par
+        diverger, et l'une des deux mentirait sans qu'on sache laquelle.
+        """
+        precedent = self._parse_datetime_value(precedent_iso)
+        if precedent is None:
+            return 0.0
+        ecoule = (maintenant - precedent).total_seconds() / 60.0
+        if 0.0 < ecoule <= _ECHANTILLON_MAX_MINUTES:
+            return ecoule
+        return 0.0
+
     def _suivre_fiabilite_tondeuse(self, mower_context: dict[str, Any]) -> dict[str, Any]:
         """Cumule le temps bloqué et le temps tondu de la journée, et en tire un état.
 
@@ -1728,11 +1806,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             en_tonte = connectee and bool(mower_context.get("mower_is_mowing"))
             genre = "bloquee" if en_erreur else ("tonte" if en_tonte else ("repos" if connectee else None))
 
-            precedent = self._parse_datetime_value(etat.get("last_seen_at"))
-            if precedent is not None and etat.get("last_kind") in {"bloquee", "tonte"}:
-                ecoule = (maintenant - precedent).total_seconds() / 60.0
-                # Plafond : au-delà, c'est un trou (arrêt de Home Assistant), pas une durée.
-                if 0.0 < ecoule <= 15.0:
+            if etat.get("last_kind") in {"bloquee", "tonte"}:
+                ecoule = self._minutes_creditables(etat.get("last_seen_at"), maintenant)
+                if ecoule > 0.0:
                     cle = "blocked_minutes" if etat["last_kind"] == "bloquee" else "mowing_minutes"
                     etat[cle] = round(float(etat.get(cle) or 0.0) + ecoule, 2)
 
@@ -1763,6 +1839,191 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             }
         except Exception:  # noqa: BLE001 - un compteur ne doit jamais casser un cycle
             return vide
+
+    def _suivre_passes_tondeuse(self, mower_context: dict[str, Any]) -> dict[str, Any]:
+        """Tient le carnet des passes garage → garage, et en tire un profil mesuré.
+
+        ⚠️ POURQUOI. Le cumul de minutes de la journée ne dit pas si le jardin a été tondu :
+        plus la machine se bloque, plus elle repart, plus elle accumule de minutes. Du 30/07
+        au 08/08/2026 :
+
+            jour     passes   minutes   blocages
+            30/07       1        49         0
+            02/08       2       130         1
+            05/08       4       302         3      ← le pire jour, le plus gros total
+            08/08       2       127         0      ← la journée parfaite, moitié moins
+
+        L'unité de travail réelle, c'est la PASSE. Et sa fin dit ce qui s'est passé : rentrer
+        à 10 % de batterie après 109 min n'a rien à voir avec rentrer à 96 % après 18 min —
+        dans le second cas la machine a décidé toute seule que c'était fini.
+
+        ⚠️ ON ÉCRIT LES FAITS BRUTS, PAS SEULEMENT LEUR INTERPRÉTATION. Les batteries et les
+        durées sont journalisées telles quelles ; `fin_motif` n'est qu'une étiquette de
+        confort. Si le seuil de classement se révèle mauvais, tout se rejoue sur le journal
+        sans avoir rien perdu — c'est la différence entre observer et présumer.
+        """
+        vide: dict[str, Any] = {
+            "mower_pass_in_progress": None,
+            "mower_pass_count_today": None,
+            "mower_last_pass_minutes": None,
+            "mower_last_pass_battery_start": None,
+            "mower_last_pass_battery_end": None,
+            "mower_last_pass_end_reason": None,
+            "mower_passes_observed": None,
+            "mower_full_pass_minutes_median": None,
+            "mower_autonomous_return_battery_median": None,
+            "mower_passes_per_day_median": None,
+        }
+        try:
+            maintenant = self._current_datetime()
+            aujourd_hui = self._current_date().isoformat()
+
+            carnet = self._runtime_state.get("mower_passes")
+            if not isinstance(carnet, dict):
+                carnet = {"en_cours": None, "journal": []}
+            journal = carnet.get("journal")
+            if not isinstance(journal, list):
+                journal = []
+
+            connectee = mower_context.get("tondeuse_connectee") is True
+            erreur = str(mower_context.get("tondeuse_erreur") or "").strip().lower()
+            en_erreur = connectee and bool(erreur) and erreur not in _NO_ERROR_CODES
+            en_tonte = connectee and bool(mower_context.get("mower_is_mowing"))
+            au_garage = connectee and bool(mower_context.get("mower_is_docked"))
+            batterie = _to_float_or_none(mower_context.get("mower_battery"))
+
+            en_cours = carnet.get("en_cours")
+            en_cours = en_cours if isinstance(en_cours, dict) else None
+
+            # ── Cumul dans la passe en cours ────────────────────────────────────────────
+            if en_cours is not None:
+                ecoule = self._minutes_creditables(en_cours.get("derniere_vue"), maintenant)
+                genre_precedent = en_cours.get("dernier_genre")
+                if ecoule > 0.0 and genre_precedent in {"tonte", "bloquee"}:
+                    cle = "minutes_bloquees" if genre_precedent == "bloquee" else "minutes_tondues"
+                    en_cours[cle] = round(float(en_cours.get(cle) or 0.0) + ecoule, 2)
+                if en_erreur:
+                    en_cours["a_ete_bloquee"] = True
+                if batterie is not None:
+                    en_cours["batterie_fin"] = batterie
+                en_cours["derniere_vue"] = maintenant.isoformat()
+                en_cours["dernier_genre"] = (
+                    "bloquee" if en_erreur else ("tonte" if en_tonte else "transit")
+                )
+
+            # ── Fin de passe : elle est rentrée ─────────────────────────────────────────
+            if en_cours is not None and au_garage:
+                journal.append(self._cloturer_passe(en_cours, maintenant))
+                journal = journal[-_PASSES_JOURNAL_MAX:]
+                en_cours = None
+
+            # ── Début de passe : elle est sortie ────────────────────────────────────────
+            elif en_cours is None and connectee and not au_garage:
+                en_cours = {
+                    "date": aujourd_hui,
+                    "debut": maintenant.isoformat(),
+                    "batterie_debut": batterie,
+                    "batterie_fin": batterie,
+                    "minutes_tondues": 0.0,
+                    "minutes_bloquees": 0.0,
+                    "a_ete_bloquee": bool(en_erreur),
+                    "derniere_vue": maintenant.isoformat(),
+                    "dernier_genre": (
+                        "bloquee" if en_erreur else ("tonte" if en_tonte else "transit")
+                    ),
+                }
+
+            carnet["en_cours"] = en_cours
+            carnet["journal"] = journal
+            self._runtime_state["mower_passes"] = carnet
+
+            derniere = journal[-1] if journal else None
+            sortie = {
+                "mower_pass_in_progress": en_cours is not None,
+                "mower_pass_count_today": sum(
+                    1 for p in journal if isinstance(p, dict) and p.get("date") == aujourd_hui
+                ),
+                "mower_last_pass_minutes": (derniere or {}).get("minutes_tondues"),
+                "mower_last_pass_battery_start": (derniere or {}).get("batterie_debut"),
+                "mower_last_pass_battery_end": (derniere or {}).get("batterie_fin"),
+                "mower_last_pass_end_reason": (derniere or {}).get("fin_motif"),
+                "mower_passes_observed": len(journal),
+            }
+            sortie.update(self._profil_appris_tondeuse(journal))
+            return sortie
+        except Exception:  # noqa: BLE001 - un carnet ne doit jamais casser un cycle
+            return vide
+
+    def _cloturer_passe(self, passe: dict[str, Any], maintenant: datetime) -> dict[str, Any]:
+        """Ferme une passe et lui attribue un motif de fin, à partir des faits bruts."""
+        batterie_fin = _to_float_or_none(passe.get("batterie_fin"))
+        bloquee = bool(passe.get("a_ete_bloquee")) or float(passe.get("minutes_bloquees") or 0.0) > 0.0
+        if bloquee:
+            motif = "bloquee"
+        elif batterie_fin is None:
+            motif = "inconnue"
+        elif batterie_fin <= _BATTERIE_RETOUR_VIDE_PCT:
+            motif = "batterie_vide"
+        else:
+            # Elle est rentrée alors qu'il lui restait de la charge : c'est SA décision.
+            motif = "retour_autonome"
+        return {
+            "date": passe.get("date"),
+            "debut": passe.get("debut"),
+            "fin": maintenant.isoformat(),
+            "minutes_tondues": round(float(passe.get("minutes_tondues") or 0.0), 1),
+            "minutes_bloquees": round(float(passe.get("minutes_bloquees") or 0.0), 1),
+            "batterie_debut": passe.get("batterie_debut"),
+            "batterie_fin": batterie_fin,
+            "fin_motif": motif,
+        }
+
+    def _profil_appris_tondeuse(self, journal: list[Any]) -> dict[str, Any]:
+        """Ce que le carnet a appris — ou rien du tout tant qu'il n'a pas assez vu.
+
+        ⚠️ Publier une médiane tirée de deux passes serait pire que ne rien publier : ça
+        ressemble à une mesure. En dessous du minimum, ces clés valent `None` et l'absence
+        se lit telle quelle.
+        """
+        passes = [p for p in journal if isinstance(p, dict)]
+        profil: dict[str, Any] = {
+            "mower_full_pass_minutes_median": None,
+            "mower_autonomous_return_battery_median": None,
+            "mower_passes_per_day_median": None,
+        }
+        # ⚠️ PAS DE GARDE GLOBALE ICI. Il y en avait une (`len(passes) < minimum → rien`), et le
+        # banc de mutation l'a montrée MORTE : chacun des trois calculs ci-dessous exige déjà
+        # son propre minimum d'échantillons. Une garde qu'aucune mutation ne peut tuer ne
+        # protège rien — elle donne juste l'illusion d'une protection.
+        pleines = [
+            float(p["minutes_tondues"])
+            for p in passes
+            if p.get("fin_motif") == "batterie_vide" and p.get("minutes_tondues") is not None
+        ]
+        if len(pleines) >= _PASSES_MIN_POUR_APPRENDRE:
+            profil["mower_full_pass_minutes_median"] = round(_mediane(pleines), 1)
+
+        autonomes = [
+            float(p["batterie_fin"])
+            for p in passes
+            if p.get("fin_motif") == "retour_autonome" and p.get("batterie_fin") is not None
+        ]
+        if len(autonomes) >= _PASSES_MIN_POUR_APPRENDRE:
+            profil["mower_autonomous_return_battery_median"] = round(_mediane(autonomes), 1)
+
+        # Passes ABOUTIES par jour : une passe bloquée n'est pas un tour de jardin.
+        par_jour: dict[str, int] = {}
+        for p in passes:
+            if p.get("fin_motif") == "bloquee":
+                continue
+            jour = str(p.get("date") or "")
+            if jour:
+                par_jour[jour] = par_jour.get(jour, 0) + 1
+        if len(par_jour) >= _PASSES_MIN_POUR_APPRENDRE:
+            profil["mower_passes_per_day_median"] = round(
+                _mediane([float(v) for v in par_jour.values()]), 1
+            )
+        return profil
 
     def _declarer_tonte_du_jour(self, mower_context: dict[str, Any]) -> dict[str, Any]:
         """Inscrit la tonte du jour dès que le cumul mesuré franchit le seuil.
@@ -2746,6 +3007,12 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "mower_health": self._serialize_runtime_value(
                 self._runtime_state.get("mower_health")
             ),
+            # Même piège, même remède : le carnet de passes s'accumule sur des SEMAINES.
+            # Non persisté, il repartirait vide à chaque redémarrage et n'apprendrait
+            # jamais rien — un carnet qui oublie est pire qu'un carnet absent.
+            "mower_passes": self._serialize_runtime_value(
+                self._runtime_state.get("mower_passes")
+            ),
             "persisted_watering_session": persisted_watering_session,
             "last_irrigation_execution_persisted": self._serialize_runtime_value(last_execution),
         }
@@ -2806,6 +3073,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # Symétrique de la sérialisation : sans cette ligne le cumul du jour serait écrit
             # sur le disque puis ignoré au rechargement — pire qu'absent, car invisible.
             "mower_health": runtime.get("mower_health"),
+            "mower_passes": runtime.get("mower_passes"),
         }
 
     def _get_active_irrigation_session(self) -> dict[str, Any] | None:
