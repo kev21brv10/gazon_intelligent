@@ -182,6 +182,22 @@ _PASSES_JOURNAL_MAX: int = 60
 # ⚠️ Ce seuil ne sert QU'À ÉTIQUETER : les batteries brutes sont écrites telles quelles dans
 # le journal, donc un mauvais classement se rejoue sans rien perdre.
 _BATTERIE_RETOUR_VIDE_PCT: float = 20.0
+
+# ⚠️ LA QUATRIÈME FIN, OUBLIÉE À LA LIVRAISON DU CARNET (0.53.0) — et c'est la plus fréquente
+# sur cette installation. Le 13/08/2026 :
+#
+#     10:40:43,774   tonte_autorisee → off   (34,9 °C, seuil 30)
+#     10:40:45,244   la tondeuse rentre      ← 1,5 seconde plus tard
+#
+# Elle est rentrée avec 58 % de batterie, RAPPELÉE par la coordination — pas parce qu'elle
+# avait fini. Le carnet l'a pourtant étiquetée `retour_autonome`. Une étiquette qui ment, et
+# qui nourrit ensuite `mower_autonomous_return_battery_median` : la mesure même censée dire à
+# quel niveau la machine décide d'elle-même que le travail est terminé.
+#
+# Le rappel est reconnu sur l'AUTORISATION DE TONDRE au dernier échantillon de la passe.
+# ⚠️ Elle est lue sur le résultat du cycle PRÉCÉDENT (`brain.last_result`) : le carnet tourne
+# avant `compute_snapshot`, donc la décision du cycle courant n'existe pas encore. Ce n'est pas
+# un pis-aller — c'est justement la décision publiée qui a provoqué le retour.
 # En dessous de ce nombre de passes observées, aucune médiane n'est publiée : une « valeur
 # apprise » tirée de deux observations est exactement le défaut « valeur fixe là où la réalité
 # varie » que ce projet traque.
@@ -1853,9 +1869,17 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             05/08       4       302         3      ← le pire jour, le plus gros total
             08/08       2       127         0      ← la journée parfaite, moitié moins
 
-        L'unité de travail réelle, c'est la PASSE. Et sa fin dit ce qui s'est passé : rentrer
-        à 10 % de batterie après 109 min n'a rien à voir avec rentrer à 96 % après 18 min —
-        dans le second cas la machine a décidé toute seule que c'était fini.
+        L'unité de travail réelle, c'est la PASSE. Et sa fin dit ce qui s'est passé — quatre
+        cas, pas trois :
+
+            batterie_vide     rentrée à 10 % après 109 min
+            retour_autonome   rentrée à 96 % après 18 min, tonte toujours autorisée
+            rappelee          rentrée à 58 % parce que la tonte venait d'être INTERDITE
+            bloquee           immobilisée en plein jardin
+
+        ⚠️ `rappelee` manquait à la livraison (0.53.0) et c'est le cas le plus fréquent ici :
+        en canicule la chaleur fait tomber l'autorisation, la coordination rappelle la machine,
+        et le carnet enregistrait ça comme une décision de la tondeuse.
 
         ⚠️ ON ÉCRIT LES FAITS BRUTS, PAS SEULEMENT LEUR INTERPRÉTATION. Les batteries et les
         durées sont journalisées telles quelles ; `fin_motif` n'est qu'une étiquette de
@@ -1906,6 +1930,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     en_cours["a_ete_bloquee"] = True
                 if batterie is not None:
                     en_cours["batterie_fin"] = batterie
+                # Suivi de l'autorisation à CHAQUE échantillon : c'est sa valeur au dernier
+                # échantillon qui dira si la machine est rentrée d'elle-même ou a été rappelée.
+                autorisee = self._tonte_autorisee_au_cycle_precedent()
+                if autorisee is not None:
+                    en_cours["tonte_autorisee_fin"] = autorisee
                 en_cours["derniere_vue"] = maintenant.isoformat()
                 en_cours["dernier_genre"] = (
                     "bloquee" if en_erreur else ("tonte" if en_tonte else "transit")
@@ -1927,6 +1956,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "minutes_tondues": 0.0,
                     "minutes_bloquees": 0.0,
                     "a_ete_bloquee": bool(en_erreur),
+                    "tonte_autorisee_fin": self._tonte_autorisee_au_cycle_precedent(),
                     "derniere_vue": maintenant.isoformat(),
                     "dernier_genre": (
                         "bloquee" if en_erreur else ("tonte" if en_tonte else "transit")
@@ -1954,18 +1984,43 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except Exception:  # noqa: BLE001 - un carnet ne doit jamais casser un cycle
             return vide
 
+    def _tonte_autorisee_au_cycle_precedent(self) -> bool | None:
+        """L'autorisation de tondre telle qu'elle était PUBLIÉE au cycle précédent.
+
+        `None` quand aucune décision n'a encore été calculée — une absence, pas un « non ».
+        """
+        try:
+            resultat = self.brain.last_result
+            if resultat is None:
+                return None
+            valeur = getattr(resultat, "tonte_autorisee", None)
+            return bool(valeur) if isinstance(valeur, bool) else None
+        except Exception:  # noqa: BLE001
+            return None
+
     def _cloturer_passe(self, passe: dict[str, Any], maintenant: datetime) -> dict[str, Any]:
-        """Ferme une passe et lui attribue un motif de fin, à partir des faits bruts."""
+        """Ferme une passe et lui attribue un motif de fin, à partir des faits bruts.
+
+        ⚠️ L'ORDRE DES CAS EST LE COEUR DE LA MÉTHODE.
+        `batterie_vide` passe avant `rappelee` : une machine à 10 % rentre de toute façon, que
+        la coordination l'ait rappelée ou non — lui attribuer le rappel effacerait la cause
+        réelle. À l'inverse, rentrer avec 58 % pendant que la tonte vient d'être interdite
+        n'est pas une décision de la machine, et c'est ce cas-là qui manquait.
+        """
         batterie_fin = _to_float_or_none(passe.get("batterie_fin"))
+        autorisee_fin = passe.get("tonte_autorisee_fin")
         bloquee = bool(passe.get("a_ete_bloquee")) or float(passe.get("minutes_bloquees") or 0.0) > 0.0
         if bloquee:
             motif = "bloquee"
+        elif batterie_fin is not None and batterie_fin <= _BATTERIE_RETOUR_VIDE_PCT:
+            motif = "batterie_vide"
+        elif autorisee_fin is False:
+            # La tonte était INTERDITE à la fin : c'est la coordination qui l'a rappelée.
+            motif = "rappelee"
         elif batterie_fin is None:
             motif = "inconnue"
-        elif batterie_fin <= _BATTERIE_RETOUR_VIDE_PCT:
-            motif = "batterie_vide"
         else:
-            # Elle est rentrée alors qu'il lui restait de la charge : c'est SA décision.
+            # Charge restante ET tonte toujours autorisée : c'est SA décision.
             motif = "retour_autonome"
         return {
             "date": passe.get("date"),
@@ -1975,6 +2030,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "minutes_bloquees": round(float(passe.get("minutes_bloquees") or 0.0), 1),
             "batterie_debut": passe.get("batterie_debut"),
             "batterie_fin": batterie_fin,
+            # Fait BRUT conservé à côté de l'étiquette : si le classement se révèle mauvais,
+            # tout se rejoue sur le journal sans avoir rien perdu.
+            "tonte_autorisee_fin": autorisee_fin,
             "fin_motif": motif,
         }
 

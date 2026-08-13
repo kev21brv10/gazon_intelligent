@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.53.1
+
+1087 tests verts. **Le carnet de passes appelait « décision de la tondeuse » un rappel commandé
+par la coordination** — le défaut a été trouvé sur la toute première passe qu'il ait enregistrée.
+
+Le 13/08/2026, mesuré à la seconde :
+
+```
+10:40:43,774   tonte_autorisee → off   (34,9 °C, seuil 30)
+10:40:45,244   la tondeuse rentre      ← 1,5 seconde plus tard
+```
+
+Elle est rentrée avec **58 %** de batterie, rappelée par la coordination. Le carnet l'a
+étiquetée `retour_autonome`, c'est-à-dire « elle a décidé toute seule que c'était fini ».
+
+- **La quatrième fin manquait**, et c'est la plus fréquente sur cette installation : en
+  canicule la chaleur fait tomber l'autorisation, Node-RED rappelle la machine. Nouveau motif
+  `rappelee`, reconnu sur l'autorisation de tondre au dernier échantillon de la passe.
+- **L'ordre des cas est le coeur de la méthode.** `batterie_vide` passe avant `rappelee` : une
+  machine à 10 % rentre de toute façon, lui attribuer le rappel effacerait la cause réelle.
+  À l'inverse, rentrer à 58 % pendant une interdiction n'est pas une décision de la machine.
+- **⚠️ `None` reste une absence, pas une interdiction.** Sans décision publiée, la passe n'est
+  pas requalifiée en rappel — c'est le test `is False`, pas `not …`, et une mutation le verrouille.
+- **L'autorisation est lue sur le cycle PRÉCÉDENT** (`brain.last_result`) : le carnet tourne
+  avant `compute_snapshot`. Ce n'est pas un pis-aller — c'est justement la décision publiée qui
+  a provoqué le retour. Le motif est déjà utilisé ailleurs dans le cerveau pour le Kc.
+- **Le fait brut est conservé** (`tonte_autorisee_fin` dans le journal) à côté de l'étiquette,
+  comme les batteries et les durées : un classement qui se révèle mauvais se rejoue.
+- **Ce que le défaut faussait** : `mower_autonomous_return_battery_median`, précisément la
+  mesure censée dire à quel niveau la machine juge son travail terminé. Les rappels météo
+  (~58 %) s'y mélangeaient aux vraies décisions (~96 %). Une passe rappelée continue en
+  revanche de compter dans le rythme quotidien : elle a bien tondu 40 minutes.
+- **Vérification** : 11 nouveaux tests, dont le rejeu de la journée du 13/08 et son **miroir**
+  — même passe, même batterie, seule l'autorisation change, et le motif bascule. Les **15
+  mutations** du banc sont détectées.
+
+
 ## 0.53.0
 
 1076 tests verts. **La tondeuse tient un carnet de bord de ses passes** — et l'intégration

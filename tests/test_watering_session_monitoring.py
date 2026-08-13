@@ -5119,3 +5119,170 @@ class CarnetDePassesCablageTests(unittest.TestCase):
             coordinator_mod.GazonIntelligentCoordinator._async_update_data
         )
         self.assertIn("_suivre_passes_tondeuse(mower_context)", source)
+
+
+class PasseRappeleeParLaCoordinationTests(unittest.TestCase):
+    """⚠️ LA QUATRIÈME FIN, OUBLIÉE À LA LIVRAISON DU CARNET — et la plus fréquente ici.
+
+    Le 13/08/2026, mesuré à la seconde :
+
+        10:40:43,774   tonte_autorisee → off   (34,9 °C, seuil 30)
+        10:40:45,244   la tondeuse rentre      ← 1,5 seconde plus tard
+
+    Elle est rentrée avec **58 %** de batterie, RAPPELÉE par la coordination — pas parce
+    qu'elle avait fini. Le carnet l'a étiquetée `retour_autonome`, c'est-à-dire « elle a
+    décidé toute seule ». Une étiquette qui ment, et qui nourrit ensuite
+    `mower_autonomous_return_battery_median` : la mesure même censée dire à quel niveau la
+    machine juge son travail terminé.
+    """
+
+    JOUR = datetime(2026, 8, 13, 10, 0, tzinfo=timezone.utc)
+
+    def _coord(self, autorisee=True):
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord._runtime_state = {}
+        coord._current_datetime = lambda: self.JOUR
+        coord._current_date = lambda: self.JOUR.date()
+        coord._parse_datetime_value = (
+            coordinator_mod.GazonIntelligentCoordinator._parse_datetime_value.__get__(coord)
+        )
+        coord._minutes_creditables = (
+            coordinator_mod.GazonIntelligentCoordinator._minutes_creditables.__get__(coord)
+        )
+        coord._tonte_autorisee_au_cycle_precedent = lambda: autorisee
+        return coord
+
+    def _ctx(self, *, garage=False, tonte=False, batterie=None, erreur=None):
+        return {
+            "tondeuse_connectee": True, "tondeuse_erreur": erreur,
+            "mower_is_mowing": tonte, "mower_is_docked": garage, "mower_battery": batterie,
+        }
+
+    def _rejouer(self, sequence, *, autorisee_par_pas):
+        """Rejoue une passe en faisant varier l'autorisation au fil des échantillons."""
+        coord = self._coord()
+        for (minutes, ctx), autorisee in zip(sequence, autorisee_par_pas):
+            instant = self.JOUR + timedelta(minutes=minutes)
+            coord._current_datetime = lambda t=instant: t
+            coord._current_date = lambda t=instant: t.date()
+            coord._tonte_autorisee_au_cycle_precedent = lambda a=autorisee: a
+            coord._suivre_passes_tondeuse(dict(ctx))
+        return coord._runtime_state["mower_passes"]["journal"]
+
+    def test_la_journee_du_13_aout_est_une_passe_RAPPELEE(self) -> None:
+        """Le cas réel : 40 min, retour à 58 %, tonte interdite au moment du retour."""
+        journal = self._rejouer(
+            [(0, self._ctx(garage=True, batterie=100)),
+             (1, self._ctx(tonte=True, batterie=100)),
+             (14, self._ctx(tonte=True, batterie=80)),
+             (27, self._ctx(tonte=True, batterie=68)),
+             (40, self._ctx(tonte=True, batterie=58)),
+             (42, self._ctx(garage=True, batterie=58))],
+            autorisee_par_pas=[True, True, True, True, False, False],
+        )
+        passe = journal[0]
+        self.assertEqual(passe["fin_motif"], "rappelee",
+                         msg="rentrer à 58 % pendant une interdiction n'est PAS une décision de la machine")
+        self.assertEqual(passe["batterie_fin"], 58)
+        self.assertIs(passe["tonte_autorisee_fin"], False)
+
+    def test_le_meme_retour_reste_autonome_si_la_tonte_est_restee_autorisee(self) -> None:
+        """PRÉMISSE MIROIR : seule l'autorisation distingue les deux cas, rien d'autre."""
+        journal = self._rejouer(
+            [(0, self._ctx(garage=True, batterie=100)),
+             (1, self._ctx(tonte=True, batterie=100)),
+             (40, self._ctx(tonte=True, batterie=58)),
+             (42, self._ctx(garage=True, batterie=58))],
+            autorisee_par_pas=[True, True, True, True],
+        )
+        self.assertEqual(journal[0]["fin_motif"], "retour_autonome")
+
+    def test_une_batterie_vide_prime_sur_le_rappel(self) -> None:
+        """⚠️ Une machine à 10 % rentre de toute façon : lui coller le rappel effacerait la
+        cause réelle. L'ordre des cas est le coeur de la méthode."""
+        journal = self._rejouer(
+            [(0, self._ctx(garage=True, batterie=100)),
+             (1, self._ctx(tonte=True, batterie=100)),
+             (100, self._ctx(tonte=True, batterie=10)),
+             (102, self._ctx(garage=True, batterie=10))],
+            autorisee_par_pas=[True, True, False, False],
+        )
+        self.assertEqual(journal[0]["fin_motif"], "batterie_vide")
+
+    def test_un_blocage_prime_sur_tout(self) -> None:
+        journal = self._rejouer(
+            [(0, self._ctx(garage=True, batterie=100)),
+             (1, self._ctx(tonte=True, batterie=100)),
+             (10, self._ctx(erreur="lifted", batterie=90)),
+             (12, self._ctx(garage=True, batterie=90))],
+            autorisee_par_pas=[True, True, False, False],
+        )
+        self.assertEqual(journal[0]["fin_motif"], "bloquee")
+
+    def test_une_autorisation_inconnue_ne_cree_pas_de_faux_rappel(self) -> None:
+        """RÈGLE DE LA MAISON : `None` est une absence de mesure, pas une interdiction."""
+        journal = self._rejouer(
+            [(0, self._ctx(garage=True, batterie=100)),
+             (1, self._ctx(tonte=True, batterie=100)),
+             (40, self._ctx(tonte=True, batterie=58)),
+             (42, self._ctx(garage=True, batterie=58))],
+            autorisee_par_pas=[None, None, None, None],
+        )
+        self.assertEqual(journal[0]["fin_motif"], "retour_autonome")
+        self.assertIsNone(journal[0]["tonte_autorisee_fin"])
+
+    def test_le_fait_brut_est_conserve_a_cote_de_l_etiquette(self) -> None:
+        """Si le classement se révèle mauvais, tout doit pouvoir se rejouer sur le journal."""
+        journal = self._rejouer(
+            [(0, self._ctx(garage=True, batterie=100)),
+             (1, self._ctx(tonte=True, batterie=100)),
+             (40, self._ctx(tonte=True, batterie=58)),
+             (42, self._ctx(garage=True, batterie=58))],
+            autorisee_par_pas=[True, True, False, False],
+        )
+        self.assertIn("tonte_autorisee_fin", journal[0])
+
+    # ---- La médiane que le défaut faussait -------------------------------------------------
+    def test_les_passes_rappelees_ne_polluent_plus_la_mediane_des_retours_autonomes(self) -> None:
+        """LE POINT DE TOUT LE CORRECTIF. Sans lui, les rappels météo (~58 %) se mélangeaient
+        aux vraies décisions (~96 %) et la médiane ne mesurait plus rien."""
+        coord = self._coord()
+        journal = [
+            {"date": "2026-08-02", "minutes_tondues": 18.0, "batterie_fin": 96.0, "fin_motif": "retour_autonome"},
+            {"date": "2026-08-03", "minutes_tondues": 18.0, "batterie_fin": 95.0, "fin_motif": "retour_autonome"},
+            {"date": "2026-08-04", "minutes_tondues": 18.0, "batterie_fin": 97.0, "fin_motif": "retour_autonome"},
+            {"date": "2026-08-13", "minutes_tondues": 40.0, "batterie_fin": 58.0, "fin_motif": "rappelee"},
+            {"date": "2026-08-14", "minutes_tondues": 35.0, "batterie_fin": 61.0, "fin_motif": "rappelee"},
+        ]
+        profil = coord._profil_appris_tondeuse(journal)
+        self.assertAlmostEqual(profil["mower_autonomous_return_battery_median"], 96.0, places=1)
+
+    def test_une_passe_rappelee_reste_un_vrai_tour_de_jardin(self) -> None:
+        """Elle a bien tondu 40 minutes : ça compte dans le rythme quotidien, contrairement
+        à une passe bloquée."""
+        coord = self._coord()
+        journal = []
+        for jour in ("2026-08-13", "2026-08-14", "2026-08-15"):
+            journal += [
+                {"date": jour, "minutes_tondues": 40.0, "batterie_fin": 58.0, "fin_motif": "rappelee"},
+                {"date": jour, "minutes_tondues": 110.0, "batterie_fin": 10.0, "fin_motif": "batterie_vide"},
+                {"date": jour, "minutes_tondues": 3.0, "batterie_fin": 92.0, "fin_motif": "bloquee"},
+            ]
+        self.assertAlmostEqual(coord._profil_appris_tondeuse(journal)["mower_passes_per_day_median"], 2.0)
+
+    # ---- Lecture de l'autorisation ---------------------------------------------------------
+    def test_l_autorisation_est_lue_sur_le_cycle_precedent(self) -> None:
+        """Le carnet tourne AVANT compute_snapshot : la décision du cycle courant n'existe pas
+        encore. C'est bien celle qui a été PUBLIÉE qui a provoqué le retour."""
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord.brain = types.SimpleNamespace(last_result=types.SimpleNamespace(tonte_autorisee=False))
+        self.assertIs(coord._tonte_autorisee_au_cycle_precedent(), False)
+
+    def test_sans_decision_calculee_l_autorisation_est_inconnue(self) -> None:
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord.brain = types.SimpleNamespace(last_result=None)
+        self.assertIsNone(coord._tonte_autorisee_au_cycle_precedent())
+
+    def test_un_cerveau_absent_ne_casse_pas_le_cycle(self) -> None:
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        self.assertIsNone(coord._tonte_autorisee_au_cycle_precedent())
