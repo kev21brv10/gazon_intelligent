@@ -290,10 +290,32 @@ class InitModuleTests(unittest.TestCase):
     def test_async_setup_initializes_domain_data_and_registers_services_idempotently(self) -> None:
         self.assertTrue(asyncio.run(self.module.async_setup(self.hass, {})))
         self.assertIn(self.module.DOMAIN, self.hass.data)
-        self.assertEqual(len(self.hass.services.register_calls), 14)
+        # 15 depuis 0.53.2 : `reset_mower_passes` s'ajoute aux 14 précédents.
+        self.assertEqual(len(self.hass.services.register_calls), 15)
 
         self.assertTrue(asyncio.run(self.module.async_setup(self.hass, {})))
-        self.assertEqual(len(self.hass.services.register_calls), 14)
+        self.assertEqual(len(self.hass.services.register_calls), 15)
+
+    def test_tout_service_enregistre_est_aussi_retire_et_documente(self) -> None:
+        """Le compte ne suffit pas : c'est la CONCORDANCE des trois listes qui compte.
+
+        `reset_mower_passes` (0.53.2) est parti en production absent de `_ALL_SERVICES`
+        alors que le compteur ci-dessus était juste : le service survivait au retrait de
+        la dernière instance et répondait « aucune instance configurée ». On part donc
+        de ce que le code enregistre RÉELLEMENT, jamais d'une liste recopiée à la main.
+        """
+        asyncio.run(self.module.async_setup(self.hass, {}))
+        enregistres = {service for _domain, service in self.hass.services.register_calls}
+
+        self.assertEqual(enregistres, set(self.module._ALL_SERVICES))
+
+        yaml_src = (PACKAGE_DIR / "services.yaml").read_text(encoding="utf-8")
+        documentes = {
+            ligne.split(":", 1)[0]
+            for ligne in yaml_src.splitlines()
+            if ligne and not ligne[0].isspace() and ligne.rstrip().endswith(":")
+        }
+        self.assertEqual(enregistres, documentes)
 
     def test_async_setup_entry_handles_empty_hass_data_and_runs_lifecycle_in_order(self) -> None:
         result = asyncio.run(self.module.async_setup_entry(self.hass, self.entry))

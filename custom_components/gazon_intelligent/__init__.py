@@ -74,6 +74,7 @@ SERVICE_START_APPLICATION_IRRIGATION = "start_application_irrigation"
 SERVICE_STOP_IRRIGATION = "stop_irrigation"
 SERVICE_DECLARE_INTERVENTION = "declare_intervention"
 SERVICE_REMOVE_LAST_APPLICATION = "remove_last_application"
+SERVICE_RESET_MOWER_PASSES = "reset_mower_passes"
 SERVICE_DECLARE_MOWING = "declare_mowing"
 SERVICE_DECLARE_WATERING = "declare_watering"
 SERVICE_REGISTER_PRODUCT = "register_product"
@@ -97,6 +98,7 @@ _ALL_SERVICES = (
     SERVICE_REGISTER_PRODUCT,
     SERVICE_REMOVE_PRODUCT,
     SERVICE_RECALIBRATE_RESERVE,
+    SERVICE_RESET_MOWER_PASSES,
 )
 
 # Validateur booléen des schémas de service. `cv.boolean` accepte les formes que Home Assistant
@@ -367,6 +369,12 @@ def _async_register_services(hass: HomeAssistant) -> None:
     )
     _register_service_if_missing(
         hass,
+        SERVICE_RESET_MOWER_PASSES,
+        _handle_reset_mower_passes,
+        schema=vol.Schema(dict(_SERVICE_TARGET_FIELD)),
+    )
+    _register_service_if_missing(
+        hass,
         SERVICE_REGISTER_PRODUCT,
         _handle_register_product,
         schema=vol.Schema(
@@ -609,6 +617,16 @@ async def _handle_declare_intervention(call: ServiceCall) -> None:
     except (HomeAssistantError, ValueError) as err:
         _LOGGER.debug("Echec declare_intervention pour %s: %s", call.data.get("intervention"), err)
         raise HomeAssistantError(str(err) or "La date doit être au format JJ/MM/AAAA.") from err
+
+
+async def _handle_reset_mower_passes(call: ServiceCall) -> None:
+    _require_explicit_target_for_multi_instance(call)
+    coordinator = await _coordinator_from_call(call)
+    try:
+        await coordinator.async_reset_mower_passes()
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.debug("Echec reset_mower_passes: %s", err)
+        raise HomeAssistantError(f"Echec reset_mower_passes: {err}") from err
 
 
 async def _handle_remove_last_application(call: ServiceCall) -> None:

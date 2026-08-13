@@ -5286,3 +5286,54 @@ class PasseRappeleeParLaCoordinationTests(unittest.TestCase):
     def test_un_cerveau_absent_ne_casse_pas_le_cycle(self) -> None:
         coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
         self.assertIsNone(coord._tonte_autorisee_au_cycle_precedent())
+
+
+class ResetDuCarnetDePassesTests(unittest.TestCase):
+    """Les motifs de fin sont une INTERPRÉTATION, et elle a déjà changé une fois.
+
+    Jusqu'en 0.53.1, un rappel par la coordination était enregistré comme une décision de la
+    tondeuse. Les passes écrites sous l'ancienne règle ne portent pas le fait brut qui
+    permettrait de les rejuger : elles sont invérifiables, et fausseraient les médianes sans
+    qu'on puisse le voir. Vider le carnet est le seul moyen honnête de repartir.
+    """
+
+    def _coord(self, journal):
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord._runtime_state = {"mower_passes": {"en_cours": {"date": "2026-08-13"}, "journal": journal}}
+        coord._async_save_state = AsyncMock()
+        coord.async_request_refresh = AsyncMock()
+        return coord
+
+    def test_le_carnet_repart_vide(self) -> None:
+        coord = self._coord([{"date": "2026-08-13", "fin_motif": "retour_autonome"}])
+        asyncio.run(coord.async_reset_mower_passes())
+        carnet = coord._runtime_state["mower_passes"]
+        self.assertEqual(carnet["journal"], [])
+        self.assertIsNone(carnet["en_cours"], "une passe en cours doit être abandonnée aussi")
+
+    def test_le_vidage_est_persiste(self) -> None:
+        """⚠️ Sans écriture, le carnet reviendrait au premier redémarrage."""
+        coord = self._coord([{"date": "2026-08-13", "fin_motif": "retour_autonome"}])
+        asyncio.run(coord.async_reset_mower_passes())
+        coord._async_save_state.assert_awaited()
+
+    def test_le_carnet_vide_ne_publie_aucune_mediane(self) -> None:
+        coord = self._coord([{"date": "2026-08-13", "fin_motif": "retour_autonome"}])
+        asyncio.run(coord.async_reset_mower_passes())
+        profil = coordinator_mod.GazonIntelligentCoordinator._profil_appris_tondeuse(
+            coord, coord._runtime_state["mower_passes"]["journal"]
+        )
+        self.assertIsNone(profil["mower_full_pass_minutes_median"])
+        self.assertIsNone(profil["mower_autonomous_return_battery_median"])
+
+    def test_le_service_est_declare_et_cable(self) -> None:
+        """Un service défini dans services.yaml mais jamais enregistré n'existe pas."""
+        import importlib as _il
+
+        init = _il.import_module("custom_components.gazon_intelligent.__init__")
+        self.assertEqual(init.SERVICE_RESET_MOWER_PASSES, "reset_mower_passes")
+        self.assertTrue(hasattr(init, "_handle_reset_mower_passes"))
+        yaml_src = (PACKAGE_DIR / "services.yaml").read_text(encoding="utf-8")
+        self.assertIn("reset_mower_passes:", yaml_src)
+        init_src = (PACKAGE_DIR / "__init__.py").read_text(encoding="utf-8")
+        self.assertIn("SERVICE_RESET_MOWER_PASSES,\n        _handle_reset_mower_passes,", init_src)

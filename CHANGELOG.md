@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.53.2
+
+1092 tests verts. **Le carnet de passes peut repartir de zéro** — nouveau service
+`gazon_intelligent.reset_mower_passes`.
+
+La 0.53.1 a changé la façon de classer la fin d'une passe. Les passes enregistrées **avant**
+elle ne portent pas le fait brut (`tonte_autorisee_fin`) qui permettrait de les rejuger : elles
+gardent une étiquette produite par des règles qui n'existent plus. Les rééditer serait inventer
+un passé ; les garder, c'est nourrir les médianes apprises avec des mesures fausses.
+
+- **Le service vide le journal ET la passe en cours.** Une passe ouverte sous les anciennes
+  règles se refermerait avec elles — elle part aussi. Une mutation verrouille ce point.
+- **Le vidage est écrit sur le disque immédiatement** (`_async_save_state`), sinon il serait
+  défait au prochain redémarrage par l'état persisté. Une deuxième mutation le verrouille.
+- **Rien d'autre n'est touché** : l'historique de tonte du cerveau, la fiabilité de la machine
+  et les réglages restent en place. Ce service ne remet à zéro que le carnet.
+- Après appel, `mower_passes_observed` repart à 0 et les médianes apprises disparaissent
+  jusqu'à ce que trois nouvelles passes soient observées.
+- **⚠️ Le piège de la liste blanche a mordu une fois de plus, sur ce service même.** Il était
+  absent de `_ALL_SERVICES`, la liste qui dé-enregistre les services au retrait de la dernière
+  instance : il aurait survécu à un rechargement et répondu « aucune instance configurée ».
+  Le test existant comptait les enregistrements (14 → 15) et voyait juste — un compte ne
+  contrôle pas une concordance. Nouveau test qui part de ce que le code enregistre
+  **réellement** et exige l'égalité avec `_ALL_SERVICES` **et** avec `services.yaml` ;
+  il couvre les quinze services, pas seulement celui du jour, et deux mutations le vérifient.
+
 ## 0.53.1
 
 1087 tests verts. **Le carnet de passes appelait « décision de la tondeuse » un rappel commandé

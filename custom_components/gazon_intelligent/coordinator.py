@@ -4120,6 +4120,22 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._async_save_state()
         await self.async_request_refresh()
 
+    async def async_reset_mower_passes(self) -> None:
+        """Repart d'un carnet de passes vierge.
+
+        ⚠️ POURQUOI CE SERVICE EXISTE. Les motifs de fin sont une INTERPRÉTATION, et cette
+        interprétation a déjà changé une fois : jusqu'en 0.53.1 un rappel par la coordination
+        était enregistré comme une décision de la tondeuse. Les passes écrites sous l'ancienne
+        règle ne portent pas le fait brut qui permettrait de les rejuger — elles sont donc
+        invérifiables, et fausseraient les médianes sans qu'on puisse le voir.
+
+        Vider le carnet est le seul moyen honnête de repartir : il n'alimente aucune décision,
+        donc on ne perd rien d'autre qu'une observation qu'on ne sait plus lire.
+        """
+        self._runtime_state["mower_passes"] = {"en_cours": None, "journal": []}
+        await self._async_save_state()
+        await self.async_request_refresh()
+
     async def async_start_manual_irrigation(self, objectif_mm: float) -> None:
         """Déclenche un arrosage manuel réel sur l'objectif fourni."""
         try:

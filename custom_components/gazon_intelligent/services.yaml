@@ -135,6 +135,12 @@ declare_intervention:
       selector:
         text: {}
 
+reset_mower_passes:
+  description: "Vide le carnet de bord des passes de la tondeuse. À utiliser quand les règles de classement des fins de passe ont changé : les passes enregistrées sous l'ancienne règle ne portent pas les faits bruts qui permettraient de les rejuger, et fausseraient les médianes. Le carnet n'alimente aucune décision — on ne perd qu'une observation devenue illisible."
+  target:
+    entity:
+      integration: gazon_intelligent
+
 remove_last_application:
   description: "Supprime la dernière application enregistrée dans l'historique local."
   target:
