@@ -224,14 +224,14 @@
     <h1>Comment le système décide</h1>
     <p class="lede">Arrosage, tonte, phases, produits, capteurs et services : ce que fait chaque brique, où sont les seuils, et ce qui reste à arbitrer. Établi sur l'état réel du code.</p>
     <div class="stats">
-      <span class="stat">version <b>0.53.0</b></span>
+      <span class="stat">version <b>0.53.2</b></span>
       <span class="stat">carte <b>0.26.0</b></span>
       <span class="stat"><b>39</b> modules</span>
-      <span class="stat"><b>60</b> entités</span>
-      <span class="stat"><b>14</b> services</span>
+      <span class="stat"><b>62</b> entités</span>
+      <span class="stat"><b>15</b> services</span>
       <span class="stat"><b>20</b> entrées</span>
       <span class="stat"><b>8</b> phases</span>
-      <span class="stat"><b>1076</b> tests</span>
+      <span class="stat"><b>1092</b> tests</span>
     </div>
     <p style="font-size:.83rem;color:var(--faint);margin-top:.2rem">Référence vivante — mise à jour à chaque changement du code, vérifiée sur les fichiers réels.</p>
   </header>
@@ -527,6 +527,10 @@
       <div class="card todo">
         <div class="card-head"><h3>Le seuil de 30 °C est le plus strict du système</h3><span class="chip warn">à arbitrer</span></div>
         <p class="detail">Partout ailleurs, le « vrai chaud » est fixé à <strong>32 °C</strong> (survie, rafraîchissement du soir). Combiné au ressuyage après arrosage, ce seuil ne laisse en pratique qu'environ <strong>1 h 30 exploitable par jour</strong> en été.</p>
+      </div>
+      <div class="card hot">
+        <div class="card-head"><h3>⚠️ Ce tableau se lit mal : à 25 °C, plus aucune fenêtre n'est « idéale »</h3><span class="chip crit">défaut confirmé</span></div>
+        <p class="detail">Le « déconseillé ≥ 25 °C » n'est pas un verdict parmi d'autres : il est rendu <strong>avant</strong> les tests d'heure, donc il <em>écrase</em> la ligne Horaire. Dès 25 °C, ni la fenêtre du matin ni celle du soir ne peuvent être atteintes — c'est la cause des quatre jours sans tonte du 09 au 12/08/2026. Détail, preuve par deux branches mortes et correctif proposé dans l'onglet <strong>À arbitrer</strong>.</p>
       </div>
     </section>
 
@@ -916,7 +920,7 @@
   <!-- ═══ SERVICES & ENTITÉS ═══ -->
   <div class="panel" role="tabpanel" id="p-api" aria-labelledby="t-api" tabindex="0" hidden>
     <section>
-      <div class="sec-head"><h2>Les 14 services</h2><span class="tally info">ton API</span></div>
+      <div class="sec-head"><h2>Les 15 services</h2><span class="tally info">ton API</span></div>
       <p>Tous prennent une <strong>entité de la pelouse ciblée</strong> en paramètre — c'est ce qui distingue les deux instances. La cible peut aussi être un appareil ou une zone : l'intégration remonte alors à la bonne pelouse. Sans cible identifiable, le service échoue avec un message qui <em>nomme l'entité attendue</em> plutôt qu'une erreur technique.</p>
 
       <div class="tbl-wrap">
@@ -944,13 +948,14 @@
             <tr><td class="rowlabel"><code>declare_mowing</code></td><td>Enregistre une tonte (avec sa hauteur de coupe) — nourrit la hauteur estimée</td></tr>
             <tr><td class="rowlabel"><code>declare_watering</code></td><td>Enregistre un arrosage fait autrement</td></tr>
             <tr><td class="rowlabel"><code>recalibrate_reserve</code></td><td>Recale la réserve à une valeur connue. <strong>Fige la journée</strong> : pluie, arrosage et ET ne sont plus comptés jusqu'à minuit</td></tr>
+            <tr><td class="rowlabel"><code>reset_mower_passes</code></td><td>Vide le carnet de passes de la tondeuse — journal <em>et</em> passe en cours. Sert quand les règles de classement changent et que les anciennes entrées ne peuvent plus être rejugées. <strong>Ne touche ni l'historique de tonte, ni la fiabilité, ni les réglages</strong></td></tr>
           </tbody>
         </table>
       </div>
     </section>
 
     <section>
-      <div class="sec-head"><h2>Les 60 entités</h2><span class="tally info">par usage</span></div>
+      <div class="sec-head"><h2>Les 62 entités</h2><span class="tally info">par usage</span></div>
       <div class="card">
         <div class="card-head"><h3>Par où commencer</h3><span class="chip ok">3 entités</span></div>
         <p class="detail"><code>sensor · assistant</code> résume l'action prioritaire — c'est le point d'entrée. <code>binary_sensor · arrosage_recommande</code> et <code>binary_sensor · tonte_autorisee</code> portent les deux verdicts. Pour une automatisation de tonte, lire l'attribut <code>action_possible</code>, pas l'état.</p>
@@ -1019,6 +1024,46 @@
   <!-- ═══ SANTÉ DU CODE ═══ -->
   <div class="panel" role="tabpanel" id="p-sante" aria-labelledby="t-sante" tabindex="0" hidden>
     <section>
+      <div class="sec-head"><h2>13/08/2026 — le carnet peut repartir de zéro</h2><span class="tally done">0.53.2</span></div>
+      <p>La 0.53.1 a changé la façon de classer la fin d'une passe. Les passes écrites <strong>avant</strong> elle ne portent pas le fait brut qui permettrait de les rejuger : elles gardent une étiquette produite par des règles qui n'existent plus. Les rééditer serait inventer un passé ; les garder, c'est nourrir les médianes apprises avec des mesures fausses. D'où <code>gazon_intelligent.reset_mower_passes</code>.</p>
+      <p>Le service vide le journal <strong>et la passe en cours</strong> — une passe ouverte sous les anciennes règles se refermerait avec elles — et écrit sur le disque immédiatement, sinon le vidage serait défait au prochain redémarrage par l'état persisté. Deux mutations verrouillent ces deux points. Rien d'autre n'est touché : historique de tonte, fiabilité de la machine et réglages restent en place.</p>
+
+      <div class="callout h">
+        <h3>⚠️ Le piège de la liste blanche a mordu sur ce service même</h3>
+        <p><code>reset_mower_passes</code> était absent de <code>_ALL_SERVICES</code>, la liste qui dé-enregistre les services au retrait de la dernière instance. Il aurait survécu à un rechargement et répondu « aucune instance configurée ».</p>
+        <p><strong>Le test existant comptait les enregistrements — 14 puis 15 — et voyait juste.</strong> Un compte ne contrôle pas une concordance : les deux listes peuvent diverger sans que le total bouge. C'est la <em>même</em> famille que le filtre de préfixe du 08/08 et que le test de persistance qui sérialisait à la main : <strong>vérifier une déclaration n'est pas vérifier un câblage</strong>.</p>
+        <p>Le nouveau test part de ce que le code enregistre <strong>réellement</strong> et exige l'égalité avec <code>_ALL_SERVICES</code> <em>et</em> avec <code>services.yaml</code>. Il couvre les quinze services, pas seulement celui du jour, et deux mutations le vérifient — service retiré de la liste de retrait, service enregistré sous un nom non documenté.</p>
+      </div>
+
+      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b> : 1092 tests verts. Les <b>17 mutations</b> du banc du carnet sont détectées, chacune par le test visé — dont une qui a d'abord frappé la mauvaise occurrence (la chaîne <code>{"en_cours": None, "journal": []}</code> sert aussi à initialiser le carnet), réancrée sur la ligne du service.</p>
+    </section>
+
+    <section>
+      <div class="sec-head"><h2>13/08/2026 — la passe rappelée</h2><span class="tally done">0.53.1</span></div>
+      <p><strong>Le carnet appelait « décision de la tondeuse » un rappel commandé par la coordination.</strong> Le défaut a été trouvé sur la toute première passe qu'il ait enregistrée. Mesuré à la seconde&nbsp;:</p>
+
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th class="num">heure</th><th>fait mesuré</th></tr></thead>
+          <tbody>
+            <tr><td class="num">10:40:43,774</td><td><code>tonte_autorisee</code> → <code>off</code> — 34,9 °C, seuil 30</td></tr>
+            <tr class="r-bad"><td class="num">10:40:45,244</td><td>la tondeuse rentre, <strong>1,5 seconde plus tard</strong>, avec <b>58 %</b> de batterie</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Étiquetée <code>retour_autonome</code>, c'est-à-dire « elle a décidé toute seule que c'était fini ». La quatrième fin manquait — et c'est la plus fréquente sur cette installation : en canicule la chaleur fait tomber l'autorisation, Node-RED rappelle la machine.</p>
+
+      <div class="callout m">
+        <h3>L'ordre des cas est le cœur de la méthode</h3>
+        <p><code>batterie_vide</code> passe <strong>avant</strong> <code>rappelee</code> : une machine à 10 % rentre de toute façon, lui attribuer le rappel effacerait la cause réelle. À l'inverse, rentrer à 58 % pendant une interdiction n'est pas une décision de la machine.</p>
+        <p><strong><code>None</code> reste une absence, pas une interdiction.</strong> Sans décision publiée, la passe n'est pas requalifiée en rappel — c'est le test <code>is False</code>, pas <code>not …</code>, et une mutation le verrouille.</p>
+      </div>
+
+      <p>L'autorisation est lue sur le cycle <strong>précédent</strong> (<code>brain.last_result</code>) : le carnet tourne avant <code>compute_snapshot</code>. Ce n'est pas un pis-aller — c'est justement la décision publiée qui a provoqué le retour. Et comme pour les batteries et les durées, <strong>le fait brut est conservé</strong> (<code>tonte_autorisee_fin</code> dans le journal) à côté de l'étiquette : un classement qui se révèle mauvais se rejoue.</p>
+    </section>
+
+    <section>
       <div class="sec-head"><h2>10/08/2026 — le carnet de passes</h2><span class="tally done">0.53.0</span></div>
       <p><strong>Le cumul de minutes de la journée ne dit pas si le jardin a été tondu.</strong> Mesuré sur l'historique réel du 30/07 au 08/08/2026 :</p>
 
@@ -1051,7 +1096,7 @@
           <tbody>
             <tr><td>durée réellement tondue · temps immobilisé</td><td><code>mower_full_pass_minutes_median</code> — ce que vaut une charge pleine</td></tr>
             <tr><td>batterie de départ · batterie d'arrivée</td><td><code>mower_autonomous_return_battery_median</code> — à quel niveau elle décide</td></tr>
-            <tr><td><code>fin_motif</code> : <code>batterie_vide</code> · <code>retour_autonome</code> · <code>bloquee</code> · <code>inconnue</code></td><td><code>mower_passes_per_day_median</code> — passes <em>abouties</em> par jour</td></tr>
+            <tr><td><code>fin_motif</code> : <code>batterie_vide</code> · <code>rappelee</code> · <code>retour_autonome</code> · <code>bloquee</code> · <code>inconnue</code> <span class="chip warn">0.53.1</span></td><td><code>mower_passes_per_day_median</code> — passes <em>abouties</em> par jour</td></tr>
           </tbody>
         </table>
       </div>
@@ -1496,7 +1541,7 @@
     </section>
 
     <section>
-      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1076 tests verts</span></div>
+      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1092 tests verts</span></div>
       <p>Cet onglet est le point d'entrée pour « <strong>qu'est-ce qui reste à corriger ou à supprimer ?</strong> ». Il distingue trois choses qu'on confond souvent : ce qui est cassé, ce qui est un choix, et ce qui est déjà mort.</p>
       <div class="tbl-wrap">
         <table>
@@ -1921,7 +1966,7 @@
           <thead><tr><th>Contrôle de cohérence jamais fait</th><th>Résultat</th></tr></thead>
           <tbody>
             <tr><td class="rowlabel">Traductions</td><td><strong>Parité parfaite</strong> : 214 clés identiques entre <code>strings.json</code> et les 5 langues, aucune manquante, aucune en trop</td></tr>
-            <tr><td class="rowlabel">Services</td><td>Les 14 concordent sur cinq dimensions (constantes, enregistrement, <code>_ALL_SERVICES</code>, <code>services.yaml</code>, handlers) et chacun accepte exactement les champs qu'il documente</td></tr>
+            <tr class="r-good"><td class="rowlabel">Services</td><td>Les <b>15</b> concordent sur cinq dimensions (constantes, enregistrement, <code>_ALL_SERVICES</code>, <code>services.yaml</code>, handlers) et chacun accepte exactement les champs qu'il documente. <strong>Depuis la 0.53.2 cette concordance est <em>testée</em>, plus seulement constatée</strong> : le test part de ce que le code enregistre réellement et exige l'égalité avec les deux listes — c'est ce qui manquait quand <code>reset_mower_passes</code> est passé au travers</td></tr>
             <tr><td class="rowlabel">Contrat carte ↔ intégration</td><td>57 attributs lus par la carte, <strong>un seul introuvable</strong> — et il cachait un défaut muet (ci-dessous)</td></tr>
           </tbody>
         </table>
@@ -2258,8 +2303,17 @@
   <!-- ═══ À ARBITRER ═══ -->
   <div class="panel" role="tabpanel" id="p-arb" aria-labelledby="t-arb" tabindex="0" hidden>
     <section>
-      <div class="sec-head"><h2>Décisions en attente</h2><span class="tally todo">2</span></div>
-      <p>Les trois arbitrages de <strong>tonte</strong> ont été tranchés le 29/07/2026 (voir l'onglet Santé du code). Restent la mesure de terrain — bloquée sur un fait, pas sur une décision —, deux points ouverts par l'audit du 31/07/2026 (ce que « risque gazon » doit signifier ; le pas d'une heure de la pousse), et trois nouveaux sortis de l'audit du 06/08/2026.</p>
+      <div class="sec-head"><h2>Décisions en attente</h2><span class="tally todo">3</span></div>
+
+      <div class="card todo">
+        <div class="card-head"><h3>La fenêtre de tonte meurt à 25 °C — quatre jours sans sortir</h3><span class="chip warn">Tonte</span></div>
+        <p class="detail"><strong>Constaté du 09 au 12/08/2026 :</strong> la tondeuse n'est pas sortie de quatre jours, puis est sortie le 13/08 à 10:00 seulement parce que le retard avait fini par forcer le passage.</p>
+        <p><strong>La cause, lue dans <code>_resolve_mowing_window</code> (<code>decision_mowing.py</code>) :</strong> le verdict « <em>Température élevée : à éviter</em> » couvre toute la plage <b>25 – 30 °C</b> et il est rendu <strong>avant</strong> les tests d'heure. Conséquence : dès 25 °C, la fenêtre ne peut plus <em>jamais</em> valoir <code>ideal</code> ni <code>acceptable</code>, quelle que soit l'heure. Or Node-RED n'accepte de lancer que sur ces deux valeurs — le seul rattrapage restant est le retard.</p>
+        <p><strong>Deux branches inatteignables prouvent que ce n'était pas l'intention.</strong> La fenêtre du soir et le créneau intermédiaire testent tous deux <code>mois ∈ {juillet, août} et température ≥ 28</code> pour décourager. Ce test ne peut jamais être vrai : à ≥ 28 °C le verdict 25–30 a déjà renvoyé « à éviter », et au-dessus de 30 °C tout est bloqué. <strong>Du code écrit pour laisser tondre le soir jusqu'à 28 °C, rendu mort par un test placé trop haut.</strong></p>
+        <p><em>Correctif proposé : déplacer le verdict de température <strong>après</strong> les tests d'heure, pour que la fenêtre du soir retrouve la vie que son propre code décrit. Le blocage dur à 30 °C sur <code>tonte_autorisee</code> n'est pas touché — vérifié tenant à 34 °C avec 5 jours de retard. À arbitrer par Kévin : c'est un changement de comportement en pleine saison chaude, pas une correction cosmétique.</em></p>
+      </div>
+
+      <p>Les trois arbitrages de <strong>tonte</strong> ont été tranchés le 29/07/2026 (voir l'onglet Santé du code). Restent la mesure de terrain — bloquée sur un fait, pas sur une décision —, deux points ouverts par l'audit du 31/07/2026 (ce que « risque gazon » doit signifier ; le pas d'une heure de la pousse), trois sortis de l'audit du 06/08/2026, et depuis le 13/08/2026 la fenêtre de tonte qui meurt à 25 °C.</p>
 
       <div class="card todo">
         <div class="card-head"><h3>Réservoir du sol : la mesure au tournevis</h3><span class="chip warn">Arrosage</span></div>
