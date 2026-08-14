@@ -2333,7 +2333,9 @@
       <div class="card done">
         <div class="card-head"><h3>Garde « il pleut » : déployé le 07/08 à 00:39</h3><span class="chip ok">en observation</span></div>
         <p class="detail">Le correctif lui-même n'est pas un arbitrage : c'est un bug, et il a fait verser <strong>5,1 mm sous la pluie le 30/07</strong>. Ce qui se décide, c'est le <em>moment</em> : ce garde <strong>n'a jamais tourné depuis le 18/03/2026</strong>. Personne ne sait ce qu'il va bloquer, ni combien de fois.</p>
-        <p><em>À déployer un matin où Kévin est disponible, avec une semaine d'observation — pas en aveugle, et pas un vendredi soir.</em></p>
+        <p><strong>Première observation — 14/08/2026, 16:00:59.</strong> <code>weather.forecast_maison</code> passe à <code>rainy</code>, le garde mord, l'arrosage devient « Retenu : Pluie active ». Au même moment, sur le terrain : pluviomètre à <b>0,1 mm</b> pour toute la journée, capteur de pluie de la tondeuse <code>off</code> depuis 24 h, humidité <b>20–25 %</b>, <b>38,5 °C</b>. <strong>Il ne pleuvait pas.</strong></p>
+        <p><code>is_active_rain_weather</code> (<code>guidance.py:178</code>) renvoie vrai dès que la <em>chaîne d'état</em> de l'entité météo est dans <code>RAINY_WEATHER_CONDITIONS</code> — aucune mesure n'entre dans ce test, et l'entité configurée est une entité de <em>prévision</em>. Sans conséquence ce jour-là (déjà arrosé le matin, créneau suivant le lendemain), mais le mécanisme est bien celui d'un <strong>repli qui se déclenche en silence, toujours dans le même sens</strong> : il ne peut que retenir de l'eau, jamais en ajouter.</p>
+        <p><em>Ce qui reste à décider : croiser la condition météo avec une mesure (pluviomètre, capteur de pluie de la tondeuse) avant de retenir, ou assumer qu'une prévision de pluie suffise à sauter un arrosage en canicule.</em></p>
       </div>
 
       <div class="card todo">
