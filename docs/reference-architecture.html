@@ -2303,7 +2303,28 @@
   <!-- ═══ À ARBITRER ═══ -->
   <div class="panel" role="tabpanel" id="p-arb" aria-labelledby="t-arb" tabindex="0" hidden>
     <section>
-      <div class="sec-head"><h2>Décisions en attente</h2><span class="tally todo">3</span></div>
+      <div class="sec-head"><h2>Décisions en attente</h2><span class="tally todo">4</span></div>
+
+      <div class="card hot">
+        <div class="card-head"><h3>L'arrosage en retard mange la fenêtre de tonte du jour</h3><span class="chip crit">mesuré le 14/08/2026</span></div>
+        <p class="detail">Deux mécanismes corrects pris séparément s'annulent l'un l'autre. Journée du 14/08/2026, minute par minute&nbsp;:</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th class="num">heure</th><th>fait mesuré</th></tr></thead>
+            <tbody>
+              <tr class="r-bad"><td class="num">21:10 (13/08)<br>→ 08:20</td><td><strong>« Garde-fou hebdomadaire »</strong> retient l'arrosage <strong>11 h 10 sans interruption</strong>, couvrant toute la fenêtre optimale 03:45–08:00</td></tr>
+              <tr><td class="num">08:20 → 09:21</td><td>l'arrosage part enfin — 3 zones, ~5 mm chacune</td></tr>
+              <tr><td class="num">09:21</td><td>le <strong>délai de reprise de tonte</strong> s'arme : 180 min, donc jusqu'à <b>12:22</b></td></tr>
+              <tr><td class="num">10:00</td><td>la fenêtre de tonte s'ouvre… mais <code>watering_cooldown</code> bloque (147 min restants)</td></tr>
+              <tr class="r-bad"><td class="num">10:35</td><td>la température passe <b>30 °C</b> — le verrou dur se referme</td></tr>
+              <tr><td class="num">12:22</td><td>le délai de reprise expire. Il fait <b>34,7 °C</b>. Trop tard.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p><strong>Les deux fenêtres ne se sont jamais croisées.</strong> La seule ouverture de tonte de la journée — <b>10:00 → 10:35, 35 minutes</b> — a été intégralement consommée par le ressuyage d'un arrosage qui aurait dû finir à 04:45. Parti à 03:45 comme sa propre fenêtre optimale le prescrit, le délai de reprise aurait expiré vers 07:45 et l'ouverture aurait été libre.</p>
+        <p>Aucun des deux garde-fous n'est fautif isolément : retenir l'eau au-delà du budget hebdomadaire est voulu, et ne pas tondre sur un gazon détrempé aussi. C'est leur <strong>enchaînement</strong> qui coûte une journée de tonte — la famille « deux sorties qui ne se parlent pas », cette fois à l'échelle du système et non d'un fichier.</p>
+        <p><em>Trois leviers possibles, à trancher par Kévin : (1) rendre au garde-fou hebdomadaire la capacité de libérer à l'aube plutôt qu'en milieu de matinée — c'est la cause racine ; (2) faire que la décision d'arroser tienne compte de la fenêtre de tonte du jour quand la tonte est en retard ; (3) raccourcir le délai de reprise de 180 min — écarté a priori, c'est le levier agronomique et le moins défendable.</em></p>
+      </div>
 
       <div class="card todo">
         <div class="card-head"><h3>La fenêtre de tonte meurt à 25 °C — quatre jours sans sortir</h3><span class="chip warn">Tonte</span></div>
