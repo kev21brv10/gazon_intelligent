@@ -231,14 +231,14 @@
     <h1>Comment le système décide</h1>
     <p class="lede">Arrosage, tonte, phases, produits, capteurs et services : ce que fait chaque brique, où sont les seuils, et ce qui reste à arbitrer. Établi sur l'état réel du code.</p>
     <div class="stats">
-      <span class="stat">version <b>0.54.0</b></span>
+      <span class="stat">version <b>0.54.1</b></span>
       <span class="stat">carte <b>0.26.0</b></span>
       <span class="stat"><b>39</b> modules</span>
       <span class="stat"><b>62</b> entités</span>
       <span class="stat"><b>15</b> services</span>
       <span class="stat"><b>20</b> entrées</span>
       <span class="stat"><b>8</b> phases</span>
-      <span class="stat"><b>1110</b> tests</span>
+      <span class="stat"><b>1119</b> tests</span>
     </div>
     <p style="font-size:.83rem;color:var(--faint);margin-top:.2rem">Référence vivante — mise à jour à chaque changement du code, vérifiée sur les fichiers réels.</p>
   </header>
@@ -1065,7 +1065,9 @@
           </table>
         </div>
         <p>L'horodatage s'est figé à <b>04:56</b>. Vérifié sur le capteur à 06:30 : « <em>Herbe mouillée&nbsp;: ressuyage après la pluie (86 min restantes)</em> » — soit une fin à 07:56, quand la pluie s'est arrêtée à 05:52. <strong>Le ressuyage a été écourté de 56 minutes</strong>, et la tondeuse était libre de sortir sur une herbe encore mouillée.</p>
-        <p>La 0.54.0 corrige ça sans une ligne de plus : le constat de pluie suit désormais le pluviomètre. <em>Contrepartie assumée</em> — la garde reste vraie 30 min après la dernière hausse, donc le ressuyage court en pratique jusqu'à <b>fin de pluie + 30 + 180 min</b>. Borné, et du côté prudent.</p>
+        <p>La 0.54.0 corrige ça sans une ligne de plus : le constat de pluie suit désormais le pluviomètre.</p>
+        <p><strong>La 0.54.1 supprime la contrepartie.</strong> La garde reste volontairement vraie 30 min après la dernière hausse — une averse fait des pauses, et le capteur a 0,1 mm de résolution. Mais l'horodatage, lui, <strong>recule jusqu'à cette hausse</strong> : sans quoi le ressuyage aurait couru jusqu'à <em>fin de pluie + 30 + 180 min</em>, soit 3 h 30 pour une pluie terminée. Sur la nuit du 16/08 : horodaté 06:20 puis ressuyage jusqu'à 09:20 ; désormais horodaté <b>05:52</b>, ressuyage jusqu'à <b>08:52</b>.</p>
+        <p><em>Deux garde-fous</em> — quand c'est la <b>prévision</b> qui conclut, on horodate <em>maintenant</em> (elle affirme une pluie à l'instant, reculer inventerait une accalmie), et l'horodatage <strong>ne recule jamais</strong> sur un constat déjà noté plus récemment : le correctif retire le rab, il ne raccourcit pas un ressuyage justifié. <code>active_rain_source</code> est désormais la source unique de la règle — <code>is_active_rain_weather</code> n'est plus qu'un « est-ce non nul ? » posé dessus, et une mutation vérifie qu'elles restent d'accord.</p>
       </div>
 
       <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b> : 1110 tests verts. Les <b>14 mutations</b> du banc sont détectées, chacune par le test visé — dont la recopie clé par clé de <code>compute_advanced_context</code> (piège n°2), où la clé serait morte en silence, et le remplacement du capteur par le repli prévision.</p>
@@ -1621,7 +1623,7 @@
     </section>
 
     <section>
-      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1110 tests verts</span></div>
+      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1119 tests verts</span></div>
       <p>Cet onglet est le point d'entrée pour « <strong>qu'est-ce qui reste à corriger ou à supprimer ?</strong> ». Il distingue trois choses qu'on confond souvent : ce qui est cassé, ce qui est un choix, et ce qui est déjà mort.</p>
       <div class="tbl-wrap">
         <table>
