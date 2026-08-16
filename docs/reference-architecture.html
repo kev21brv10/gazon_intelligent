@@ -231,14 +231,14 @@
     <h1>Comment le système décide</h1>
     <p class="lede">Arrosage, tonte, phases, produits, capteurs et services : ce que fait chaque brique, où sont les seuils, et ce qui reste à arbitrer. Établi sur l'état réel du code.</p>
     <div class="stats">
-      <span class="stat">version <b>0.54.1</b></span>
+      <span class="stat">version <b>0.54.2</b></span>
       <span class="stat">carte <b>0.26.0</b></span>
       <span class="stat"><b>39</b> modules</span>
       <span class="stat"><b>62</b> entités</span>
       <span class="stat"><b>15</b> services</span>
       <span class="stat"><b>20</b> entrées</span>
       <span class="stat"><b>8</b> phases</span>
-      <span class="stat"><b>1119</b> tests</span>
+      <span class="stat"><b>1122</b> tests</span>
     </div>
     <p style="font-size:.83rem;color:var(--faint);margin-top:.2rem">Référence vivante — mise à jour à chaque changement du code, vérifiée sur les fichiers réels.</p>
   </header>
@@ -1041,6 +1041,20 @@
       </div>
 
       <div class="callout h">
+        <h3>⚠️ Le défaut que la 0.54.0 a introduit — et la question qui l'a trouvé</h3>
+        <p>Deux heures après la livraison, j'ai annoncé « il pleut en ce moment » sur un capteur qui venait de passer de 3,2 à 3,6 mm. Kévin&nbsp;: <em>« tu es sûr qu'il pleut ? »</em> Il ne pleuvait pas.</p>
+        <p>Le détecteur comparait chaque lecture à la <strong>précédente</strong>. Or ce compteur journalier oscille — et un compteur du jour qui <em>descend</em>, c'est du bruit, pas de la pluie négative. Journée du 16/08, <strong>sans une goutte après 05:52</strong> :</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th class="num">05:52</th><th class="num">06:22</th><th class="num">08:33</th><th class="num">09:32</th><th class="num">10:32</th><th class="num">12:26</th><th class="num">12:38</th><th class="num">13:07</th><th class="num">13:25</th><th class="num">14:25</th></tr></thead>
+            <tbody><tr><td class="num">3,6</td><td class="num">3,5</td><td class="num"><b>4,2</b></td><td class="num">3,7</td><td class="num">3,6</td><td class="num">3,1</td><td class="num">3,3</td><td class="num">3,4</td><td class="num">3,2</td><td class="num">3,6</td></tr></tbody>
+          </table>
+        </div>
+        <p><strong>Quatre fausses averses</strong> — 08:33, 12:38, 13:07, 14:25. La <b>0.54.2</b> compare au <strong>pic du jour</strong> : seul un dépassement du maximum est une pluie nouvelle. Une hausse retenue au lieu de quatre.</p>
+        <p><strong>Et le cliquet n'a pas été réécrit : il est partagé.</strong> <code>soil_balance.appliquer_cliquet_pluie</code> est extrait de <code>update_soil_balance</code>. La règle — et sa détection de remise à zéro par la chute vers ~0, arbitrée le 06/08/2026 — existait déjà pour le bilan sol. En écrire une seconde version était exactement le piège que ce projet documente, et la seconde version a effectivement menti.</p>
+      </div>
+
+      <div class="callout h">
         <h3>Ce qu'il ne fallait pas faire : remplacer un aveuglement par un autre</h3>
         <p>Sans capteur, sans lecture, ou au tout premier cycle, la réponse est <code>None</code> — <strong>pas <code>False</code></strong>. Et la garde teste <code>is True</code>, jamais la valeur brute : un <code>None</code> traité comme vrai bloquerait l'arrosage sur un capteur muet. Deux mutations verrouillent ce point.</p>
         <p>Elle est nourrie par <code>pluie_24h_sensor</code> — le capteur réel — et <strong>surtout pas</strong> par <code>pluie_24h</code>, qui retombe sur la prévision quand le capteur manque. Nourrir la garde d'un repli météo la ramènerait exactement à l'aveuglement qu'elle vient de corriger.</p>
@@ -1070,7 +1084,7 @@
         <p><em>Deux garde-fous</em> — quand c'est la <b>prévision</b> qui conclut, on horodate <em>maintenant</em> (elle affirme une pluie à l'instant, reculer inventerait une accalmie), et l'horodatage <strong>ne recule jamais</strong> sur un constat déjà noté plus récemment : le correctif retire le rab, il ne raccourcit pas un ressuyage justifié. <code>active_rain_source</code> est désormais la source unique de la règle — <code>is_active_rain_weather</code> n'est plus qu'un « est-ce non nul ? » posé dessus, et une mutation vérifie qu'elles restent d'accord.</p>
       </div>
 
-      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b> : 1110 tests verts. Les <b>14 mutations</b> du banc sont détectées, chacune par le test visé — dont la recopie clé par clé de <code>compute_advanced_context</code> (piège n°2), où la clé serait morte en silence, et le remplacement du capteur par le repli prévision.</p>
+      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b> : 1122 tests verts. Les <b>14 mutations</b> du banc sont détectées, chacune par le test visé — dont la recopie clé par clé de <code>compute_advanced_context</code> (piège n°2), où la clé serait morte en silence, et le remplacement du capteur par le repli prévision.</p>
     </section>
 
     <section>
@@ -1623,7 +1637,7 @@
     </section>
 
     <section>
-      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1119 tests verts</span></div>
+      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1122 tests verts</span></div>
       <p>Cet onglet est le point d'entrée pour « <strong>qu'est-ce qui reste à corriger ou à supprimer ?</strong> ». Il distingue trois choses qu'on confond souvent : ce qui est cassé, ce qui est un choix, et ce qui est déjà mort.</p>
       <div class="tbl-wrap">
         <table>
