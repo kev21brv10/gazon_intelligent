@@ -5404,18 +5404,51 @@ class PluieMesureeTests(unittest.TestCase):
         sortie, _ = self._rejouer([(0, 1.2), (6, 1.8), (6 + 29, 1.8)])
         self.assertIs(sortie["pluie_mesuree_active"], True)
 
-    def test_une_baisse_est_une_remise_a_zero_pas_une_pluie_negative(self) -> None:
+    def test_une_baisse_n_est_pas_une_pluie_et_le_pic_tient(self) -> None:
         """⚠️ Mesuré 10 fois le 04/08/2026 en une journée : le capteur redescend.
 
-        Une baisse ne doit ni compter comme une averse, ni effacer la fraîcheur de
-        l'averse précédente — et la lecture suivante doit se comparer à la NOUVELLE
-        référence, sinon la remontée d'après serait vue comme une hausse fantôme.
+        Une baisse ne compte pas comme une averse et n'efface pas la fraîcheur de la
+        précédente. Surtout, le PIC du jour est conservé : sinon la remontée d'après se
+        comparerait à un plancher et passerait pour une hausse fantôme.
         """
         sortie, coord = self._rejouer([(0, 2.2), (6, 2.3), (12, 1.8)])
-        # La baisse elle-même n'horodate pas : on reste sur la fraîcheur de la hausse de +6 min.
         self.assertIs(sortie["pluie_mesuree_active"], True)
         self.assertEqual(sortie["pluie_mesuree_minutes_depuis_hausse"], 6.0)
-        self.assertEqual(coord._runtime_state["pluie_mesuree"]["dernier_cumul"], 1.8)
+        self.assertEqual(coord._runtime_state["pluie_mesuree"]["pic"], 2.3)
+        # Le cumul PUBLIÉ suit le cliquet lui aussi : afficher la lecture brute montrerait
+        # au diagnostic une valeur que ni la garde ni le bilan sol n'utilisent.
+        self.assertEqual(sortie["pluie_mesuree_cumul_mm"], 2.3)
+
+    def test_une_remontee_sous_le_pic_du_jour_n_est_pas_une_averse(self) -> None:
+        """⚠️ LE DÉFAUT DU 16/08/2026, trouvé par Kévin deux heures après la livraison.
+
+        Comparer à la LECTURE PRÉCÉDENTE prenait chaque remontée de bruit pour une pluie.
+        Journée réelle, sans une goutte après 05:52 — le détecteur criait « il pleut »
+        QUATRE fois (08:33, 12:38, 13:07, 14:25).
+        """
+        journee = [
+            (0, 3.6), (30, 3.5), (161, 4.2), (220, 3.7), (280, 3.6), (334, 3.5),
+            (388, 3.3), (394, 3.1), (406, 3.3), (435, 3.4), (447, 3.3), (453, 3.2),
+            (513, 3.6),
+        ]
+        sortie, coord = self._rejouer(journee)
+        # Seul le franchissement du maximum (4,2 à +161 min) horodate. La dernière lecture
+        # est à +513 min, soit 352 min après — bien au-delà de la fenêtre de 30 min.
+        self.assertIs(sortie["pluie_mesuree_active"], False)
+        self.assertEqual(sortie["pluie_mesuree_minutes_depuis_hausse"], 352.0)
+        self.assertEqual(coord._runtime_state["pluie_mesuree"]["pic"], 4.2)
+
+    def test_une_vraie_remise_a_zero_repart_de_la_nouvelle_base(self) -> None:
+        """La chute vers ~0 (minuit) relâche le cliquet, sinon il figerait la veille."""
+        sortie, coord = self._rejouer([(0, 3.6), (6, 0.0), (12, 0.4)])
+        self.assertEqual(coord._runtime_state["pluie_mesuree"]["pic"], 0.4)
+        self.assertIs(sortie["pluie_mesuree_active"], True)
+
+    def test_le_cliquet_n_est_pas_reecrit_ici(self) -> None:
+        """⚠️ Deux implémentations de la même règle : l'une a déjà menti. Une seule source."""
+        source = (PACKAGE_DIR / "coordinator.py").read_text(encoding="utf-8")
+        self.assertIn("appliquer_cliquet_pluie(cumul, precedent)", source)
+        self.assertIn("from .soil_balance import appliquer_cliquet_pluie", source)
 
     def test_la_nuit_du_16_aout(self) -> None:
         """Le cas réel : la garde doit mordre AVANT que la prévision ne bascule."""
@@ -5515,8 +5548,8 @@ class PluieMesureeTests(unittest.TestCase):
         relu = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
         relu._restore_runtime_state(serialise)
         self.assertEqual(
-            relu._runtime_state["pluie_mesuree"]["dernier_cumul"],
-            coord._runtime_state["pluie_mesuree"]["dernier_cumul"],
+            relu._runtime_state["pluie_mesuree"]["pic"],
+            coord._runtime_state["pluie_mesuree"]["pic"],
         )
         self.assertIsNotNone(relu._runtime_state["pluie_mesuree"]["derniere_hausse"])
 

@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.54.2
+
+1122 tests verts. **La garde « il pleut » prenait le bruit du pluviomètre pour des averses.**
+Défaut trouvé par Kévin deux heures après la livraison de la 0.54.0, sur une simple question :
+« tu es sûr qu'il pleut ? »
+
+Le détecteur comparait chaque lecture à la **précédente**. Or ce capteur journalier oscille
+toute la journée — un compteur du jour qui descend, c'est du bruit, pas de la pluie négative.
+Journée du 16/08/2026, **sans une goutte après 05:52** :
+
+```
+05:52  3,6   06:22  3,5   08:33  4,2   09:32  3,7   10:32  3,6   11:26  3,5
+12:20  3,3   12:26  3,1   12:38  3,3   13:07  3,4   13:19  3,3   13:25  3,2   14:25  3,6
+```
+
+Le détecteur criait « il pleut » **quatre fois** : 08:33, 12:38, 13:07 et 14:25.
+
+- **La comparaison se fait désormais sur le PIC DU JOUR**, pas sur la lecture précédente : seul
+  un dépassement du maximum est une pluie nouvelle. Sur cette journée, une seule hausse retenue
+  (le pic de 4,2) au lieu de quatre.
+- **⚠️ Le cliquet n'est pas réécrit : il est PARTAGÉ.** `soil_balance.appliquer_cliquet_pluie`
+  est extrait de `update_soil_balance` et sert maintenant les deux. La règle — et sa détection
+  de remise à zéro par la chute vers ~0, arbitrée le 06/08/2026 — existait déjà pour le bilan
+  sol ; en écrire une seconde version était précisément le piège, et la seconde version a
+  effectivement menti.
+- **Le cumul publié suit le cliquet** (`pluie_mesuree_cumul_mm`) : afficher la lecture brute
+  montrerait au diagnostic une valeur que ni la garde ni le bilan n'utilisent.
+- Le banc a trouvé une **garde morte** au passage — `not remise_a_zero` était intestable, une
+  remise à zéro fait tomber le pic donc l'écart est toujours négatif. Supprimée.
+- Les **7 mutations** du banc sont détectées, chacune par le test visé, dont le retrait du
+  cliquet côté bilan sol.
+
 ## 0.54.1
 
 1119 tests verts. **L'averse est horodatée à sa dernière hausse mesurée**, plus au dernier

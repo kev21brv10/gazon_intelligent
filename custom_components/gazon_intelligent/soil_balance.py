@@ -70,6 +70,33 @@ def _round_half_up_1(value: float) -> float:
     return float(int(value * 10.0 + 0.5)) / 10.0
 
 
+def appliquer_cliquet_pluie(
+    lecture: float,
+    pic_precedent: float | None,
+) -> tuple[float, float, bool]:
+    """Cliquet intra-journée du pluviomètre. Rend (valeur retenue, pic du jour, remise à zéro).
+
+    ⚠️ SOURCE UNIQUE DE LA RÈGLE — arbitrée par Kévin le 06/08/2026. Le pluviomètre journalier
+    BAISSE en cours de journée : mesuré 10 fois le 04/08/2026 (00:48 1,0 → 03:11 2,6 → 04:08
+    2,5 → 04:20 3,5 → 04:44 2,7 → 17:17 4,2 → 19:08 3,4 → 20:11 4,0 → 21:50 2,9 → 23:52 3,1).
+    Un compteur du jour ne peut pas décroître : ces baisses sont du bruit, et la lecture brute
+    ne dit donc ni ce qu'il est tombé, ni s'il pleut.
+
+    ⚠️ PAS un `max()` nu : le capteur se remet à zéro plusieurs dizaines de minutes APRÈS
+    minuit local, donc un maximum figerait le cumul de la veille pour toute la journée. On
+    détecte la REMISE À ZÉRO — une chute vers ~0 — au lieu de se fier à l'heure.
+
+    Extrait de `update_soil_balance` le 16/08/2026 pour servir aussi la garde « il pleut »
+    (coordinateur) : sans ça, deux implémentations de la même règle — et la seconde a
+    effectivement menti, en prenant quatre remontées de bruit pour des averses le 16/08.
+    """
+    if pic_precedent is None or pic_precedent <= lecture:
+        return lecture, lecture, False
+    if lecture <= max(0.5, pic_precedent * 0.5) and lecture <= 0.5:
+        return lecture, lecture, True   # le compteur a rebouclé : on repart de la nouvelle base
+    return pic_precedent, pic_precedent, False  # simple décrochage : on garde le maximum
+
+
 def base_reserve_mm(type_sol: str | None) -> float:
     return float(SOIL_RESERVE_BASE_MM.get(type_sol or "", SOIL_RESERVE_DEFAULT_BASE_MM))
 
@@ -445,7 +472,7 @@ def update_soil_balance(
         if _pluie_deja_comptee is not None:
             pluie = _pluie_deja_comptee
 
-    # ── CLIQUET INTRA-JOURNÉE ────────────────────────────────────────────────────────────────
+    # ── CLIQUET INTRA-JOURNÉE ──────────────────────────────────────── voir appliquer_cliquet_pluie
     # Le pluviomètre journalier BAISSE en cours de journée : mesuré 10 fois le 04/08/2026
     # (00:48 1,0 → 03:11 2,6 → 04:08 2,5 → 04:20 3,5 → 04:44 2,7 → 17:17 4,2 → 19:08 3,4 →
     # 20:11 4,0 → 21:50 2,9 → 23:52 3,1), et la réserve suivait pas pour pas — 21:33→21:50,
@@ -462,14 +489,7 @@ def update_soil_balance(
     _pic_precedent = None
     if ledger and ledger[-1].get("date") == today_str:
         _pic_precedent = _to_float(ledger[-1].get("pluie_pic_mm"))
-    pluie_pic = pluie
-    if _pic_precedent is not None and _pic_precedent > pluie:
-        _remise_a_zero = pluie <= max(0.5, _pic_precedent * 0.5) and pluie <= 0.5
-        if _remise_a_zero:
-            pluie_pic = pluie          # le compteur a rebouclé : on repart de la nouvelle base
-        else:
-            pluie = _pic_precedent     # simple décrochage intra-journée : on garde le maximum
-            pluie_pic = _pic_precedent
+    pluie, pluie_pic, _ = appliquer_cliquet_pluie(pluie, _pic_precedent)
     # DÉBIT PROGRESSIF DE L'ET0. Débiter toute l'ET0 du jour dès le premier passage après minuit
     # (comportement historique) rendait la réserve ANTICIPÉE : à 00h01 elle chutait d'un coup de
     # toute la demande à venir (« falaise de minuit ») et se trouvait ÉCRASÉE au plancher dès que
