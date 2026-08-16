@@ -1051,6 +1051,23 @@
         <p><code>pluie_mesuree_active</code> et <code>pluie_mesuree_minutes_depuis_hausse</code> apparaissent dans <code>sensor_health</code>. Ce garde a bloqué et débloqué l'arrosage <strong>des mois durant</strong> sans qu'aucune sortie ne dise sur quoi il se fondait — un automatisme muet est indiscernable d'un automatisme cassé, la même leçon que <code>mower_auto_declaration_state</code>. Placé dans <code>sensor_health</code>, déjà publié comme un dict : <strong>aucune liste blanche à traverser</strong>, donc aucun des chemins qui cassent en silence sur ce projet.</p>
       </div>
 
+      <div class="callout m">
+        <h3>Effet de bord immédiat : le ressuyage après averse devient juste</h3>
+        <p>Le délai de ressuyage après la pluie existe depuis la <b>0.32.0</b> — 180 min, le même réglage qu'après un arrosage. Il s'appuie sur un horodatage de la dernière pluie <em>constatée</em>, et « constatée » voulait dire « la prévision affichait <code>rainy</code> ». Mesuré ce matin même :</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th class="num">heure</th><th>prévision</th><th>pluviomètre</th></tr></thead>
+            <tbody>
+              <tr><td class="num">03:59:47</td><td><code>rainy</code></td><td class="num">2,4 mm</td></tr>
+              <tr class="r-bad"><td class="num">04:56:47</td><td><code>partlycloudy</code> — « c'est fini »</td><td class="num">2,6 mm… <b>et ça monte encore</b></td></tr>
+              <tr><td class="num">05:52:44</td><td><code>cloudy</code></td><td class="num">3,6 mm — <b>fin réelle</b></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>L'horodatage s'est figé à <b>04:56</b>. Vérifié sur le capteur à 06:30 : « <em>Herbe mouillée&nbsp;: ressuyage après la pluie (86 min restantes)</em> » — soit une fin à 07:56, quand la pluie s'est arrêtée à 05:52. <strong>Le ressuyage a été écourté de 56 minutes</strong>, et la tondeuse était libre de sortir sur une herbe encore mouillée.</p>
+        <p>La 0.54.0 corrige ça sans une ligne de plus : le constat de pluie suit désormais le pluviomètre. <em>Contrepartie assumée</em> — la garde reste vraie 30 min après la dernière hausse, donc le ressuyage court en pratique jusqu'à <b>fin de pluie + 30 + 180 min</b>. Borné, et du côté prudent.</p>
+      </div>
+
       <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b> : 1110 tests verts. Les <b>14 mutations</b> du banc sont détectées, chacune par le test visé — dont la recopie clé par clé de <code>compute_advanced_context</code> (piège n°2), où la clé serait morte en silence, et le remplacement du capteur par le repli prévision.</p>
     </section>
 
@@ -1454,11 +1471,11 @@
               <td>180 min imposées après un arrosage, <strong>zéro</strong> après une averse.
                   <code>is_active_rain_weather</code> ne regarde que la météo de l'instant. En pratique couvert
                   par les gardes voisins (rosée, sol humide), mais pas explicitement.</td>
-              <td><strong>Débloquée par la 0.54.0.</strong> Elle était classée impossible faute d'HEURE DE FIN
-                  d'averse dans le contexte — or <code>pluie_mesuree_minutes_depuis_hausse</code> est
-                  exactement cette donnée, livrée pour la garde « il pleut ». Un ressuyage après pluie
-                  devient donc écrivable. <em>Non fait&nbsp;: hors du périmètre demandé, et il faudrait
-                  décider de sa durée.</em> Le libellé mensonger (« ou récente ») était corrigé en 0.31.2.</td>
+              <td><strong>Livrée en 0.32.0</strong> — cette ligne la disait « bloquée » à tort, et l'affirmation
+                  a survécu à deux relectures. Chaque constat de pluie est horodaté dans la mémoire
+                  persistée&nbsp;; le délai est le <em>même réglage</em> que celui d'après-arrosage
+                  (symétrie voulue par Kévin). <strong>Inerte jusqu'à la 0.44.0</strong> faute de condition
+                  météo, puis <strong>rendue juste par la 0.54.0</strong> — voir ci-dessous.</td>
             </tr>
             <tr>
               <td class="rowlabel">Le capteur de risque <strong>n'explique pas son niveau</strong></td>
