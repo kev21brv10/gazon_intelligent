@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.54.1
+
+1119 tests verts. **L'averse est horodatée à sa dernière hausse mesurée**, plus au dernier
+cycle où la garde était vraie.
+
+La 0.54.0 laisse la garde « il pleut » vraie **30 min après le dernier tic du pluviomètre** —
+c'est voulu, une averse fait des pauses et le capteur a 0,1 mm de résolution. Mais l'horodatage
+de l'averse, lui, était posé à « maintenant » à chaque cycle : le ressuyage après pluie, déjà
+long de 180 min, courait donc jusqu'à **fin de pluie + 30 + 180**. Trois heures et demie
+d'attente pour une pluie terminée.
+
+- **Quand seule la MESURE conclut**, l'horodatage recule de
+  `pluie_mesuree_minutes_depuis_hausse` : le dernier instant de pluie qu'on ait réellement
+  mesuré. Le rab de 30 min disparaît, la garde garde sa tolérance aux pauses.
+- **Quand la PRÉVISION conclut, on horodate maintenant** : elle affirme une pluie à l'instant,
+  reculer inventerait une accalmie. Elle l'emporte donc quand les deux parlent.
+- **⚠️ L'horodatage ne recule JAMAIS.** Si un constat plus récent est déjà noté, on le garde :
+  ce correctif supprime le rab, il ne raccourcit jamais un ressuyage déjà justifié.
+- **`active_rain_source` devient la source unique de la règle** — `"mesure"`, `"prevision"`
+  ou `None`. `is_active_rain_weather` n'est plus qu'un « est-ce non nul ? » posé dessus.
+  Réécrire le test ailleurs pour savoir qui a parlé aurait fait deux implémentations de la
+  même règle, et l'une des deux aurait fini par mentir sans qu'on sache laquelle. Une mutation
+  vérifie que les deux fonctions restent d'accord.
+- Les **8 mutations** du banc sont détectées, chacune par le test visé — dont le franchissement
+  de minuit et la divergence garde/source.
+
+**Mesuré sur la nuit du 16/08/2026** : pluie finie à 05:52, garde encore vraie à 06:20 par la
+mesure. Avant, l'averse était horodatée 06:20 et le ressuyage courait jusqu'à 09:20 ; désormais
+elle est horodatée 05:52 et il s'arrête à 08:52.
+
 ## 0.54.0
 
 1110 tests verts. **La garde « il pleut en ce moment » reçoit enfin une MESURE.** Jusqu'ici

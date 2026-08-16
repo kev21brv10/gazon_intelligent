@@ -16,7 +16,7 @@ except Exception:  # pragma: no cover - repli hors Home Assistant (tests, enviro
     dt_util = None
 
 from .decision_models import DecisionContext
-from .guidance import compute_tonte_statut, is_active_rain_weather
+from .guidance import active_rain_source, compute_tonte_statut, is_active_rain_weather
 from .memory import compute_application_state
 from .water import (
     HISTORY_DATE_ONLY_FALLBACK_HOUR,
@@ -635,9 +635,42 @@ def _minutes_depuis_derniere_pluie(context: DecisionContext) -> float | None:
 
 
 def _etat_pluie(context: DecisionContext, il_pleut: bool) -> dict[str, Any] | None:
-    """Horodatage à persister : mis à jour tant qu'il pleut, conservé ensuite."""
+    """Horodatage à persister : mis à jour tant qu'il pleut, conservé ensuite.
+
+    ⚠️ QUAND SEULE LA MESURE PARLE, ON RECULE JUSQU'À LA DERNIÈRE HAUSSE. La garde reste vraie
+    30 min après le dernier tic du pluviomètre — c'est voulu, une averse fait des pauses. Mais
+    horodater « maintenant » pendant ces 30 min prolongerait d'autant le ressuyage, qui court
+    déjà 180 min : la tondeuse attendrait 3 h 30 au lieu de 3 h pour une pluie finie.
+
+    ⚠️ L'horodatage NE RECULE JAMAIS. La prévision peut affirmer la pluie plus longtemps que le
+    pluviomètre ne la mesure ; si elle a déjà horodaté plus tard, on garde son constat. Le
+    correctif ne fait que supprimer le rab, il ne raccourcit jamais un ressuyage déjà justifié.
+    """
     if il_pleut and context.hour_of_day is not None:
-        return {"date": context.today.isoformat(), "heure": round(float(context.hour_of_day), 3)}
+        # Ancienneté du constat qu'on s'apprête à écrire : 0 min pour « il pleut maintenant »,
+        # l'âge de la dernière hausse quand seul le pluviomètre parle.
+        recul_minutes = 0.0
+        if active_rain_source(context.weather_profile) == "mesure":
+            profil = context.weather_profile if isinstance(context.weather_profile, dict) else {}
+            depuis = _to_float_safe(profil.get("pluie_mesuree_minutes_depuis_hausse"))
+            if depuis is not None and depuis > 0.0:
+                recul_minutes = depuis
+
+        precedent_minutes = _minutes_depuis_derniere_pluie(context)
+        memoire = context.memory if isinstance(context.memory, dict) else {}
+        precedent = memoire.get(_PLUIE_STATE_KEY)
+        if (
+            precedent_minutes is not None
+            and precedent_minutes < recul_minutes
+            and isinstance(precedent, dict)
+        ):
+            return dict(precedent)  # déjà noté plus récemment : ne jamais reculer
+
+        jour = context.today
+        heure = float(context.hour_of_day) - recul_minutes / 60.0
+        if heure < 0.0:  # la hausse est tombée avant minuit
+            jour, heure = jour - timedelta(days=1), heure + 24.0
+        return {"date": jour.isoformat(), "heure": round(heure, 3)}
     memoire = context.memory if isinstance(context.memory, dict) else {}
     precedent = memoire.get(_PLUIE_STATE_KEY)
     return dict(precedent) if isinstance(precedent, dict) else None

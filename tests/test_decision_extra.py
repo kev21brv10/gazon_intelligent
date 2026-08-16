@@ -3885,6 +3885,109 @@ class TestRessuyageApresPluie(unittest.TestCase):
         self.assertIsNone(decision_mowing._minutes_depuis_derniere_pluie(self._ctx(heure=12.0, memoire={})))
 
 
+class TestHorodatageSurLaDerniereHausse(unittest.TestCase):
+    """L'averse est horodatée à sa DERNIÈRE HAUSSE mesurée, pas au dernier cycle de garde.
+
+    ⚠️ POURQUOI. Depuis la 0.54.0 la garde « il pleut » reste vraie 30 min après le dernier tic
+    du pluviomètre — voulu, une averse fait des pauses. Mais horodater « maintenant » pendant
+    ces 30 min prolonge d'autant le ressuyage, qui court déjà 180 min : 3 h 30 d'attente pour
+    une pluie finie. On recule donc jusqu'à la hausse.
+
+    ⚠️ ET JAMAIS EN ARRIÈRE. La prévision peut affirmer la pluie plus longtemps que le
+    pluviomètre ne la mesure ; le correctif supprime le rab, il ne raccourcit jamais un
+    ressuyage déjà justifié.
+    """
+
+    def _ctx(self, *, heure, memoire=None, condition="sunny", depuis=None, mesure=None,
+             jour=date(2026, 8, 16)):
+        profil = {"weather_condition": condition}
+        if mesure is not None:
+            profil["pluie_mesuree_active"] = mesure
+        if depuis is not None:
+            profil["pluie_mesuree_minutes_depuis_hausse"] = depuis
+        return decision.DecisionContext.from_legacy_args(
+            history=[], today=jour, hour_of_day=heure, temperature=20.0, humidite=60.0,
+            memory=memoire if memoire is not None else {}, weather_profile=profil,
+            runtime_context={"mowing_cooldown_after_watering_minutes": 180},
+        )
+
+    def test_la_source_dit_qui_a_parle(self) -> None:
+        self.assertEqual(guidance.active_rain_source({"weather_condition": "rainy"}), "prevision")
+        self.assertEqual(
+            guidance.active_rain_source({"weather_precipitation_probability": 90}), "prevision"
+        )
+        self.assertEqual(guidance.active_rain_source({"pluie_mesuree_active": True}), "mesure")
+        self.assertIsNone(guidance.active_rain_source({"weather_condition": "sunny"}))
+
+    def test_la_garde_reste_le_meme_predicat_que_la_source(self) -> None:
+        """⚠️ Deux implémentations de la même règle finiraient par diverger."""
+        for profil in (
+            {"weather_condition": "rainy"},
+            {"weather_condition": "sunny", "pluie_mesuree_active": True},
+            {"weather_condition": "sunny", "pluie_mesuree_active": None},
+            {"weather_precipitation_probability": 90},
+            {},
+        ):
+            with self.subTest(profil=profil):
+                self.assertEqual(
+                    guidance.is_active_rain_weather(profil),
+                    guidance.active_rain_source(profil) is not None,
+                )
+
+    def test_seule_la_mesure_parle_on_recule_jusqu_a_la_hausse(self) -> None:
+        etat = decision_mowing._etat_pluie(
+            self._ctx(heure=6.25, condition="cloudy", mesure=True, depuis=25.0), True
+        )
+        self.assertEqual(etat["date"], "2026-08-16")
+        self.assertAlmostEqual(etat["heure"], 6.25 - 25.0 / 60.0, places=3)
+
+    def test_la_prevision_parle_on_horodate_maintenant(self) -> None:
+        """Elle affirme une pluie à l'INSTANT — reculer inventerait une accalmie."""
+        etat = decision_mowing._etat_pluie(
+            self._ctx(heure=6.25, condition="rainy", mesure=True, depuis=25.0), True
+        )
+        self.assertAlmostEqual(etat["heure"], 6.25, places=3)
+
+    def test_l_horodatage_ne_recule_jamais(self) -> None:
+        memoire = {"derniere_pluie_active": {"date": "2026-08-16", "heure": 6.0}}
+        etat = decision_mowing._etat_pluie(
+            self._ctx(heure=6.1, condition="cloudy", mesure=True, depuis=30.0, memoire=memoire),
+            True,
+        )
+        self.assertEqual(etat, {"date": "2026-08-16", "heure": 6.0})
+
+    def test_une_hausse_plus_recente_remplace_le_constat(self) -> None:
+        memoire = {"derniere_pluie_active": {"date": "2026-08-16", "heure": 5.0}}
+        etat = decision_mowing._etat_pluie(
+            self._ctx(heure=6.0, condition="cloudy", mesure=True, depuis=6.0, memoire=memoire),
+            True,
+        )
+        self.assertAlmostEqual(etat["heure"], 5.9, places=3)
+
+    def test_une_hausse_avant_minuit(self) -> None:
+        etat = decision_mowing._etat_pluie(
+            self._ctx(heure=0.25, condition="cloudy", mesure=True, depuis=30.0), True
+        )
+        self.assertEqual(etat["date"], "2026-08-15")
+        self.assertAlmostEqual(etat["heure"], 23.75, places=3)
+
+    def test_sans_mesure_le_comportement_d_avant_est_intact(self) -> None:
+        etat = decision_mowing._etat_pluie(self._ctx(heure=10.0, condition="rainy"), True)
+        self.assertEqual(etat, {"date": "2026-08-16", "heure": 10.0})
+
+    def test_la_nuit_du_16_aout_le_ressuyage_va_jusqu_au_bout(self) -> None:
+        """Le cas réel. Pluie finie à 05:52, garde encore vraie à 06:20 par la mesure.
+
+        Avant : horodaté 06:20 ⇒ ressuyage jusqu'à 09:20. Après : 05:52 ⇒ 08:52.
+        """
+        etat = decision_mowing._etat_pluie(
+            self._ctx(heure=6.0 + 20.0 / 60.0, condition="cloudy", mesure=True, depuis=28.0), True
+        )
+        fin_ressuyage = etat["heure"] + 3.0
+        self.assertAlmostEqual(etat["heure"], 5.0 + 52.0 / 60.0, places=2)
+        self.assertLess(fin_ressuyage, 9.0, "le ressuyage déborde encore de la fin réelle")
+
+
 class TestHeureDecimale(unittest.TestCase):
     """La pousse avançait par PALIERS D'UNE HEURE : `hour_of_day` était un entier.
 
