@@ -188,12 +188,25 @@ def is_active_rain_weather(weather_profile: dict[str, Any] | None) -> bool:
     RIEN et laisse les deux bras météo décider. Le test est donc `is True`, jamais la
     valeur brute — un `None` traité comme vrai bloquerait l'arrosage sur un capteur muet.
     """
+    return active_rain_source(weather_profile) is not None
+
+
+def active_rain_source(weather_profile: dict[str, Any] | None) -> str | None:
+    """Laquelle des entrées conclut à la pluie — `"mesure"`, `"prevision"`, ou `None`.
+
+    ⚠️ SOURCE UNIQUE DE LA RÈGLE. `is_active_rain_weather` n'est qu'un « est-ce non nul ? »
+    posé dessus : réécrire le test ailleurs pour savoir QUI a parlé ferait deux
+    implémentations de la même règle, et l'une des deux finirait par mentir sans qu'on sache
+    laquelle (même raison que le plafond d'échantillon partagé, côté coordinateur).
+
+    ⚠️ La prévision l'emporte quand les deux concluent : elle affirme une pluie à l'INSTANT,
+    là où la mesure ne prouve qu'une hausse dans les 30 dernières minutes. C'est ce qui permet
+    d'horodater l'averse au plus juste — voir `_etat_pluie` (decision_mowing).
+    """
     weather_profile = weather_profile or {}
-    if weather_profile.get("pluie_mesuree_active") is True:
-        return True
     condition = str(weather_profile.get("weather_condition") or "").strip().lower()
     if condition in RAINY_WEATHER_CONDITIONS:
-        return True
+        return "prevision"
     precipitation_probability = weather_profile.get("weather_precipitation_probability")
     try:
         precipitation_probability = (
@@ -203,7 +216,13 @@ def is_active_rain_weather(weather_profile: dict[str, Any] | None) -> bool:
         )
     except (TypeError, ValueError):
         precipitation_probability = None
-    return precipitation_probability is not None and precipitation_probability >= 80.0
+    if precipitation_probability is not None and precipitation_probability >= 80.0:
+        return "prevision"
+    # ⚠️ `is True`, jamais la valeur brute : `None` veut dire « aucun capteur ne répond », et
+    # un `None` traité comme vrai bloquerait l'arrosage sur un pluviomètre muet.
+    if weather_profile.get("pluie_mesuree_active") is True:
+        return "mesure"
+    return None
 
 
 def _temperature_band(temperature: float | None) -> str:
