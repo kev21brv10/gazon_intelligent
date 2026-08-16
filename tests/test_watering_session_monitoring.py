@@ -5337,3 +5337,211 @@ class ResetDuCarnetDePassesTests(unittest.TestCase):
         self.assertIn("reset_mower_passes:", yaml_src)
         init_src = (PACKAGE_DIR / "__init__.py").read_text(encoding="utf-8")
         self.assertIn("SERVICE_RESET_MOWER_PASSES,\n        _handle_reset_mower_passes,", init_src)
+
+
+class PluieMesureeTests(unittest.TestCase):
+    """La garde « il pleut » reçoit enfin une MESURE, pas seulement une prévision.
+
+    ⚠️ POURQUOI CES TESTS EXISTENT. Nuit du 16/08/2026, mesuré à la seconde :
+
+        00:12      pluviomètre 0,1 mm — la pluie commence     météo : partlycloudy
+        02:05:42   1,2 mm, il pleut toujours                  météo : clear-night
+                   └→ 45 ms plus tard : 5 mm autorisés, `execution_autorisee: true`
+        03:59:47   2,4 mm                                     météo : rainy
+
+    3 h 47 pendant lesquelles la seule entrée de la garde s'est trompée, et c'est la
+    PRÉVISION qui a débloqué pendant qu'une mesure disait le contraire.
+    """
+
+    def _coord(self, instant, runtime=None):
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord._runtime_state = runtime if runtime is not None else {}
+        coord._current_datetime = lambda: instant
+        coord._parse_datetime_value = (
+            coordinator_mod.GazonIntelligentCoordinator._parse_datetime_value.__get__(coord)
+        )
+        return coord
+
+    def _rejouer(self, lectures, *, depart=None, coord=None):
+        """Rejoue une suite (minutes, cumul_mm) et rend la dernière sortie publiée."""
+        t0 = depart or datetime(2026, 8, 16, 0, 0, tzinfo=timezone.utc)
+        coord = coord or self._coord(t0)
+        sortie = {}
+        for minutes, cumul in lectures:
+            instant = t0 + timedelta(minutes=minutes)
+            coord._current_datetime = lambda t=instant: t
+            sortie = coord._suivre_pluie_mesuree(cumul)
+        return sortie, coord
+
+    # ── le détecteur de hausse ────────────────────────────────────────────────────────
+    def test_sans_capteur_la_reponse_est_inconnue_jamais_un_non(self) -> None:
+        """⚠️ Le cœur du correctif : une absence ne doit pas devenir « il ne pleut pas »."""
+        sortie, _ = self._rejouer([(0, None)])
+        self.assertIsNone(sortie["pluie_mesuree_active"])
+        self.assertIsNone(sortie["pluie_mesuree_cumul_mm"])
+
+    def test_premiere_lecture_ne_conclut_rien(self) -> None:
+        sortie, _ = self._rejouer([(0, 1.2)])
+        self.assertIsNone(sortie["pluie_mesuree_active"])
+        self.assertEqual(sortie["pluie_mesuree_cumul_mm"], 1.2)
+
+    def test_une_hausse_signe_une_pluie_en_cours(self) -> None:
+        sortie, _ = self._rejouer([(0, 1.2), (6, 1.8)])
+        self.assertIs(sortie["pluie_mesuree_active"], True)
+        self.assertEqual(sortie["pluie_mesuree_minutes_depuis_hausse"], 0.0)
+
+    def test_un_cumul_stable_n_est_pas_une_pluie(self) -> None:
+        """Le cumul reste affiché toute la journée après l'averse : la VALEUR ne dit rien."""
+        sortie, _ = self._rejouer([(0, 3.2), (6, 3.2), (12, 3.2)])
+        self.assertIs(sortie["pluie_mesuree_active"], False)
+
+    def test_l_averse_expire_apres_la_fenetre(self) -> None:
+        sortie, _ = self._rejouer([(0, 1.2), (6, 1.8), (6 + 31, 1.8)])
+        self.assertIs(sortie["pluie_mesuree_active"], False)
+        self.assertEqual(sortie["pluie_mesuree_minutes_depuis_hausse"], 31.0)
+
+    def test_l_averse_tient_pendant_toute_la_fenetre(self) -> None:
+        sortie, _ = self._rejouer([(0, 1.2), (6, 1.8), (6 + 29, 1.8)])
+        self.assertIs(sortie["pluie_mesuree_active"], True)
+
+    def test_une_baisse_est_une_remise_a_zero_pas_une_pluie_negative(self) -> None:
+        """⚠️ Mesuré 10 fois le 04/08/2026 en une journée : le capteur redescend.
+
+        Une baisse ne doit ni compter comme une averse, ni effacer la fraîcheur de
+        l'averse précédente — et la lecture suivante doit se comparer à la NOUVELLE
+        référence, sinon la remontée d'après serait vue comme une hausse fantôme.
+        """
+        sortie, coord = self._rejouer([(0, 2.2), (6, 2.3), (12, 1.8)])
+        # La baisse elle-même n'horodate pas : on reste sur la fraîcheur de la hausse de +6 min.
+        self.assertIs(sortie["pluie_mesuree_active"], True)
+        self.assertEqual(sortie["pluie_mesuree_minutes_depuis_hausse"], 6.0)
+        self.assertEqual(coord._runtime_state["pluie_mesuree"]["dernier_cumul"], 1.8)
+
+    def test_la_nuit_du_16_aout(self) -> None:
+        """Le cas réel : la garde doit mordre AVANT que la prévision ne bascule."""
+        t0 = datetime(2026, 8, 16, 0, 12, tzinfo=timezone.utc)
+        sortie, _ = self._rejouer(
+            [(0, 0.1), (7, 0.3), (25, 0.6), (97, 1.0), (103, 1.2), (113, 1.8)],
+            depart=t0,
+        )
+        self.assertIs(sortie["pluie_mesuree_active"], True)
+
+    def test_un_suivi_casse_ne_fait_pas_tomber_le_cycle(self) -> None:
+        coord = self._coord(datetime(2026, 8, 16, 2, 0, tzinfo=timezone.utc))
+        coord._runtime_state = {"pluie_mesuree": {"dernier_cumul": "n'importe quoi"}}
+        sortie = coord._suivre_pluie_mesuree(1.8)
+        self.assertIn("pluie_mesuree_active", sortie)
+
+    # ── la garde elle-même ────────────────────────────────────────────────────────────
+    def test_la_mesure_prime_sur_une_prevision_qui_annonce_ciel_clair(self) -> None:
+        """⚠️ LE DÉFAUT DU 16/08 : `clear-night` pendant qu'il pleut pour de bon."""
+        guidance = importlib.import_module("custom_components.gazon_intelligent.guidance")
+        profil = {"weather_condition": "clear-night", "pluie_mesuree_active": True}
+        self.assertTrue(guidance.is_active_rain_weather(profil))
+
+    def test_sans_mesure_les_bras_meteo_decident_encore(self) -> None:
+        """Aucune régression : le correctif AJOUTE une entrée, il n'en retire aucune."""
+        guidance = importlib.import_module("custom_components.gazon_intelligent.guidance")
+        self.assertTrue(
+            guidance.is_active_rain_weather(
+                {"weather_condition": "rainy", "pluie_mesuree_active": None}
+            )
+        )
+        self.assertTrue(
+            guidance.is_active_rain_weather(
+                {"weather_condition": "sunny", "weather_precipitation_probability": 90}
+            )
+        )
+
+    def test_une_mesure_inconnue_ne_bloque_pas_a_elle_seule(self) -> None:
+        """⚠️ `None` traité comme vrai bloquerait l'arrosage sur un capteur muet."""
+        guidance = importlib.import_module("custom_components.gazon_intelligent.guidance")
+        for absence in (None, "unknown", ""):
+            with self.subTest(absence=absence):
+                self.assertFalse(
+                    guidance.is_active_rain_weather(
+                        {"weather_condition": "sunny", "pluie_mesuree_active": absence}
+                    )
+                )
+
+    def test_une_mesure_seche_ne_debloque_pas_une_pluie_annoncee(self) -> None:
+        guidance = importlib.import_module("custom_components.gazon_intelligent.guidance")
+        self.assertTrue(
+            guidance.is_active_rain_weather(
+                {"weather_condition": "pouring", "pluie_mesuree_active": False}
+            )
+        )
+
+    # ── le câblage, depuis la SORTIE RÉELLE ───────────────────────────────────────────
+    def test_les_cles_publiees_traversent_advanced_context(self) -> None:
+        """⚠️ On part des clés que le coordinateur produit VRAIMENT, pas d'une liste écrite ici.
+
+        `compute_advanced_context` recopie la météo clé par clé (piège n°2 du projet) :
+        une clé oubliée là meurt en silence, tests verts.
+        """
+        _, coord = self._rejouer([(0, 1.2), (6, 1.8)])
+        produites = set(coord._suivre_pluie_mesuree(1.9))
+        contexte = water_mod.compute_advanced_context(
+            weather_profile={cle: True for cle in produites}
+        )
+        self.assertTrue(
+            produites <= set(contexte),
+            f"clés perdues dans advanced_context : {sorted(produites - set(contexte))}",
+        )
+
+    def test_la_garde_mord_par_le_chemin_advanced_context(self) -> None:
+        """Le bout du câblage : de la mesure jusqu'au booléen, via le contexte réellement bâti."""
+        guidance = importlib.import_module("custom_components.gazon_intelligent.guidance")
+        _, coord = self._rejouer([(0, 1.2), (6, 1.8)])
+        profil = {"weather_condition": "clear-night", **coord._suivre_pluie_mesuree(1.9)}
+        contexte = water_mod.compute_advanced_context(weather_profile=profil)
+        self.assertTrue(guidance.is_active_rain_weather(contexte))
+
+    def test_le_suivi_survit_a_un_redemarrage(self) -> None:
+        """Non persisté, la garde repartirait aveugle en pleine averse."""
+        _, coord = self._rejouer([(0, 1.2), (6, 1.8)])
+        # ⚠️ Par `_serialized_runtime_state()`, la VRAIE méthode qui bâtit le dict persisté :
+        # sérialiser la valeur à la main prouverait qu'elle est sérialisable, pas qu'elle
+        # figure dans la liste blanche — un test qui survit à la suppression de la clé.
+        coord._serialize_runtime_value = (
+            coordinator_mod.GazonIntelligentCoordinator._serialize_runtime_value.__get__(coord)
+        )
+        coord._ensure_irrigation_runtime_bootstrap = lambda: None
+        coord._runtime_state.setdefault("active_irrigation_session", None)
+        coord._runtime_state.setdefault("last_irrigation_execution", None)
+        serialise = coordinator_mod.GazonIntelligentCoordinator._serialized_runtime_state(coord)
+        self.assertIn("pluie_mesuree", serialise, "le suivi n'atteint pas le disque")
+
+        relu = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        relu._restore_runtime_state(serialise)
+        self.assertEqual(
+            relu._runtime_state["pluie_mesuree"]["dernier_cumul"],
+            coord._runtime_state["pluie_mesuree"]["dernier_cumul"],
+        )
+        self.assertIsNotNone(relu._runtime_state["pluie_mesuree"]["derniere_hausse"])
+
+    def test_la_garde_mesuree_est_visible_dans_sensor_health(self) -> None:
+        """Un garde muet est indiscernable d'un garde cassé — celui-ci l'a été des mois."""
+        _, coord = self._rejouer([(0, 1.2), (6, 1.8)])
+        coord._get_conf = lambda _cle: None
+        profil = coord._suivre_pluie_mesuree(1.9)
+        sante = coordinator_mod.GazonIntelligentCoordinator._build_sensor_health(
+            coord,
+            temperature_source="capteur",
+            humidite_capteur=None,
+            vent_capteur=None,
+            etp_capteur=None,
+            pluie_24h_sensor=1.9,
+            weather_profile=profil,
+            eto_hourly={},
+        )
+        self.assertIs(sante["pluie_mesuree_active"], True)
+        self.assertEqual(sante["pluie_mesuree_minutes_depuis_hausse"], 0.0)
+
+    def test_la_garde_est_nourrie_par_le_capteur_pas_par_la_prevision(self) -> None:
+        """⚠️ Le repli prévision de `pluie_24h` ramènerait l'aveuglement qu'on vient de corriger."""
+        source = (PACKAGE_DIR / "coordinator.py").read_text(encoding="utf-8")
+        self.assertIn(
+            "weather_profile.update(self._suivre_pluie_mesuree(pluie_24h_sensor))",
+            source,
+        )

@@ -176,7 +176,21 @@ SURSEMIS_POLICY_CONFIGS: dict[str, dict[str, float | str]] = {
 
 
 def is_active_rain_weather(weather_profile: dict[str, Any] | None) -> bool:
+    """Pleut-il en ce moment ? Trois entrées, dont UNE SEULE est une mesure.
+
+    ⚠️ L'ordre n'est pas indifférent : la mesure passe en PREMIER. Jusqu'au 16/08/2026 cette
+    fonction ne lisait qu'une entité de PRÉVISION, et son second bras (la probabilité) est
+    toujours nul — elle n'avait donc, en pratique, qu'une entrée, et cette entrée s'est trompée
+    3 h 47 d'affilée pendant qu'il pleuvait pour de bon (2,4 mm au pluviomètre, `clear-night` à
+    la prévision). Le pluviomètre tranche désormais avant elle.
+
+    ⚠️ `pluie_mesuree_active` vaut `None` quand aucun capteur ne répond : l'absence ne dit
+    RIEN et laisse les deux bras météo décider. Le test est donc `is True`, jamais la
+    valeur brute — un `None` traité comme vrai bloquerait l'arrosage sur un capteur muet.
+    """
     weather_profile = weather_profile or {}
+    if weather_profile.get("pluie_mesuree_active") is True:
+        return True
     condition = str(weather_profile.get("weather_condition") or "").strip().lower()
     if condition in RAINY_WEATHER_CONDITIONS:
         return True

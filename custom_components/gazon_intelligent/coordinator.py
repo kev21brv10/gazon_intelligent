@@ -203,6 +203,29 @@ _BATTERIE_RETOUR_VIDE_PCT: float = 20.0
 # varie » que ce projet traque.
 _PASSES_MIN_POUR_APPRENDRE: int = 3
 
+# ── PLUIE MESURÉE ─────────────────────────────────────────────────────────────────────────
+# La garde « il pleut en ce moment » n'avait qu'UNE entrée : la chaîne d'état d'une entité de
+# PRÉVISION. Son second bras (`weather_precipitation_probability ≥ 80`) est toujours nul, la
+# 0.44.0 l'avait déjà noté. Mesuré la nuit du 16/08/2026 :
+#
+#     00:12      pluviomètre 0,1 mm — la pluie COMMENCE     météo : partlycloudy
+#     02:05:42   1,2 mm, il pleut toujours                  météo : clear-night
+#                └→ 45 ms plus tard : 5 mm AUTORISÉS, `execution_autorisee: true`
+#     03:59:47   2,4 mm                                     météo : rainy → la garde mord enfin
+#
+# 3 h 47 d'aveuglement, et c'est la prévision qui a DÉBLOQUÉ pendant qu'une mesure disait le
+# contraire. Ce jour-là seuls le bilan hydrique (qui a compté la pluie réelle) et l'horaire ont
+# évité l'arrosage sous l'averse. La garde reçoit donc ici une entrée MESURÉE.
+#
+# ⚠️ Le capteur configuré est un CUMUL (24 h glissantes) : sa VALEUR ne dit pas s'il pleut,
+# seulement combien il est tombé — 3,2 mm restent affichés une journée entière après l'averse.
+# Ce qui signe une averse EN COURS, c'est sa HAUSSE. On garde donc la dernière lecture et
+# l'instant de la dernière hausse, et on ne conclut que sur la fraîcheur de cette hausse.
+_PLUIE_MESUREE_FENETRE_MINUTES: float = 30.0
+# Pas de mesure du pluviomètre (0,1 mm). Le seuil s'intercale entre le bruit flottant (1e-9) et
+# le plus petit incrément réel, donc toute vraie hausse est vue et aucune ne s'invente.
+_PLUIE_MESUREE_HAUSSE_MIN_MM: float = 0.05
+
 # Fenêtres pour lesquelles un renoncement à arroser est un vrai REFUS, digne d'être tracé.
 # Doit rester un sous-ensemble de `POSSIBLE_FENETRE_OPTIMALE_VALUES` (decision_models.py) :
 # une valeur inventée ici désactive silencieusement la trace pour cette fenêtre.
@@ -817,6 +840,10 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         weather_profile["et_elapsed_fraction"] = self._et_elapsed_fraction(sun_context)
         pluie_24h_sensor = self._validate_sensor_value(pluie_24h_sensor, "pluie")
         pluie_demain_sensor = self._validate_sensor_value(pluie_demain_sensor, "pluie")
+        # ⚠️ Sur `pluie_24h_sensor` — le capteur RÉEL — et surtout pas sur `pluie_24h`, qui
+        # retombe sur la prévision quand le capteur manque. Nourrir la garde « il pleut » avec
+        # un repli météo la ramènerait exactement à l'aveuglement qu'elle vient de corriger.
+        weather_profile.update(self._suivre_pluie_mesuree(pluie_24h_sensor))
         pluie_24h, pluie_24h_source, pluie_demain, pluie_demain_source = self._resolve_precipitation_inputs(
             pluie_24h_sensor=pluie_24h_sensor,
             pluie_demain_sensor=pluie_demain_sensor,
@@ -1780,6 +1807,65 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return ecoule
         return 0.0
 
+    def _suivre_pluie_mesuree(self, cumul_mm: float | None) -> dict[str, Any]:
+        """Dit s'il pleut EN CE MOMENT, d'après le pluviomètre et non d'après la prévision.
+
+        ⚠️ On reçoit un CUMUL, pas une intensité : 3,2 mm restent affichés toute la journée
+        après l'averse. C'est la HAUSSE qui signe une pluie en cours, jamais la valeur.
+
+        ⚠️ Une BAISSE n'est pas une pluie négative : c'est la remise à zéro du capteur, et elle
+        est fréquente ici — mesurée 10 fois le 04/08/2026 en une seule journée. On se recale
+        alors sur la nouvelle valeur SANS horodater, et l'averse précédente garde sa fraîcheur.
+
+        ⚠️ Sans capteur, sans lecture, ou au tout premier cycle, la réponse est `None` et non
+        `False` : « je ne sais pas » ne doit pas se transformer en « il ne pleut pas », sans
+        quoi on aurait remplacé un aveuglement par un autre.
+        """
+        vide: dict[str, Any] = {
+            "pluie_mesuree_active": None,
+            "pluie_mesuree_cumul_mm": None,
+            "pluie_mesuree_minutes_depuis_hausse": None,
+        }
+        try:
+            cumul = _to_float_or_none(cumul_mm)
+            if cumul is None:
+                return vide
+
+            maintenant = self._current_datetime()
+            suivi = self._runtime_state.get("pluie_mesuree")
+            if not isinstance(suivi, dict):
+                suivi = {}
+
+            precedent = _to_float_or_none(suivi.get("dernier_cumul"))
+            derniere_hausse = suivi.get("derniere_hausse")
+
+            if precedent is not None and cumul - precedent >= _PLUIE_MESUREE_HAUSSE_MIN_MM:
+                derniere_hausse = maintenant.isoformat()
+
+            suivi["dernier_cumul"] = cumul
+            suivi["derniere_hausse"] = derniere_hausse
+            self._runtime_state["pluie_mesuree"] = suivi
+
+            if precedent is None:
+                # Première lecture : aucune comparaison possible, donc aucune conclusion.
+                return {**vide, "pluie_mesuree_cumul_mm": cumul}
+
+            depuis = None
+            horodatage = self._parse_datetime_value(derniere_hausse)
+            if horodatage is not None:
+                ecoule = (maintenant - horodatage).total_seconds() / 60.0
+                if ecoule >= 0.0:
+                    depuis = round(ecoule, 1)
+
+            return {
+                "pluie_mesuree_active": depuis is not None and depuis <= _PLUIE_MESUREE_FENETRE_MINUTES,
+                "pluie_mesuree_cumul_mm": cumul,
+                "pluie_mesuree_minutes_depuis_hausse": depuis,
+            }
+        except Exception:  # noqa: BLE001 — un suivi d'observation ne fait jamais tomber le cycle
+            _LOGGER.debug("Suivi de la pluie mesurée indisponible", exc_info=True)
+            return vide
+
     def _suivre_fiabilite_tondeuse(self, mower_context: dict[str, Any]) -> dict[str, Any]:
         """Cumule le temps bloqué et le temps tondu de la journée, et en tire un état.
 
@@ -2222,6 +2308,18 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # (`pluie_24h is not None or pluie_24h_sensor is None`) était donc toujours vraie et le
             # voyant ne pouvait jamais signaler un capteur pluie en panne. Même forme que etp_valid.
             "pluie_valid": pluie_24h_sensor is not None or self._get_conf(CONF_CAPTEUR_PLUIE_24H) is None,
+            # ⚠️ RENDRE LA GARDE VISIBLE. « Il pleut en ce moment » a bloqué et débloqué
+            # l'arrosage pendant des mois sans qu'aucune sortie ne dise sur quoi elle se
+            # fondait — un garde muet est indiscernable d'un garde cassé (même leçon que
+            # `mower_auto_declaration_state`). On publie donc son entrée MESURÉE, à côté du
+            # `weather_condition` déjà lisible ailleurs : les deux bras deviennent comparables,
+            # et la nuit du 16/08 se relit d'un coup d'œil. Placé dans `sensor_health`, qui est
+            # DÉJÀ publié comme un dict : aucune liste blanche à traverser, donc aucun des
+            # chemins qui cassent en silence sur ce projet.
+            "pluie_mesuree_active": weather_profile.get("pluie_mesuree_active"),
+            "pluie_mesuree_minutes_depuis_hausse": weather_profile.get(
+                "pluie_mesuree_minutes_depuis_hausse"
+            ),
             "etp_valid": etp_capteur is not None or self._get_conf(CONF_CAPTEUR_ETP) is None,
             "humidity_valid": (
                 humidite_capteur is not None or self._get_conf(CONF_CAPTEUR_HUMIDITE) is None
@@ -3071,6 +3169,12 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "mower_passes": self._serialize_runtime_value(
                 self._runtime_state.get("mower_passes")
             ),
+            # Même piège encore : sans persistance, un redémarrage efface la référence ET
+            # l'horodatage de la dernière hausse. La garde « il pleut » repartirait alors
+            # aveugle en pleine averse — précisément ce qu'elle vient de corriger.
+            "pluie_mesuree": self._serialize_runtime_value(
+                self._runtime_state.get("pluie_mesuree")
+            ),
             "persisted_watering_session": persisted_watering_session,
             "last_irrigation_execution_persisted": self._serialize_runtime_value(last_execution),
         }
@@ -3132,6 +3236,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # sur le disque puis ignoré au rechargement — pire qu'absent, car invisible.
             "mower_health": runtime.get("mower_health"),
             "mower_passes": runtime.get("mower_passes"),
+            "pluie_mesuree": runtime.get("pluie_mesuree"),
         }
 
     def _get_active_irrigation_session(self) -> dict[str, Any] | None:
