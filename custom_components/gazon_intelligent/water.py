@@ -961,6 +961,15 @@ def compute_advanced_context(
         "weather_dew_point": weather_profile.get("weather_dew_point"),
         "weather_uv_index": weather_profile.get("weather_uv_index"),
         "weather_condition": weather_profile.get("weather_condition"),
+        # ⚠️ RECOPIE CLÉ PAR CLÉ — pas de `**weather_profile`. Sans cette ligne, la pluie
+        # MESURÉE n'atteindrait jamais `is_active_rain_weather` par le chemin
+        # `advanced_context` (guidance.py), et la garde resterait aveugle de ce côté-là
+        # sans qu'aucun test ne rougisse. C'est le piège n°2 du projet.
+        "pluie_mesuree_active": weather_profile.get("pluie_mesuree_active"),
+        "pluie_mesuree_cumul_mm": weather_profile.get("pluie_mesuree_cumul_mm"),
+        "pluie_mesuree_minutes_depuis_hausse": weather_profile.get(
+            "pluie_mesuree_minutes_depuis_hausse"
+        ),
     }
 
 

@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.54.0
+
+1110 tests verts. **La garde « il pleut en ce moment » reçoit enfin une MESURE.** Jusqu'ici
+elle ne lisait qu'une entité de *prévision* — et son second bras (`weather_precipitation_probability ≥ 80`)
+est toujours nul, la 0.44.0 l'avait déjà noté. Elle n'avait donc, en pratique, qu'une entrée.
+
+Nuit du 16/08/2026, mesurée à la seconde :
+
+```
+00:12      pluviomètre 0,1 mm — la pluie COMMENCE     météo : partlycloudy
+02:05:42   1,2 mm, il pleut toujours                  météo : clear-night
+           └→ 45 ms plus tard : 5 mm AUTORISÉS, execution_autorisee: true
+03:59:47   2,4 mm                                     météo : rainy → la garde mord enfin
+```
+
+**3 h 47 d'aveuglement**, et c'est la prévision qui a *débloqué* pendant qu'une mesure disait le
+contraire. Rien n'a été versé cette nuit-là, mais rien grâce à la garde : c'est le bilan
+hydrique qui a compté la pluie réelle, et l'horaire — la fenêtre n'ouvre qu'à 03:45.
+
+- **La mesure passe en premier**, avant les deux bras météo. Ceux-ci sont conservés tels quels :
+  le correctif *ajoute* une entrée, il n'en retire aucune.
+- **⚠️ C'est la HAUSSE du pluviomètre qui signe une averse, jamais sa valeur.** Le capteur
+  configuré est un cumul 24 h : 3,2 mm restent affichés une journée entière après la pluie.
+  Le suivi garde la dernière lecture et l'instant de la dernière hausse, et ne conclut que sur
+  la fraîcheur de cette hausse (30 min).
+- **⚠️ Une BAISSE n'est pas une pluie négative** : c'est la remise à zéro du capteur, mesurée
+  10 fois le 04/08/2026 en une seule journée. On se recale sans horodater, et l'averse
+  précédente garde sa fraîcheur.
+- **⚠️ L'absence reste une absence.** Sans capteur, sans lecture, ou au tout premier cycle, la
+  réponse est `None` et non `False` — et la garde teste `is True`, jamais la valeur brute.
+  Un `None` traité comme vrai bloquerait l'arrosage sur un capteur muet : on aurait remplacé
+  un aveuglement par un autre.
+- **Nourrie par le capteur, jamais par le repli prévision.** `pluie_24h` retombe sur la météo
+  quand le capteur manque ; c'est `pluie_24h_sensor` qui alimente la garde. Une mutation le
+  verrouille.
+- **La garde devient visible** : `pluie_mesuree_active` et `pluie_mesuree_minutes_depuis_hausse`
+  apparaissent dans `sensor_health`. Elle a bloqué et débloqué l'arrosage pendant des mois sans
+  qu'aucune sortie ne dise sur quoi elle se fondait — un garde muet est indiscernable d'un
+  garde cassé.
+- Le suivi est persisté : sans quoi un redémarrage la ferait repartir aveugle en pleine averse.
+- Les **14 mutations** du banc sont détectées, chacune par le test visé — dont la recopie clé
+  par clé de `compute_advanced_context` (piège n°2), où la clé serait morte en silence.
+
 ## 0.53.2
 
 1092 tests verts. **Le carnet de passes peut repartir de zéro** — nouveau service
