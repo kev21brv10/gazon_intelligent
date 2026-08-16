@@ -58,7 +58,10 @@
     padding: clamp(18px, 4vw, 56px) 18px 88px; }
   .col { max-width: 840px; margin: 0 auto; display: flex; flex-direction: column; gap: 1.6rem; }
   h1, h2 { font-family: var(--font-display); font-weight: 600; text-wrap: balance; line-height: 1.18; }
-  code, .mono { font-family: var(--font-mono); font-size: .86em; }
+  /* `overflow-wrap: anywhere` : un nom de service ou de clé (`start_application_irrigation`)
+     est un mot insécable. Sur écran étroit il poussait la PAGE entière en défilement latéral
+     au lieu de se couper. Le texte courant, lui, garde ses césures normales. */
+  code, .mono { font-family: var(--font-mono); font-size: .86em; overflow-wrap: anywhere; }
   p { margin: 0; max-width: 68ch; }
   strong { font-weight: 650; }
 
@@ -100,7 +103,7 @@
     border-bottom: 1px solid var(--line-strong); padding-bottom: .45rem; }
   .sec-head h2 { font-size: 1.32rem; margin: 0; }
   .tally { font-family: var(--font-mono); font-size: .76rem; font-weight: 650;
-    padding: .18em .6em; border-radius: 999px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    padding: .18em .6em; border-radius: 999px; font-variant-numeric: tabular-nums; }
   .tally.done { background: var(--accent-soft); color: var(--accent-ink); }
   .tally.todo { background: var(--mow-soft); color: var(--mow-ink); }
   .tally.info { background: var(--water-soft); color: var(--water-ink); }
@@ -111,12 +114,12 @@
   .card.todo { border-left: 3px solid var(--mow); }
   .card.hot  { border-left: 3px solid var(--heat); }
   .card.prd  { border-left: 3px solid var(--prod); }
-  .card-head { display: flex; align-items: center; justify-content: space-between; gap: .8rem; }
+  .card-head { display: flex; align-items: center; justify-content: space-between; gap: .8rem; flex-wrap: wrap; }
   .card-head h3 { font-size: 1.02rem; margin: 0; font-family: var(--font-body); font-weight: 650; }
   .card p { color: var(--muted); font-size: .95rem; }
   .card p.detail { color: var(--ink); }
   .chip { font-size: .67rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
-    padding: .26em .58em; border-radius: 999px; white-space: nowrap; }
+    padding: .26em .58em; border-radius: 999px; }
   .chip.ok   { background: var(--accent-soft); color: var(--accent-ink); }
   .chip.warn { background: var(--mow-soft); color: var(--mow-ink); }
   .chip.crit { background: var(--heat-soft); color: var(--heat-ink); }
@@ -136,7 +139,11 @@
   .callout.h { background: var(--heat-soft); border-color: color-mix(in srgb, var(--heat) 32%, transparent); border-left-color: var(--heat); }
   .callout.p { background: var(--prod-soft); border-color: color-mix(in srgb, var(--prod) 32%, transparent); border-left-color: var(--prod); }
 
-  .tbl-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+  /* `min-width: 0` : sans lui, un `.tbl-wrap` placé dans un conteneur flex (carte, encart)
+     refuse de descendre sous la largeur mini de sa table et fait déborder la PAGE au lieu de
+     défiler dans son cadre. Le débordement n'apparaît que sur écran étroit — invisible au
+     rendu de contrôle habituel, donc à poser une fois pour toutes ici. */
+  .tbl-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); min-width: 0; }
   table { border-collapse: collapse; width: 100%; font-size: .92rem; min-width: 480px; }
   th, td { text-align: left; padding: .6rem .8rem; border-bottom: 1px solid var(--line); vertical-align: top; }
   thead th { background: var(--surface-2); font-size: .73rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 650; }
@@ -1023,6 +1030,35 @@
 
   <!-- ═══ SANTÉ DU CODE ═══ -->
   <div class="panel" role="tabpanel" id="p-sante" aria-labelledby="t-sante" tabindex="0" hidden>
+    <section>
+      <div class="sec-head"><h2>16/08/2026 — la chaîne tondeuse validée en production</h2><span class="tally done">observé</span></div>
+      <p>Trois versions livrées à l'aveugle depuis le 08/08 se sont exercées <strong>le même jour, sur le terrain</strong>, et chacune sur le cas exact pour lequel elle avait été écrite.</p>
+
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th class="num">heure</th><th>fait mesuré</th><th>ce que ça valide</th></tr></thead>
+          <tbody>
+            <tr><td class="num">10:01 → 11:28</td><td>passe n°1 — <b>85 min</b>, retour au garage</td><td>carnet 0.53.0</td></tr>
+            <tr><td class="num">12:40 → 12:46</td><td>passe n°2 — <b>6,1 min</b>, batterie 98 % → 98 %</td><td>carnet 0.53.0</td></tr>
+            <tr class="r-good"><td class="num">12:46:23,416<br>12:46:24,786</td><td><code>tonte_autorisee</code> → <code>off</code> (30,8 °C)<br>la tondeuse rentre, <b>1,4 s plus tard</b></td><td><strong>motif <code>rappelee</code> — 0.53.1</strong></td></tr>
+            <tr class="r-good"><td class="num">cumul</td><td><b>90,2 min</b> pour un seuil de <b>90</b></td><td><strong>déclaration automatique — 0.52.0</strong></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p><strong>La déclaration est passée à 12 secondes près.</strong> <code>mower_auto_declared_today: true</code>, <code>mower_auto_declaration_state: deja_declaree</code> — l'intégration a inscrit la tonte elle-même, sans Node-RED, pour la première fois. Et le carnet n'a pas répété l'erreur du 13/08 : la passe de 6 min, rentrée à 98 % de batterie pendant une interdiction, est étiquetée <code>rappelee</code> et non « elle a décidé toute seule ».</p>
+
+      <div class="callout a">
+        <h3>Le retard est résorbé</h3>
+        <p><code>mowing_overdue_days</code> repasse à <b>0</b>, hauteur estimée à <b>6,0 cm</b>. Et la fenêtre a été libre parce qu'<strong>aucun arrosage n'a tourné ce matin</strong> — la démonstration en creux de la chaîne du 14/08 : ce jour-là le ressuyage avait mangé les 35 minutes disponibles, ici les 2 h 45 sont restées ouvertes.</p>
+      </div>
+
+      <div class="callout m">
+        <h3>La veille, 15/08 : « Tondeuse soulevée »</h3>
+        <p>Sortie à 10:00, <b>13,5 min</b> de tonte, puis erreur <code>lifted</code>. À 14:00 : <b>223 minutes bloquées</b> pour <b>15,3 tondues</b>, deux blocages, batterie 51 %, position <em>inconnue</em>. <code>mower_reliability_today</code> a dit <strong><code>critique</code></strong> — c'est exactement ce pour quoi ce capteur existe. Elle n'a regagné le garage qu'à 22:30.</p>
+      </div>
+    </section>
+
     <section>
       <div class="sec-head"><h2>13/08/2026 — le carnet peut repartir de zéro</h2><span class="tally done">0.53.2</span></div>
       <p>La 0.53.1 a changé la façon de classer la fin d'une passe. Les passes écrites <strong>avant</strong> elle ne portent pas le fait brut qui permettrait de les rejuger : elles gardent une étiquette produite par des règles qui n'existent plus. Les rééditer serait inventer un passé ; les garder, c'est nourrir les médianes apprises avec des mesures fausses. D'où <code>gazon_intelligent.reset_mower_passes</code>.</p>
@@ -2355,8 +2391,26 @@
         <div class="card-head"><h3>Garde « il pleut » : déployé le 07/08 à 00:39</h3><span class="chip ok">en observation</span></div>
         <p class="detail">Le correctif lui-même n'est pas un arbitrage : c'est un bug, et il a fait verser <strong>5,1 mm sous la pluie le 30/07</strong>. Ce qui se décide, c'est le <em>moment</em> : ce garde <strong>n'a jamais tourné depuis le 18/03/2026</strong>. Personne ne sait ce qu'il va bloquer, ni combien de fois.</p>
         <p><strong>Première observation — 14/08/2026, 16:00:59.</strong> <code>weather.forecast_maison</code> passe à <code>rainy</code>, le garde mord, l'arrosage devient « Retenu : Pluie active ». Au même moment, sur le terrain : pluviomètre à <b>0,1 mm</b> pour toute la journée, capteur de pluie de la tondeuse <code>off</code> depuis 24 h, humidité <b>20–25 %</b>, <b>38,5 °C</b>. <strong>Il ne pleuvait pas.</strong></p>
-        <p><code>is_active_rain_weather</code> (<code>guidance.py:178</code>) renvoie vrai dès que la <em>chaîne d'état</em> de l'entité météo est dans <code>RAINY_WEATHER_CONDITIONS</code> — aucune mesure n'entre dans ce test, et l'entité configurée est une entité de <em>prévision</em>. Sans conséquence ce jour-là (déjà arrosé le matin, créneau suivant le lendemain), mais le mécanisme est bien celui d'un <strong>repli qui se déclenche en silence, toujours dans le même sens</strong> : il ne peut que retenir de l'eau, jamais en ajouter.</p>
-        <p><em>Ce qui reste à décider : croiser la condition météo avec une mesure (pluviomètre, capteur de pluie de la tondeuse) avant de retenir, ou assumer qu'une prévision de pluie suffise à sauter un arrosage en canicule.</em></p>
+        <p><code>is_active_rain_weather</code> (<code>guidance.py:178</code>) renvoie vrai dès que la <em>chaîne d'état</em> de l'entité météo est dans <code>RAINY_WEATHER_CONDITIONS</code> — aucune mesure n'entre dans ce test, et l'entité configurée est une entité de <em>prévision</em>. Son second bras (<code>weather_precipitation_probability ≥ 80</code>) est <strong>toujours nul</strong>, la 0.44.0 l'avait déjà noté : la garde n'a donc, en pratique, <strong>qu'une seule entrée</strong>.</p>
+
+        <div class="callout h">
+          <h3>⚠️ Deuxième observation — 16/08/2026 : elle échoue AUSSI dans l'autre sens</h3>
+          <p>Cette fiche affirmait que le mécanisme « ne peut que retenir de l'eau, jamais en ajouter ». <strong>C'est faux, et la nuit du 16/08 le prouve.</strong></p>
+          <div class="tbl-wrap">
+            <table>
+              <thead><tr><th class="num">heure</th><th>pluviomètre</th><th><code>weather.forecast_maison</code></th><th>décision</th></tr></thead>
+              <tbody>
+                <tr><td class="num">00:12</td><td class="num">0,1 mm — <b>la pluie commence</b></td><td><code>partlycloudy</code></td><td>—</td></tr>
+                <tr class="r-bad"><td class="num">02:05:42</td><td class="num">1,2 mm, il pleut</td><td><code>clear-night</code></td><td><strong>5 mm autorisés</strong>, <code>execution_autorisee: true</code></td></tr>
+                <tr><td class="num">02:37:40</td><td class="num">2,3 mm</td><td><code>clear-night</code></td><td>besoin retombé à 0 — <em>par le bilan, pas par la garde</em></td></tr>
+                <tr class="r-good"><td class="num">03:59:47</td><td class="num">2,4 mm</td><td><code>rainy</code></td><td>la garde mord enfin</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p><strong>3 h 47 d'aveuglement</strong>, et l'autorisation des 5 mm tombe <b>45 ms</b> après le basculement de l'entité vers <code>clear-night</code> — c'est bien la prévision qui a débloqué, pendant qu'une mesure disait le contraire. Ce qui a protégé la pelouse cette nuit-là, c'est le <strong>bilan hydrique</strong> qui a compté la pluie réelle, pas la garde ; et l'horaire, la fenêtre d'arrosage n'ouvrant qu'à 03:45.</p>
+        </div>
+
+        <p><em>Ce qui reste à décider : croiser la condition météo avec une mesure (pluviomètre, capteur de pluie de la tondeuse) — dans les <strong>deux</strong> sens, pour ne plus retenir à sec ni verser sous l'averse —, ou assumer qu'une prévision seule pilote la garde.</em></p>
       </div>
 
       <div class="card todo">
