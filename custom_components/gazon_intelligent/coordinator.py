@@ -72,6 +72,7 @@ from .mower_adapter import build_mower_context, derive_related_entity_id
 from .mower_coordination import build_mower_coordination_context
 from .entity_ids import public_entity_id, resolve_entry_instance_slug
 from .shared_state import get_shared_state, resolve_effective_config
+from .soil_balance import appliquer_cliquet_pluie
 from .const import SHARED_WEATHER_CONFIG_KEYS
 from .water import (
     compute_recent_watering_mm,
@@ -1836,19 +1837,32 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if not isinstance(suivi, dict):
                 suivi = {}
 
-            precedent = _to_float_or_none(suivi.get("dernier_cumul"))
+            precedent = _to_float_or_none(suivi.get("pic"))
             derniere_hausse = suivi.get("derniere_hausse")
 
-            if precedent is not None and cumul - precedent >= _PLUIE_MESUREE_HAUSSE_MIN_MM:
+            # ⚠️ COMPARER AU PIC DU JOUR, PAS À LA LECTURE PRÉCÉDENTE. Ce capteur oscille
+            # toute la journée, et une remontée après un décrochage n'est PAS une averse.
+            # Mesuré le 16/08/2026, journée sans une goutte après 05:52 :
+            #     05:52 3,6 · 06:22 3,5 · 08:33 4,2 · 09:32 3,7 · 10:32 3,6 · 11:26 3,5
+            #     12:20 3,3 · 12:26 3,1 · 12:38 3,3 · 13:07 3,4 · 13:19 3,3 · 13:25 3,2 · 14:25 3,6
+            # Comparer à la lecture précédente criait « il pleut » QUATRE fois (08:33, 12:38,
+            # 13:07, 14:25). Seul un dépassement du maximum du jour est une pluie nouvelle —
+            # c'est le cliquet déjà arbitré pour le bilan sol, réutilisé et non réécrit.
+            # Le troisième retour (remise à zéro) n'est pas testé ici, volontairement : une
+            # remise à zéro fait TOMBER le pic, donc l'écart est négatif et le seuil ne peut
+            # pas être franchi. Le banc de mutation l'a prouvé — la garde `not remise_a_zero`
+            # écrite d'abord était morte, aucune mutation ne pouvait la tuer.
+            retenue, pic, _ = appliquer_cliquet_pluie(cumul, precedent)
+            if precedent is not None and pic - precedent >= _PLUIE_MESUREE_HAUSSE_MIN_MM:
                 derniere_hausse = maintenant.isoformat()
 
-            suivi["dernier_cumul"] = cumul
+            suivi["pic"] = pic
             suivi["derniere_hausse"] = derniere_hausse
             self._runtime_state["pluie_mesuree"] = suivi
 
             if precedent is None:
                 # Première lecture : aucune comparaison possible, donc aucune conclusion.
-                return {**vide, "pluie_mesuree_cumul_mm": cumul}
+                return {**vide, "pluie_mesuree_cumul_mm": retenue}
 
             depuis = None
             horodatage = self._parse_datetime_value(derniere_hausse)
@@ -1859,7 +1873,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             return {
                 "pluie_mesuree_active": depuis is not None and depuis <= _PLUIE_MESUREE_FENETRE_MINUTES,
-                "pluie_mesuree_cumul_mm": cumul,
+                "pluie_mesuree_cumul_mm": retenue,
                 "pluie_mesuree_minutes_depuis_hausse": depuis,
             }
         except Exception:  # noqa: BLE001 — un suivi d'observation ne fait jamais tomber le cycle
