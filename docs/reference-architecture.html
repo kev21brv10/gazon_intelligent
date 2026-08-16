@@ -231,14 +231,14 @@
     <h1>Comment le système décide</h1>
     <p class="lede">Arrosage, tonte, phases, produits, capteurs et services : ce que fait chaque brique, où sont les seuils, et ce qui reste à arbitrer. Établi sur l'état réel du code.</p>
     <div class="stats">
-      <span class="stat">version <b>0.53.2</b></span>
+      <span class="stat">version <b>0.54.0</b></span>
       <span class="stat">carte <b>0.26.0</b></span>
       <span class="stat"><b>39</b> modules</span>
       <span class="stat"><b>62</b> entités</span>
       <span class="stat"><b>15</b> services</span>
       <span class="stat"><b>20</b> entrées</span>
       <span class="stat"><b>8</b> phases</span>
-      <span class="stat"><b>1092</b> tests</span>
+      <span class="stat"><b>1110</b> tests</span>
     </div>
     <p style="font-size:.83rem;color:var(--faint);margin-top:.2rem">Référence vivante — mise à jour à chaque changement du code, vérifiée sur les fichiers réels.</p>
   </header>
@@ -1031,6 +1031,30 @@
   <!-- ═══ SANTÉ DU CODE ═══ -->
   <div class="panel" role="tabpanel" id="p-sante" aria-labelledby="t-sante" tabindex="0" hidden>
     <section>
+      <div class="sec-head"><h2>16/08/2026 — la garde « il pleut » reçoit une mesure</h2><span class="tally done">0.54.0</span></div>
+      <p>Jusqu'ici <code>is_active_rain_weather</code> ne lisait qu'une entité de <strong>prévision</strong>, et son second bras (<code>weather_precipitation_probability ≥ 80</code>) est toujours nul — la 0.44.0 l'avait déjà noté. Elle n'avait donc, en pratique, <strong>qu'une seule entrée</strong>. La nuit du 16/08 a montré ce que ça coûte : <strong>3 h 47</strong> pendant lesquelles cette entrée s'est trompée, et c'est elle qui a <em>débloqué</em> 5 mm pendant qu'un pluviomètre mesurait la pluie tomber. Le détail minute par minute est dans l'onglet <strong>À arbitrer</strong>.</p>
+
+      <div class="callout w">
+        <h3>⚠️ C'est la HAUSSE qui signe une averse, jamais la valeur</h3>
+        <p>Le capteur configuré est un <strong>cumul 24 h</strong> : 3,2 mm restent affichés une journée entière après la pluie. Lire sa valeur donnerait « il pleut » du matin au soir. Le suivi garde donc la dernière lecture et l'<em>instant de la dernière hausse</em>, et ne conclut que sur la fraîcheur de cette hausse — <b>30 min</b>.</p>
+        <p><strong>Une BAISSE n'est pas une pluie négative</strong> : c'est la remise à zéro du capteur, mesurée <b>10 fois le 04/08/2026</b> en une seule journée. On se recale sur la nouvelle référence <em>sans horodater</em>, et l'averse précédente garde sa fraîcheur.</p>
+      </div>
+
+      <div class="callout h">
+        <h3>Ce qu'il ne fallait pas faire : remplacer un aveuglement par un autre</h3>
+        <p>Sans capteur, sans lecture, ou au tout premier cycle, la réponse est <code>None</code> — <strong>pas <code>False</code></strong>. Et la garde teste <code>is True</code>, jamais la valeur brute : un <code>None</code> traité comme vrai bloquerait l'arrosage sur un capteur muet. Deux mutations verrouillent ce point.</p>
+        <p>Elle est nourrie par <code>pluie_24h_sensor</code> — le capteur réel — et <strong>surtout pas</strong> par <code>pluie_24h</code>, qui retombe sur la prévision quand le capteur manque. Nourrir la garde d'un repli météo la ramènerait exactement à l'aveuglement qu'elle vient de corriger.</p>
+      </div>
+
+      <div class="callout a">
+        <h3>La garde devient visible</h3>
+        <p><code>pluie_mesuree_active</code> et <code>pluie_mesuree_minutes_depuis_hausse</code> apparaissent dans <code>sensor_health</code>. Ce garde a bloqué et débloqué l'arrosage <strong>des mois durant</strong> sans qu'aucune sortie ne dise sur quoi il se fondait — un automatisme muet est indiscernable d'un automatisme cassé, la même leçon que <code>mower_auto_declaration_state</code>. Placé dans <code>sensor_health</code>, déjà publié comme un dict : <strong>aucune liste blanche à traverser</strong>, donc aucun des chemins qui cassent en silence sur ce projet.</p>
+      </div>
+
+      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b> : 1110 tests verts. Les <b>14 mutations</b> du banc sont détectées, chacune par le test visé — dont la recopie clé par clé de <code>compute_advanced_context</code> (piège n°2), où la clé serait morte en silence, et le remplacement du capteur par le repli prévision.</p>
+    </section>
+
+    <section>
       <div class="sec-head"><h2>16/08/2026 — la chaîne tondeuse validée en production</h2><span class="tally done">observé</span></div>
       <p>Trois versions livrées à l'aveugle depuis le 08/08 se sont exercées <strong>le même jour, sur le terrain</strong>, et chacune sur le cas exact pour lequel elle avait été écrite.</p>
 
@@ -1430,8 +1454,11 @@
               <td>180 min imposées après un arrosage, <strong>zéro</strong> après une averse.
                   <code>is_active_rain_weather</code> ne regarde que la météo de l'instant. En pratique couvert
                   par les gardes voisins (rosée, sol humide), mais pas explicitement.</td>
-              <td><strong>Bloquée.</strong> Demande l'HEURE DE FIN de l'averse, que le contexte ne transporte pas.
-                  Le libellé mensonger (« ou récente ») est corrigé en 0.31.2.</td>
+              <td><strong>Débloquée par la 0.54.0.</strong> Elle était classée impossible faute d'HEURE DE FIN
+                  d'averse dans le contexte — or <code>pluie_mesuree_minutes_depuis_hausse</code> est
+                  exactement cette donnée, livrée pour la garde « il pleut ». Un ressuyage après pluie
+                  devient donc écrivable. <em>Non fait&nbsp;: hors du périmètre demandé, et il faudrait
+                  décider de sa durée.</em> Le libellé mensonger (« ou récente ») était corrigé en 0.31.2.</td>
             </tr>
             <tr>
               <td class="rowlabel">Le capteur de risque <strong>n'explique pas son niveau</strong></td>
@@ -1577,7 +1604,7 @@
     </section>
 
     <section>
-      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1092 tests verts</span></div>
+      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1110 tests verts</span></div>
       <p>Cet onglet est le point d'entrée pour « <strong>qu'est-ce qui reste à corriger ou à supprimer ?</strong> ». Il distingue trois choses qu'on confond souvent : ce qui est cassé, ce qui est un choix, et ce qui est déjà mort.</p>
       <div class="tbl-wrap">
         <table>
@@ -2339,7 +2366,7 @@
   <!-- ═══ À ARBITRER ═══ -->
   <div class="panel" role="tabpanel" id="p-arb" aria-labelledby="t-arb" tabindex="0" hidden>
     <section>
-      <div class="sec-head"><h2>Décisions en attente</h2><span class="tally todo">4</span></div>
+      <div class="sec-head"><h2>Décisions en attente</h2><span class="tally todo">3</span></div>
 
       <div class="card hot">
         <div class="card-head"><h3>L'arrosage en retard mange la fenêtre de tonte du jour</h3><span class="chip crit">mesuré le 14/08/2026</span></div>
@@ -2388,7 +2415,8 @@
       </div>
 
       <div class="card done">
-        <div class="card-head"><h3>Garde « il pleut » : déployé le 07/08 à 00:39</h3><span class="chip ok">en observation</span></div>
+        <div class="card-head"><h3>Garde « il pleut » : tranché — le pluviomètre entre dans la garde</h3><span class="chip ok">fait 0.54.0</span></div>
+        <p class="detail"><strong>Arbitré par Kévin le 16/08/2026 : croiser la prévision avec la mesure.</strong> La garde lit désormais le pluviomètre <em>en premier</em>, avant les deux bras météo — qui sont conservés tels quels : le correctif <strong>ajoute</strong> une entrée, il n'en retire aucune. Conservé ici pour mémoire de la décision ; le détail du mécanisme est dans l'onglet Santé du code.</p>
         <p class="detail">Le correctif lui-même n'est pas un arbitrage : c'est un bug, et il a fait verser <strong>5,1 mm sous la pluie le 30/07</strong>. Ce qui se décide, c'est le <em>moment</em> : ce garde <strong>n'a jamais tourné depuis le 18/03/2026</strong>. Personne ne sait ce qu'il va bloquer, ni combien de fois.</p>
         <p><strong>Première observation — 14/08/2026, 16:00:59.</strong> <code>weather.forecast_maison</code> passe à <code>rainy</code>, le garde mord, l'arrosage devient « Retenu : Pluie active ». Au même moment, sur le terrain : pluviomètre à <b>0,1 mm</b> pour toute la journée, capteur de pluie de la tondeuse <code>off</code> depuis 24 h, humidité <b>20–25 %</b>, <b>38,5 °C</b>. <strong>Il ne pleuvait pas.</strong></p>
         <p><code>is_active_rain_weather</code> (<code>guidance.py:178</code>) renvoie vrai dès que la <em>chaîne d'état</em> de l'entité météo est dans <code>RAINY_WEATHER_CONDITIONS</code> — aucune mesure n'entre dans ce test, et l'entité configurée est une entité de <em>prévision</em>. Son second bras (<code>weather_precipitation_probability ≥ 80</code>) est <strong>toujours nul</strong>, la 0.44.0 l'avait déjà noté : la garde n'a donc, en pratique, <strong>qu'une seule entrée</strong>.</p>
@@ -2410,7 +2438,7 @@
           <p><strong>3 h 47 d'aveuglement</strong>, et l'autorisation des 5 mm tombe <b>45 ms</b> après le basculement de l'entité vers <code>clear-night</code> — c'est bien la prévision qui a débloqué, pendant qu'une mesure disait le contraire. Ce qui a protégé la pelouse cette nuit-là, c'est le <strong>bilan hydrique</strong> qui a compté la pluie réelle, pas la garde ; et l'horaire, la fenêtre d'arrosage n'ouvrant qu'à 03:45.</p>
         </div>
 
-        <p><em>Ce qui reste à décider : croiser la condition météo avec une mesure (pluviomètre, capteur de pluie de la tondeuse) — dans les <strong>deux</strong> sens, pour ne plus retenir à sec ni verser sous l'averse —, ou assumer qu'une prévision seule pilote la garde.</em></p>
+        <p><em>Reste ouvert, non couvert par la 0.54.0 : le <strong>faux positif</strong> — retenir l'eau parce que la prévision annonce <code>rainy</code> alors que le pluviomètre reste sec, comme le 14/08 à 38,5 °C. La mesure ne peut aujourd'hui que <em>confirmer</em> une pluie, jamais <em>démentir</em> une prévision. Le démenti est un autre arbitrage : une prévision de pluie qui se réalise une heure plus tard reste une bonne raison de ne pas arroser.</em></p>
       </div>
 
       <div class="card todo">
