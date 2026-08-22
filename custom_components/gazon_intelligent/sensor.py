@@ -3730,6 +3730,8 @@ class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):
             "mower_full_pass_minutes_median",
             "mower_autonomous_return_battery_median",
             "mower_passes_per_day_median",
+            "mower_recommendation_ignored_minutes",
+            "mower_recommendation_ignored",
             "mowing_blocked_by_watering",
             "mowing_blocked",
             "mowing_block_reason_code",

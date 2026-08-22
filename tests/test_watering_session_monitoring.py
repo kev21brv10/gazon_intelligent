@@ -5578,3 +5578,164 @@ class PluieMesureeTests(unittest.TestCase):
             "weather_profile.update(self._suivre_pluie_mesuree(pluie_24h_sensor))",
             source,
         )
+
+
+class RecommandationIgnoreeTests(unittest.TestCase):
+    """Le compteur du SILENCE D'EN FACE : recommandé, prêt, au garage… et rien ne part.
+
+    ⚠️ POURQUOI. Le déclencheur de la tonte vit dans Node-RED, hors de cette intégration.
+    Coupé, l'intégration recommande dans le vide et rien ne le signale. Deux fois en 2026 :
+    le nœud de déclaration éteint du 30/07 au 06/08, et l'onglet Tondeuse désactivé qui a
+    laissé filer 1 h 49 de fenêtre idéale le 21/08 — `action_possible` vrai à 10:01, machine
+    prête et au garage, aucun départ jusqu'à 11:50.
+
+    ⚠️ IL N'ALIMENTE AUCUNE DÉCISION. Un compteur de silence qui relâcherait un garde-fou
+    serait pire que le silence. Un test le verrouille.
+    """
+
+    def _coord(self, instant, *, action_possible=True, runtime=None):
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord._runtime_state = runtime if runtime is not None else {}
+        coord._current_datetime = lambda: instant
+        coord._parse_datetime_value = (
+            coordinator_mod.GazonIntelligentCoordinator._parse_datetime_value.__get__(coord)
+        )
+        coord._booleen_publie_au_cycle_precedent = lambda _cle: action_possible
+        return coord
+
+    def _ctx(self, *, garage=True, coordination=True):
+        return {"mower_is_docked": garage, "mower_coordination_enabled": coordination}
+
+    def _rejouer(self, etapes, *, action_possible=True, depart=None):
+        t0 = depart or datetime(2026, 8, 21, 10, 1, tzinfo=timezone.utc)
+        coord = self._coord(t0, action_possible=action_possible)
+        sortie = {}
+        for minutes, ctx in etapes:
+            instant = t0 + timedelta(minutes=minutes)
+            coord._current_datetime = lambda t=instant: t
+            sortie = coord._suivre_recommandation_ignoree(dict(ctx))
+        return sortie, coord
+
+    def test_le_premier_cycle_demarre_le_compteur_a_zero(self) -> None:
+        sortie, _ = self._rejouer([(0, self._ctx())])
+        self.assertEqual(sortie["mower_recommendation_ignored_minutes"], 0.0)
+        self.assertIs(sortie["mower_recommendation_ignored"], False)
+
+    def test_la_latence_normale_ne_declenche_rien(self) -> None:
+        """Mesurée le 16/08 et le 19/08 : 6 minutes entre l'autorisation et le départ."""
+        sortie, _ = self._rejouer([(0, self._ctx()), (6, self._ctx())])
+        self.assertEqual(sortie["mower_recommendation_ignored_minutes"], 6.0)
+        self.assertIs(sortie["mower_recommendation_ignored"], False)
+
+    def test_la_matinee_du_21_aout(self) -> None:
+        """1 h 49 de fenêtre idéale sans départ : c'est exactement ce qu'il doit voir."""
+        sortie, _ = self._rejouer([(0, self._ctx()), (30, self._ctx()), (109, self._ctx())])
+        self.assertEqual(sortie["mower_recommendation_ignored_minutes"], 109.0)
+        self.assertIs(sortie["mower_recommendation_ignored"], True)
+
+    def test_le_seuil_mord_a_trente_minutes(self) -> None:
+        for minutes, attendu in ((29.0, False), (30.0, True)):
+            with self.subTest(minutes=minutes):
+                sortie, _ = self._rejouer([(0, self._ctx()), (minutes, self._ctx())])
+                self.assertIs(sortie["mower_recommendation_ignored"], attendu)
+
+    def test_elle_sort_et_le_compteur_repart(self) -> None:
+        """Quelqu'un a écouté : plus rien à signaler, et le silence suivant repart de zéro."""
+        sortie, coord = self._rejouer([
+            (0, self._ctx()), (40, self._ctx()), (41, self._ctx(garage=False)),
+        ])
+        self.assertIs(sortie["mower_recommendation_ignored"], False)
+        self.assertNotIn("mower_recommendation_ignored_since", coord._runtime_state)
+
+    def test_coordination_coupee_le_compteur_se_tait(self) -> None:
+        """⚠️ Couper la coordination est une DÉCISION de l'utilisateur, pas une panne."""
+        sortie, coord = self._rejouer([
+            (0, self._ctx()), (40, self._ctx()), (41, self._ctx(coordination=False)),
+        ])
+        self.assertIsNone(sortie["mower_recommendation_ignored"])
+        self.assertIsNone(sortie["mower_recommendation_ignored_minutes"])
+        self.assertNotIn("mower_recommendation_ignored_since", coord._runtime_state)
+
+    def test_sans_decision_publiee_on_ne_conclut_rien(self) -> None:
+        """⚠️ `None` = aucune décision calculée. Une absence, pas « rien n'est recommandé »."""
+        sortie, _ = self._rejouer([(0, self._ctx())], action_possible=None)
+        self.assertIsNone(sortie["mower_recommendation_ignored"])
+
+    def test_rien_de_recommande_n_est_pas_un_silence(self) -> None:
+        sortie, _ = self._rejouer([(0, self._ctx())], action_possible=False)
+        self.assertIs(sortie["mower_recommendation_ignored"], False)
+        self.assertIsNone(sortie["mower_recommendation_ignored_minutes"])
+
+    def test_le_compteur_survit_a_un_redemarrage(self) -> None:
+        """C'est sur la DURÉE qu'il alerte : un redémarrage ne doit pas la remettre à zéro."""
+        _, coord = self._rejouer([(0, self._ctx()), (40, self._ctx())])
+        coord._serialize_runtime_value = (
+            coordinator_mod.GazonIntelligentCoordinator._serialize_runtime_value.__get__(coord)
+        )
+        coord._ensure_irrigation_runtime_bootstrap = lambda: None
+        coord._runtime_state.setdefault("active_irrigation_session", None)
+        coord._runtime_state.setdefault("last_irrigation_execution", None)
+        serialise = coordinator_mod.GazonIntelligentCoordinator._serialized_runtime_state(coord)
+        self.assertIn("mower_recommendation_ignored_since", serialise)
+
+        relu = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        relu._restore_runtime_state(serialise)
+        self.assertEqual(
+            relu._runtime_state["mower_recommendation_ignored_since"],
+            coord._runtime_state["mower_recommendation_ignored_since"],
+        )
+
+    def test_les_cles_atteignent_le_capteur(self) -> None:
+        """⚠️ On part des clés RÉELLEMENT produites, pas d'une liste recopiée ici.
+
+        Le contexte tondeuse traverse deux filtres qui ne gardent que `mower_`/`tondeuse_` :
+        une clé mal préfixée meurt en silence, déclarée partout et absente du capteur.
+        """
+        sortie, _ = self._rejouer([(0, self._ctx()), (40, self._ctx())])
+        produites = set(sortie)
+        self.assertTrue(
+            all(cle.startswith("mower_") for cle in produites),
+            f"préfixe fatal : {sorted(c for c in produites if not c.startswith('mower_'))}",
+        )
+        coord_src = (PACKAGE_DIR / "coordinator.py").read_text(encoding="utf-8")
+        capteur_src = (PACKAGE_DIR / "sensor.py").read_text(encoding="utf-8")
+        for cle in produites:
+            with self.subTest(cle=cle):
+                self.assertIn(f'"{cle}",', coord_src)
+                self.assertIn(f'"{cle}",', capteur_src)
+
+    def test_la_lecture_du_cycle_precedent_va_chercher_dans_extra(self) -> None:
+        """⚠️ `action_possible` n'est PAS un membre de `DecisionResult` : il vit dans `extra`.
+
+        Sans la lecture de `extra`, le détecteur lirait `None` à chaque cycle et ne se
+        déclencherait JAMAIS — muet, donc indiscernable d'un détecteur qui marche.
+        """
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        lire = coordinator_mod.GazonIntelligentCoordinator._booleen_publie_au_cycle_precedent
+
+        class _Resultat:
+            tonte_autorisee = True          # membre direct
+            extra = {"action_possible": True}   # uniquement dans extra
+
+        coord.brain = types.SimpleNamespace(last_result=_Resultat())
+        self.assertIs(lire(coord, "action_possible"), True, "extra n'est pas lu")
+        self.assertIs(lire(coord, "tonte_autorisee"), True, "l'attribut direct n'est plus lu")
+        self.assertIsNone(lire(coord, "cle_inexistante"))
+
+        coord.brain = types.SimpleNamespace(last_result=None)
+        self.assertIsNone(lire(coord, "action_possible"))
+
+    def test_il_est_appele_dans_le_cycle(self) -> None:
+        source = (PACKAGE_DIR / "coordinator.py").read_text(encoding="utf-8")
+        self.assertIn(
+            "mower_context.update(self._suivre_recommandation_ignoree(mower_context))", source
+        )
+
+    def test_il_n_alimente_aucune_decision(self) -> None:
+        """⚠️ Le jour où une décision voudra le lire, ce test tombera et forcera la discussion."""
+        for module in ("decision_mowing.py", "guidance.py", "decision.py", "decision_watering.py"):
+            with self.subTest(module=module):
+                self.assertNotIn(
+                    "mower_recommendation_ignored",
+                    (PACKAGE_DIR / module).read_text(encoding="utf-8"),
+                )
