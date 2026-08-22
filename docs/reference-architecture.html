@@ -231,14 +231,14 @@
     <h1>Comment le système décide</h1>
     <p class="lede">Arrosage, tonte, phases, produits, capteurs et services : ce que fait chaque brique, où sont les seuils, et ce qui reste à arbitrer. Établi sur l'état réel du code.</p>
     <div class="stats">
-      <span class="stat">version <b>0.54.2</b></span>
+      <span class="stat">version <b>0.55.0</b></span>
       <span class="stat">carte <b>0.26.0</b></span>
       <span class="stat"><b>39</b> modules</span>
       <span class="stat"><b>62</b> entités</span>
       <span class="stat"><b>15</b> services</span>
       <span class="stat"><b>20</b> entrées</span>
       <span class="stat"><b>8</b> phases</span>
-      <span class="stat"><b>1122</b> tests</span>
+      <span class="stat"><b>1135</b> tests</span>
     </div>
     <p style="font-size:.83rem;color:var(--faint);margin-top:.2rem">Référence vivante — mise à jour à chaque changement du code, vérifiée sur les fichiers réels.</p>
   </header>
@@ -1031,6 +1031,33 @@
   <!-- ═══ SANTÉ DU CODE ═══ -->
   <div class="panel" role="tabpanel" id="p-sante" aria-labelledby="t-sante" tabindex="0" hidden>
     <section>
+      <div class="sec-head"><h2>22/08/2026 — l'intégration s'aperçoit qu'on ne l'écoute pas</h2><span class="tally done">0.55.0</span></div>
+      <p>Le <strong>déclencheur</strong> de la tonte ne vit pas dans cette intégration : c'est un flow Node-RED. Quand il est coupé, l'intégration continue de recommander dans le vide et <strong>rien ne le signale</strong>. Deux fois en 2026 — le nœud de déclaration éteint du 30/07 au 06/08 (sept jours d'historique perdus), puis l'onglet Tondeuse désactivé le 19/08 pour une coupe de bordure et oublié.</p>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th class="num">21/08</th><th>fait mesuré</th></tr></thead>
+          <tbody>
+            <tr><td class="num">10:01:07</td><td><code>action_possible: true</code>, fenêtre <b>idéale</b>, machine prête, batterie 100 %, au garage</td></tr>
+            <tr class="r-bad"><td class="num">10:01 → 11:50</td><td><strong>aucun départ</strong> — 1 h 49 de fenêtre idéale, et aucune sortie ne le dit</td></tr>
+            <tr><td class="num">11:50:51</td><td>départ, après signalement manuel</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Nouveaux attributs <code>mower_recommendation_ignored_minutes</code> et <code>mower_recommendation_ignored</code>. Seuil à <b>30 min</b> : la latence normale entre l'autorisation et le départ vaut <b>6 minutes</b>, mesurée le 16/08 et le 19/08.</p>
+      <div class="callout m">
+        <h3>Trois silences volontaires</h3>
+        <p><strong>Coordination coupée → muet.</strong> L'utilisateur a choisi le pilotage manuel ; crier au silence serait crier sur une décision.</p>
+        <p><strong><code>None</code> reste une absence.</strong> Sans décision publiée au cycle précédent, on ne conclut rien — ce n'est pas « rien n'est recommandé ».</p>
+        <p><strong>Il n'alimente AUCUNE décision</strong>, comme le carnet de passes. Un compteur de silence qui relâcherait un garde-fou serait pire que le silence. Un test le verrouille sur quatre modules.</p>
+      </div>
+      <div class="callout h">
+        <h3>⚠️ Le piège que le banc a trouvé</h3>
+        <p><code>action_possible</code> n'est <strong>pas</strong> un membre de <code>DecisionResult</code> : il n'existe que dans <code>extra</code>. La lecture du cycle précédent va donc chercher l'attribut <em>puis</em> <code>extra</code> — une seule implémentation pour les deux, <code>_booleen_publie_au_cycle_precedent</code>. Sans test dédié, casser cette lecture aurait rendu le détecteur <strong>muet à jamais</strong> : il aurait lu <code>None</code> à chaque cycle sans jamais se déclencher. Un détecteur de silence silencieux — la mutation est passée au travers de neuf tests avant qu'on ne l'attrape.</p>
+      </div>
+      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b> : 1135 tests verts, <b>10 mutations</b> détectées chacune par le test visé.</p>
+    </section>
+
+    <section>
       <div class="sec-head"><h2>16/08/2026 — la garde « il pleut » reçoit une mesure</h2><span class="tally done">0.54.0</span></div>
       <p>Jusqu'ici <code>is_active_rain_weather</code> ne lisait qu'une entité de <strong>prévision</strong>, et son second bras (<code>weather_precipitation_probability ≥ 80</code>) est toujours nul — la 0.44.0 l'avait déjà noté. Elle n'avait donc, en pratique, <strong>qu'une seule entrée</strong>. La nuit du 16/08 a montré ce que ça coûte : <strong>3 h 47</strong> pendant lesquelles cette entrée s'est trompée, et c'est elle qui a <em>débloqué</em> 5 mm pendant qu'un pluviomètre mesurait la pluie tomber. Le détail minute par minute est dans l'onglet <strong>À arbitrer</strong>.</p>
 
@@ -1637,7 +1664,7 @@
     </section>
 
     <section>
-      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1122 tests verts</span></div>
+      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1135 tests verts</span></div>
       <p>Cet onglet est le point d'entrée pour « <strong>qu'est-ce qui reste à corriger ou à supprimer ?</strong> ». Il distingue trois choses qu'on confond souvent : ce qui est cassé, ce qui est un choix, et ce qui est déjà mort.</p>
       <div class="tbl-wrap">
         <table>
