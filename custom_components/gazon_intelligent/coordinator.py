@@ -222,6 +222,21 @@ _PASSES_MIN_POUR_APPRENDRE: int = 3
 # seulement combien il est tombé — 3,2 mm restent affichés une journée entière après l'averse.
 # Ce qui signe une averse EN COURS, c'est sa HAUSSE. On garde donc la dernière lecture et
 # l'instant de la dernière hausse, et on ne conclut que sur la fraîcheur de cette hausse.
+# ── LE SILENCE D'EN FACE ──────────────────────────────────────────────────────────────────
+# Le DÉCLENCHEUR de la tonte ne vit pas dans cette intégration : c'est un flow Node-RED. Quand
+# il est coupé, l'intégration continue de recommander dans le vide et RIEN ne le signale.
+# Deux fois en 2026 : le nœud de déclaration éteint du 30/07 au 06/08 (sept jours d'historique
+# perdus), et l'onglet Tondeuse désactivé qui a laissé filer 1 h 49 de fenêtre idéale le
+# 21/08 — `action_possible` vrai à 10:01, la machine prête et au garage, aucun départ.
+#
+# Latence normale mesurée entre l'autorisation et le départ : 6 min le 16/08, 6 min le 19/08.
+# 30 minutes laissent donc largement la place à un démarrage normal tout en restant loin de la
+# fin de la fenêtre idéale (10h-12h).
+#
+# ⚠️ N'ALIMENTE AUCUNE DÉCISION — il observe, il ne tranche pas. Un compteur de silence qui
+# relâcherait un garde-fou serait pire que le silence lui-même.
+_RECOMMANDATION_IGNOREE_MINUTES: float = 30.0
+
 _PLUIE_MESUREE_FENETRE_MINUTES: float = 30.0
 # Pas de mesure du pluviomètre (0,1 mm). Le seuil s'intercale entre le bruit flottant (1e-9) et
 # le plus petit incrément réel, donc toute vraie hausse est vue et aucune ne s'invente.
@@ -335,6 +350,8 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "mower_full_pass_minutes_median",
     "mower_autonomous_return_battery_median",
     "mower_passes_per_day_median",
+    "mower_recommendation_ignored_minutes",
+    "mower_recommendation_ignored",
     "watering_blocked_by_mower",
     "watering_block_reason_code",
     "watering_block_reason_label",
@@ -925,6 +942,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         mower_context = self._build_mower_snapshot()
         mower_context.update(self._suivre_fiabilite_tondeuse(mower_context))
         mower_context.update(self._suivre_passes_tondeuse(mower_context))
+        mower_context.update(self._suivre_recommandation_ignoree(mower_context))
         # Déclarée AVANT `compute_snapshot` : le retard de tonte est alors corrigé dès ce
         # cycle-ci. La placer après repousserait la correction de deux minutes pour rien.
         mower_context.update(self._declarer_tonte_du_jour(mower_context))
@@ -1808,6 +1826,52 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return ecoule
         return 0.0
 
+    def _suivre_recommandation_ignoree(self, mower_context: dict[str, Any]) -> dict[str, Any]:
+        """Depuis combien de temps la tonte est recommandée sans que rien ne parte.
+
+        ⚠️ Lit `action_possible` du cycle PRÉCÉDENT : ce hook tourne avant `compute_snapshot`,
+        donc la décision du cycle courant n'existe pas encore. Même motif que le carnet.
+
+        ⚠️ Muet quand la coordination est coupée : l'utilisateur a alors choisi de piloter à la
+        main, et personne n'est censé écouter. Crier au silence serait crier sur une décision.
+        """
+        vide: dict[str, Any] = {
+            "mower_recommendation_ignored_minutes": None,
+            "mower_recommendation_ignored": None,
+        }
+        try:
+            if not bool(mower_context.get("mower_coordination_enabled")):
+                self._runtime_state.pop("mower_recommendation_ignored_since", None)
+                return vide
+
+            recommandee = self._booleen_publie_au_cycle_precedent("action_possible")
+            au_garage = bool(mower_context.get("mower_is_docked"))
+            # Elle est sortie, ou plus rien n'est recommandé : quelqu'un a écouté (ou il n'y
+            # avait rien à écouter). Dans les deux cas le compteur repart de zéro.
+            if recommandee is not True or not au_garage:
+                self._runtime_state.pop("mower_recommendation_ignored_since", None)
+                return {**vide, "mower_recommendation_ignored": False} if recommandee is not None else vide
+
+            maintenant = self._current_datetime()
+            depuis = self._parse_datetime_value(
+                self._runtime_state.get("mower_recommendation_ignored_since")
+            )
+            if depuis is None:
+                self._runtime_state["mower_recommendation_ignored_since"] = maintenant.isoformat()
+                return {**vide, "mower_recommendation_ignored_minutes": 0.0,
+                        "mower_recommendation_ignored": False}
+
+            ecoule = (maintenant - depuis).total_seconds() / 60.0
+            if ecoule < 0.0:
+                return vide
+            return {
+                "mower_recommendation_ignored_minutes": round(ecoule, 1),
+                "mower_recommendation_ignored": ecoule >= _RECOMMANDATION_IGNOREE_MINUTES,
+            }
+        except Exception:  # noqa: BLE001 — un compteur d'observation ne fait pas tomber le cycle
+            _LOGGER.debug("Suivi de la recommandation ignorée indisponible", exc_info=True)
+            return vide
+
     def _suivre_pluie_mesuree(self, cumul_mm: float | None) -> dict[str, Any]:
         """Dit s'il pleut EN CE MOMENT, d'après le pluviomètre et non d'après la prévision.
 
@@ -2084,19 +2148,32 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except Exception:  # noqa: BLE001 - un carnet ne doit jamais casser un cycle
             return vide
 
-    def _tonte_autorisee_au_cycle_precedent(self) -> bool | None:
-        """L'autorisation de tondre telle qu'elle était PUBLIÉE au cycle précédent.
+    def _booleen_publie_au_cycle_precedent(self, cle: str) -> bool | None:
+        """Un booléen tel qu'il a été PUBLIÉ au cycle précédent, ou `None`.
 
         `None` quand aucune décision n'a encore été calculée — une absence, pas un « non ».
+
+        ⚠️ Cherche l'attribut PUIS `extra`. Certains champs sont des membres de
+        `DecisionResult` (`tonte_autorisee`), d'autres n'existent que dans `extra`
+        (`action_possible`, posé par `_build_decision_extra`). Deux lectures séparées
+        finiraient par diverger ; il n'y en a qu'une.
         """
         try:
             resultat = self.brain.last_result
             if resultat is None:
                 return None
-            valeur = getattr(resultat, "tonte_autorisee", None)
+            valeur = getattr(resultat, cle, None)
+            if valeur is None:
+                extra = getattr(resultat, "extra", None)
+                if isinstance(extra, dict):
+                    valeur = extra.get(cle)
             return bool(valeur) if isinstance(valeur, bool) else None
         except Exception:  # noqa: BLE001
             return None
+
+    def _tonte_autorisee_au_cycle_precedent(self) -> bool | None:
+        """L'autorisation de tondre telle qu'elle était PUBLIÉE au cycle précédent."""
+        return self._booleen_publie_au_cycle_precedent("tonte_autorisee")
 
     def _cloturer_passe(self, passe: dict[str, Any], maintenant: datetime) -> dict[str, Any]:
         """Ferme une passe et lui attribue un motif de fin, à partir des faits bruts.
@@ -3189,6 +3266,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "pluie_mesuree": self._serialize_runtime_value(
                 self._runtime_state.get("pluie_mesuree")
             ),
+            # Non persisté, un redémarrage remettrait le compteur de silence à zéro — or c'est
+            # justement sur la DURÉE qu'il alerte, et les redémarrages sont fréquents ici.
+            "mower_recommendation_ignored_since": self._serialize_runtime_value(
+                self._runtime_state.get("mower_recommendation_ignored_since")
+            ),
             "persisted_watering_session": persisted_watering_session,
             "last_irrigation_execution_persisted": self._serialize_runtime_value(last_execution),
         }
@@ -3251,6 +3333,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "mower_health": runtime.get("mower_health"),
             "mower_passes": runtime.get("mower_passes"),
             "pluie_mesuree": runtime.get("pluie_mesuree"),
+            "mower_recommendation_ignored_since": runtime.get("mower_recommendation_ignored_since"),
         }
 
     def _get_active_irrigation_session(self) -> dict[str, Any] | None:

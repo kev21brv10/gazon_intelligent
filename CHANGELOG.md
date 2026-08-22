@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.55.0
+
+1135 tests verts. **L'intégration s'aperçoit enfin qu'on ne l'écoute pas.**
+
+Le DÉCLENCHEUR de la tonte ne vit pas dans cette intégration : c'est un flow Node-RED. Quand
+il est coupé, l'intégration continue de recommander dans le vide et **rien ne le signale**.
+Deux fois en 2026 :
+
+- le nœud de déclaration éteint du 30/07 au 06/08 — sept jours d'historique perdus ;
+- l'onglet Tondeuse désactivé le 19/08 et oublié : le 21/08, `action_possible` vrai à 10:01,
+  machine prête et au garage, **aucun départ jusqu'à 11:50**. 1 h 49 de fenêtre idéale.
+
+Nouveaux attributs `mower_recommendation_ignored_minutes` et `mower_recommendation_ignored` :
+depuis combien de temps la tonte est recommandée sans que rien ne parte.
+
+- **Seuil à 30 min.** La latence normale entre l'autorisation et le départ est de **6 minutes**
+  (mesurée le 16/08 et le 19/08). 30 min laissent la place à un démarrage normal tout en
+  restant loin de la fin de la fenêtre idéale (10h-12h).
+- **⚠️ Muet quand la coordination est coupée.** L'utilisateur a alors choisi le pilotage
+  manuel : crier au silence serait crier sur une décision.
+- **⚠️ `None` reste une absence.** Sans décision publiée au cycle précédent, on ne conclut
+  rien — ce n'est pas « rien n'est recommandé ». Deux mutations le verrouillent.
+- **⚠️ N'ALIMENTE AUCUNE DÉCISION**, comme le carnet de passes. Un compteur de silence qui
+  relâcherait un garde-fou serait pire que le silence. Un test le verrouille sur quatre modules.
+- **`_booleen_publie_au_cycle_precedent` remplace `_tonte_autorisee_au_cycle_precedent`** et
+  cherche l'attribut PUIS `extra` : `tonte_autorisee` est un membre de `DecisionResult`,
+  `action_possible` n'existe que dans `extra`. Le banc a montré que sans test dédié cette
+  lecture pouvait casser en silence — le détecteur aurait alors lu `None` à chaque cycle et
+  ne se serait **jamais** déclenché.
+- Le compteur est persisté : c'est sur la DURÉE qu'il alerte, un redémarrage la remettrait à zéro.
+- Les **10 mutations** du banc sont détectées, chacune par le test visé.
+
 ## 0.54.2
 
 1122 tests verts. **La garde « il pleut » prenait le bruit du pluviomètre pour des averses.**
