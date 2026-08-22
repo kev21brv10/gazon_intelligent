@@ -1423,7 +1423,7 @@
           </tbody>
         </table>
       </div>
-      <p style="font-size:.9rem;color:var(--muted)">Hors code, trois réglages à trancher : la hauteur de tonte maximale qui sature le modèle, le capteur « prochain départ » muet depuis dix jours, et l'entité météo périmée dans les données de configuration. Voir l'onglet <em>À arbitrer</em>.</p>
+      <p style="font-size:.9rem;color:var(--muted)">Hors code, trois réglages à trancher : la hauteur de tonte maximale qui sature le modèle, le capteur « prochain départ » muet faute de programmation, et l'entité météo périmée dans les données de configuration. Voir l'onglet <em>À arbitrer</em>.</p>
 
       <div class="callout m">
         <h3>Les angles morts de cet audit — à lire avant de s'appuyer dessus</h3>
@@ -2477,7 +2477,7 @@
       <div class="card todo">
         <div class="card-head"><h3>Trois réglages qui ne portent plus d'information</h3><span class="chip warn">Configuration</span></div>
         <p class="detail"><strong>Hauteur de tonte maximale à 6 cm</strong> — la hauteur conseillée affiche <code>6.0</code> sur <strong>11 enregistrements sur 11</strong> depuis le 27/07, uniquement à cause de l'écrêtage. Le capteur ne ment pas : il ne dit plus rien en août.</p>
-        <p><strong>Capteur « prochain départ » de la tondeuse</strong> — <code>unavailable</code> sur ses 64 états enregistrés, soit dix jours. Aucun effet sur les décisions (la valeur n'est que recopiée), mais <strong>aucune sortie ne signale qu'une entrée configurée ne répond plus</strong>.</p>
+        <p><strong>Capteur « prochain départ » de la tondeuse</strong> — <code>unavailable</code> en permanence. <strong>Ce n'était pas une panne, et cette fiche l'a laissé croire</strong> : vérifié le 22/08/2026, <code>switch.esperance_jr_auto_schedule</code> est <b>coupé</b>. La machine n'a aucune programmation, donc aucun « prochain départ » — le capteur rapporte correctement qu'il n'y a rien. Ce qui reste vrai est plus étroit : <strong>une entrée est configurée sur une valeur qui ne peut jamais exister</strong>, et rien ne le signale. Même famille que <code>number.esperance_jr_lawn_size</code>, à <code>unknown</code> parce que ce modèle ne publie pas la surface — <em>l'entité existe, la donnée non</em>.</p>
         <p><strong>Entité météo périmée</strong> — la configuration porte encore <code>weather.&lt;commune&gt;</code> dans ses données, alors que seules les options ont l'entité réellement utilisée. À nettoyer pour éviter un futur faux diagnostic.</p>
       </div>
 
