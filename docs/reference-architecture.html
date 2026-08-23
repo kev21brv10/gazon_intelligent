@@ -1031,6 +1031,39 @@
   <!-- ═══ SANTÉ DU CODE ═══ -->
   <div class="panel" role="tabpanel" id="p-sante" aria-labelledby="t-sante" tabindex="0" hidden>
     <section>
+      <div class="sec-head"><h2>22/08/2026 — le cycle de tonte réel, mesuré</h2><span class="tally info">référence terrain</span></div>
+      <p>Trois jours de discussions sur « qu'est-ce qu'un cycle complet » ont été tranchés par une seule soirée observée de bout en bout, du lancement manuel jusqu'au retour définitif.</p>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>phase</th><th class="num">durée</th><th class="num">batterie</th><th>fin</th></tr></thead>
+          <tbody>
+            <tr><td class="rowlabel">passe 1</td><td class="num">89,0 min</td><td class="num">100 % → 11 %</td><td>batterie vide</td></tr>
+            <tr><td class="rowlabel">recharge</td><td class="num">68 min</td><td class="num">11 % → 97 %</td><td>reprise <b>automatique</b></td></tr>
+            <tr class="r-good"><td class="rowlabel">passe 2</td><td class="num">73,2 min</td><td class="num">97 % → 51 %</td><td><strong>travail terminé</strong></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><strong>Un cycle complet = 2 passes, 162 minutes de coupe, ~3 h 54 d'horloge.</strong> La preuve que c'est fini n'est pas le niveau de batterie : c'est qu'elle s'est rechargée jusqu'à 81 % <em>sans repartir</em>, alors qu'elle reprend seule tant qu'il reste du travail — observé deux fois.</p>
+
+      <div class="callout m">
+        <h3>Ce que ça règle</h3>
+        <p><strong>Le seuil de déclaration (90 min) vaut la première passe seule</strong>, soit ~55 % du travail. C'est un plancher de crédibilité correct — il rejette les sorties de 3 secondes et les journées à 40 min — mais il ne dit pas « fini », et il n'a jamais prétendu le dire. Rien à corriger.</p>
+        <p><strong>Les valeurs apprises par le carnet sont justes</strong> : <code>mower_full_pass_minutes_median</code> = <b>88,4 min</b> (la passe limitée par la batterie) et <code>mower_passes_per_day_median</code> = <b>2</b> (exactement un cycle).</p>
+      </div>
+
+      <div class="callout h">
+        <h3>⚠️ Un cycle complet NE PEUT PAS tenir dans la fenêtre idéale</h3>
+        <p>La fenêtre idéale du matin dure <b>2 heures</b> (10 h – 12 h). Un cycle en demande <b>3 h 54</b>. Arithmétiquement, <strong>elle finira toujours en dehors</strong> — dans l'après-midi « à éviter » ou le soir. C'est ce qui s'est passé le 21/08, où elle a terminé à 20:33.</p>
+        <p>Ça change le poids de l'arbitrage encore ouvert sur la <em>fenêtre qui meurt à 25 °C</em> : si la fin de cycle tombe nécessairement hors du matin, la fenêtre du soir n'est pas un supplément — c'est la moitié du dispositif.</p>
+      </div>
+
+      <div class="callout w">
+        <h3>Et une mesure perdue, faute d'étiquette juste</h3>
+        <p>La passe 2 est rentrée à <b>51 %</b> sur un travail réellement terminé — la seule réponse mesurée à « à quel niveau estime-t-elle avoir fini ». Le carnet l'a étiquetée <code>rappelee</code>, parce que <code>tonte_autorisee</code> valait <code>off</code> (nuit, coordination coupée). <code>mower_autonomous_return_battery_median</code> reste donc <strong>vide</strong>. Le motif <code>hors_coordination</code> proposé le 21/08 n'est plus cosmétique : il mange la mesure que le carnet existe pour produire.</p>
+      </div>
+    </section>
+
+    <section>
       <div class="sec-head"><h2>22/08/2026 — l'intégration s'aperçoit qu'on ne l'écoute pas</h2><span class="tally done">0.55.0</span></div>
       <p>Le <strong>déclencheur</strong> de la tonte ne vit pas dans cette intégration : c'est un flow Node-RED. Quand il est coupé, l'intégration continue de recommander dans le vide et <strong>rien ne le signale</strong>. Deux fois en 2026 — le nœud de déclaration éteint du 30/07 au 06/08 (sept jours d'historique perdus), puis l'onglet Tondeuse désactivé le 19/08 pour une coupe de bordure et oublié.</p>
       <div class="tbl-wrap">
