@@ -352,6 +352,9 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "mower_passes_per_day_median",
     "mower_recommendation_ignored_minutes",
     "mower_recommendation_ignored",
+    "mower_job_progress_pct",
+    "mower_job_id",
+    "mower_job_status_raw",
     "watering_blocked_by_mower",
     "watering_block_reason_code",
     "watering_block_reason_label",
@@ -943,6 +946,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         mower_context.update(self._suivre_fiabilite_tondeuse(mower_context))
         mower_context.update(self._suivre_passes_tondeuse(mower_context))
         mower_context.update(self._suivre_recommandation_ignoree(mower_context))
+        mower_context.update(self._lire_progression_tonte())
         # Déclarée AVANT `compute_snapshot` : le retard de tonte est alors corrigé dès ce
         # cycle-ci. La placer après repousserait la correction de deux minutes pour rien.
         mower_context.update(self._declarer_tonte_du_jour(mower_context))
@@ -1826,6 +1830,55 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return ecoule
         return 0.0
 
+    def _lire_progression_tonte(self) -> dict[str, Any]:
+        """Où en est le TRAVAIL en cours, d'après la tondeuse elle-même.
+
+        ⚠️ OBSERVATION SEULE — RIEN N'EST BRANCHÉ SUR UNE DÉCISION. Le carnet compte des
+        PASSES ; il n'a jamais su ce qu'est un TRAVAIL. Cette entité le dit : une progression
+        0 → 100 % et un `task_id` stable qui survit à la recharge, donc qui recolle deux
+        passes séparées par une charge en un seul travail.
+
+        Mesuré le 25/08/2026 : 13:20:38 progression → 0 (nouvelle tâche), montée régulière,
+        17:24:11 → 100, au garage à 17:26:51.
+
+        ⚠️ DEUX INCONNUES INTERDISENT DE S'EN SERVIR POUR DÉCIDER, et c'est pour les lever
+        qu'on publie d'abord :
+          · `task_status` vaut 2 — on ignore son vocabulaire, donc on le publie BRUT ;
+          · une COUPE DE BORDURE monte-t-elle aussi à 100 ? Si oui, « progression = 100 »
+            veut dire « une tâche s'est terminée », pas « le gazon est tondu ».
+
+        ⚠️ Le suffixe de l'entité dépend de la langue de l'intégration tondeuse. Absente,
+        la réponse est `None` partout — une absence, jamais un zéro.
+        """
+        vide: dict[str, Any] = {
+            "mower_job_progress_pct": None,
+            "mower_job_id": None,
+            "mower_job_status_raw": None,
+        }
+        try:
+            selection = self._resolve_mower_selection()
+            entity_id = derive_related_entity_id(
+                selection.get("entity_id"), "sensor", "progression_de_la_tonte"
+            )
+            if not entity_id:
+                return vide
+            states = getattr(getattr(self, "hass", None), "states", None)
+            get_state = getattr(states, "get", None)
+            etat = get_state(entity_id) if callable(get_state) else None
+            if etat is None:
+                return vide
+            attrs = getattr(etat, "attributes", None) or {}
+            tache = attrs.get("task_id")
+            statut = attrs.get("task_status")
+            return {
+                "mower_job_progress_pct": _to_float_or_none(getattr(etat, "state", None)),
+                "mower_job_id": str(tache) if tache not in (None, "") else None,
+                "mower_job_status_raw": statut if statut is not None else None,
+            }
+        except Exception:  # noqa: BLE001 — une observation ne fait jamais tomber le cycle
+            _LOGGER.debug("Progression de la tonte indisponible", exc_info=True)
+            return vide
+
     def _suivre_recommandation_ignoree(self, mower_context: dict[str, Any]) -> dict[str, Any]:
         """Depuis combien de temps la tonte est recommandée sans que rien ne parte.
 
@@ -2099,6 +2152,14 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 autorisee = self._tonte_autorisee_au_cycle_precedent()
                 if autorisee is not None:
                     en_cours["tonte_autorisee_fin"] = autorisee
+                # ⚠️ « Rappelée » suppose qu'il y ait eu une autorisation À RETIRER. Sans ce
+                # drapeau, une passe lancée à la main hors fenêtre — autorisation fausse du
+                # début à la fin — était classée « rappelée par la coordination » alors que
+                # personne ne l'avait rappelée. Mesuré le 22/08/2026 : retour à 51 % sur un
+                # travail terminé, étiqueté `rappelee`, et la médiane de retour autonome est
+                # restée vide faute de cette passe.
+                if autorisee is True:
+                    en_cours["autorisee_vue_vraie"] = True
                 en_cours["derniere_vue"] = maintenant.isoformat()
                 en_cours["dernier_genre"] = (
                     "bloquee" if en_erreur else ("tonte" if en_tonte else "transit")
@@ -2191,8 +2252,8 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             motif = "bloquee"
         elif batterie_fin is not None and batterie_fin <= _BATTERIE_RETOUR_VIDE_PCT:
             motif = "batterie_vide"
-        elif autorisee_fin is False:
-            # La tonte était INTERDITE à la fin : c'est la coordination qui l'a rappelée.
+        elif autorisee_fin is False and bool(passe.get("autorisee_vue_vraie")):
+            # Autorisée PUIS interdite : la coordination l'a bien rappelée.
             motif = "rappelee"
         elif batterie_fin is None:
             motif = "inconnue"
@@ -2210,6 +2271,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # Fait BRUT conservé à côté de l'étiquette : si le classement se révèle mauvais,
             # tout se rejoue sur le journal sans avoir rien perdu.
             "tonte_autorisee_fin": autorisee_fin,
+            # Fait brut, pas une étiquette : la passe s'est déroulée sans qu'aucune
+            # autorisation n'ait jamais été vraie (lancement manuel, hors fenêtre).
+            "hors_coordination": autorisee_fin is False and not bool(passe.get("autorisee_vue_vraie")),
             "fin_motif": motif,
         }
 
