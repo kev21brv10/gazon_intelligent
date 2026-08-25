@@ -5739,3 +5739,148 @@ class RecommandationIgnoreeTests(unittest.TestCase):
                     "mower_recommendation_ignored",
                     (PACKAGE_DIR / module).read_text(encoding="utf-8"),
                 )
+
+
+class PasseHorsCoordinationTests(unittest.TestCase):
+    """« Rappelée » suppose qu'il y ait eu une autorisation À RETIRER.
+
+    ⚠️ POURQUOI. Mesuré le 22/08/2026 : passe de 73 min lancée à la main le soir, coordination
+    coupée, `tonte_autorisee` faux du début à la fin. Elle est rentrée à **51 %** sur un
+    travail réellement terminé — la seule réponse mesurée à « à quel niveau estime-t-elle
+    avoir fini ». Le carnet l'a étiquetée `rappelee`, donc exclue de
+    `mower_autonomous_return_battery_median`, qui est resté vide.
+    """
+
+    def _coord(self, instant, *, autorisee=None):
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord._runtime_state = {}
+        coord._current_datetime = lambda: instant
+        coord._current_date = lambda: instant.date()
+        coord._parse_datetime_value = (
+            coordinator_mod.GazonIntelligentCoordinator._parse_datetime_value.__get__(coord)
+        )
+        coord._minutes_creditables = (
+            coordinator_mod.GazonIntelligentCoordinator._minutes_creditables.__get__(coord)
+        )
+        coord._tonte_autorisee_au_cycle_precedent = lambda: autorisee
+        return coord
+
+    def _ctx(self, *, garage=False, tonte=False, batterie=None):
+        return {"tondeuse_connectee": True, "tondeuse_erreur": None,
+                "mower_is_mowing": tonte, "mower_is_docked": garage, "mower_battery": batterie}
+
+    def _rejouer(self, etapes, *, autorisee):
+        t0 = datetime(2026, 8, 22, 19, 50, tzinfo=timezone.utc)
+        coord = self._coord(t0, autorisee=autorisee)
+        for minutes, ctx in etapes:
+            instant = t0 + timedelta(minutes=minutes)
+            coord._current_datetime = lambda t=instant: t
+            coord._current_date = lambda t=instant: t.date()
+            coord._suivre_passes_tondeuse(dict(ctx))
+        return coord._runtime_state["mower_passes"]["journal"][-1]
+
+    def test_jamais_autorisee_n_est_pas_un_rappel(self) -> None:
+        """⚠️ LE CAS DU 22/08 : personne ne l'a rappelée, elle a fini son travail."""
+        passe = self._rejouer([
+            (0, self._ctx(garage=True, batterie=97)),
+            (1, self._ctx(tonte=True, batterie=97)),
+            (72, self._ctx(tonte=True, batterie=51)),
+            (73, self._ctx(garage=True, batterie=51)),
+        ], autorisee=False)
+        self.assertEqual(passe["fin_motif"], "retour_autonome")
+        self.assertIs(passe["hors_coordination"], True)
+        self.assertEqual(passe["batterie_fin"], 51)
+
+    def test_autorisee_puis_interdite_reste_un_rappel(self) -> None:
+        """⚠️ Le cas du 13/08 ne doit PAS régresser : autorisée, puis la chaleur l'interdit."""
+        t0 = datetime(2026, 8, 13, 10, 0, tzinfo=timezone.utc)
+        coord = self._coord(t0, autorisee=True)
+        etapes = [
+            (0, self._ctx(garage=True, batterie=100)),
+            (1, self._ctx(tonte=True, batterie=100)),
+            (39, self._ctx(tonte=True, batterie=58)),
+        ]
+        for minutes, ctx in etapes:
+            instant = t0 + timedelta(minutes=minutes)
+            coord._current_datetime = lambda t=instant: t
+            coord._current_date = lambda t=instant: t.date()
+            coord._suivre_passes_tondeuse(dict(ctx))
+        # L'autorisation tombe, puis elle rentre.
+        coord._tonte_autorisee_au_cycle_precedent = lambda: False
+        for minutes, ctx in [(40, self._ctx(tonte=True, batterie=58)),
+                             (41, self._ctx(garage=True, batterie=58))]:
+            instant = t0 + timedelta(minutes=minutes)
+            coord._current_datetime = lambda t=instant: t
+            coord._current_date = lambda t=instant: t.date()
+            coord._suivre_passes_tondeuse(dict(ctx))
+        passe = coord._runtime_state["mower_passes"]["journal"][-1]
+        self.assertEqual(passe["fin_motif"], "rappelee")
+        self.assertIs(passe["hors_coordination"], False)
+
+    def test_la_batterie_vide_prime_toujours(self) -> None:
+        passe = self._rejouer([
+            (0, self._ctx(garage=True, batterie=100)),
+            (1, self._ctx(tonte=True, batterie=100)),
+            (88, self._ctx(tonte=True, batterie=11)),
+            (89, self._ctx(garage=True, batterie=11)),
+        ], autorisee=False)
+        self.assertEqual(passe["fin_motif"], "batterie_vide")
+
+
+class ProgressionTonteTests(unittest.TestCase):
+    """La progression du TRAVAIL, publiée sans qu'elle décide de rien.
+
+    ⚠️ Le carnet compte des PASSES ; il n'a jamais su ce qu'est un TRAVAIL. Le `task_id`
+    survit à la recharge, donc il recolle deux passes en un seul travail.
+    """
+
+    def _coord(self, etat, *, mower="lawn_mower.esperance_jr"):
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord._resolve_mower_selection = lambda: {"entity_id": mower}
+        coord.hass = types.SimpleNamespace(
+            states=types.SimpleNamespace(get=lambda eid: etat.get(eid))
+        )
+        return coord
+
+    def test_la_progression_est_lue_sur_l_entite_derivee(self) -> None:
+        etat = {"sensor.esperance_jr_progression_de_la_tonte": types.SimpleNamespace(
+            state="100", attributes={"task_id": "a7de6def", "task_status": 2})}
+        sortie = coordinator_mod.GazonIntelligentCoordinator._lire_progression_tonte(self._coord(etat))
+        self.assertEqual(sortie["mower_job_progress_pct"], 100.0)
+        self.assertEqual(sortie["mower_job_id"], "a7de6def")
+        self.assertEqual(sortie["mower_job_status_raw"], 2)
+
+    def test_sans_entite_la_reponse_est_une_absence(self) -> None:
+        """⚠️ Le suffixe dépend de la langue : absente, on ne conclut rien."""
+        sortie = coordinator_mod.GazonIntelligentCoordinator._lire_progression_tonte(self._coord({}))
+        self.assertIsNone(sortie["mower_job_progress_pct"])
+        self.assertIsNone(sortie["mower_job_id"])
+
+    def test_une_valeur_illisible_ne_devient_pas_zero(self) -> None:
+        etat = {"sensor.esperance_jr_progression_de_la_tonte": types.SimpleNamespace(
+            state="unavailable", attributes={})}
+        sortie = coordinator_mod.GazonIntelligentCoordinator._lire_progression_tonte(self._coord(etat))
+        self.assertIsNone(sortie["mower_job_progress_pct"])
+
+    def test_les_cles_atteignent_le_capteur(self) -> None:
+        etat = {"sensor.esperance_jr_progression_de_la_tonte": types.SimpleNamespace(
+            state="34", attributes={"task_id": "x", "task_status": 2})}
+        produites = set(coordinator_mod.GazonIntelligentCoordinator._lire_progression_tonte(self._coord(etat)))
+        self.assertTrue(all(c.startswith("mower_") for c in produites), sorted(produites))
+        coord_src = (PACKAGE_DIR / "coordinator.py").read_text(encoding="utf-8")
+        capteur_src = (PACKAGE_DIR / "sensor.py").read_text(encoding="utf-8")
+        for cle in produites:
+            with self.subTest(cle=cle):
+                self.assertIn(f'"{cle}",', coord_src)
+                self.assertIn(f'"{cle}",', capteur_src)
+
+    def test_elle_est_appelee_dans_le_cycle(self) -> None:
+        source = (PACKAGE_DIR / "coordinator.py").read_text(encoding="utf-8")
+        self.assertIn("mower_context.update(self._lire_progression_tonte())", source)
+
+    def test_elle_n_alimente_aucune_decision(self) -> None:
+        """⚠️ Deux inconnues l'interdisent : le vocabulaire de `task_status`, et le
+        comportement sur une coupe de bordure. Ce test tombera si on l'oublie."""
+        for module in ("decision_mowing.py", "guidance.py", "decision.py", "decision_watering.py"):
+            with self.subTest(module=module):
+                self.assertNotIn("mower_job_", (PACKAGE_DIR / module).read_text(encoding="utf-8"))

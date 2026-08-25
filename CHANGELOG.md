@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.56.0
+
+1144 tests verts. Deux correctifs de carnet, **observation seule, aucune décision touchée**.
+
+**« Rappelée » suppose qu'il y ait eu une autorisation À RETIRER.** Mesuré le 22/08/2026 :
+passe de 73 min lancée à la main le soir, coordination coupée, `tonte_autorisee` faux du
+début à la fin. Elle est rentrée à **51 %** sur un travail réellement terminé — la seule
+réponse mesurée à « à quel niveau estime-t-elle avoir fini ». Le carnet l'a étiquetée
+`rappelee`, donc exclue de `mower_autonomous_return_battery_median`, resté vide.
+
+- Le motif `rappelee` exige désormais que l'autorisation ait été **vraie au moins une fois**
+  pendant la passe. Sinon on retombe sur le classement normal — et un retour à 51 % nourrit
+  enfin la médiane qu'il devait nourrir.
+- **⚠️ Le cas du 13/08 ne régresse pas** : autorisée puis interdite par la chaleur reste un
+  vrai rappel. Deux mutations gardent les deux sens.
+- Nouveau fait brut `hors_coordination` dans le journal, à côté de l'étiquette — pas un
+  motif : il dit que la passe s'est déroulée sans qu'aucune autorisation n'ait jamais existé.
+
+**La progression du travail est publiée** — `mower_job_progress_pct`, `mower_job_id`,
+`mower_job_status_raw`, lus sur l'entité dérivée `sensor.<tondeuse>_progression_de_la_tonte`.
+
+Le carnet compte des **passes** ; il n'a jamais su ce qu'est un **travail**. Le `task_id`
+survit à la recharge, donc il recolle deux passes en un seul travail. Mesuré le 25/08 :
+13:20:38 progression → 0, montée régulière, 17:24:11 → 100, au garage à 17:26:51.
+
+- **⚠️ RIEN N'EST BRANCHÉ SUR UNE DÉCISION**, et deux inconnues l'imposent : le vocabulaire
+  de `task_status` (vaut 2, sens ignoré — donc publié BRUT pour l'apprendre), et le
+  comportement sur une **coupe de bordure**. Si elle monte aussi à 100, « progression = 100 »
+  veut dire « une tâche s'est terminée », pas « le gazon est tondu ». Un test verrouille
+  l'absence de branchement sur quatre modules.
+- Le suffixe de l'entité dépend de la langue de l'intégration tondeuse : absente, la réponse
+  est `None` partout — une absence, jamais un zéro.
+- Les **10 mutations** du banc sont détectées, chacune par le test visé.
+
 ## 0.55.0
 
 1135 tests verts. **L'intégration s'aperçoit enfin qu'on ne l'écoute pas.**
