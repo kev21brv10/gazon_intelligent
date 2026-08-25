@@ -1052,9 +1052,10 @@
       </div>
 
       <div class="callout h">
-        <h3>⚠️ Un cycle complet NE PEUT PAS tenir dans la fenêtre idéale</h3>
-        <p>La fenêtre idéale du matin dure <b>2 heures</b> (10 h – 12 h). Un cycle en demande <b>3 h 54</b>. Arithmétiquement, <strong>elle finira toujours en dehors</strong> — dans l'après-midi « à éviter » ou le soir. C'est ce qui s'est passé le 21/08, où elle a terminé à 20:33.</p>
-        <p>Ça change le poids de l'arbitrage encore ouvert sur la <em>fenêtre qui meurt à 25 °C</em> : si la fin de cycle tombe nécessairement hors du matin, la fenêtre du soir n'est pas un supplément — c'est la moitié du dispositif.</p>
+        <h3>⚠️ Un cycle complet ne tient pas dans la fenêtre idéale — mais ça ne change rien</h3>
+        <p>La fenêtre idéale dure <b>2 heures</b> (10 h – 12 h), un cycle en demande <b>3 h 50</b>. Partie à 10:00, elle finit vers <b>13:50</b> — dans le <em>créneau intermédiaire</em>, pas le soir.</p>
+        <p><strong>Et ça n'a aucune conséquence</strong>, parce que la deuxième passe est une <strong>reprise décidée par la machine</strong>, pas par le flow : aucune fenêtre ne la commande. Une première version de cette fiche en concluait que « la fenêtre du soir est la moitié du dispositif » — <strong>c'est faux, sur les deux jambes</strong> : ce n'est pas le soir mais l'après-midi, et la fin de cycle ne dépend d'aucune fenêtre.</p>
+        <p>Ce que la fenêtre commande, c'est le <strong>DÉPART</strong>. Et c'est là que le verdict « à éviter » au-dessus de 25 °C mord : Node-RED ne lance que sur <code>ideal</code> ou <code>acceptable</code>, donc au-dessus de 25 °C plus aucun départ n'est possible sauf par le rattrapage de retard. Cadrage d'origine (21/08), et le bon.</p>
       </div>
 
       <div class="callout w">
