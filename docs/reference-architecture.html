@@ -231,14 +231,14 @@
     <h1>Comment le système décide</h1>
     <p class="lede">Arrosage, tonte, phases, produits, capteurs et services : ce que fait chaque brique, où sont les seuils, et ce qui reste à arbitrer. Établi sur l'état réel du code.</p>
     <div class="stats">
-      <span class="stat">version <b>0.55.0</b></span>
+      <span class="stat">version <b>0.56.0</b></span>
       <span class="stat">carte <b>0.26.0</b></span>
       <span class="stat"><b>39</b> modules</span>
       <span class="stat"><b>62</b> entités</span>
       <span class="stat"><b>15</b> services</span>
       <span class="stat"><b>20</b> entrées</span>
       <span class="stat"><b>8</b> phases</span>
-      <span class="stat"><b>1135</b> tests</span>
+      <span class="stat"><b>1144</b> tests</span>
     </div>
     <p style="font-size:.83rem;color:var(--faint);margin-top:.2rem">Référence vivante — mise à jour à chaque changement du code, vérifiée sur les fichiers réels.</p>
   </header>
@@ -1031,6 +1031,28 @@
   <!-- ═══ SANTÉ DU CODE ═══ -->
   <div class="panel" role="tabpanel" id="p-sante" aria-labelledby="t-sante" tabindex="0" hidden>
     <section>
+      <div class="sec-head"><h2>25/08/2026 — le carnet apprend ce qu'est un TRAVAIL</h2><span class="tally done">0.56.0</span></div>
+      <p>Deux correctifs, <strong>observation seule, aucune décision touchée</strong>.</p>
+
+      <div class="callout h">
+        <h3>« Rappelée » supposait une autorisation à retirer — et personne ne le vérifiait</h3>
+        <p>Le 22/08, une passe de 73 min lancée à la main le soir, coordination coupée, <code>tonte_autorisee</code> faux du début à la fin. Elle rentre à <b>51 %</b> sur un travail réellement terminé — <strong>la seule réponse mesurée</strong> à « à quel niveau estime-t-elle avoir fini ». Le carnet l'étiquette <code>rappelee</code>, donc l'exclut de <code>mower_autonomous_return_battery_median</code>, qui reste vide.</p>
+        <p>Le motif exige désormais que l'autorisation ait été <strong>vraie au moins une fois</strong> pendant la passe. Le cas du 13/08 — autorisée puis interdite par la chaleur — reste un vrai rappel ; deux mutations gardent les deux sens. Et un fait brut <code>hors_coordination</code> rejoint le journal à côté de l'étiquette.</p>
+      </div>
+
+      <div class="callout w">
+        <h3>La progression du travail, enfin visible</h3>
+        <p>Le carnet compte des <strong>passes</strong> ; il n'a jamais su ce qu'est un <strong>travail</strong>. Une nouvelle entité de la tondeuse le dit — progression 0 → 100 % et un <code>task_id</code> qui <em>survit à la recharge</em>, donc qui recolle deux passes en un seul travail. Mesuré le 25/08 : 13:20:38 → 0, montée régulière, <b>17:24:11 → 100</b>, au garage à 17:26:51.</p>
+        <p>Publiée en <code>mower_job_progress_pct</code>, <code>mower_job_id</code>, <code>mower_job_status_raw</code>, lue sur l'entité <em>dérivée</em> du nom de la tondeuse — aucun changement de configuration.</p>
+      </div>
+
+      <div class="callout m">
+        <h3>⚠️ Pourquoi elle ne décide encore de rien</h3>
+        <p>Deux inconnues l'interdisent. <code>task_status</code> vaut <b>2</b> et on ignore son vocabulaire — d'où sa publication <strong>brute</strong>, pour l'apprendre. Et surtout : <strong>une coupe de bordure monte-t-elle aussi à 100 ?</strong> Si oui, « progression = 100 » veut dire « une tâche s'est terminée », pas « le gazon est tondu ». Un test verrouille l'absence de branchement sur quatre modules — le jour où une décision voudra la lire, il tombera.</p>
+      </div>
+    </section>
+
+    <section>
       <div class="sec-head"><h2>22/08/2026 — le cycle de tonte réel, mesuré</h2><span class="tally info">référence terrain</span></div>
       <p>Trois jours de discussions sur « qu'est-ce qu'un cycle complet » ont été tranchés par une seule soirée observée de bout en bout, du lancement manuel jusqu'au retour définitif.</p>
       <div class="tbl-wrap">
@@ -1698,7 +1720,7 @@
     </section>
 
     <section>
-      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1135 tests verts</span></div>
+      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1144 tests verts</span></div>
       <p>Cet onglet est le point d'entrée pour « <strong>qu'est-ce qui reste à corriger ou à supprimer ?</strong> ». Il distingue trois choses qu'on confond souvent : ce qui est cassé, ce qui est un choix, et ce qui est déjà mort.</p>
       <div class="tbl-wrap">
         <table>
