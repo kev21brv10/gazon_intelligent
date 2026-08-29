@@ -231,12 +231,12 @@
     <h1>Comment le système décide</h1>
     <p class="lede">Arrosage, tonte, phases, produits, capteurs et services : ce que fait chaque brique, où sont les seuils, et ce qui reste à arbitrer. Établi sur l'état réel du code.</p>
     <div class="stats">
-      <span class="stat">version <b>0.56.0</b></span>
-      <span class="stat">carte <b>0.26.0</b></span>
+      <span class="stat">version <b>0.60.0</b></span>
+      <span class="stat">carte <b>0.26.5</b></span>
       <span class="stat"><b>39</b> modules</span>
       <span class="stat"><b>62</b> entités</span>
       <span class="stat"><b>15</b> services</span>
-      <span class="stat"><b>20</b> entrées</span>
+      <span class="stat"><b>22</b> entrées</span>
       <span class="stat"><b>8</b> phases</span>
       <span class="stat"><b>1144</b> tests</span>
     </div>
@@ -852,6 +852,8 @@
             <tr><td class="rowlabel">Température locale</td><td>Mesure au jardin</td><td>Température de l'entité météo</td></tr>
             <tr><td class="rowlabel">Humidité</td><td>Déficit de pression de vapeur</td><td>Humidité de l'entité météo</td></tr>
             <tr><td class="rowlabel">Pluie 24 h</td><td>Crédite la réserve du sol</td><td>Prévision — jamais créditée au bilan</td></tr>
+            <tr><td class="rowlabel">Pluie instantanée <span class="chip info">0.58.0</span></td><td>Répond directement à « pleut-il&nbsp;? » — Netatmo <code>precipitation</code>, WS90 <code>rain_rate</code></td><td>Déduite d'une hausse du cumul : c'est tout l'appareillage cliquet + horodatage, et ses défauts</td></tr>
+            <tr><td class="rowlabel">Compteur de pluie cumulatif <span class="chip info">0.60.0</span></td><td>Total du jour reconstruit sur <strong>notre</strong> horloge, depuis un compteur qui ne se remet jamais à zéro</td><td>Total du jour lu tel quel sur le capteur 24&nbsp;h</td></tr>
             <tr><td class="rowlabel">Pluie de demain</td><td>Reporte un arrosage si la pluie suffit</td><td>Prévision de l'entité météo</td></tr>
             <tr><td class="rowlabel">ETP du jour</td><td>Court-circuite le calcul interne</td><td>ET0 estimée en interne</td></tr>
             <tr><td class="rowlabel">Humidité du sol</td><td>Recoupement direct</td><td>Le bilan fait foi seul</td></tr>
@@ -861,7 +863,7 @@
           </tbody>
         </table>
       </div>
-      <p style="font-size:.88rem;color:var(--faint)">13 entrées côté météo et jardin, plus 7 côté tondeuse ci-dessous — 20 au total, toutes optionnelles sauf l'entité météo.</p>
+      <p style="font-size:.88rem;color:var(--faint)">15 entrées côté météo et jardin, plus 7 côté tondeuse ci-dessous — 22 au total, toutes optionnelles sauf l'entité météo.</p>
 
       <div class="tbl-wrap">
         <table>
@@ -881,7 +883,7 @@
 
       <div class="callout w">
         <h3>Comment savoir si ça tourne sur des mesures</h3>
-        <p>L'attribut <code>sensor_health</code> de la réserve porte les voyants : <code>eto_radiation_measured</code>, <code>eto_pressure_measured</code>, <code>eto_hourly_available</code>, plus température, pluie, ETP et humidité. La carte affiche une pastille <strong>« ET₀ approchée »</strong> uniquement quand un repli est actif — en marche normale, rien.</p>
+        <p>L'attribut <code>sensor_health</code> de la réserve porte les voyants : <code>eto_radiation_measured</code>, <code>eto_pressure_measured</code>, <code>eto_hourly_available</code>, plus température, pluie, ETP et humidité. S'y ajoutent depuis la 0.54.0 les voyants de pluie — <code>pluie_mesuree_active</code>, <code>pluie_mesuree_minutes_depuis_hausse</code>, <code>pluie_actuelle_active</code> (0.58.0), <code>pluie_cumul_jour_mm</code> et <code>pluie_gain_rejete_mm</code> (0.60.0) : <strong>observation seule</strong>, aucune décision ne les lit, et un test le verrouille sur quatre modules. La carte affiche une pastille <strong>« ET₀ approchée »</strong> uniquement quand un repli est actif — en marche normale, rien.</p>
       </div>
     </section>
 
@@ -1030,6 +1032,74 @@
 
   <!-- ═══ SANTÉ DU CODE ═══ -->
   <div class="panel" role="tabpanel" id="p-sante" aria-labelledby="t-sante" tabindex="0" hidden>
+    <section>
+      <div class="sec-head"><h2>29/08/2026 — la garde « il pleut » cesse de deviner</h2><span class="tally done">0.56.1 → 0.60.0</span></div>
+      <p>Cinq versions en une journée, toutes sur la même question&nbsp;: <strong>d'où vient l'information « il pleut »</strong>. Depuis le début elle était <em>déduite</em> d'un cumul journalier — un cumul ne dit pas s'il pleut, il dit combien il est tombé. Tout l'appareillage construit pour le deviner (détecteur de hausse, cliquet intra-journée, horodatage sur la dernière hausse) vient de là, et ses défauts aussi.</p>
+
+      <div class="callout h">
+        <h3>⚠️ Le cliquet inventait de la pluie les jours de bruine <span class="chip ok">0.56.1</span></h3>
+        <p>Défaut <strong>introduit par le cliquet lui-même</strong> en 0.54.2, mesuré le 29/08 sur une journée à 0,4 mm&nbsp;:</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th class="num">09:00</th><th class="num">10:17</th><th class="num">11:23</th><th class="num">12:23</th></tr></thead>
+            <tbody><tr><td class="num">0,3</td><td class="num"><b>0,4</b> (pic)</td><td class="num">0,2 ↓</td><td class="num">0,4 ↑</td></tr></tbody>
+          </table>
+        </div>
+        <p>La détection de remise à zéro testait <code>lecture ≤ max(0,5 ; pic/2)</code>. Pour 0,2 sous un pic de 0,4, c'est vrai&nbsp;: le cliquet croyait le compteur rebouclé, se recalait sur 0,2, et la remontée devenait une <strong>averse</strong>. Le commentaire disait « une chute vers <b>~0</b> », le code disait « sous 0,5 » — pas la même chose quand la journée entière vaut 0,4 mm.</p>
+        <p>Une remise à zéro est désormais une chute vers zéro&nbsp;: <code>_PLUIE_REMISE_A_ZERO_MAX_MM = 0,1</code>, la résolution du capteur. Le bras relatif est <strong>conservé mais gardé</strong> par un pic d'au moins <code>1,0 mm</code> — sans lui, un <code>max()</code> figerait le cumul de la veille toute la journée. <strong>Aucun test existant n'a vu ce défaut</strong>&nbsp;: ils portaient tous sur des cumuls de plusieurs millimètres. La règle était juste là où on l'avait regardée.</p>
+      </div>
+
+      <div class="callout w">
+        <h3>Bloquer n'est plus armer trois heures de ressuyage <span class="chip ok">0.57.0</span></h3>
+        <p>Mesuré le 29/08&nbsp;: la prévision annonce <code>rainy</code> de 13:10 à 14:07, la dernière hausse du pluviomètre remonte à 10:17. Le ressuyage courait donc jusqu'à <strong>17:07</strong> pour une averse que rien n'avait mesurée.</p>
+        <p>Quand la prévision annonce la pluie et que le pluviomètre la <strong>dément</strong>, on continue de <strong>bloquer</strong> — ça ne coûte que la durée de la prévision, et le pluviomètre n'est pas sur la pelouse. <strong>Mais on n'horodate plus l'averse</strong>, donc on n'engage pas 180 min de ressuyage sur une pluie jamais tombée. Le test est <code>is False</code>, jamais la valeur brute&nbsp;: <code>None</code> veut dire « aucune mesure », et une absence ne dément rien.</p>
+      </div>
+
+      <div class="callout a">
+        <h3>La pluie INSTANTANÉE devient une entrée <span class="chip ok">0.58.0</span></h3>
+        <p><code>capteur_pluie_actuelle</code>, optionnelle, dans les deux formulaires. Netatmo&nbsp;: <code>sensor.&lt;station&gt;_precipitation</code>. Ecowitt/Shelly <strong>WS90</strong>&nbsp;: <code>rain_rate</code>. Le 29/08 à 12:23, quand le cliquet a inventé une averse, ce capteur affichait <strong>0,0 depuis 10:11</strong> — il aurait évité l'erreur d'entrée de jeu.</p>
+        <p>Elle est publiée <strong>à côté</strong> de <code>pluie_mesuree_active</code>, volontairement&nbsp;: c'est en comparant les deux sur plusieurs averses réelles qu'on saura si la mesure directe peut remplacer la déduction. <strong>Elle n'alimente aucune décision</strong> pour l'instant.</p>
+        <p><b>Mesuré au passage</b>&nbsp;: la station publique Netatmo est à <strong>55 m</strong> de la tondeuse (coordonnées comparées). Elle n'est donc pas « chez un voisin lointain » comme la note de projet le laissait croire — une averse locale ne peut pas lui échapper. Ça affaiblit l'argument qui justifie de bloquer sur une prévision que la mesure dément&nbsp;: <strong>point à rouvrir</strong>.</p>
+      </div>
+
+      <div class="callout h">
+        <h3>⚠️ Les capteurs étaient lus avec une unité SUPPOSÉE <span class="chip ok">0.59.0</span></h3>
+        <p>Défaut <strong>préexistant</strong>, trouvé en préparant l'arrivée de la station&nbsp;:</p>
+        <div class="tbl-wrap"><table><tbody><tr><td><code>wind_unit_raw = "km/h" if vent is not None else weather_profile.get("weather_wind_speed_unit")</code></td></tr></tbody></table></div>
+        <p>Dès qu'un capteur de vent était configuré, le code <strong>supposait des km/h</strong> et ne lisait jamais son unité — juste par chance avec le Netatmo. Avec un capteur en <strong>m/s</strong>, l'ET0 divisait par 3,6 une valeur déjà en m/s, et les seuils de tonte devenaient inatteignables&nbsp;: un vent réel de 40 km/h vaut 11 m/s, très loin du seuil de blocage à 40. Le WS90 publie sa pression en <strong>kPa</strong> — branché tel quel, il aurait donné une pression dix fois trop faible au cœur du calcul du besoin en eau.</p>
+        <p>Vent normalisé en km/h et pression en hPa <strong>une fois, à la lecture</strong>&nbsp;: tout l'aval garde ses hypothèses et devient vrai au lieu d'être supposé. <strong>Unité absente ou inconnue → aucune conversion</strong>, exactement le comportement d'avant. Une seule table d'unités&nbsp;: <code>facteur_vent_vers_ms</code> est extraite de <code>wind_speed_to_ms</code>, qui garde son comportement au chiffre près — deux tables finiraient par diverger, c'est déjà arrivé ici. Et le plancher de 0,5 m/s de Penman-Monteith <strong>ne fuit pas</strong> dans les seuils de tonte&nbsp;: il empêche la formule de diverger, il n'a aucun sens pour décider si le vent gêne la coupe.</p>
+      </div>
+
+      <div class="callout m">
+        <h3>Un compteur qui ne se remet jamais à zéro <span class="chip ok">0.60.0</span></h3>
+        <p><code>capteur_pluie_cumul</code>, préparée pour le WS90. Deux défauts documentés de ce compteur qu'un <code>utility_meter</code> ne sait pas gérer&nbsp;: il <strong>ne se réinitialise pas à minuit</strong>, et il <strong>chute parfois brutalement à 0 puis revient</strong> (trames corrompues). Un compteur d'énergie branché dessus enregistre la remontée comme 250 mm de pluie.</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>lecture</th><th>ce que c'est</th><th>retenu</th></tr></thead>
+            <tbody>
+              <tr><td class="num">250 → 0</td><td>chute parasite</td><td>aucun gain, le maximum reste 250</td></tr>
+              <tr><td class="num">0 → 250</td><td>remontée</td><td>aucun gain, on est sous le maximum</td></tr>
+              <tr><td class="num">250 → 250,4</td><td>vraie pluie</td><td class="num">+0,4 mm</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>On ne compte que ce qui <strong>dépasse le maximum déjà vu</strong>, et le total repart à zéro sur <strong>notre</strong> horloge. Les deux mémoires sont <strong>persistées</strong>&nbsp;: sans elles, une chute parasite suivie d'un redémarrage recompterait tout le compteur en pluie. Plafond de plausibilité <code>_PLUIE_GAIN_MAX_PAR_PAS_MM = 30</code> par pas de cycle (~2 min, marge d'un facteur 5 sur les pluies les plus intenses relevées en France), et un gain rejeté est <strong>conservé en trace</strong> — un rejet silencieux serait indiscernable d'une panne.</p>
+      </div>
+
+      <div class="callout h">
+        <h3>⚠️ Deux pièges attrapés par les tests avant livraison</h3>
+        <p><strong>Collision de nom</strong>&nbsp;: <code>pluie_jour_mm</code> existait déjà dans le bilan sol — la clé est devenue <code>pluie_cumul_jour_mm</code>. Et une première version du test de chute parasite utilisait 250 mm&nbsp;: le <strong>plafond de plausibilité</strong> rejetait la remontée, et masquait donc un maximum cassé. <strong>Le test passait pour la mauvaise raison.</strong> Le test décisif utilise 20 mm, sous le plafond, où seul le maximum peut protéger.</p>
+      </div>
+
+      <div class="callout a">
+        <h3>Côté carte — trois entités déduites de la config brute <span class="chip ok">carte 0.26.5</span></h3>
+        <p><code>entity_hauteur_gazon_estimee</code>, <code>entity_catalogue_produits</code> et <code>entity_derniere_application</code> n'ont pas de défaut à elles&nbsp;: elles se déduisent d'une autre entité pour <strong>suivre le préfixe de l'instance</strong> — un <code>gazon_intelligent_</code> figé ferait lire à la seconde pelouse les valeurs de la première. Mais la déduction lisait <code>config.entity_…</code>, la valeur <strong>brute</strong>, au lieu du défaut résolu&nbsp;: une carte qui ne déclarait pas la source les laissait à <code>undefined</code>, muettes en silence, alors que toutes les autres entités avaient un défaut. <code>entity_derniere_application</code> y était de surcroît déclarée <strong>deux fois</strong> dans le même littéral — la seconde écrasait la première, dont le défaut explicite était mort.</p>
+        <p>Les deux cartes de l'installation déclarent déjà leurs sources&nbsp;: <strong>rendu inchangé</strong>, vérifié onglet par onglet sur les valeurs réelles avant et après.</p>
+      </div>
+
+      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b>&nbsp;: 1181 tests verts côté intégration, 22 côté carte, et pour chaque correctif un banc de mutations où la mutation visée fait bien tomber le test visé.</p>
+    </section>
+
     <section>
       <div class="sec-head"><h2>25/08/2026 — le carnet apprend ce qu'est un TRAVAIL</h2><span class="tally done">0.56.0</span></div>
       <p>Deux correctifs, <strong>observation seule, aucune décision touchée</strong>.</p>
@@ -1720,7 +1790,7 @@
     </section>
 
     <section>
-      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1144 tests verts</span></div>
+      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1181 tests verts</span></div>
       <p>Cet onglet est le point d'entrée pour « <strong>qu'est-ce qui reste à corriger ou à supprimer ?</strong> ». Il distingue trois choses qu'on confond souvent : ce qui est cassé, ce qui est un choix, et ce qui est déjà mort.</p>
       <div class="tbl-wrap">
         <table>
@@ -2482,7 +2552,7 @@
   <!-- ═══ À ARBITRER ═══ -->
   <div class="panel" role="tabpanel" id="p-arb" aria-labelledby="t-arb" tabindex="0" hidden>
     <section>
-      <div class="sec-head"><h2>Décisions en attente</h2><span class="tally todo">3</span></div>
+      <div class="sec-head"><h2>Décisions en attente</h2><span class="tally todo">4</span></div>
 
       <div class="card hot">
         <div class="card-head"><h3>L'arrosage en retard mange la fenêtre de tonte du jour</h3><span class="chip crit">mesuré le 14/08/2026</span></div>
@@ -2511,6 +2581,14 @@
         <p><strong>La cause, lue dans <code>_resolve_mowing_window</code> (<code>decision_mowing.py</code>) :</strong> le verdict « <em>Température élevée : à éviter</em> » couvre toute la plage <b>25 – 30 °C</b> et il est rendu <strong>avant</strong> les tests d'heure. Conséquence : dès 25 °C, la fenêtre ne peut plus <em>jamais</em> valoir <code>ideal</code> ni <code>acceptable</code>, quelle que soit l'heure. Or Node-RED n'accepte de lancer que sur ces deux valeurs — le seul rattrapage restant est le retard.</p>
         <p><strong>Deux branches inatteignables prouvent que ce n'était pas l'intention.</strong> La fenêtre du soir et le créneau intermédiaire testent tous deux <code>mois ∈ {juillet, août} et température ≥ 28</code> pour décourager. Ce test ne peut jamais être vrai : à ≥ 28 °C le verdict 25–30 a déjà renvoyé « à éviter », et au-dessus de 30 °C tout est bloqué. <strong>Du code écrit pour laisser tondre le soir jusqu'à 28 °C, rendu mort par un test placé trop haut.</strong></p>
         <p><em>Correctif proposé : déplacer le verdict de température <strong>après</strong> les tests d'heure, pour que la fenêtre du soir retrouve la vie que son propre code décrit. Le blocage dur à 30 °C sur <code>tonte_autorisee</code> n'est pas touché — vérifié tenant à 34 °C avec 5 jours de retard. À arbitrer par Kévin : c'est un changement de comportement en pleine saison chaude, pas une correction cosmétique.</em></p>
+      </div>
+
+      <div class="card todo">
+        <div class="card-head"><h3>Faut-il encore bloquer sur une prévision que la mesure dément&nbsp;?</h3><span class="chip warn">rouvert le 29/08/2026</span></div>
+        <p class="detail"><strong>Aujourd'hui (0.57.0)&nbsp;:</strong> quand la prévision annonce <code>rainy</code> et que le pluviomètre dit non, on <strong>bloque quand même</strong> la tonte — mais sans horodater l'averse, donc sans armer les 180 min de ressuyage.</p>
+        <p>La justification était&nbsp;: « le pluviomètre n'est pas sur la pelouse, une averse locale peut lui échapper ». <strong>Cet argument vient de tomber.</strong> Coordonnées comparées le 29/08&nbsp;: la station publique Netatmo est à <strong>55 m</strong> de la tondeuse. Ce n'est pas « chez un voisin lointain » comme la note de projet le laissait croire — à 55 m, une averse ne peut pas tomber sur l'une et pas sur l'autre.</p>
+        <p><em>Deux options, à trancher par Kévin&nbsp;: (1) garder le blocage — il ne coûte que la durée de la prévision, et la prudence sur un robot qui roule sur l'herbe mouillée se défend seule&nbsp;; (2) laisser la mesure primer sur la prévision, ce qui rendrait à la tonte les créneaux où la prévision se trompe. La 0.57.0 a laissé un test volontairement redondant à cet endroit, précisément pour que ce bras soit facile à inverser le jour où la décision tombe.</em></p>
+        <p><strong>À reprendre à l'arrivée du WS90</strong>&nbsp;: la station sera alors <em>chez lui</em>, et l'argument de distance disparaîtra pour de bon.</p>
       </div>
 
       <p>Les trois arbitrages de <strong>tonte</strong> ont été tranchés le 29/07/2026 (voir l'onglet Santé du code). Restent la mesure de terrain — bloquée sur un fait, pas sur une décision —, deux points ouverts par l'audit du 31/07/2026 (ce que « risque gazon » doit signifier ; le pas d'une heure de la pousse), trois sortis de l'audit du 06/08/2026, et depuis le 13/08/2026 la fenêtre de tonte qui meurt à 25 °C.</p>
