@@ -31,6 +31,7 @@ from .const import (
     CONF_CAPTEUR_ETP,
     CONF_CAPTEUR_PLUIE_24H,
     CONF_CAPTEUR_PLUIE_ACTUELLE,
+    CONF_CAPTEUR_PLUIE_CUMUL,
     CONF_CAPTEUR_PLUIE_DEMAIN,
     CONF_ENTITE_METEO,
     CONF_CAPTEUR_TEMPERATURE,
@@ -244,6 +245,22 @@ _PLUIE_MESUREE_FENETRE_MINUTES: float = 30.0
 # Pas de mesure du pluviomètre (0,1 mm). Le seuil s'intercale entre le bruit flottant (1e-9) et
 # le plus petit incrément réel, donc toute vraie hausse est vue et aucune ne s'invente.
 _PLUIE_MESUREE_HAUSSE_MIN_MM: float = 0.05
+
+# ── TOTAL DU JOUR DEPUIS UN COMPTEUR CUMULATIF ────────────────────────────────────────────
+# Le compteur du WS90 ne se remet JAMAIS à zéro, et il chute parfois brutalement à 0 avant de
+# revenir à sa valeur — trames corrompues documentées, simultanées à des rafales à plus de
+# 25 000 km/h. Un `utility_meter` branché dessus compte ces remontées comme de la pluie.
+#
+# On ne compte donc QUE CE QUI DÉPASSE LE MAXIMUM DÉJÀ VU :
+#     250 → 0     chute parasite  → aucun gain, le maximum reste 250
+#     0   → 250   remontée        → aucun gain, on est sous le maximum
+#     250 → 250,4 vraie pluie     → +0,4 mm
+# Et le total du jour est remis à zéro par NOTRE horloge, pas par celle du capteur.
+#
+# ⚠️ Plafond de plausibilité par pas de cycle (~2 min). Les pluies les plus intenses relevées
+# en France plafonnent vers 3 mm/min ; 30 mm en un pas laisse un facteur 5 de marge et écarte
+# les sauts de compteur. À recalibrer quand la station sera là et qu'on aura ses vrais écarts.
+_PLUIE_GAIN_MAX_PAR_PAS_MM: float = 30.0
 
 # Fenêtres pour lesquelles un renoncement à arroser est un vrai REFUS, digne d'être tracé.
 # Doit rester un sous-ensemble de `POSSIBLE_FENETRE_OPTIMALE_VALUES` (decision_models.py) :
@@ -873,6 +890,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # un repli météo la ramènerait exactement à l'aveuglement qu'elle vient de corriger.
         weather_profile.update(self._suivre_pluie_mesuree(pluie_24h_sensor))
         weather_profile.update(self._lire_pluie_actuelle())
+        weather_profile.update(self._suivre_pluie_du_jour())
         pluie_24h, pluie_24h_source, pluie_demain, pluie_demain_source = self._resolve_precipitation_inputs(
             pluie_24h_sensor=pluie_24h_sensor,
             pluie_demain_sensor=pluie_demain_sensor,
@@ -1960,6 +1978,62 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.debug("Suivi de la recommandation ignorée indisponible", exc_info=True)
             return vide
 
+    def _suivre_pluie_du_jour(self) -> dict[str, Any]:
+        """Total de pluie du jour, dérivé d'un compteur CUMULATIF qui ne se réinitialise pas.
+
+        ⚠️ OBSERVATION SEULE POUR L'INSTANT — publiée à côté de `capteur_pluie_24h`, elle
+        n'alimente aucune décision tant qu'on ne l'a pas vue vivre sur une vraie station.
+
+        ⚠️ ON NE COMPTE QUE LE DÉPASSEMENT DU MAXIMUM DÉJÀ VU. Le compteur du WS90 chute
+        parfois à 0 puis revient à sa valeur : un simple `delta` compterait la remontée comme
+        de la pluie — 250 mm d'un coup. Le maximum, lui, ne redescend jamais.
+
+        ⚠️ LES DEUX MÉMOIRES SONT PERSISTÉES. Sans elles, un redémarrage ferait repartir le
+        maximum de la lecture courante : la première vraie hausse serait perdue, et surtout
+        une chute parasite suivie d'un redémarrage recompterait tout le compteur.
+        """
+        vide: dict[str, Any] = {
+            "pluie_cumul_jour_mm": None,
+            "pluie_cumul_pic_mm": None,
+            "pluie_gain_rejete_mm": None,
+        }
+        try:
+            lecture = self._get_float_state(self._get_conf(CONF_CAPTEUR_PLUIE_CUMUL))
+            if lecture is None:
+                return vide
+
+            suivi = self._runtime_state.get("pluie_cumul")
+            if not isinstance(suivi, dict):
+                suivi = {}
+            aujourd_hui = self._current_date().isoformat()
+            if suivi.get("date") != aujourd_hui:
+                suivi["date"] = aujourd_hui
+                suivi["total_jour"] = 0.0   # ⚠️ NOTRE minuit, pas celui du capteur.
+
+            pic = _to_float_or_none(suivi.get("pic"))
+            rejete = _to_float_or_none(suivi.get("gain_rejete")) or 0.0
+            if pic is not None:
+                gain = lecture - pic
+                if gain > 0.0:
+                    if gain <= _PLUIE_GAIN_MAX_PAR_PAS_MM:
+                        suivi["total_jour"] = round(float(suivi.get("total_jour") or 0.0) + gain, 2)
+                    else:
+                        # Saut impossible en deux minutes : on ne le compte pas, mais on le
+                        # GARDE en trace. Un rejet silencieux serait indiscernable d'une panne.
+                        rejete = round(rejete + gain, 2)
+            suivi["pic"] = lecture if pic is None else max(pic, lecture)
+            suivi["gain_rejete"] = rejete
+            self._runtime_state["pluie_cumul"] = suivi
+
+            return {
+                "pluie_cumul_jour_mm": round(float(suivi.get("total_jour") or 0.0), 2),
+                "pluie_cumul_pic_mm": suivi["pic"],
+                "pluie_gain_rejete_mm": rejete,
+            }
+        except Exception:  # noqa: BLE001 — une observation ne fait jamais tomber le cycle
+            _LOGGER.debug("Total de pluie du jour indisponible", exc_info=True)
+            return vide
+
     def _lire_pluie_actuelle(self) -> dict[str, Any]:
         """Pleut-il MAINTENANT, dit directement par un capteur — sans rien déduire.
 
@@ -2538,6 +2612,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # plusieurs averses qu'on saura si la mesure directe peut remplacer la déduction.
             "pluie_actuelle_mm": weather_profile.get("pluie_actuelle_mm"),
             "pluie_actuelle_active": weather_profile.get("pluie_actuelle_active"),
+            "pluie_cumul_jour_mm": weather_profile.get("pluie_cumul_jour_mm"),
+            "pluie_cumul_pic_mm": weather_profile.get("pluie_cumul_pic_mm"),
+            "pluie_gain_rejete_mm": weather_profile.get("pluie_gain_rejete_mm"),
             "pluie_mesuree_minutes_depuis_hausse": weather_profile.get(
                 "pluie_mesuree_minutes_depuis_hausse"
             ),
@@ -3396,6 +3473,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "pluie_mesuree": self._serialize_runtime_value(
                 self._runtime_state.get("pluie_mesuree")
             ),
+            # ⚠️ Le maximum ne doit JAMAIS repartir de la lecture courante : sans persistance,
+            # une chute parasite suivie d'un redémarrage recompterait tout le compteur en pluie.
+            "pluie_cumul": self._serialize_runtime_value(
+                self._runtime_state.get("pluie_cumul")
+            ),
             # Non persisté, un redémarrage remettrait le compteur de silence à zéro — or c'est
             # justement sur la DURÉE qu'il alerte, et les redémarrages sont fréquents ici.
             "mower_recommendation_ignored_since": self._serialize_runtime_value(
@@ -3463,6 +3545,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "mower_health": runtime.get("mower_health"),
             "mower_passes": runtime.get("mower_passes"),
             "pluie_mesuree": runtime.get("pluie_mesuree"),
+            "pluie_cumul": runtime.get("pluie_cumul"),
             "mower_recommendation_ignored_since": runtime.get("mower_recommendation_ignored_since"),
         }
 
