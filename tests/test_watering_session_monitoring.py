@@ -5111,7 +5111,11 @@ class CarnetDePassesTondeuseTests(unittest.TestCase):
     def test_le_carnet_n_alimente_AUCUNE_decision(self) -> None:
         """Promesse explicite : il observe, il ne tranche pas. Le jour où une décision lira
         ces clés, ce test doit tomber et forcer une discussion."""
+        # ⚠️ `decision_watering.py` manquait ici alors que les quatre autres verrous
+        # « observation seule » le couvrent : une clé du carnet lue par la décision
+        # d'arrosage serait passée sans bruit. Cinq verrous, la même liste de modules.
         source = (PACKAGE_DIR / "decision_mowing.py").read_text(encoding="utf-8")
+        source += (PACKAGE_DIR / "decision_watering.py").read_text(encoding="utf-8")
         source += (PACKAGE_DIR / "guidance.py").read_text(encoding="utf-8")
         source += (PACKAGE_DIR / "decision.py").read_text(encoding="utf-8")
         for cle in ("mower_full_pass_minutes_median", "mower_passes_per_day_median",

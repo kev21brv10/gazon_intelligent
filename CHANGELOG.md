@@ -34,6 +34,12 @@ trois fois, exactement le piège que ce projet documente.
 - Les **5 mutations** du banc sont détectées par le test visé, dont les deux erreurs
   symétriques et le retour au cumul brut.
 
+**Au passage, un cinquième verrou « observation seule » était plus étroit que les quatre
+autres.** Le carnet de passes se vérifiait contre `decision_mowing`, `guidance` et `decision`,
+mais **pas** `decision_watering` — une clé du carnet lue par la décision d'arrosage serait
+passée sans bruit, alors que les quatre autres verrous couvrent bien les quatre modules. Même
+liste partout, et la mutation le confirme.
+
 ## 0.60.0
 
 1181 tests verts. **Le total de pluie du jour peut venir d'un compteur qui ne se remet jamais
