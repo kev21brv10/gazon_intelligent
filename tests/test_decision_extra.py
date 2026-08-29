@@ -3975,6 +3975,35 @@ class TestHorodatageSurLaDerniereHausse(unittest.TestCase):
         etat = decision_mowing._etat_pluie(self._ctx(heure=10.0, condition="rainy"), True)
         self.assertEqual(etat, {"date": "2026-08-16", "heure": 10.0})
 
+    def test_une_prevision_que_la_mesure_dement_n_arme_pas_le_ressuyage(self) -> None:
+        """⚠️ MESURÉ LE 29/08/2026. Prévision `rainy` de 13:10 à 14:07, dernière hausse du
+        pluviomètre à 10:17 : le ressuyage courait jusqu'à 17:07 pour une pluie jamais tombée.
+
+        Bloquer pendant la prévision reste juste — ça ne coûte que sa durée, et le pluviomètre
+        n'est pas sur la pelouse. Engager trois heures de ressuyage, non.
+        """
+        memoire = {"derniere_pluie_active": {"date": "2026-08-29", "heure": 10.28}}
+        etat = decision_mowing._etat_pluie(
+            self._ctx(heure=14.0, condition="rainy", mesure=False, depuis=223.0,
+                      memoire=memoire, jour=date(2026, 8, 29)),
+            True,
+        )
+        self.assertEqual(etat, {"date": "2026-08-29", "heure": 10.28},
+                         "le constat a été repoussé par une prévision que la mesure dément")
+
+    def test_sans_pluviometre_la_prevision_garde_le_dernier_mot(self) -> None:
+        """⚠️ `None` = aucune mesure. Une absence ne dément rien."""
+        etat = decision_mowing._etat_pluie(
+            self._ctx(heure=14.0, condition="rainy"), True
+        )
+        self.assertAlmostEqual(etat["heure"], 14.0, places=3)
+
+    def test_une_mesure_qui_confirme_horodate_bien_maintenant(self) -> None:
+        etat = decision_mowing._etat_pluie(
+            self._ctx(heure=14.0, condition="rainy", mesure=True, depuis=2.0), True
+        )
+        self.assertAlmostEqual(etat["heure"], 14.0, places=3)
+
     def test_la_nuit_du_16_aout_le_ressuyage_va_jusqu_au_bout(self) -> None:
         """Le cas réel. Pluie finie à 05:52, garde encore vraie à 06:20 par la mesure.
 
