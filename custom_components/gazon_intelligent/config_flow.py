@@ -22,6 +22,7 @@ from .const import (
     CONF_DEBIT_ZONE_5,
     CONF_ENTITE_METEO,
     CONF_CAPTEUR_PLUIE_24H,
+    CONF_CAPTEUR_PLUIE_ACTUELLE,
     CONF_CAPTEUR_PLUIE_DEMAIN,
     CONF_CAPTEUR_TEMPERATURE,
     CONF_CAPTEUR_ETP,
@@ -64,6 +65,7 @@ _OPTIONAL_CLEARABLE_KEYS = (
     CONF_ZONE_4,
     CONF_ZONE_5,
     CONF_CAPTEUR_PLUIE_24H,
+    CONF_CAPTEUR_PLUIE_ACTUELLE,
     CONF_CAPTEUR_PLUIE_DEMAIN,
     CONF_CAPTEUR_TEMPERATURE,
     CONF_CAPTEUR_ETP,
@@ -89,6 +91,7 @@ _OPTIONAL_CLEARABLE_KEYS = (
 _OPTIONAL_ENTITY_KEYS = (
     CONF_ENTITE_METEO,
     CONF_CAPTEUR_PLUIE_24H,
+    CONF_CAPTEUR_PLUIE_ACTUELLE,
     CONF_CAPTEUR_PLUIE_DEMAIN,
     CONF_CAPTEUR_TEMPERATURE,
     CONF_CAPTEUR_ETP,
@@ -242,6 +245,9 @@ def build_advanced_schema(current: dict | None = None, *, shared_defaults: dict 
                 selector.EntitySelectorConfig(domain="weather")
             ),
             vol.Optional(CONF_CAPTEUR_PLUIE_24H, default=_d(current.get(CONF_CAPTEUR_PLUIE_24H))): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_CAPTEUR_PLUIE_ACTUELLE, default=_d(current.get(CONF_CAPTEUR_PLUIE_ACTUELLE))): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="sensor")
             ),
             vol.Optional(CONF_CAPTEUR_PLUIE_DEMAIN, default=_d(current.get(CONF_CAPTEUR_PLUIE_DEMAIN))): selector.EntitySelector(

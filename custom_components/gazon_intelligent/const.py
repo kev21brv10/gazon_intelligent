@@ -15,6 +15,12 @@ CONF_DEBIT_ZONE_4 = "debit_zone_4"
 CONF_DEBIT_ZONE_5 = "debit_zone_5"
 CONF_ENTITE_METEO = "entite_meteo"
 CONF_CAPTEUR_PLUIE_24H = "capteur_pluie_24h"
+# Pluie INSTANTANÉE (mm sur le dernier relevé, ou mm/h). Non nulle seulement PENDANT l'averse.
+# ⚠️ Rien à voir avec `capteur_pluie_24h`, qui est un CUMUL : 3,6 mm y restent affichés toute la
+# journée après la pluie. C'est de cette confusion que viennent le détecteur de hausse, le
+# cliquet et leurs défauts — on approximait « pleut-il ? » à partir d'un total.
+# Netatmo : `sensor.<station>_precipitation`. Ecowitt/Shelly WS90 : `rain_rate`.
+CONF_CAPTEUR_PLUIE_ACTUELLE = "capteur_pluie_actuelle"
 CONF_CAPTEUR_PLUIE_DEMAIN = "capteur_pluie_demain"
 CONF_CAPTEUR_HUMIDITE = "capteur_humidite"
 CONF_CAPTEUR_HUMIDITE_SOL = "capteur_humidite_sol"
@@ -47,6 +53,7 @@ SHARED_WEATHER_CONFIG_KEYS = frozenset(
     {
         CONF_ENTITE_METEO,
         CONF_CAPTEUR_PLUIE_24H,
+        CONF_CAPTEUR_PLUIE_ACTUELLE,
         CONF_CAPTEUR_PLUIE_DEMAIN,
         CONF_CAPTEUR_TEMPERATURE,
         CONF_CAPTEUR_ETP,

@@ -43,6 +43,7 @@
         "data": {
           "entite_meteo": "Primary weather (required)",
           "capteur_pluie_24h": "Local 24h rain (optional, used first if provided)",
+          "capteur_pluie_actuelle": "Instantaneous rain (optional — tells if it is raining NOW, not the total)",
           "capteur_pluie_demain": "Local tomorrow rain (optional, used first if provided)",
           "capteur_temperature": "Local temperature (optional, used first if provided)",
           "capteur_etp": "Daily ETP (optional, automatic if not provided)",
@@ -82,6 +83,7 @@
         "data": {
           "entite_meteo": "Primary weather (required)",
           "capteur_pluie_24h": "Local 24h rain (optional, used first if provided)",
+          "capteur_pluie_actuelle": "Instantaneous rain (optional — tells if it is raining NOW, not the total)",
           "capteur_pluie_demain": "Local tomorrow rain (optional, used first if provided)",
           "capteur_temperature": "Local temperature (optional, used first if provided)",
           "capteur_etp": "Daily ETP (optional, automatic if not provided)",
