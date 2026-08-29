@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.57.0
+
+1152 tests verts. **Bloquer n'est plus armer trois heures de ressuyage.**
+
+Mesuré le 29/08/2026 : la prévision annonce `rainy` de 13:10 à 14:07, la dernière hausse du
+pluviomètre remonte à 10:17. Le ressuyage après pluie courait donc jusqu'à **17:07** pour une
+averse que rien n'avait mesurée.
+
+- **Quand la PRÉVISION annonce la pluie et que le pluviomètre la DÉMENT, on continue de
+  bloquer** — ça ne coûte que la durée de la prévision, et le pluviomètre n'est pas sur la
+  pelouse : une averse locale peut lui échapper. **Mais on n'horodate plus l'averse**, donc
+  on n'engage pas 180 min de ressuyage sur une pluie jamais tombée.
+- **⚠️ `is False`, jamais la valeur brute.** `None` veut dire « aucune mesure », et une
+  absence ne dément rien : sans pluviomètre, la prévision garde le dernier mot. Une mutation
+  le verrouille.
+- Une mesure qui **confirme** la prévision horodate toujours à l'instant. Verrouillé aussi.
+
+⚠️ Le banc a montré que le test sur la source est **redondant** : `active_rain_source` ne rend
+« mesure » que si la mesure est vraie, donc les deux conditions ne peuvent pas se contredire.
+Aucune mutation ne peut le tuer. Il est conservé **volontairement** — il dit qui parle, et la
+priorité entre les deux bras est exactement ce qui change avec le temps (cf. la charge qui
+passait avant l'état réel dans `_normalize_mower_status`). Le jour où la mesure primerait,
+cette ligne resterait juste au lieu de devenir fausse en silence.
+
 ## 0.56.1
 
 1149 tests verts. **Le cliquet inventait de la pluie les jours de bruine** — défaut introduit

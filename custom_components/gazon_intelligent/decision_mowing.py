@@ -647,18 +647,42 @@ def _etat_pluie(context: DecisionContext, il_pleut: bool) -> dict[str, Any] | No
     correctif ne fait que supprimer le rab, il ne raccourcit jamais un ressuyage déjà justifié.
     """
     if il_pleut and context.hour_of_day is not None:
+        profil = context.weather_profile if isinstance(context.weather_profile, dict) else {}
+        source = active_rain_source(profil)
+        memoire = context.memory if isinstance(context.memory, dict) else {}
+        precedent = memoire.get(_PLUIE_STATE_KEY)
+
+        # ⚠️ BLOQUER N'EST PAS ARMER 180 MINUTES DE RESSUYAGE. Quand la PRÉVISION annonce la
+        # pluie et que le pluviomètre la DÉMENT, on continue de bloquer — c'est fait ailleurs,
+        # ça ne coûte que la durée de la prévision, et le pluviomètre n'est pas sur la pelouse :
+        # une averse locale peut lui échapper. Mais on n'engage pas trois heures de ressuyage
+        # sur une pluie que rien n'a mesurée.
+        #
+        # Mesuré le 29/08/2026 : prévision `rainy` de 13:10 à 14:07, dernière hausse du
+        # pluviomètre à 10:17. Le ressuyage courait jusqu'à 17:07 pour une pluie jamais tombée.
+        #
+        # ⚠️ `is False` et pas la valeur brute : `None` veut dire « aucune mesure », et une
+        # absence ne dément rien. Sans capteur, la prévision garde le dernier mot.
+        #
+        # ⚠️ Le test sur `source` est REDONDANT aujourd'hui — aucune mutation du banc ne peut
+        # le tuer : `active_rain_source` ne rend « mesure » que si `pluie_mesuree_active` est
+        # vrai, donc les deux conditions ne peuvent pas se contredire. Il est conservé quand
+        # même, et volontairement : il dit QUI parle, et la priorité entre les deux bras est
+        # exactement le genre de chose qui change (cf. `_normalize_mower_status`, où la charge
+        # passait avant l'état réel). Le jour où la mesure primerait, cette ligne resterait
+        # juste au lieu de devenir fausse en silence.
+        if source == "prevision" and profil.get("pluie_mesuree_active") is False:
+            return dict(precedent) if isinstance(precedent, dict) else None
+
         # Ancienneté du constat qu'on s'apprête à écrire : 0 min pour « il pleut maintenant »,
         # l'âge de la dernière hausse quand seul le pluviomètre parle.
         recul_minutes = 0.0
-        if active_rain_source(context.weather_profile) == "mesure":
-            profil = context.weather_profile if isinstance(context.weather_profile, dict) else {}
+        if source == "mesure":
             depuis = _to_float_safe(profil.get("pluie_mesuree_minutes_depuis_hausse"))
             if depuis is not None and depuis > 0.0:
                 recul_minutes = depuis
 
         precedent_minutes = _minutes_depuis_derniere_pluie(context)
-        memoire = context.memory if isinstance(context.memory, dict) else {}
-        precedent = memoire.get(_PLUIE_STATE_KEY)
         if (
             precedent_minutes is not None
             and precedent_minutes < recul_minutes
