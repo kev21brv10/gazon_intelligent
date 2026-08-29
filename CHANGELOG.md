@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.56.1
+
+1149 tests verts. **Le cliquet inventait de la pluie les jours de bruine** — défaut introduit
+par le cliquet lui-même en 0.54.2, mesuré le 29/08/2026.
+
+Journée à 0,4 mm de cumul :
+
+```
+09:00  0,3    10:17  0,4 (pic)    11:23  0,2 ↓    12:23  0,4 ↑
+```
+
+La détection de remise à zéro testait `lecture ≤ max(0,5 ; pic/2)` **et** `lecture ≤ 0,5`.
+Pour 0,2 sous un pic de 0,4, les deux sont vrais : le cliquet croyait le compteur rebouclé,
+se recalait sur 0,2, et la remontée à 0,4 devenait une **nouvelle averse**.
+`pluie_mesuree_active` s'est allumé sur une pluie qui n'a jamais eu lieu.
+
+Le commentaire disait « une chute vers **~0** ». Le code disait « sous 0,5 ». Ce n'est pas la
+même chose quand la journée entière vaut 0,4 mm — le défaut ne pouvait apparaître que sous
+1 mm de cumul, invisible sur l'orage de 29 mm du 24/08 où le cliquet a parfaitement tenu.
+
+- **Une remise à zéro est désormais une chute vers zéro** (≤ 0,1 mm, la résolution du capteur),
+  quel que soit le cumul de la veille — la forme observée à chaque minuit.
+- **Le bras relatif est conservé mais gardé** par un pic d'au moins 1 mm : après une journée à
+  29 mm, un compteur qui repart à 0,3 a bien rebouclé. Sans ce bras, un `max()` figerait le
+  cumul de la veille toute la journée — le piège que le commentaire d'origine met en garde de
+  réintroduire.
+- Les **5 mutations** du banc sont détectées, dont celle qui rejoue l'ancienne règle sur la
+  journée du 29/08.
+
+⚠️ Aucun test existant n'a vu ce défaut : ils portaient tous sur des cumuls de plusieurs
+millimètres. La règle était juste là où on l'avait regardée, fausse là où on ne l'avait pas.
+
 ## 0.56.0
 
 1144 tests verts. Deux correctifs de carnet, **observation seule, aucune décision touchée**.
