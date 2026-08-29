@@ -252,7 +252,11 @@ def _zone_session_surface_mm(
     return _round_half_up_1(sum(values) / len(values))
 
 
-def surface_mm_depuis_segments(segments: list[dict[str, Any]] | None) -> float:
+def surface_mm_depuis_segments(
+    segments: list[dict[str, Any]] | None,
+    *,
+    zones_prevues: int | None = None,
+) -> float:
     """Dose SURFACE d'une liste de segments d'exécution (une entrée par zone × passage).
 
     Chaque segment porte la lame appliquée à SA zone. Deux passages sur la même zone
@@ -264,6 +268,12 @@ def surface_mm_depuis_segments(segments: list[dict[str, Any]] | None) -> float:
     l'herbe trois fois plus arrosée qu'elle ne l'est (installation à 3 zones), le budget
     hebdomadaire se croit dépassé, et le système sous-arrose ensuite — l'inverse exact de
     ce que l'enregistrement doit protéger.
+
+    ``zones_prevues`` compte les zones du PLAN, pas seulement celles qui ont tourné. Un cycle
+    arrêté après la première de trois zones n'a pas arrosé la pelouse à 5 mm : deux tiers du
+    gazon n'ont rien reçu, et la lame moyenne vaut ~1,7 mm. Sans ce diviseur, le bilan du sol
+    était crédité au triple et les deux zones restantes — celles qui ont le plus soif —
+    attendaient d'autant plus longtemps. Les zones non touchées sont donc comptées à zéro.
 
     Même règle que ``compute_live_session_water`` (qui cumule par zone avant de moyenner)
     et que la fin de cycle normale (qui enregistre ``plan.objective_mm``). Cette fonction
@@ -283,6 +293,11 @@ def surface_mm_depuis_segments(segments: list[dict[str, Any]] | None) -> float:
     if not par_zone:
         return 0.0
     zone_list = [{"zone": zone_id, "mm": montant} for zone_id, montant in par_zone.items()]
+    # Les zones prévues mais jamais ouvertes entrent dans la moyenne à 0 mm : c'est la seule
+    # façon de rester sur UNE règle de moyenne (celle de `_zone_session_surface_mm`) tout en
+    # disant la vérité sur un cycle interrompu.
+    manquantes = max(0, int(zones_prevues or 0) - len(zone_list))
+    zone_list += [{"zone": f"__non_arrosee_{i}", "mm": 0.0} for i in range(manquantes)]
     return _zone_session_surface_mm(zone_list) or 0.0
 
 

@@ -1551,6 +1551,44 @@ class WateringSessionMonitoringTests(unittest.TestCase):
             coordinator._events,
         )
 
+        # ── Deuxième passage : un relais qui retombe à mi-segment ─────────────────────
+        # ⚠️ La proratisation de `_build_zone_execution_record` ne servait à RIEN ici : la
+        # fin de cycle enregistrait `plan.objective_mm`, l'objectif PRÉVU. L'historique, le
+        # bilan du sol et le budget hebdomadaire créditaient donc l'eau qui n'a pas coulé, et
+        # le système sous-arrosait ensuite — exactement ce que la surveillance de vanne
+        # devait éviter. Ce scénario passe par la VRAIE séquence, pas par le helper.
+        partiel = _ManualIrrigationCoordinator()
+
+        async def _vanne_qui_retombe(zone_id, duree_s, *args, **kwargs):
+            return float(duree_s) / 2.0
+
+        partiel._attendre_zone_ouverte = _vanne_qui_retombe
+
+        async def _run_partiel() -> None:
+            original_sleep = coordinator_mod.asyncio.sleep
+
+            async def _noop_sleep(*args, **kwargs):
+                return None
+
+            coordinator_mod.asyncio.sleep = _noop_sleep
+            try:
+                await coordinator_mod.GazonIntelligentCoordinator.async_start_manual_irrigation(
+                    partiel,
+                    1.0,
+                )
+                task = partiel._auto_irrigation_task
+                assert task is not None
+                await task
+            finally:
+                coordinator_mod.asyncio.sleep = original_sleep
+
+        asyncio.run(_run_partiel())
+
+        self.assertEqual(len(partiel._watering_calls), 1)
+        dose_partielle = partiel._watering_calls[0]["kwargs"]["objectif_mm"]
+        self.assertEqual(dose_partielle, 0.5, "les deux zones ont coulé moitié moins : 0,5 mm")
+        self.assertNotEqual(dose_partielle, 1.0, "l'objectif PRÉVU a été réenregistré tel quel")
+
     def test_auto_scheduler_launch_records_pending_then_final_state(self) -> None:
         class _AutoSchedulerCoordinator:
             def __init__(self) -> None:
@@ -3811,7 +3849,10 @@ class TestStopIrrigation(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(resultat["stopped"])
         coordinator.async_record_watering.assert_awaited_once()
         kwargs = coordinator.async_record_watering.await_args.kwargs
-        self.assertEqual(kwargs["total_mm"], 4.0)
+        # 4 mm sur la zone 1, la zone 2 prévue mais jamais ouverte : la moitié du gazon n'a
+        # rien reçu, la lame moyenne vaut donc 2 mm. Créditer 4 ferait croire au bilan du sol
+        # que toute la pelouse a bu — et la zone restée sèche attendrait d'autant plus.
+        self.assertEqual(kwargs["total_mm"], 2.0)
         self.assertEqual(kwargs["watering_cause"], "arret_manuel")
         # La source d'origine est conservée : les garde-fous comptent cette eau comme les autres.
         self.assertEqual(kwargs["source"], "auto_irrigation")
@@ -3871,6 +3912,42 @@ class TestStopIrrigation(unittest.IsolatedAsyncioTestCase):
         kwargs = coordinator.async_record_watering.await_args.kwargs
         self.assertEqual(kwargs["total_mm"], 5.0)
         self.assertEqual(kwargs["objectif_mm"], 5.0)
+
+    async def test_les_zones_jamais_ouvertes_comptent_pour_zero(self) -> None:
+        """Arrêter après la première de trois zones n'arrose pas la pelouse à 5 mm.
+
+        Deux tiers du gazon n'ont rien reçu. Ne moyenner que les zones qui ont tourné
+        créditait le bilan du sol au triple, et les zones restées sèches — celles qui ont le
+        plus soif — attendaient d'autant plus longtemps le prochain cycle.
+        """
+        coordinator = self._coordinateur()
+        session = self._session(coordinator, ecoule_s=0.0)
+        session["zones_done"] = [
+            {"order": 1, "passage": 1, "zone": "switch.zone_1", "mm": 5.0, "duration_s": 300},
+        ]
+        session["zones_pending"] = [
+            {"passage": 1, "zone_index": 1, "zone": "switch.zone_2", "duration_s": 300, "mm": 5.0},
+            {"passage": 1, "zone_index": 2, "zone": "switch.zone_3", "duration_s": 300, "mm": 5.0},
+        ]
+        coordinator._set_active_irrigation_session(session)
+
+        resultat = await coordinator.async_stop_irrigation()
+
+        # 5 mm sur une zone, trois zones au plan → 5 / 3 ≈ 1,7 mm de lame moyenne.
+        self.assertEqual(resultat["applied_mm"], 1.7)
+        self.assertNotEqual(resultat["applied_mm"], 5.0,
+                            "les zones jamais ouvertes ont été exclues de la moyenne")
+
+    async def test_la_cause_arret_manuel_survit_a_l_enregistrement(self) -> None:
+        """Elle traversait DEUX listes blanches et mourait dans la seconde.
+
+        `_normalize_watering_cause` puis `GazonBrain.record_watering` filtrent chacune les
+        causes reconnues. `arret_manuel` manquait aux deux : l'historique retombait sur
+        « hydrique » et ne distinguait plus un cycle interrompu d'un arrosage normal — la
+        trace d'audit que le service était censé laisser.
+        """
+        coordinator = self._coordinateur()
+        self.assertEqual(coordinator._normalize_watering_cause("arret_manuel"), "arret_manuel")
 
     async def test_deux_passages_sur_une_zone_s_additionnent(self) -> None:
         """Le même carré d'herbe arrosé deux fois a bien reçu les deux lames.
@@ -4033,6 +4110,31 @@ class TestVeilleurDeVanne(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(moitie["mm"], 1.0)        # moitié du temps -> moitié de la dose
         self.assertTrue(moitie["interrupted"])
         self.assertEqual(moitie["planned_duration_s"], 600)
+
+    def test_la_proratisation_atteint_vraiment_la_dose_enregistree(self) -> None:
+        """⚠️ Elle ne servait à rien : la fin de cycle enregistrait l'objectif PRÉVU.
+
+        `_build_zone_execution_record` proratise bien `zones_done` quand un relais retombe,
+        mais la voie nominale appelait `async_record_watering` avec `plan.objective_mm`.
+        L'historique, le bilan du sol et le budget hebdomadaire créditaient donc l'eau qui
+        n'a pas coulé — et le système sous-arrosait ensuite, exactement ce que la
+        surveillance de vanne devait éviter. Ce test part des enregistrements d'exécution,
+        pas du plan.
+        """
+        # Trois zones prévues à 5 mm ; la deuxième n'a coulé qu'à moitié.
+        executes = [
+            {"zone": "switch.zone_1", "mm": 5.0},
+            {"zone": "switch.zone_2", "mm": 2.5, "interrupted": True},
+            {"zone": "switch.zone_3", "mm": 5.0},
+        ]
+        water = importlib.import_module("custom_components.gazon_intelligent.water")
+        surface = water.surface_mm_depuis_segments(executes, zones_prevues=3)
+        self.assertEqual(surface, 4.2)          # (5 + 2,5 + 5) / 3
+        self.assertNotEqual(surface, 5.0, "la dose prévue a été réenregistrée telle quelle")
+
+        # Et sans chute de vanne, la voie nominale doit rendre l'objectif exact.
+        complets = [{"zone": f"switch.zone_{i}", "mm": 5.0} for i in (1, 2, 3)]
+        self.assertEqual(water.surface_mm_depuis_segments(complets, zones_prevues=3), 5.0)
 
 
 class SessionPayloadPorteLeDebutTests(unittest.TestCase):

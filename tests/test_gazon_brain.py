@@ -313,6 +313,24 @@ class GazonBrainTests(unittest.TestCase):
         self.assertEqual(brain.history[-1]["date"], "2026-04-26")
         self.assertIsNone(brain.selected_product_id)
 
+    def test_record_watering_conserve_la_cause_arret_manuel(self) -> None:
+        """DEUXIÈME liste blanche sur le chemin de la cause, et elle la jetait.
+
+        `_normalize_watering_cause` (coordinator) laissait passer `arret_manuel` une fois
+        corrigée, mais `record_watering` avait sa PROPRE liste, restée à trois valeurs : la
+        cause disparaissait du payload, et l'historique ne distinguait plus un cycle
+        interrompu d'un arrosage normal — la trace d'audit que le service `stop_irrigation`
+        était censé laisser. Les deux lisent désormais `WATERING_CAUSES`.
+        """
+        brain = GazonBrain()
+        payload = brain.record_watering(
+            date_action=date(2026, 8, 29),
+            total_mm=3.5,
+            source="auto_irrigation",
+            watering_cause="arret_manuel",
+        )
+        self.assertEqual(payload.get("watering_cause"), "arret_manuel")
+
     def test_record_watering_keeps_session_summary(self) -> None:
         brain = GazonBrain()
         payload = brain.record_watering(
