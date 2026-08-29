@@ -253,3 +253,12 @@ BLOCK_REASON_DISPLAY_LABELS: dict[str, str] = {
     "upcoming_watering": "Arrosage imminent",
     "wet_grass": "Herbe mouillée",
 }
+
+# ⚠️ SOURCE UNIQUE des causes d'arrosage reconnues. Elle a existé en DEUX exemplaires —
+# `_normalize_watering_cause` (coordinator) et `record_watering` (gazon_brain) — et la
+# seconde a silencieusement jeté `arret_manuel`, la cause que le service `stop_irrigation`
+# était censé laisser dans l'historique. Deux listes finissent toujours par diverger : le
+# défaut n°1 de ce projet, cette fois sur la fonctionnalité qui le documente.
+WATERING_CAUSES: frozenset[str] = frozenset(
+    {"hydrique", "post_application", "rafraichissement_soir", "arret_manuel"}
+)

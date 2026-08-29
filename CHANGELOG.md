@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.60.2
+
+1187 tests verts. **Trois défauts de plus sur la voie « arrêt manuel », remontés par la revue
+automatique de la PR.** Tous les trois réels, tous les trois vérifiés dans le code avant d'être
+retenus.
+
+**⚠️ Les zones jamais ouvertes étaient exclues de la moyenne.** Arrêter un cycle après la
+première de trois zones enregistrait **5 mm** de lame surfacique. Or deux tiers du gazon
+n'avaient rien reçu : la lame moyenne vaut **1,7 mm**. Le bilan du sol était crédité au triple,
+et les deux zones restées sèches — celles qui ont le plus soif — attendaient d'autant plus le
+cycle suivant. Les zones prévues mais non arrosées comptent désormais **pour zéro**, ce qui
+reste une seule règle de moyenne (celle de `_zone_session_surface_mm`, à laquelle on ajoute des
+entrées à 0 mm).
+
+**⚠️ La proratisation d'une vanne qui retombe ne servait à RIEN.**
+`_build_zone_execution_record` réduit bien la dose de `zones_done` quand le relais retombe en
+cours de segment — mais la fin de cycle appelait `async_record_watering` avec
+`plan.objective_mm`, l'objectif **prévu**. L'historique, le bilan du sol et le budget
+hebdomadaire créditaient donc l'eau qui n'a pas coulé, et le système sous-arrosait ensuite :
+exactement ce que la surveillance de vanne devait empêcher. La voie nominale enregistre
+maintenant l'exécution dès qu'elle est inférieure au plan de plus de 0,1 mm — la marge évite
+tout bruit d'arrondi sur un cycle complet, dont le comportement ne change pas.
+
+**⚠️ La cause `arret_manuel` traversait DEUX listes blanches et mourait dans la seconde.**
+`_normalize_watering_cause` (coordinator) et `record_watering` (gazon_brain) filtrent chacune
+les causes reconnues, et la seconde était restée à trois valeurs. L'historique retombait sur
+« hydrique » : impossible de distinguer un cycle interrompu d'un arrosage normal, c'est-à-dire
+exactement la trace d'audit que le service `stop_irrigation` était censé laisser. **Le piège
+n°1 de ce projet, appliqué à la fonctionnalité qui le documente.** Les deux listes sont
+remplacées par une seule, `const.WATERING_CAUSES`.
+
+- **4 mutations sur 5 sont détectées** par le test visé, dont le retour au plan sur la voie
+  nominale — testé à travers la **vraie séquence** d'arrosage, pas au niveau du helper : une
+  première version du test vérifiait le helper seul et **ne mordait pas**.
+- ⚠️ **La mutation non couverte est signalée, pas dissimulée** : retirer `zones_prevues` de
+  l'appel nominal ne casse rien tant que toutes les zones prévues ont tourné — il faudrait un
+  scénario où une zone échoue entièrement en fin de cycle normale.
+
 ## 0.60.1
 
 1183 tests verts. **Un cycle arrêté à la main créditait la lame × le nombre de zones.**

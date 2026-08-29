@@ -7,6 +7,7 @@ from typing import Any
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    WATERING_CAUSES,
     DEFAULT_AUTO_IRRIGATION_ENABLED,
     DEFAULT_AUTO_MOWING_DECLARATION_ENABLED,
     DEFAULT_AUTO_MOWING_DECLARATION_MINUTES,
@@ -630,7 +631,7 @@ class GazonBrain:
         # technique était DROPPÉE ici à l'écriture de l'historique → cause `None` → le cooling
         # passait pour un arrosage normal et armait le cooldown 24 h + créditait la réserve à tort
         # (bug constaté 25-26/06 : cooling 22h06 → cooldown armé, recharge du lendemain bloquée).
-        if watering_cause in {"hydrique", "post_application", "rafraichissement_soir"}:
+        if watering_cause in WATERING_CAUSES:
             payload["watering_cause"] = str(watering_cause)
         if mm_scope not in (None, ""):
             payload["mm_scope"] = str(mm_scope)

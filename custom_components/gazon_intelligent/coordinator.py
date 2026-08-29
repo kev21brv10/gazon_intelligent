@@ -19,6 +19,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    WATERING_CAUSES,
     DOMAIN,
     DEFAULT_AUTO_IRRIGATION_ENABLED,
     DEFAULT_AUTO_MOWING_DECLARATION_ENABLED,
@@ -3674,7 +3675,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     @staticmethod
     def _normalize_watering_cause(value: Any, *, source: str | None = None) -> str:
         raw_cause = str(value or "").strip().lower()
-        if raw_cause in {"hydrique", "post_application", "rafraichissement_soir"}:
+        # ⚠️ `arret_manuel` manquait à cette liste blanche : la cause promise par le service
+        # `stop_irrigation` retombait sur « hydrique », et l'historique ne distinguait plus un
+        # cycle interrompu d'un arrosage normal — la trace d'audit que le service était censé
+        # laisser. Le piège des listes blanches, appliqué à la fonctionnalité qui le documente.
+        if raw_cause in WATERING_CAUSES:
             return raw_cause
         raw_source = str(source or "").strip().lower()
         if raw_source in {"application_technique", "application_technique_auto", "manual_application"}:
@@ -5460,6 +5465,23 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             zones_total_mm = round(sum(float(zone.get("mm") or 0.0) for zone in executed_zones), 1)
             surface_mm = round(float(plan.objective_mm), 1)
+            # ⚠️ LE PLAN N'EST PAS L'EXÉCUTION. La proratisation posée sur `zones_done` quand
+            # un relais retombe (`_build_zone_execution_record`) ne servait à rien ici : on
+            # enregistrait quand même l'objectif PRÉVU. L'historique, le bilan du sol et le
+            # budget hebdomadaire créditaient donc l'eau qui n'a pas coulé, et le système
+            # sous-arrosait ensuite — exactement ce que la surveillance de vanne devait éviter.
+            # On ne descend QUE s'il manque vraiment de l'eau (marge de 0,1 mm) : la voie
+            # nominale garde l'objectif exact, sans bruit d'arrondi.
+            surface_executee = surface_mm_depuis_segments(
+                executed_zones, zones_prevues=len(plan.zones)
+            )
+            if surface_executee + 0.1 < surface_mm:
+                _LOGGER.info(
+                    "Cycle partiel : %.1f mm réellement délivrés sur %.1f mm prévus — "
+                    "c'est la valeur exécutée qui est enregistrée",
+                    surface_executee, surface_mm,
+                )
+                surface_mm = round(surface_executee, 1)
             semis_strategy = str(plan.watering_strategy or "").strip() == WATERING_STRATEGY_SEMIS_FREQUENT
             # Annotée : sans ça la valeur est inférée comme l'union de TOUS les types du
             # littéral, et les 13 arguments qu'on en tire plus bas étaient signalés un par un
@@ -5846,7 +5868,18 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # helper — fin de cycle normale (`plan.objective_mm`), affichage temps réel
         # (`compute_live_session_water`) et `_zone_session_surface_mm` ; seule celle-ci
         # divergeait.
-        applique_mm = self._round_runtime_mm(surface_mm_depuis_segments(zones_faites))
+        # Zones du PLAN, pas seulement celles qui ont tourné : arrêter après la première de
+        # trois ne verse pas 5 mm sur la pelouse, deux tiers du gazon n'ont rien reçu. Sans ce
+        # diviseur le bilan du sol était crédité au triple, et les zones restées sèches —
+        # celles qui ont le plus soif — attendaient d'autant plus.
+        zones_du_plan = {
+            str(z.get("zone") or z.get("entity_id") or "")
+            for z in (zones_faites + list(instantane.get("zones_pending") or []))
+            if isinstance(z, dict) and (z.get("zone") or z.get("entity_id"))
+        }
+        applique_mm = self._round_runtime_mm(
+            surface_mm_depuis_segments(zones_faites, zones_prevues=len(zones_du_plan))
+        )
 
         if applique_mm > 0:
             # `source` conservé (auto_irrigation / manual…) pour que les garde-fous existants

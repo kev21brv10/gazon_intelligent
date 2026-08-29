@@ -231,8 +231,8 @@
     <h1>Comment le système décide</h1>
     <p class="lede">Arrosage, tonte, phases, produits, capteurs et services : ce que fait chaque brique, où sont les seuils, et ce qui reste à arbitrer. Établi sur l'état réel du code.</p>
     <div class="stats">
-      <span class="stat">version <b>0.60.1</b></span>
-      <span class="stat">carte <b>0.26.5</b></span>
+      <span class="stat">version <b>0.60.2</b></span>
+      <span class="stat">carte <b>0.26.6</b></span>
       <span class="stat"><b>39</b> modules</span>
       <span class="stat"><b>62</b> entités</span>
       <span class="stat"><b>15</b> services</span>
@@ -1033,7 +1033,7 @@
   <!-- ═══ SANTÉ DU CODE ═══ -->
   <div class="panel" role="tabpanel" id="p-sante" aria-labelledby="t-sante" tabindex="0" hidden>
     <section>
-      <div class="sec-head"><h2>29/08/2026 — la garde « il pleut » cesse de deviner</h2><span class="tally done">0.56.1 → 0.60.1</span></div>
+      <div class="sec-head"><h2>29/08/2026 — la garde « il pleut » cesse de deviner</h2><span class="tally done">0.56.1 → 0.60.2</span></div>
       <p>Cinq versions en une journée, toutes sur la même question&nbsp;: <strong>d'où vient l'information « il pleut »</strong>. Depuis le début elle était <em>déduite</em> d'un cumul journalier — un cumul ne dit pas s'il pleut, il dit combien il est tombé. Tout l'appareillage construit pour le deviner (détecteur de hausse, cliquet intra-journée, horodatage sur la dernière hausse) vient de là, et ses défauts aussi.</p>
 
       <div class="callout h">
@@ -1109,6 +1109,25 @@
         <p>La règle vit maintenant dans <code>water.surface_mm_depuis_segments</code>&nbsp;: cumul <strong>par zone</strong> (deux passages sur la même zone s'additionnent, le même carré d'herbe a reçu les deux), puis <strong>moyenne des zones</strong> (deux zones distinctes ne s'additionnent pas). <strong>⚠️ Deux tests encodaient le comportement faux</strong> et affirmaient 7,0 et 10,0&nbsp;; ils portent désormais la raison, et deux tests neufs distinguent les deux erreurs symétriques — sommer les zones, et moyenner les passages.</p>
       </div>
 
+      <div class="callout h">
+        <h3>⚠️ Ce que la revue de la PR a trouvé en plus <span class="chip ok">0.60.2 · carte 0.26.6</span></h3>
+        <p>Les dix PR laissées ouvertes portaient <strong>33 fils de revue automatique non résolus</strong>. Relus un par un avant de pousser, ils ont donné le défaut de la 0.60.1 — puis la revue de la PR neuve en a trouvé <strong>trois autres</strong>, tous vérifiés dans le code avant d'être retenus.</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>Défaut</th><th>Ce qui était enregistré</th><th>Ce qui était vrai</th></tr></thead>
+            <tbody>
+              <tr class="r-bad"><td class="rowlabel">Zones jamais ouvertes exclues de la moyenne</td><td class="num">5 mm</td><td class="num">1,7 mm</td></tr>
+              <tr class="r-bad"><td class="rowlabel">Vanne retombée : le plan enregistré, pas l'exécution</td><td class="num">objectif prévu</td><td class="num">eau réellement délivrée</td></tr>
+              <tr class="r-bad"><td class="rowlabel">Cause <code>arret_manuel</code> jetée par une 2<sup>e</sup> liste blanche</td><td><code>hydrique</code></td><td><code>arret_manuel</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p><strong>La proratisation d'une vanne qui retombe ne servait à rien.</strong> <code>_build_zone_execution_record</code> réduit bien la dose de <code>zones_done</code>, mais la fin de cycle enregistrait <code>plan.objective_mm</code> — l'objectif <em>prévu</em>. Le bilan du sol créditait l'eau qui n'a pas coulé, et le système sous-arrosait ensuite : exactement ce que la surveillance de vanne devait empêcher.</p>
+        <p><strong>Et la cause <code>arret_manuel</code> traversait DEUX listes blanches</strong> — <code>_normalize_watering_cause</code> et <code>record_watering</code> — en mourant dans la seconde. Le piège n°1 de ce projet, appliqué à la fonctionnalité qui le documente. Une seule liste désormais&nbsp;: <code>const.WATERING_CAUSES</code>.</p>
+        <p><strong>Côté carte (0.26.6), une régression de la 0.26.2</strong>&nbsp;: depuis que le rendu <em>préserve</em> les blocs inchangés, <code>_bindEvents</code> rajoutait un écouteur à chaque passage sur les éléments d'action survivants. Mesuré&nbsp;: <strong>six <code>switch.toggle</code> pour un seul clic</strong> après cinq rendus. Le garde posé sur la barre d'onglets n'avait pas été étendu aux actions — le correctif à moitié appliqué, encore. Trois variables CSS (<code>--gi-line</code>, <code>--gi-card</code>, <code>--gi-ink</code>) n'étaient par ailleurs définies nulle part, et « ⏸ Semaine couverte » se recalculait au lieu de lire la décision de l'intégration.</p>
+        <p><strong>⚠️ Deux tests écrits pour ces correctifs ne mordaient pas</strong>, et il a fallu les réécrire&nbsp;: côté carte, cinq <code>set hass</code> d'affilée produisent un HTML identique — le rendu sortait par son raccourci de coût&nbsp;; côté intégration, le premier test vérifiait le <em>helper</em> au lieu de la vraie séquence d'arrosage. Une mutation non couverte est <strong>signalée dans le CHANGELOG plutôt que dissimulée</strong>.</p>
+      </div>
+
       <div class="callout a">
         <h3>Côté carte — trois entités déduites de la config brute <span class="chip ok">carte 0.26.5</span></h3>
         <p><code>entity_hauteur_gazon_estimee</code>, <code>entity_catalogue_produits</code> et <code>entity_derniere_application</code> n'ont pas de défaut à elles&nbsp;: elles se déduisent d'une autre entité pour <strong>suivre le préfixe de l'instance</strong> — un <code>gazon_intelligent_</code> figé ferait lire à la seconde pelouse les valeurs de la première. Mais la déduction lisait <code>config.entity_…</code>, la valeur <strong>brute</strong>, au lieu du défaut résolu&nbsp;: une carte qui ne déclarait pas la source les laissait à <code>undefined</code>, muettes en silence, alors que toutes les autres entités avaient un défaut. <code>entity_derniere_application</code> y était de surcroît déclarée <strong>deux fois</strong> dans le même littéral — la seconde écrasait la première, dont le défaut explicite était mort.</p>
@@ -1133,7 +1152,7 @@
         <p>C'est aussi la première fois que la version affichée en Réglages sert&nbsp;: figée jusqu'en 0.26.3, elle n'aurait rien pu révéler. <strong>Le dossier est géré par HACS</strong> — une réinstallation depuis HACS écrase la copie locale par la dernière release GitHub, donc tant que les commits ne sont pas poussés, HACS ne peut que faire régresser.</p>
       </div>
 
-      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b>&nbsp;: 1183 tests verts côté intégration, 22 côté carte, et pour chaque correctif un banc de mutations où la mutation visée fait bien tomber le test visé.</p>
+      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b>&nbsp;: 1187 tests verts côté intégration, 25 côté carte, et pour chaque correctif un banc de mutations où la mutation visée fait bien tomber le test visé.</p>
     </section>
 
     <section>
@@ -1826,7 +1845,7 @@
     </section>
 
     <section>
-      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1183 tests verts</span></div>
+      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1187 tests verts</span></div>
       <p>Cet onglet est le point d'entrée pour « <strong>qu'est-ce qui reste à corriger ou à supprimer ?</strong> ». Il distingue trois choses qu'on confond souvent : ce qui est cassé, ce qui est un choix, et ce qui est déjà mort.</p>
       <div class="tbl-wrap">
         <table>
