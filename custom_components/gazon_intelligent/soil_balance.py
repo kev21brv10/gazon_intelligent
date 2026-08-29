@@ -92,9 +92,38 @@ def appliquer_cliquet_pluie(
     """
     if pic_precedent is None or pic_precedent <= lecture:
         return lecture, lecture, False
-    if lecture <= max(0.5, pic_precedent * 0.5) and lecture <= 0.5:
+    if _est_une_remise_a_zero(lecture, pic_precedent):
         return lecture, lecture, True   # le compteur a rebouclé : on repart de la nouvelle base
     return pic_precedent, pic_precedent, False  # simple décrochage : on garde le maximum
+
+
+# Une remise à zéro est une chute VERS ZÉRO. La résolution du pluviomètre est de 0,1 mm.
+_PLUIE_REMISE_A_ZERO_MAX_MM = 0.1
+# En dessous de ce cumul, « 0,5 mm » n'est pas « ~0 » : c'est la moitié de la journée.
+_PLUIE_PIC_MIN_POUR_CHUTE_RELATIVE_MM = 1.0
+
+
+def _est_une_remise_a_zero(lecture: float, pic_precedent: float) -> bool:
+    """Le compteur a-t-il rebouclé, ou est-ce un simple décrochage ?
+
+    ⚠️ DEUX BRAS, ET LE PREMIER EST LE PLUS SÛR.
+
+    · Une chute **vers zéro** est une remise à zéro, quel que soit le cumul de la veille.
+      C'est la forme observée à chaque minuit : 0.0 le 17/08 à 01:39, le 25/08 à 00:04.
+
+    · Une chute **très large depuis un cumul significatif** en est une aussi : après une
+      journée à 29 mm, un compteur qui repart à 0,3 mm a bien rebouclé. Le garde
+      `pic ≥ 1 mm` est indispensable — sans lui, le 29/08/2026 une simple oscillation
+      0,4 → 0,2 mm passait pour une remise à zéro (0,2 ≤ 0,5 et 0,2 ≤ max(0,5 ; 0,2)),
+      le cliquet se recalait sur 0,2, et la remontée à 0,4 était comptée comme une NOUVELLE
+      averse. Une pluie inventée un jour de bruine, exactement le défaut que ce cliquet
+      existe pour empêcher.
+    """
+    if lecture <= _PLUIE_REMISE_A_ZERO_MAX_MM:
+        return True
+    if pic_precedent < _PLUIE_PIC_MIN_POUR_CHUTE_RELATIVE_MM:
+        return False
+    return lecture <= pic_precedent * 0.5 and lecture <= 0.5
 
 
 def base_reserve_mm(type_sol: str | None) -> float:

@@ -928,3 +928,63 @@ class LeCliquetIntraJourneeDuPluviometreTests(unittest.TestCase):
         # …et il tient encore après le rechargement.
         apres = self._cycle(recharge, 2.9, 21, 50)
         self.assertAlmostEqual(apres["pluie_mm"], 4.2, places=1)
+
+
+class RemiseAZeroDuPluviometreTests(unittest.TestCase):
+    """Une remise à zéro est une chute VERS ZÉRO — pas simplement « sous 0,5 mm ».
+
+    ⚠️ DÉFAUT MESURÉ LE 29/08/2026, introduit par le cliquet lui-même (0.54.2). Journée de
+    bruine, cumul du jour à 0,4 mm :
+
+        09:00  0,3    10:17  0,4 (pic)    11:23  0,2 ↓    12:23  0,4 ↑
+
+    L'ancien test — `lecture ≤ max(0,5 ; pic/2)` ET `lecture ≤ 0,5` — était vrai pour
+    0,2 avec un pic à 0,4. Le cliquet croyait le compteur rebouclé, se recalait sur 0,2, et
+    la remontée à 0,4 devenait une NOUVELLE averse : `pluie_mesuree_active` s'est allumé sur
+    une pluie qui n'a jamais eu lieu. Le commentaire disait « chute vers ~0 » ; le code
+    disait « sous 0,5 » — ce n'est pas la même chose quand la journée entière vaut 0,4.
+    """
+
+    def _cliquet(self, lecture, pic):
+        return soil_balance.appliquer_cliquet_pluie(lecture, pic)
+
+    def test_la_bruine_du_29_aout_n_invente_plus_de_pluie(self) -> None:
+        retenue, pic, remise = self._cliquet(0.2, 0.4)
+        self.assertFalse(remise, "0,2 sous un pic de 0,4 n'est pas une remise à zéro")
+        self.assertEqual(pic, 0.4, "le pic du jour doit tenir")
+        self.assertEqual(retenue, 0.4, "la valeur retenue reste le maximum")
+        # Et la remontée qui suit ne doit pas franchir le pic, donc ne rien signaler.
+        _retenue2, pic2, remise2 = self._cliquet(0.4, pic)
+        self.assertFalse(remise2)
+        self.assertEqual(pic2, 0.4, "retour au pic : aucune hausse nouvelle")
+
+    def test_une_chute_vers_zero_reste_une_remise_a_zero(self) -> None:
+        """La forme observée à chaque minuit : 0.0 le 17/08 à 01:39, le 25/08 à 00:04."""
+        for pic in (0.4, 3.6, 29.1):
+            with self.subTest(pic=pic):
+                retenue, nouveau, remise = self._cliquet(0.0, pic)
+                self.assertTrue(remise, f"chute 0,0 depuis {pic} : le compteur a rebouclé")
+                self.assertEqual((retenue, nouveau), (0.0, 0.0))
+
+    def test_un_redemarrage_sous_la_pluie_reste_detecte(self) -> None:
+        """⚠️ Après une grosse journée, un compteur qui repart à 0,3 a bien rebouclé.
+
+        Sans ce bras, un `max()` figerait le cumul de la VEILLE toute la journée — le défaut
+        que le commentaire d'origine mettait en garde de réintroduire.
+        """
+        _retenue, pic, remise = self._cliquet(0.3, 29.1)
+        self.assertTrue(remise)
+        self.assertEqual(pic, 0.3)
+
+    def test_le_bruit_d_orage_n_est_pas_une_remise_a_zero(self) -> None:
+        """Journée du 24/08 : pic 29,1 puis douze oscillations, aucune n'est un reset."""
+        for lecture in (25.9, 25.2, 27.0, 26.2, 24.0, 25.0):
+            with self.subTest(lecture=lecture):
+                retenue, pic, remise = self._cliquet(lecture, 29.1)
+                self.assertFalse(remise)
+                self.assertEqual((retenue, pic), (29.1, 29.1))
+
+    def test_une_hausse_reste_une_hausse(self) -> None:
+        retenue, pic, remise = self._cliquet(4.2, 3.6)
+        self.assertFalse(remise)
+        self.assertEqual((retenue, pic), (4.2, 4.2))
