@@ -76,6 +76,8 @@ from .shared_state import get_shared_state, resolve_effective_config
 from .soil_balance import appliquer_cliquet_pluie
 from .const import SHARED_WEATHER_CONFIG_KEYS
 from .water import (
+    wind_speed_to_kmh as _wind_speed_to_kmh,
+    pression_vers_hpa as _pression_vers_hpa,
     compute_recent_watering_mm,
     compute_eto_hourly as water_compute_eto_hourly,
     _zone_session_surface_mm,
@@ -710,7 +712,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if humidity is None:
             return {"value": None, "reason": "humidité indisponible"}
         radiation = self._get_float_state(self._get_conf(CONF_CAPTEUR_RAYONNEMENT))
-        pressure = self._get_float_state(self._get_conf(CONF_CAPTEUR_PRESSION))
+        _pression_entite = self._get_conf(CONF_CAPTEUR_PRESSION)
+        pressure = self._get_float_state(_pression_entite)
+        if pressure is not None:
+            # La chaîne ET0 attend des hPa (`p_kpa = pressure_hpa / 10`). Le WS90 publie des kPa.
+            pressure = round(_pression_vers_hpa(pressure, self._get_state_unit(_pression_entite)), 2)
         # BORNES DE PLAUSIBILITÉ. Le sélecteur de configuration filtre désormais par device_class,
         # mais une entrée déjà enregistrée peut porter une autre unité — et l'erreur est
         # silencieuse ET grave : un rayonnement lu en kW/m² (au lieu de W/m²) divise l'ET0 par ~5,
@@ -902,7 +908,14 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if humidite is None:
             humidite = weather_profile.get("weather_humidity")
         humidite_sol = self._get_float_state(self._get_conf(CONF_CAPTEUR_HUMIDITE_SOL))
-        vent_capteur = self._get_float_state(self._get_conf(CONF_CAPTEUR_VENT))
+        _vent_entite = self._get_conf(CONF_CAPTEUR_VENT)
+        vent_capteur = self._get_float_state(_vent_entite)
+        if vent_capteur is not None:
+            # ⚠️ NORMALISÉ UNE FOIS, À LA SOURCE. Tout l'aval (seuils de tonte à 20/40 km/h,
+            # ET0 qui reçoit `wind_unit="km/h"`) garde ses hypothèses actuelles, et une unité
+            # absente ou inconnue laisse la valeur telle quelle : rien ne change pour une
+            # installation existante.
+            vent_capteur = round(_wind_speed_to_kmh(vent_capteur, self._get_state_unit(_vent_entite)), 2)
         vent = vent_capteur
         if vent is None:
             vent = weather_profile.get("weather_wind_speed")
@@ -1252,6 +1265,26 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 _LOGGER.warning("Valeur humidité aberrante rejetée: %s%%", value)
                 return None
         return value
+
+    def _get_state_unit(self, entity_id: str | None) -> str | None:
+        """Unité déclarée par l'entité, ou `None`.
+
+        ⚠️ Home Assistant publie l'unité dans chaque entité — il suffit de la lire au lieu de
+        la supposer. Le code supposait des km/h dès qu'un capteur de vent était configuré
+        (`"km/h" if vent is not None`), et ne lisait l'unité que sur l'entité météo de repli.
+        Un capteur en m/s — le Shelly WS90 par exemple — était donc divisé par 3,6 à tort,
+        sous-estimant le vent d'autant dans l'ET0 et rendant les seuils de tonte inatteignables.
+        """
+        try:
+            if not entity_id:
+                return None
+            state = self.hass.states.get(entity_id)
+            if state is None:
+                return None
+            unite = (state.attributes or {}).get("unit_of_measurement")
+            return str(unite) if unite not in (None, "") else None
+        except Exception:  # noqa: BLE001
+            return None
 
     def _get_float_state(self, entity_id: str | None) -> float | None:
         """Retourne l'état float d'une entité Home Assistant."""

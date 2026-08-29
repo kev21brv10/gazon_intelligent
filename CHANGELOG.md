@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.59.0
+
+1170 tests verts. **Les capteurs sont lus avec leur unité, plus avec une unité supposée.**
+
+Défaut **préexistant**, trouvé en préparant l'arrivée d'une station WS90 :
+
+```python
+wind_unit_raw = "km/h" if vent is not None else weather_profile.get("weather_wind_speed_unit")
+```
+
+Dès qu'un capteur de vent était configuré, le code **supposait des km/h** et ne lisait jamais
+son unité — il ne la consultait que sur l'entité météo de repli. Juste par chance avec le
+Netatmo. Avec un capteur en **m/s**, l'ET0 divisait par 3,6 une valeur déjà en m/s, et les
+seuils de tonte devenaient inatteignables : un vent réel de 40 km/h vaut 11 m/s, très loin
+du seuil de blocage à 40.
+
+- **Vent normalisé en km/h et pression en hPa, une fois, À LA LECTURE.** Tout l'aval garde ses
+  hypothèses actuelles — seuils de tonte, `wind_unit="km/h"` transmis à l'ET0 — et devient
+  vrai au lieu d'être supposé.
+- **⚠️ Unité absente ou inconnue → aucune conversion.** C'est exactement ce que le code faisait
+  avant : rien ne change pour une installation existante. Quatre sous-tests le verrouillent.
+- **Une seule table d'unités.** `facteur_vent_vers_ms` est extraite de `wind_speed_to_ms`, qui
+  garde son comportement au chiffre près (une mutation le vérifie). Deux tables finiraient par
+  diverger — c'est déjà arrivé sur ce projet.
+- **⚠️ Le plancher de 0,5 m/s de Penman-Monteith ne fuit pas** dans les seuils de tonte : il
+  empêche la formule de diverger, il n'a aucun sens pour décider si le vent gêne la coupe.
+  Une mutation le vérifie.
+- Pression : kPa, Pa, bar, inHg, mmHg reconnus. Le WS90 publie des **kPa** — branché tel quel,
+  il aurait donné une pression dix fois trop faible au cœur du calcul du besoin en eau.
+- Les **7 mutations** du banc sont détectées.
+
 ## 0.58.0
 
 1160 tests verts. **Nouvelle entrée de configuration : la pluie INSTANTANÉE.**

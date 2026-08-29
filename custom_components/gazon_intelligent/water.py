@@ -1001,15 +1001,58 @@ def wind_speed_to_ms(wind: float, unit: str | None) -> float:
     absente ou inconnue. Partagé par l'ET0 JOURNALIÈRE et l'ET0 HORAIRE : les deux doivent
     normaliser de la même façon, sans quoi le bilan sol et les seuils divergent.
     """
+    return max(0.5, float(wind) * facteur_vent_vers_ms(unit))
+
+
+def facteur_vent_vers_ms(unit: str | None) -> float:
+    """Facteur multiplicatif d'une unité de vent vers les m/s.
+
+    ⚠️ SOURCE UNIQUE DE LA TABLE D'UNITÉS. Extraite de `wind_speed_to_ms` pour servir aussi la
+    normalisation en km/h, dont les seuils de tonte ont besoin (20 et 40 km/h). Deux tables
+    d'unités finiraient par diverger, et l'une des deux mentirait sans qu'on sache laquelle.
+
+    ⚠️ Unité absente ou inconnue → km/h, le défaut des entités météo Home Assistant. C'est
+    aussi ce que le code supposait avant : le repli ne change donc RIEN au comportement connu.
+    """
     unit_norm = str(unit or "").strip().lower()
-    wind_ms = float(wind)
     if unit_norm in ("mph", "mi/h"):
-        wind_ms *= 0.44704
-    elif unit_norm in ("m/s", "ms", "mps"):
-        pass
-    else:  # km/h (défaut des entités météo HA) ou unité inconnue
-        wind_ms /= 3.6
-    return max(0.5, wind_ms)
+        return 0.44704
+    if unit_norm in ("m/s", "ms", "mps"):
+        return 1.0
+    if unit_norm in ("kn", "kt", "knot", "knots"):
+        return 0.514444
+    return 1.0 / 3.6
+
+
+def wind_speed_to_kmh(wind: float, unit: str | None) -> float:
+    """Vitesse de vent → km/h, l'unité qu'attendent les seuils de tonte.
+
+    ⚠️ Pas de plancher ici : les 0,5 m/s de `wind_speed_to_ms` sont propres à
+    Penman-Monteith (un terme aérodynamique nul ferait diverger la formule), ils n'ont
+    aucun sens pour décider si le vent gêne la tonte.
+    """
+    return float(wind) * facteur_vent_vers_ms(unit) * 3.6
+
+
+def pression_vers_hpa(valeur: float, unit: str | None) -> float:
+    """Pression → hPa, l'unité qu'attend la chaîne ET0 (`p_kpa = pressure_hpa / 10`).
+
+    ⚠️ Le Shelly/Ecowitt WS90 publie des **kPa** : branché tel quel, il donnerait une pression
+    dix fois trop faible en plein cœur du calcul du besoin en eau. Unité absente ou inconnue
+    → hPa, ce que le code supposait déjà.
+    """
+    unit_norm = str(unit or "").strip().lower()
+    if unit_norm in ("kpa",):
+        return float(valeur) * 10.0
+    if unit_norm in ("pa",):
+        return float(valeur) / 100.0
+    if unit_norm in ("bar",):
+        return float(valeur) * 1000.0
+    if unit_norm in ("inhg", "in hg"):
+        return float(valeur) * 33.863886
+    if unit_norm in ("mmhg", "mm hg"):
+        return float(valeur) * 1.3332239
+    return float(valeur)  # hPa, mbar, ou inconnue
 
 
 def compute_etp(

@@ -5950,3 +5950,82 @@ class PluieActuelleTests(unittest.TestCase):
         flow = (PACKAGE_DIR / "config_flow.py").read_text(encoding="utf-8")
         self.assertIn("CONF_CAPTEUR_PLUIE_ACTUELLE", flow)
         self.assertIn("vol.Optional(CONF_CAPTEUR_PLUIE_ACTUELLE", flow)
+
+
+class UnitesDesCapteursTests(unittest.TestCase):
+    """Le vent et la pression sont normalisés À LA LECTURE, d'après l'unité déclarée.
+
+    ⚠️ DÉFAUT PRÉEXISTANT. `wind_unit_raw = "km/h" if vent is not None else ...` : dès qu'un
+    capteur de vent était configuré, le code SUPPOSAIT des km/h et ne lisait jamais son unité.
+    Juste par chance avec le Netatmo. Avec un capteur en m/s — le Shelly WS90 publie ainsi —
+    l'ET0 divisait par 3,6 une valeur déjà en m/s, et les seuils de tonte (20 et 40 km/h)
+    devenaient inatteignables : un vent réel de 40 km/h vaut 11 m/s.
+    """
+
+    def _coord(self, valeur, unite, *, cle):
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        etat = types.SimpleNamespace(
+            state=str(valeur),
+            attributes={"unit_of_measurement": unite} if unite else {},
+        )
+        coord.hass = types.SimpleNamespace(
+            states=types.SimpleNamespace(get=lambda eid: etat if eid == cle else None)
+        )
+        return coord
+
+    def _unite(self, coord, cle):
+        return coordinator_mod.GazonIntelligentCoordinator._get_state_unit(coord, cle)
+
+    def test_l_unite_declaree_est_lue(self) -> None:
+        coord = self._coord(11.1, "m/s", cle="sensor.vent")
+        self.assertEqual(self._unite(coord, "sensor.vent"), "m/s")
+
+    def test_une_unite_absente_ne_casse_rien(self) -> None:
+        coord = self._coord(20.0, None, cle="sensor.vent")
+        self.assertIsNone(self._unite(coord, "sensor.vent"))
+        self.assertIsNone(self._unite(coord, "sensor.inexistant"))
+
+    # ── vent ──────────────────────────────────────────────────────────────────────────
+    def test_un_vent_en_ms_devient_des_kmh(self) -> None:
+        """⚠️ LE PIÈGE DU WS90 : 11,1 m/s = 40 km/h, soit le seuil de blocage."""
+        self.assertAlmostEqual(water_mod.wind_speed_to_kmh(11.1, "m/s"), 39.96, places=2)
+
+    def test_un_vent_deja_en_kmh_ne_bouge_pas(self) -> None:
+        for unite in ("km/h", None, "", "unité inconnue"):
+            with self.subTest(unite=unite):
+                self.assertAlmostEqual(water_mod.wind_speed_to_kmh(20.0, unite), 20.0, places=6)
+
+    def test_le_plancher_de_penman_ne_fuit_pas_dans_les_seuils_de_tonte(self) -> None:
+        """⚠️ Les 0,5 m/s de `wind_speed_to_ms` servent la formule, pas la décision de tondre."""
+        self.assertAlmostEqual(water_mod.wind_speed_to_kmh(0.0, "km/h"), 0.0, places=6)
+        self.assertAlmostEqual(water_mod.wind_speed_to_ms(0.0, "km/h"), 0.5, places=6)
+
+    def test_la_conversion_vers_les_ms_est_inchangee(self) -> None:
+        """Garde-fou de non-régression : l'ET0 doit voir exactement ce qu'elle voyait."""
+        for valeur, unite, attendu in (
+            (36.0, "km/h", 10.0), (10.0, "m/s", 10.0), (10.0, "mph", 4.4704), (36.0, None, 10.0),
+        ):
+            with self.subTest(unite=unite):
+                self.assertAlmostEqual(water_mod.wind_speed_to_ms(valeur, unite), attendu, places=4)
+
+    # ── pression ──────────────────────────────────────────────────────────────────────
+    def test_une_pression_en_kpa_devient_des_hpa(self) -> None:
+        """⚠️ Le WS90 publie des kPa ; la chaîne ET0 divise par 10 en supposant des hPa."""
+        self.assertAlmostEqual(water_mod.pression_vers_hpa(101.3, "kPa"), 1013.0, places=3)
+
+    def test_une_pression_deja_en_hpa_ne_bouge_pas(self) -> None:
+        for unite in ("hPa", "mbar", None, "", "inconnue"):
+            with self.subTest(unite=unite):
+                self.assertAlmostEqual(water_mod.pression_vers_hpa(1013.0, unite), 1013.0, places=6)
+
+    # ── câblage ───────────────────────────────────────────────────────────────────────
+    def test_les_deux_sont_normalises_a_la_lecture(self) -> None:
+        source = (PACKAGE_DIR / "coordinator.py").read_text(encoding="utf-8")
+        self.assertIn("_wind_speed_to_kmh(vent_capteur, self._get_state_unit(_vent_entite))", source)
+        self.assertIn("_pression_vers_hpa(pressure, self._get_state_unit(_pression_entite))", source)
+
+    def test_la_table_d_unites_n_est_pas_dupliquee(self) -> None:
+        """⚠️ Deux tables d'unités finiraient par diverger : une seule source."""
+        src = (PACKAGE_DIR / "water.py").read_text(encoding="utf-8")
+        self.assertEqual(src.count('"mph", "mi/h"'), 1, "la table de vent est écrite deux fois")
+        self.assertIn("facteur_vent_vers_ms(unit)", src)
