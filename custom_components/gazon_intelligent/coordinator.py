@@ -83,6 +83,7 @@ from .water import (
     compute_eto_hourly as water_compute_eto_hourly,
     _zone_session_surface_mm,
     _zone_session_total_mm,
+    surface_mm_depuis_segments,
 )
 from .weather_adapter import WeatherAdapter
 from .watering_plan import WateringPlan, build_watering_plan, normalize_existing_plan
@@ -5838,9 +5839,14 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if zone_partielle is not None:
             zones_faites.append(zone_partielle)
 
-        applique_mm = self._round_runtime_mm(
-            sum(self._round_runtime_mm(z.get("mm")) for z in zones_faites)
-        )
+        # ⚠️ Dose SURFACE, pas cumul brut. Sommer les segments donnait la lame × le nombre
+        # de zones : trois zones à 5 mm enregistraient 15 mm alors que chaque carré d'herbe
+        # en avait reçu 5. Le bilan du sol se croyait crédité au triple et le système
+        # sous-arrosait ensuite. Les trois autres voies disent déjà la même chose que ce
+        # helper — fin de cycle normale (`plan.objective_mm`), affichage temps réel
+        # (`compute_live_session_water`) et `_zone_session_surface_mm` ; seule celle-ci
+        # divergeait.
+        applique_mm = self._round_runtime_mm(surface_mm_depuis_segments(zones_faites))
 
         if applique_mm > 0:
             # `source` conservé (auto_irrigation / manual…) pour que les garde-fous existants

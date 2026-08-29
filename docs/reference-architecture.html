@@ -231,7 +231,7 @@
     <h1>Comment le système décide</h1>
     <p class="lede">Arrosage, tonte, phases, produits, capteurs et services : ce que fait chaque brique, où sont les seuils, et ce qui reste à arbitrer. Établi sur l'état réel du code.</p>
     <div class="stats">
-      <span class="stat">version <b>0.60.0</b></span>
+      <span class="stat">version <b>0.60.1</b></span>
       <span class="stat">carte <b>0.26.5</b></span>
       <span class="stat"><b>39</b> modules</span>
       <span class="stat"><b>62</b> entités</span>
@@ -1033,7 +1033,7 @@
   <!-- ═══ SANTÉ DU CODE ═══ -->
   <div class="panel" role="tabpanel" id="p-sante" aria-labelledby="t-sante" tabindex="0" hidden>
     <section>
-      <div class="sec-head"><h2>29/08/2026 — la garde « il pleut » cesse de deviner</h2><span class="tally done">0.56.1 → 0.60.0</span></div>
+      <div class="sec-head"><h2>29/08/2026 — la garde « il pleut » cesse de deviner</h2><span class="tally done">0.56.1 → 0.60.1</span></div>
       <p>Cinq versions en une journée, toutes sur la même question&nbsp;: <strong>d'où vient l'information « il pleut »</strong>. Depuis le début elle était <em>déduite</em> d'un cumul journalier — un cumul ne dit pas s'il pleut, il dit combien il est tombé. Tout l'appareillage construit pour le deviner (détecteur de hausse, cliquet intra-journée, horodatage sur la dernière hausse) vient de là, et ses défauts aussi.</p>
 
       <div class="callout h">
@@ -1091,6 +1091,24 @@
         <p><strong>Collision de nom</strong>&nbsp;: <code>pluie_jour_mm</code> existait déjà dans le bilan sol — la clé est devenue <code>pluie_cumul_jour_mm</code>. Et une première version du test de chute parasite utilisait 250 mm&nbsp;: le <strong>plafond de plausibilité</strong> rejetait la remontée, et masquait donc un maximum cassé. <strong>Le test passait pour la mauvaise raison.</strong> Le test décisif utilise 20 mm, sous le plafond, où seul le maximum peut protéger.</p>
       </div>
 
+      <div class="callout h">
+        <h3>⚠️ Un cycle arrêté à la main créditait la lame × le nombre de zones <span class="chip ok">0.60.1</span></h3>
+        <p>Trouvé en relisant les revues automatiques accumulées sur les PR en attente&nbsp;: la même remarque y revenait <strong>neuf fois</strong>, sur neuf PR différentes. Elle était juste.</p>
+        <p>Sur la voie « arrêt manuel » (<code>stop_irrigation</code>), la dose enregistrée était la <strong>somme</strong> des segments exécutés. Or un segment porte la lame appliquée à <em>sa</em> zone&nbsp;:</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>cycle interrompu</th><th class="num">enregistré</th><th class="num">réellement reçu par l'herbe</th></tr></thead>
+            <tbody>
+              <tr class="r-bad"><td class="rowlabel">3 zones à 5 mm</td><td class="num">15 mm</td><td class="num">5 mm</td></tr>
+              <tr><td class="rowlabel">2 zones, 4 mm et 3 mm</td><td class="num">7 mm</td><td class="num">3,5 mm</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Le bilan du sol se croyait crédité au triple, le budget hebdomadaire se croyait dépassé, et le système <strong>sous-arrosait</strong> ensuite — l'inverse exact de ce que cet enregistrement protège.</p>
+        <p><strong>Les trois autres voies disaient déjà la bonne chose</strong>&nbsp;: la fin de cycle normale enregistre <code>plan.objective_mm</code>, l'affichage temps réel cumule par zone avant de moyenner (<code>compute_live_session_water</code>), et <code>_zone_session_surface_mm</code> documente explicitement la moyenne. Seul l'arrêt manuel divergeait — <strong>une quatrième implémentation d'une règle déjà écrite trois fois</strong>, exactement le piège que cette référence documente.</p>
+        <p>La règle vit maintenant dans <code>water.surface_mm_depuis_segments</code>&nbsp;: cumul <strong>par zone</strong> (deux passages sur la même zone s'additionnent, le même carré d'herbe a reçu les deux), puis <strong>moyenne des zones</strong> (deux zones distinctes ne s'additionnent pas). <strong>⚠️ Deux tests encodaient le comportement faux</strong> et affirmaient 7,0 et 10,0&nbsp;; ils portent désormais la raison, et deux tests neufs distinguent les deux erreurs symétriques — sommer les zones, et moyenner les passages.</p>
+      </div>
+
       <div class="callout a">
         <h3>Côté carte — trois entités déduites de la config brute <span class="chip ok">carte 0.26.5</span></h3>
         <p><code>entity_hauteur_gazon_estimee</code>, <code>entity_catalogue_produits</code> et <code>entity_derniere_application</code> n'ont pas de défaut à elles&nbsp;: elles se déduisent d'une autre entité pour <strong>suivre le préfixe de l'instance</strong> — un <code>gazon_intelligent_</code> figé ferait lire à la seconde pelouse les valeurs de la première. Mais la déduction lisait <code>config.entity_…</code>, la valeur <strong>brute</strong>, au lieu du défaut résolu&nbsp;: une carte qui ne déclarait pas la source les laissait à <code>undefined</code>, muettes en silence, alors que toutes les autres entités avaient un défaut. <code>entity_derniere_application</code> y était de surcroît déclarée <strong>deux fois</strong> dans le même littéral — la seconde écrasait la première, dont le défaut explicite était mort.</p>
@@ -1115,7 +1133,7 @@
         <p>C'est aussi la première fois que la version affichée en Réglages sert&nbsp;: figée jusqu'en 0.26.3, elle n'aurait rien pu révéler. <strong>Le dossier est géré par HACS</strong> — une réinstallation depuis HACS écrase la copie locale par la dernière release GitHub, donc tant que les commits ne sont pas poussés, HACS ne peut que faire régresser.</p>
       </div>
 
-      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b>&nbsp;: 1181 tests verts côté intégration, 22 côté carte, et pour chaque correctif un banc de mutations où la mutation visée fait bien tomber le test visé.</p>
+      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b>&nbsp;: 1183 tests verts côté intégration, 22 côté carte, et pour chaque correctif un banc de mutations où la mutation visée fait bien tomber le test visé.</p>
     </section>
 
     <section>
@@ -1808,7 +1826,7 @@
     </section>
 
     <section>
-      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1181 tests verts</span></div>
+      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1183 tests verts</span></div>
       <p>Cet onglet est le point d'entrée pour « <strong>qu'est-ce qui reste à corriger ou à supprimer ?</strong> ». Il distingue trois choses qu'on confond souvent : ce qui est cassé, ce qui est un choix, et ce qui est déjà mort.</p>
       <div class="tbl-wrap">
         <table>

@@ -252,6 +252,40 @@ def _zone_session_surface_mm(
     return _round_half_up_1(sum(values) / len(values))
 
 
+def surface_mm_depuis_segments(segments: list[dict[str, Any]] | None) -> float:
+    """Dose SURFACE d'une liste de segments d'exécution (une entrée par zone × passage).
+
+    Chaque segment porte la lame appliquée à SA zone. Deux passages sur la même zone
+    s'additionnent — le même carré d'herbe a reçu les deux. Deux zones différentes NE
+    s'additionnent PAS : chacune couvre une part distincte de la pelouse, et chacune a
+    reçu sa propre lame. D'où : somme par zone, PUIS moyenne des zones.
+
+    ⚠️ Sommer tout donne la dose × le nombre de zones. Le bilan du sol croit alors
+    l'herbe trois fois plus arrosée qu'elle ne l'est (installation à 3 zones), le budget
+    hebdomadaire se croit dépassé, et le système sous-arrose ensuite — l'inverse exact de
+    ce que l'enregistrement doit protéger.
+
+    Même règle que ``compute_live_session_water`` (qui cumule par zone avant de moyenner)
+    et que la fin de cycle normale (qui enregistre ``plan.objective_mm``). Cette fonction
+    existe pour que la voie « cycle interrompu » ne soit pas une QUATRIÈME implémentation :
+    la moyenne elle-même reste celle de ``_zone_session_surface_mm``.
+    """
+    par_zone: dict[str, float] = {}
+    for segment in segments or []:
+        if not isinstance(segment, dict):
+            continue
+        zone_id = segment.get("zone") or segment.get("entity_id")
+        montant = _to_float(segment.get("mm"))
+        if not zone_id or montant is None or montant <= 0:
+            continue
+        cle = str(zone_id)
+        par_zone[cle] = par_zone.get(cle, 0.0) + float(montant)
+    if not par_zone:
+        return 0.0
+    zone_list = [{"zone": zone_id, "mm": montant} for zone_id, montant in par_zone.items()]
+    return _zone_session_surface_mm(zone_list) or 0.0
+
+
 def _zone_session_total_mm(zones: list[dict[str, Any]] | None) -> float | None:
     values = _zone_session_mm_values(zones)
     if not values:

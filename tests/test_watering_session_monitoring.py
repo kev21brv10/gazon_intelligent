@@ -3825,7 +3825,9 @@ class TestStopIrrigation(unittest.IsolatedAsyncioTestCase):
 
         resultat = await coordinator.async_stop_irrigation()
 
-        self.assertEqual(resultat["applied_mm"], 7.0)  # 4 (zone 1) + 3 (zone 2 à moitié)
+        # 4 mm sur la zone 1, 3 mm sur la zone 2 : chaque carré d'herbe concerné a reçu
+        # SA lame, la pelouse n'a pas reçu 7 mm. Dose surface = moyenne des zones = 3,5.
+        self.assertEqual(resultat["applied_mm"], 3.5)
         zones = coordinator.async_record_watering.await_args.kwargs["zones"]
         self.assertEqual(len(zones), 2)
         self.assertTrue(zones[1]["interrupted"])
@@ -3838,7 +3840,62 @@ class TestStopIrrigation(unittest.IsolatedAsyncioTestCase):
 
         resultat = await coordinator.async_stop_irrigation()
 
-        self.assertEqual(resultat["applied_mm"], 10.0)  # 4 + 6 (segment plein, pas plus)
+        # Le segment plein plafonne à 6 mm (pas plus), et la dose surface reste la moyenne
+        # des deux zones : (4 + 6) / 2 = 5.
+        self.assertEqual(resultat["applied_mm"], 5.0)
+
+    async def test_la_dose_enregistree_est_une_lame_de_surface_pas_un_cumul(self) -> None:
+        """Trois zones à 5 mm : la pelouse a reçu 5 mm, pas 15.
+
+        Sommer les segments enregistrait la lame × le nombre de zones. Le bilan du sol se
+        croyait crédité au triple, le budget hebdomadaire se croyait dépassé, et le système
+        sous-arrosait ensuite — l'inverse exact de ce que cet enregistrement protège.
+        Les trois autres voies disaient déjà la bonne chose : fin de cycle normale
+        (`plan.objective_mm`), affichage temps réel (`compute_live_session_water`) et
+        `_zone_session_surface_mm`. Seul l'arrêt manuel divergeait.
+        """
+        coordinator = self._coordinateur()
+        session = self._session(coordinator, ecoule_s=0.0)
+        session["zones_done"] = [
+            {"order": 1, "passage": 1, "zone": "switch.zone_1", "mm": 5.0, "duration_s": 300},
+            {"order": 2, "passage": 1, "zone": "switch.zone_2", "mm": 5.0, "duration_s": 300},
+            {"order": 3, "passage": 1, "zone": "switch.zone_3", "mm": 5.0, "duration_s": 300},
+        ]
+        session["zones_pending"] = []
+        coordinator._set_active_irrigation_session(session)
+
+        resultat = await coordinator.async_stop_irrigation()
+
+        self.assertEqual(resultat["applied_mm"], 5.0)
+        self.assertNotEqual(resultat["applied_mm"], 15.0, "la somme des zones a été réenregistrée")
+        kwargs = coordinator.async_record_watering.await_args.kwargs
+        self.assertEqual(kwargs["total_mm"], 5.0)
+        self.assertEqual(kwargs["objectif_mm"], 5.0)
+
+    async def test_deux_passages_sur_une_zone_s_additionnent(self) -> None:
+        """Le même carré d'herbe arrosé deux fois a bien reçu les deux lames.
+
+        C'est la moitié de la règle que la moyenne seule casserait : moyenner les six
+        segments d'un cycle à 2 passages × 3 zones rendrait la dose d'UN passage — le
+        sous-comptage que `_watering_item_mm` met déjà en garde de réintroduire.
+        """
+        coordinator = self._coordinateur()
+        session = self._session(coordinator, ecoule_s=0.0)
+        session["zones_done"] = [
+            {"order": 1, "passage": 1, "zone": "switch.zone_1", "mm": 2.5, "duration_s": 150},
+            {"order": 2, "passage": 1, "zone": "switch.zone_2", "mm": 2.5, "duration_s": 150},
+            {"order": 3, "passage": 2, "zone": "switch.zone_1", "mm": 2.5, "duration_s": 150},
+            {"order": 4, "passage": 2, "zone": "switch.zone_2", "mm": 2.5, "duration_s": 150},
+        ]
+        session["zones_pending"] = []
+        coordinator._set_active_irrigation_session(session)
+
+        resultat = await coordinator.async_stop_irrigation()
+
+        # 2,5 + 2,5 par zone = 5 mm par zone ; moyenne des deux zones = 5 mm.
+        self.assertEqual(resultat["applied_mm"], 5.0)
+        self.assertNotEqual(resultat["applied_mm"], 2.5, "les passages ont été moyennés au lieu d'être cumulés")
+        self.assertNotEqual(resultat["applied_mm"], 10.0, "les zones ont été sommées")
 
     async def test_un_arret_immediat_nenregistre_rien(self) -> None:
         """Zéro seconde écoulée sur la zone en cours et aucune zone terminée : rien à créditer."""

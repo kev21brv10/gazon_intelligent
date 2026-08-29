@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.60.1
+
+1183 tests verts. **Un cycle arrêté à la main créditait la lame × le nombre de zones.**
+
+Trouvé en relisant les revues automatiques accumulées sur les PR en attente : la même
+remarque y revenait **neuf fois**, sur neuf PR différentes. Elle était juste.
+
+Sur la voie « arrêt manuel » (`stop_irrigation`, introduite dans ce lot), la dose enregistrée
+était la **somme** des segments exécutés. Or un segment porte la lame appliquée à SA zone :
+
+```
+3 zones à 5 mm  →  enregistré 15 mm  |  reçu par chaque carré d'herbe : 5 mm
+```
+
+Le bilan du sol se croyait crédité au triple, le budget hebdomadaire se croyait dépassé, et le
+système **sous-arrosait** ensuite — l'inverse exact de ce que cet enregistrement protège.
+
+**Les trois autres voies disaient déjà la bonne chose** : la fin de cycle normale enregistre
+`plan.objective_mm`, l'affichage temps réel cumule par zone avant de moyenner
+(`compute_live_session_water`), et `_zone_session_surface_mm` documente explicitement la
+moyenne. Seul l'arrêt manuel divergeait — une quatrième implémentation d'une règle déjà écrite
+trois fois, exactement le piège que ce projet documente.
+
+- **Une seule règle, un seul endroit** : `water.surface_mm_depuis_segments` cumule **par zone**
+  (deux passages sur la même zone s'additionnent — le même carré d'herbe a reçu les deux) puis
+  **moyenne les zones** (deux zones distinctes ne s'additionnent pas). La moyenne elle-même
+  reste celle de `_zone_session_surface_mm`.
+- **⚠️ Deux tests encodaient le comportement faux** et affirmaient `7.0` et `10.0`. Ils ont été
+  corrigés en y inscrivant la raison, pas seulement le nouveau chiffre. Deux tests neufs
+  distinguent réellement les deux erreurs symétriques : sommer les zones, et moyenner les
+  passages.
+- Les **5 mutations** du banc sont détectées par le test visé, dont les deux erreurs
+  symétriques et le retour au cumul brut.
+
 ## 0.60.0
 
 1181 tests verts. **Le total de pluie du jour peut venir d'un compteur qui ne se remet jamais
