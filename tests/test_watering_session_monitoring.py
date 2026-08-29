@@ -6029,3 +6029,103 @@ class UnitesDesCapteursTests(unittest.TestCase):
         src = (PACKAGE_DIR / "water.py").read_text(encoding="utf-8")
         self.assertEqual(src.count('"mph", "mi/h"'), 1, "la table de vent est écrite deux fois")
         self.assertIn("facteur_vent_vers_ms(unit)", src)
+
+
+class PluieDuJourDepuisCumulTests(unittest.TestCase):
+    """Total du jour dérivé d'un compteur cumulatif qui ne se réinitialise jamais.
+
+    ⚠️ POURQUOI. Le compteur du WS90 ne repart pas à zéro à minuit, ET il chute parfois
+    brutalement à 0 avant de revenir à sa valeur — trames corrompues documentées, simultanées
+    à des rafales à plus de 25 000 km/h. Un `utility_meter` branché dessus compte ces
+    remontées comme de la pluie : 250 mm d'un coup.
+    """
+
+    def _coord(self, jour=date(2026, 9, 1), runtime=None):
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord._runtime_state = runtime if runtime is not None else {}
+        coord._current_date = lambda: jour
+        coord._get_conf = lambda cle: "sensor.cumul" if cle == "capteur_pluie_cumul" else None
+        coord._lectures = []
+        coord._get_float_state = lambda _e: coord._lectures.pop(0) if coord._lectures else None
+        return coord
+
+    def _rejouer(self, lectures, *, coord=None, jour=date(2026, 9, 1)):
+        coord = coord or self._coord(jour)
+        sortie = {}
+        for v in lectures:
+            coord._lectures = [v]
+            sortie = coordinator_mod.GazonIntelligentCoordinator._suivre_pluie_du_jour(coord)
+        return sortie, coord
+
+    def test_une_vraie_pluie_est_comptee(self) -> None:
+        sortie, _ = self._rejouer([250.0, 250.4, 251.0])
+        self.assertAlmostEqual(sortie["pluie_cumul_jour_mm"], 1.0, places=2)
+
+    def test_la_chute_parasite_a_zero_ne_compte_rien(self) -> None:
+        """⚠️ LE PIÈGE DU WS90 : 250 → 0 → 250 ne doit ajouter aucun millimètre."""
+        sortie, _ = self._rejouer([250.0, 0.0, 250.0])
+        self.assertEqual(sortie["pluie_cumul_jour_mm"], 0.0)
+        self.assertEqual(sortie["pluie_cumul_pic_mm"], 250.0, "le maximum ne doit pas redescendre")
+
+    def test_la_pluie_apres_une_chute_parasite_est_bien_comptee(self) -> None:
+        sortie, _ = self._rejouer([250.0, 0.0, 250.0, 250.6])
+        self.assertAlmostEqual(sortie["pluie_cumul_jour_mm"], 0.6, places=2)
+
+    def test_une_chute_parasite_SOUS_le_plafond_ne_compte_rien(self) -> None:
+        """⚠️ Le cas qui prouve que c'est bien le MAXIMUM qui protège, pas le plafond.
+
+        Avec 250 → 0 → 250, le plafond de plausibilité (30 mm) rejette la remontée et masque
+        l'absence de maximum : le test passe même si le maximum est cassé. Avec 20 → 0 → 20,
+        la remontée est sous le plafond — seul le maximum peut l'écarter.
+        """
+        sortie, _ = self._rejouer([20.0, 0.0, 20.0])
+        self.assertEqual(sortie["pluie_cumul_jour_mm"], 0.0)
+        self.assertEqual(sortie["pluie_gain_rejete_mm"], 0.0, "rien ne devait être rejeté non plus")
+        self.assertEqual(sortie["pluie_cumul_pic_mm"], 20.0)
+
+    def test_elle_est_appelee_dans_le_cycle(self) -> None:
+        source = (PACKAGE_DIR / "coordinator.py").read_text(encoding="utf-8")
+        self.assertIn("weather_profile.update(self._suivre_pluie_du_jour())", source)
+
+    def test_un_saut_impossible_est_rejete_mais_trace(self) -> None:
+        """⚠️ Un rejet silencieux serait indiscernable d'une panne : on garde la trace."""
+        sortie, _ = self._rejouer([250.0, 900.0])
+        self.assertEqual(sortie["pluie_cumul_jour_mm"], 0.0)
+        self.assertAlmostEqual(sortie["pluie_gain_rejete_mm"], 650.0, places=1)
+
+    def test_le_total_repart_a_zero_a_notre_minuit(self) -> None:
+        """⚠️ NOTRE horloge : le capteur, lui, ne se réinitialise jamais."""
+        _sortie, coord = self._rejouer([250.0, 252.0])
+        coord._current_date = lambda: date(2026, 9, 2)
+        sortie, _ = self._rejouer([253.0], coord=coord)
+        self.assertAlmostEqual(sortie["pluie_cumul_jour_mm"], 1.0, places=2)
+        self.assertEqual(sortie["pluie_cumul_pic_mm"], 253.0, "le maximum, lui, ne se remet pas à zéro")
+
+    def test_sans_capteur_on_ne_conclut_rien(self) -> None:
+        coord = self._coord(); coord._get_conf = lambda _c: None
+        sortie = coordinator_mod.GazonIntelligentCoordinator._suivre_pluie_du_jour(coord)
+        self.assertIsNone(sortie["pluie_cumul_jour_mm"])
+
+    def test_les_deux_memoires_survivent_a_un_redemarrage(self) -> None:
+        """Sans persistance, une chute parasite suivie d'un redémarrage recompterait tout."""
+        _sortie, coord = self._rejouer([250.0, 251.0])
+        coord._serialize_runtime_value = (
+            coordinator_mod.GazonIntelligentCoordinator._serialize_runtime_value.__get__(coord)
+        )
+        coord._ensure_irrigation_runtime_bootstrap = lambda: None
+        coord._runtime_state.setdefault("active_irrigation_session", None)
+        coord._runtime_state.setdefault("last_irrigation_execution", None)
+        serialise = coordinator_mod.GazonIntelligentCoordinator._serialized_runtime_state(coord)
+        self.assertIn("pluie_cumul", serialise, "le suivi n'atteint pas le disque")
+        relu = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        relu._restore_runtime_state(serialise)
+        self.assertEqual(relu._runtime_state["pluie_cumul"]["pic"], 251.0)
+
+    def test_elle_n_alimente_aucune_decision(self) -> None:
+        for module in ("decision_mowing.py", "guidance.py", "decision.py", "decision_watering.py"):
+            with self.subTest(module=module):
+                self.assertNotIn("pluie_cumul_jour_mm", (PACKAGE_DIR / module).read_text(encoding="utf-8"))
+
+    def test_l_entree_de_configuration_existe(self) -> None:
+        flow = (PACKAGE_DIR / "config_flow.py").read_text(encoding="utf-8")
+        self.assertIn("vol.Optional(CONF_CAPTEUR_PLUIE_CUMUL", flow)

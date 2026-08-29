@@ -21,6 +21,10 @@ CONF_CAPTEUR_PLUIE_24H = "capteur_pluie_24h"
 # cliquet et leurs défauts — on approximait « pleut-il ? » à partir d'un total.
 # Netatmo : `sensor.<station>_precipitation`. Ecowitt/Shelly WS90 : `rain_rate`.
 CONF_CAPTEUR_PLUIE_ACTUELLE = "capteur_pluie_actuelle"
+# Compteur de pluie CUMULATIF qui ne se remet JAMAIS à zéro (Ecowitt/Shelly WS90 :
+# `precipitation`, plage 0–100000 mm). L'intégration en dérive elle-même le total du jour.
+# ⚠️ À ne pas confondre avec `capteur_pluie_24h`, qui attend un total DÉJÀ journalier.
+CONF_CAPTEUR_PLUIE_CUMUL = "capteur_pluie_cumul"
 CONF_CAPTEUR_PLUIE_DEMAIN = "capteur_pluie_demain"
 CONF_CAPTEUR_HUMIDITE = "capteur_humidite"
 CONF_CAPTEUR_HUMIDITE_SOL = "capteur_humidite_sol"
@@ -54,6 +58,7 @@ SHARED_WEATHER_CONFIG_KEYS = frozenset(
         CONF_ENTITE_METEO,
         CONF_CAPTEUR_PLUIE_24H,
         CONF_CAPTEUR_PLUIE_ACTUELLE,
+        CONF_CAPTEUR_PLUIE_CUMUL,
         CONF_CAPTEUR_PLUIE_DEMAIN,
         CONF_CAPTEUR_TEMPERATURE,
         CONF_CAPTEUR_ETP,

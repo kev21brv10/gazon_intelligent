@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.60.0
+
+1181 tests verts. **Le total de pluie du jour peut venir d'un compteur qui ne se remet jamais
+à zéro.** Nouvelle entrée `capteur_pluie_cumul`, préparée pour le Shelly/Ecowitt WS90.
+
+Deux défauts documentés de ce compteur, qu'un `utility_meter` ne sait pas gérer :
+
+- il **ne se réinitialise pas à minuit** — il compte depuis toujours ;
+- il **chute parfois brutalement à 0 puis revient** à sa valeur (trames corrompues, simultanées
+  à des rafales relevées au-dessus de 25 000 km/h). Un compteur d'énergie branché dessus
+  enregistre la remontée comme de la pluie : 250 mm d'un coup.
+
+**On ne compte donc que ce qui dépasse le maximum déjà vu**, et le total repart à zéro sur
+**notre** horloge :
+
+```
+250 → 0      chute parasite  → aucun gain, le maximum reste 250
+0   → 250    remontée        → aucun gain, on est sous le maximum
+250 → 250,4  vraie pluie     → +0,4 mm
+```
+
+- **Les deux mémoires sont persistées.** Sans elles, une chute parasite suivie d'un redémarrage
+  recompterait tout le compteur en pluie.
+- **Plafond de plausibilité de 30 mm par pas de cycle** (~2 min) : les pluies les plus intenses
+  relevées en France plafonnent vers 3 mm/min, la marge est d'un facteur 5. Un gain rejeté est
+  **conservé en trace** (`pluie_gain_rejete_mm`) — un rejet silencieux serait indiscernable
+  d'une panne. À recalibrer sur les vrais écarts de la station.
+- **⚠️ OBSERVATION SEULE** : publiée dans `sensor_health`, elle n'alimente aucune décision.
+  Un test le verrouille sur quatre modules.
+- Les **7 mutations** du banc sont détectées.
+
+⚠️ Deux pièges attrapés par les tests avant livraison. **Collision de nom** : `pluie_jour_mm`
+existait déjà dans le bilan sol — la clé est devenue `pluie_cumul_jour_mm`. Et une première
+version du test de chute parasite utilisait 250 mm : le **plafond de plausibilité** rejetait
+la remontée et masquait un maximum cassé. Le test décisif utilise 20 mm, sous le plafond, où
+seul le maximum peut protéger.
+
 ## 0.59.0
 
 1170 tests verts. **Les capteurs sont lus avec leur unité, plus avec une unité supposée.**
