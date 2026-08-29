@@ -1097,6 +1097,24 @@
         <p>Les deux cartes de l'installation déclarent déjà leurs sources&nbsp;: <strong>rendu inchangé</strong>, vérifié onglet par onglet sur les valeurs réelles avant et après.</p>
       </div>
 
+      <div class="callout h">
+        <h3>⚠️ Cinq versions de carte n'ont jamais atteint le navigateur</h3>
+        <p>Découvert en vérifiant le déploiement de la 0.26.5, le 29/08. La ressource Lovelace déclarée pointe sur <code>/hacsfiles/lovelace-gazon-intelligent-card/…</code>, c'est-à-dire <code>www/community/lovelace-gazon-intelligent-card/</code>. Or les livraisons partaient dans <code>www/</code> — <strong>un fichier au même nom, que Lovelace ne charge pas</strong>.</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>Chemin</th><th>Contenu au 29/08 avant correction</th><th>Chargé par Lovelace</th></tr></thead>
+            <tbody>
+              <tr class="r-bad"><td class="rowlabel"><code>www/</code></td><td>0.26.4 — livré et vérifié par empreinte</td><td><strong>non</strong></td></tr>
+              <tr><td class="rowlabel"><code>www/community/lovelace-gazon-intelligent-card/</code></td><td><b>0.25.1</b>, datée du <b>04/08</b></td><td>oui</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>La copie « réussissait » à chaque fois&nbsp;: mêmes noms de fichiers, <code>.js</code> et <code>.gz</code> régénérés, empreintes comparées et identiques. <strong>Une empreinte identique entre la source et la copie ne prouve rien si la copie est au mauvais endroit</strong> — c'est la vérification qui était fausse, pas le déploiement. Toutes les cartes <b>0.26.0 → 0.26.4</b> sont restées invisibles, dont le correctif de défilement des onglets sur téléphone.</p>
+        <p>La seule vérification qui compte interroge le <strong>serveur</strong>, pas le disque, et deux fois — sans puis avec <code>--compressed</code>, puisque c'est le <code>.gz</code> que le navigateur reçoit&nbsp;:</p>
+        <div class="tbl-wrap"><table><tbody><tr><td><code>curl -s "http://homeassistant.local:8123/hacsfiles/lovelace-gazon-intelligent-card/gazon-intelligent-card.js" | grep -m1 GI_VERSION</code></td></tr></tbody></table></div>
+        <p>C'est aussi la première fois que la version affichée en Réglages sert&nbsp;: figée jusqu'en 0.26.3, elle n'aurait rien pu révéler. <strong>Le dossier est géré par HACS</strong> — une réinstallation depuis HACS écrase la copie locale par la dernière release GitHub, donc tant que les commits ne sont pas poussés, HACS ne peut que faire régresser.</p>
+      </div>
+
       <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b>&nbsp;: 1181 tests verts côté intégration, 22 côté carte, et pour chaque correctif un banc de mutations où la mutation visée fait bien tomber le test visé.</p>
     </section>
 
