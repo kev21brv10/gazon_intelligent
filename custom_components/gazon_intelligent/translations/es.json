@@ -43,6 +43,7 @@
         "data": {
           "entite_meteo": "Meteorología principal (obligatoria)",
           "capteur_pluie_24h": "Lluvia local 24 h (opcional, se usa primero si existe)",
+          "capteur_pluie_actuelle": "Lluvia instantánea (opcional: indica si llueve AHORA, no el acumulado)",
           "capteur_pluie_demain": "Lluvia local mañana (opcional, se usa primero si existe)",
           "capteur_temperature": "Temperatura local (opcional, se usa primero si existe)",
           "capteur_etp": "ETP diario (opcional, cálculo automático si no se indica)",
@@ -82,6 +83,7 @@
         "data": {
           "entite_meteo": "Meteorología principal (obligatoria)",
           "capteur_pluie_24h": "Lluvia local 24 h (opcional, se usa primero si existe)",
+          "capteur_pluie_actuelle": "Lluvia instantánea (opcional: indica si llueve AHORA, no el acumulado)",
           "capteur_pluie_demain": "Lluvia local mañana (opcional, se usa primero si existe)",
           "capteur_temperature": "Temperatura local (opcional, se usa primero si existe)",
           "capteur_etp": "ETP diario (opcional, cálculo automático si no se indica)",

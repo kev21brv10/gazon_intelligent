@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.58.0
+
+1160 tests verts. **Nouvelle entrée de configuration : la pluie INSTANTANÉE.**
+
+Depuis le début, « pleut-il ? » est déduit d'un **cumul journalier**. Un cumul ne le dit pas :
+3,6 mm y restent affichés toute la journée après l'averse. D'où tout l'appareillage construit
+pour le deviner — détecteur de hausse, cliquet intra-journée, horodatage sur la dernière
+hausse — et d'où viennent ses défauts : la fausse averse du 16/08 (bruit lu comme une hausse)
+et celle du 29/08 (remise à zéro mal détectée sous 1 mm de cumul).
+
+Or la station expose depuis toujours une pluie **instantanée**, qui répond sans calcul.
+Le 29/08 à 12:23, quand le cliquet a inventé une averse, ce capteur affichait **0,0** depuis
+10:11 — il aurait évité l'erreur d'entrée de jeu.
+
+- **`capteur_pluie_actuelle`**, optionnel, offert dans les deux formulaires. Netatmo :
+  `sensor.<station>_precipitation`. Ecowitt/Shelly **WS90** : `rain_rate`. Le jour où la
+  station de Kévin arrive, il change l'entité et rien d'autre ne bouge.
+- **Publiée à côté** de `pluie_mesuree_active` dans `sensor_health`, volontairement : c'est en
+  comparant les deux sur plusieurs averses qu'on saura si la mesure directe peut remplacer la
+  déduction. **Elle n'alimente aucune décision** — un test le verrouille sur quatre modules.
+- **⚠️ `None` reste une absence.** Capteur non configuré, injoignable ou illisible : on ne
+  conclut rien, surtout pas « il ne pleut pas ». Deux mutations le vérifient.
+- Les **6 mutations** du banc sont détectées, dont celle qui retire l'entrée du formulaire —
+  la clé existerait dans le code mais resterait inatteignable depuis l'interface.
+
+**Mesuré au passage** : la station publique Netatmo est à **55 m** de la tondeuse (coordonnées
+comparées). Elle n'est donc pas « chez un voisin lointain » comme la note de projet le laissait
+croire — une averse locale ne peut pas lui échapper. Ça affaiblit l'argument qui justifiait de
+bloquer la tonte sur une prévision que la mesure dément (0.57.0), point à rouvrir.
+
 ## 0.57.0
 
 1152 tests verts. **Bloquer n'est plus armer trois heures de ressuyage.**

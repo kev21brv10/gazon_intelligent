@@ -43,6 +43,7 @@
         "data": {
           "entite_meteo": "Hauptwetter (erforderlich)",
           "capteur_pluie_24h": "Lokaler Regen 24 h (optional, wird zuerst genutzt, wenn vorhanden)",
+          "capteur_pluie_actuelle": "Momentaner Regen (optional – sagt, ob es JETZT regnet, nicht die Summe)",
           "capteur_pluie_demain": "Lokaler Regen morgen (optional, wird zuerst genutzt, wenn vorhanden)",
           "capteur_temperature": "Lokale Temperatur (optional, wird zuerst genutzt, wenn vorhanden)",
           "capteur_etp": "ETP des Tages (optional, automatische Berechnung wenn leer)",
@@ -82,6 +83,7 @@
         "data": {
           "entite_meteo": "Hauptwetter (erforderlich)",
           "capteur_pluie_24h": "Lokaler Regen 24 h (optional, wird zuerst genutzt, wenn vorhanden)",
+          "capteur_pluie_actuelle": "Momentaner Regen (optional – sagt, ob es JETZT regnet, nicht die Summe)",
           "capteur_pluie_demain": "Lokaler Regen morgen (optional, wird zuerst genutzt, wenn vorhanden)",
           "capteur_temperature": "Lokale Temperatur (optional, wird zuerst genutzt, wenn vorhanden)",
           "capteur_etp": "ETP des Tages (optional, automatische Berechnung wenn leer)",

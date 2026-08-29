@@ -30,6 +30,7 @@ from .const import (
     APPLICATION_TYPE_SOL,
     CONF_CAPTEUR_ETP,
     CONF_CAPTEUR_PLUIE_24H,
+    CONF_CAPTEUR_PLUIE_ACTUELLE,
     CONF_CAPTEUR_PLUIE_DEMAIN,
     CONF_ENTITE_METEO,
     CONF_CAPTEUR_TEMPERATURE,
@@ -865,6 +866,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # retombe sur la prévision quand le capteur manque. Nourrir la garde « il pleut » avec
         # un repli météo la ramènerait exactement à l'aveuglement qu'elle vient de corriger.
         weather_profile.update(self._suivre_pluie_mesuree(pluie_24h_sensor))
+        weather_profile.update(self._lire_pluie_actuelle())
         pluie_24h, pluie_24h_source, pluie_demain, pluie_demain_source = self._resolve_precipitation_inputs(
             pluie_24h_sensor=pluie_24h_sensor,
             pluie_demain_sensor=pluie_demain_sensor,
@@ -1925,6 +1927,33 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.debug("Suivi de la recommandation ignorée indisponible", exc_info=True)
             return vide
 
+    def _lire_pluie_actuelle(self) -> dict[str, Any]:
+        """Pleut-il MAINTENANT, dit directement par un capteur — sans rien déduire.
+
+        ⚠️ OBSERVATION SEULE POUR L'INSTANT. Publiée à côté de `pluie_mesuree_active` pour
+        qu'on puisse comparer les deux sur plusieurs averses avant de faire dépendre une
+        décision de celle-ci. C'est la méthode qui a évité deux erreurs sur la garde pluie.
+
+        ⚠️ POURQUOI ELLE EXISTE. Tout l'appareillage actuel — détecteur de hausse, cliquet,
+        horodatage sur la dernière hausse — approxime « pleut-il ? » à partir d'un CUMUL
+        journalier, faute de mieux. Un cumul ne le dit pas : 3,6 mm y restent affichés toute
+        la journée après l'averse. De là viennent la fausse averse du 16/08 (bruit lu comme
+        une hausse) et celle du 29/08 (remise à zéro mal détectée sous 1 mm).
+        Or la station expose depuis toujours une pluie INSTANTANÉE, qui répond sans calcul.
+
+        ⚠️ `None` reste une absence. Capteur non configuré, injoignable ou illisible : on ne
+        conclut rien, surtout pas « il ne pleut pas ».
+        """
+        vide: dict[str, Any] = {"pluie_actuelle_mm": None, "pluie_actuelle_active": None}
+        try:
+            valeur = self._get_float_state(self._get_conf(CONF_CAPTEUR_PLUIE_ACTUELLE))
+            if valeur is None:
+                return vide
+            return {"pluie_actuelle_mm": valeur, "pluie_actuelle_active": valeur > 0.0}
+        except Exception:  # noqa: BLE001 — une observation ne fait jamais tomber le cycle
+            _LOGGER.debug("Pluie instantanée indisponible", exc_info=True)
+            return vide
+
     def _suivre_pluie_mesuree(self, cumul_mm: float | None) -> dict[str, Any]:
         """Dit s'il pleut EN CE MOMENT, d'après le pluviomètre et non d'après la prévision.
 
@@ -2472,6 +2501,10 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # DÉJÀ publié comme un dict : aucune liste blanche à traverser, donc aucun des
             # chemins qui cassent en silence sur ce projet.
             "pluie_mesuree_active": weather_profile.get("pluie_mesuree_active"),
+            # Publiée À CÔTÉ de la précédente, volontairement : c'est en les comparant sur
+            # plusieurs averses qu'on saura si la mesure directe peut remplacer la déduction.
+            "pluie_actuelle_mm": weather_profile.get("pluie_actuelle_mm"),
+            "pluie_actuelle_active": weather_profile.get("pluie_actuelle_active"),
             "pluie_mesuree_minutes_depuis_hausse": weather_profile.get(
                 "pluie_mesuree_minutes_depuis_hausse"
             ),

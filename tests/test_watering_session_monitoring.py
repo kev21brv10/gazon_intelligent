@@ -5884,3 +5884,69 @@ class ProgressionTonteTests(unittest.TestCase):
         for module in ("decision_mowing.py", "guidance.py", "decision.py", "decision_watering.py"):
             with self.subTest(module=module):
                 self.assertNotIn("mower_job_", (PACKAGE_DIR / module).read_text(encoding="utf-8"))
+
+
+class PluieActuelleTests(unittest.TestCase):
+    """Pleut-il MAINTENANT — dit par un capteur, pas déduit d'un cumul.
+
+    ⚠️ POURQUOI ELLE EXISTE. Tout l'appareillage actuel — détecteur de hausse, cliquet,
+    horodatage sur la dernière hausse — approxime « pleut-il ? » à partir d'un CUMUL
+    journalier. Un cumul ne le dit pas : 3,6 mm y restent affichés toute la journée après
+    l'averse. De là viennent la fausse averse du 16/08 et celle du 29/08.
+
+    ⚠️ OBSERVATION SEULE : publiée à côté de `pluie_mesuree_active` pour comparaison, elle
+    n'alimente aucune décision tant qu'on ne l'a pas vue vivre sur plusieurs averses.
+    """
+
+    def _coord(self, etat, *, configure="sensor.pluie_actuelle"):
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord._get_conf = lambda cle: configure if cle == "capteur_pluie_actuelle" else None
+        coord._get_float_state = lambda eid: etat.get(eid)
+        return coord
+
+    def _lire(self, coord):
+        return coordinator_mod.GazonIntelligentCoordinator._lire_pluie_actuelle(coord)
+
+    def test_zero_veut_dire_il_ne_pleut_pas(self) -> None:
+        sortie = self._lire(self._coord({"sensor.pluie_actuelle": 0.0}))
+        self.assertIs(sortie["pluie_actuelle_active"], False)
+        self.assertEqual(sortie["pluie_actuelle_mm"], 0.0)
+
+    def test_une_valeur_non_nulle_veut_dire_il_pleut(self) -> None:
+        sortie = self._lire(self._coord({"sensor.pluie_actuelle": 0.3}))
+        self.assertIs(sortie["pluie_actuelle_active"], True)
+        self.assertEqual(sortie["pluie_actuelle_mm"], 0.3)
+
+    def test_le_29_aout_elle_aurait_evite_la_fausse_averse(self) -> None:
+        """⚠️ À 12:23 le cliquet a cru à une averse ; ce capteur affichait 0,0 depuis 10:11."""
+        sortie = self._lire(self._coord({"sensor.pluie_actuelle": 0.0}))
+        self.assertIs(sortie["pluie_actuelle_active"], False)
+
+    def test_sans_capteur_configure_on_ne_conclut_rien(self) -> None:
+        """⚠️ Une absence n'est pas « il ne pleut pas »."""
+        sortie = self._lire(self._coord({}, configure=None))
+        self.assertIsNone(sortie["pluie_actuelle_active"])
+        self.assertIsNone(sortie["pluie_actuelle_mm"])
+
+    def test_un_capteur_illisible_ne_devient_pas_zero(self) -> None:
+        sortie = self._lire(self._coord({"sensor.pluie_actuelle": None}))
+        self.assertIsNone(sortie["pluie_actuelle_active"])
+
+    def test_elle_est_lue_dans_le_cycle_et_publiee(self) -> None:
+        source = (PACKAGE_DIR / "coordinator.py").read_text(encoding="utf-8")
+        self.assertIn("weather_profile.update(self._lire_pluie_actuelle())", source)
+        for cle in ("pluie_actuelle_mm", "pluie_actuelle_active"):
+            with self.subTest(cle=cle):
+                self.assertIn(f'"{cle}": weather_profile.get("{cle}")', source)
+
+    def test_elle_n_alimente_aucune_decision(self) -> None:
+        """⚠️ Le jour où une décision voudra la lire, ce test tombera et forcera la discussion."""
+        for module in ("decision_mowing.py", "guidance.py", "decision.py", "decision_watering.py"):
+            with self.subTest(module=module):
+                self.assertNotIn("pluie_actuelle", (PACKAGE_DIR / module).read_text(encoding="utf-8"))
+
+    def test_l_entree_de_configuration_est_offerte_dans_les_deux_formulaires(self) -> None:
+        """Sans ça, la clé existe dans le code mais reste inatteignable depuis l'interface."""
+        flow = (PACKAGE_DIR / "config_flow.py").read_text(encoding="utf-8")
+        self.assertIn("CONF_CAPTEUR_PLUIE_ACTUELLE", flow)
+        self.assertIn("vol.Optional(CONF_CAPTEUR_PLUIE_ACTUELLE", flow)
