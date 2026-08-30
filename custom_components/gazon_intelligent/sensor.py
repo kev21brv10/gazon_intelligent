@@ -3716,6 +3716,9 @@ class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):
             "mower_reliability_today",
             # Auto-déclaration : son état dit pourquoi elle n'a pas agi, pas seulement qu'elle
             # n'a pas agi.
+            "mower_job_completion_state",
+            "mower_job_followed_id",
+            "mower_job_seen_incomplete",
             "mower_auto_declaration_state",
             "mower_auto_declaration_threshold_minutes",
             "mower_auto_declared_today",

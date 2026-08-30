@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.61.0
+
+1193 tests verts. **La tonte se déclare sur le TRAVAIL terminé, plus sur une durée.**
+
+Demandé par Kévin le 30/08/2026, après avoir vu le défaut se produire en direct.
+
+**Ce qui n'allait pas.** Le seuil inscrivait une tonte dès 90 min cumulées, quelle que soit la
+surface faite. Mesuré ce jour-là : déclarée à 14:32 avec **102,8 min tondues et le travail à
+49 %**. Conséquences immédiates — hauteur estimée ramenée de 6,4 à **5,5 cm** comme si toute la
+pelouse avait été coupée, retard remis de 3 jours à **0**, prochaine tonte repoussée au 02/09,
+pendant que la moitié de la pelouse restait haute et que la tondeuse tondait encore. Le seuil
+mesurait une durée là où il fallait une surface.
+
+**⚠️ Et le piège qui aurait tout cassé si on l'avait branché naïvement.**
+`progression_de_la_tonte` n'est PAS un événement quand elle vaut 100 : c'est l'état de **repos**.
+Relevé sur huit jours d'historique réel :
+
+```
+25/08  13:00 → 0 … 17:00 → 100    puis 100 pendant 51 h
+27/08  16:00 → 0 … 21:00 → 100    puis 100 pendant 62 h
+30/08  11:21 → 0 …  (en cours)
+```
+
+Un test `== 100` aurait donc été vrai la quasi-totalité du temps, et aurait déclaré une tonte
+**tous les jours**. On déclare sur le **passage** à 100 d'une tâche qu'on a vue inachevée,
+jamais sur la valeur seule.
+
+- **`task_id` recolle les passes d'un même travail**, recharge comprise : c'est exactement
+  l'unité voulue. Le 30/08, la reprise après charge est repartie de 35 % et non de 0.
+- **Le suivi est persisté des deux côtés.** Un travail dure 4 à 5 h ; non persisté, il repartirait
+  vide au milieu, le passage à 100 serait lu comme un repos, et **plus aucune tonte ne serait
+  déclarée** — un silence total, indiscernable d'un capteur muet.
+- **Le réglage existant change de sens sans changer de nom** : il ne DÉCLENCHE plus, il QUALIFIE.
+  Un travail terminé ne compte que s'il a représenté au moins ce temps de tonte dans la journée —
+  une coupe de bordure est aussi une tâche qui monte à 100, et elle est courte.
+- **⚠️ `None` reste une absence** : tondeuse injoignable ou entité absente ne valent pas
+  « travail inachevé ». Une mutation le verrouille.
+- Trois clés publiées pour que la règle soit lisible de l'extérieur :
+  `mower_job_completion_state`, `mower_job_followed_id`, `mower_job_seen_incomplete`.
+- Les **7 mutations** du banc sont détectées par le test visé.
+
+**⚠️ Conséquence assumée : un travail jamais terminé n'est plus déclaré.** Une journée où la
+batterie lâche avant la fin ne comptera plus comme une tonte — c'est le but, mais le retard
+continuera de courir tant que le travail n'est pas bouclé.
+
+⚠️ **Deux trous trouvés par le banc, pas par les tests.** Le premier test du « 100 au repos »
+ne traversait qu'un des deux chemins ; et les trois nouvelles clés n'étaient protégées dans
+aucune liste de câblage — retirer l'une du capteur ne faisait tomber personne.
+
 ## 0.60.2
 
 1187 tests verts. **Trois défauts de plus sur la voie « arrêt manuel », remontés par la revue

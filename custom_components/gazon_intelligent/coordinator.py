@@ -356,6 +356,9 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     # ⚠️ AUTO-DÉCLARATION — sans ces clés, impossible de savoir POURQUOI une tonte n'a pas été
     # inscrite (interrupteur coupé ? sous le seuil ? tondeuse injoignable ?). Un automatisme
     # muet qui n'agit pas est indiscernable d'un automatisme cassé.
+    "mower_job_completion_state",
+    "mower_job_followed_id",
+    "mower_job_seen_incomplete",
     "mower_auto_declaration_state",
     "mower_auto_declaration_threshold_minutes",
     "mower_auto_declared_today",
@@ -2462,6 +2465,67 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
         return profil
 
+    def _suivre_travail_tondeuse(self, mower_context: dict[str, Any]) -> dict[str, Any]:
+        """Suit UN travail de tonte de bout en bout, et dit quand il vient de se terminer.
+
+        ⚠️ La difficulté n'est pas de lire 100, c'est de savoir que c'est NOUVEAU. Sur huit
+        jours d'historique, `progression_de_la_tonte` passe à 100 en fin de travail puis y
+        RESTE jusqu'au travail suivant — 51 h après celui du 25/08, 62 h après celui du 27/08.
+        Un test `== 100` serait donc vrai la quasi-totalité du temps.
+
+        On mémorise donc la tâche en cours et le fait de l'avoir vue INACHEVÉE. Le travail
+        n'est « terminé » qu'au premier cycle où une tâche vue sous 100 atteint 100.
+
+        ⚠️ La mémoire est persistée : un travail dure 4 à 5 h et traverse les recharges — et
+        les redémarrages sont fréquents ici. Non persistée, elle repartirait vide au milieu du
+        travail, et le passage à 100 serait lu comme un état de repos : plus aucune tonte
+        déclarée. Le silence serait total et indiscernable d'un capteur muet.
+
+        ⚠️ `None` reste une absence. Tondeuse injoignable, entité absente ou langue différente :
+        on ne conclut rien, surtout pas « travail non terminé ».
+        """
+        vide = {
+            "mower_job_completion_state": "sans_mesure",
+            "mower_job_followed_id": None,
+            "mower_job_seen_incomplete": None,
+        }
+        progression = mower_context.get("mower_job_progress_pct")
+        tache = mower_context.get("mower_job_id")
+        if tache in (None, "") or not isinstance(progression, (int, float)) or isinstance(progression, bool):
+            return vide
+
+        tache = str(tache)
+        suivi = self._runtime_state.get("mower_job_suivi")
+        if not isinstance(suivi, dict):
+            suivi = {}
+        if suivi.get("task_id") != tache:
+            # Nouvelle tâche : on ne sait rien d'elle. Si elle apparaît déjà à 100, c'est un
+            # état de repos qu'on découvre, pas un travail qu'on a vu s'accomplir.
+            suivi = {"task_id": tache, "vu_inacheve": float(progression) < 100.0}
+            self._runtime_state["mower_job_suivi"] = suivi
+            etat = "en_cours" if suivi["vu_inacheve"] else "repos"
+            return {
+                "mower_job_completion_state": etat,
+                "mower_job_followed_id": tache,
+                "mower_job_seen_incomplete": bool(suivi["vu_inacheve"]),
+            }
+
+        if float(progression) < 100.0:
+            suivi["vu_inacheve"] = True
+            self._runtime_state["mower_job_suivi"] = suivi
+            return {
+                "mower_job_completion_state": "en_cours",
+                "mower_job_followed_id": tache,
+                "mower_job_seen_incomplete": True,
+            }
+
+        vu_inacheve = bool(suivi.get("vu_inacheve"))
+        return {
+            "mower_job_completion_state": "termine" if vu_inacheve else "repos",
+            "mower_job_followed_id": tache,
+            "mower_job_seen_incomplete": vu_inacheve,
+        }
+
     def _declarer_tonte_du_jour(self, mower_context: dict[str, Any]) -> dict[str, Any]:
         """Inscrit la tonte du jour dès que le cumul mesuré franchit le seuil.
 
@@ -2507,8 +2571,38 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 trace["mower_auto_declaration_state"] = "sans_mesure"
                 return trace
 
+            # ⚠️ LE TRAVAIL, PAS LA DURÉE. Le seuil en minutes déclarait une tonte dès 90 min
+            # cumulées, quelle que soit la surface faite. Mesuré le 30/08/2026 : déclarée à
+            # 14:32 avec 102,8 min tondues et le travail à **49 %** — hauteur estimée remise
+            # à 5,5 cm, retard remis à 0, prochaine tonte repoussée de 3 jours, pendant que la
+            # moitié de la pelouse restait haute et que la tondeuse tondait encore.
+            #
+            # ⚠️ ET « progression = 100 » N'EST PAS UN ÉVÉNEMENT : c'est l'état de REPOS. Relevé
+            # sur 8 jours, la valeur reste à 100 entre deux travaux — 51 h après celui du 25/08,
+            # 62 h après celui du 27/08. Déclarer sur `== 100` déclencherait donc tous les jours.
+            # On déclare sur le PASSAGE à 100 d'une tâche qu'on a vue en dessous, jamais sur la
+            # valeur seule. `task_id` est stable à travers les recharges : il recolle les deux
+            # passes d'une même journée en un seul travail, ce qui est exactement l'unité voulue.
+            suivi = self._suivre_travail_tondeuse(mower_context)
+            trace.update(suivi)
+            if suivi["mower_job_completion_state"] == "sans_mesure":
+                trace["mower_auto_declaration_state"] = "sans_mesure"
+                return trace
+            if suivi["mower_job_completion_state"] != "termine":
+                trace["mower_auto_declaration_state"] = (
+                    "travail_au_repos"
+                    if suivi["mower_job_completion_state"] == "repos"
+                    else "travail_en_cours"
+                )
+                return trace
+
+            # Plancher de durée : une COUPE DE BORDURE est aussi une tâche qui monte à 100.
+            # Elle est courte, là où un vrai travail dure 4 à 5 h (mesuré les 25 et 27/08).
+            # Le réglage existant garde son nom et change de sens : il ne DÉCLENCHE plus, il
+            # QUALIFIE — un travail terminé ne compte que s'il a représenté au moins ce temps
+            # de tonte dans la journée.
             if float(minutes) < float(seuil):
-                trace["mower_auto_declaration_state"] = "sous_seuil"
+                trace["mower_auto_declaration_state"] = "travail_trop_court"
                 return trace
 
             # ⚠️ MÊME JOURNÉE des deux côtés. Le cumul est indexé sur `_current_date()` ; la
@@ -2538,8 +2632,10 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 hauteur_coupe_mm=mower_context.get("tondeuse_hauteur_coupe_mm"),
             )
             _LOGGER.info(
-                "Tonte du %s déclarée automatiquement : %.1f min tondues (seuil %d min)",
+                "Tonte du %s déclarée automatiquement : travail %s terminé à 100 %%, "
+                "%.1f min tondues (plancher %d min)",
                 jour,
+                suivi.get("mower_job_id") or "?",
                 float(minutes),
                 seuil,
             )
@@ -3485,6 +3581,12 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "mower_recommendation_ignored_since": self._serialize_runtime_value(
                 self._runtime_state.get("mower_recommendation_ignored_since")
             ),
+            # ⚠️ Un travail dure 4 à 5 h et traverse les recharges. Non persisté, ce suivi
+            # repartirait vide au milieu — et le passage à 100 serait alors lu comme un état
+            # de repos, donc AUCUNE tonte ne serait plus jamais déclarée après un redémarrage.
+            "mower_job_suivi": self._serialize_runtime_value(
+                self._runtime_state.get("mower_job_suivi")
+            ),
             "persisted_watering_session": persisted_watering_session,
             "last_irrigation_execution_persisted": self._serialize_runtime_value(last_execution),
         }
@@ -3549,6 +3651,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "pluie_mesuree": runtime.get("pluie_mesuree"),
             "pluie_cumul": runtime.get("pluie_cumul"),
             "mower_recommendation_ignored_since": runtime.get("mower_recommendation_ignored_since"),
+            "mower_job_suivi": runtime.get("mower_job_suivi"),
         }
 
     def _get_active_irrigation_session(self) -> dict[str, Any] | None:
