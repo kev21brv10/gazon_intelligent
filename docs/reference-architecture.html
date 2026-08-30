@@ -232,7 +232,7 @@
     <p class="lede">Arrosage, tonte, phases, produits, capteurs et services : ce que fait chaque brique, où sont les seuils, et ce qui reste à arbitrer. Établi sur l'état réel du code.</p>
     <div class="stats">
       <span class="stat">version <b>0.61.0</b></span>
-      <span class="stat">carte <b>0.26.6</b></span>
+      <span class="stat">carte <b>0.27.0</b></span>
       <span class="stat"><b>39</b> modules</span>
       <span class="stat"><b>62</b> entités</span>
       <span class="stat"><b>15</b> services</span>
@@ -1069,12 +1069,21 @@
         <p><strong>Le réglage existant change de sens sans changer de nom</strong>&nbsp;: il ne déclenche plus, il <em>qualifie</em>. Une coupe de bordure est aussi une tâche qui monte à 100, et elle est courte&nbsp;; le plancher de minutes l'écarte.</p>
       </div>
 
+      <div class="callout a">
+        <h3>Et la carte le montre enfin <span class="chip ok">carte 0.27.0</span></h3>
+        <p>L'intégration publiait tout cela — progression, état de la déclaration, bilan du jour — et la carte n'en lisait <strong>aucune clé</strong>. On venait y chercher « est-ce qu'elle a fini ? » sans pouvoir le savoir. Nouveau bloc dans l'onglet Tonte&nbsp;:</p>
+        <div class="tbl-wrap"><table><tbody>
+          <tr><td><code>Travail de tonte &nbsp;&nbsp; 55 % · en cours</code><br><code>████████████░░░░░░░░░░░</code><br><code>Déclaration : Pas encore — travail inachevé</code><br><code>Tondu aujourd'hui 108 min · 2 passes · batterie vide · passe médiane 86 min</code></td></tr>
+        </tbody></table></div>
+        <p>La déclaration dit <strong>pourquoi</strong> rien n'est inscrit, pas seulement que rien ne l'est. ⚠️ Le vert est réservé à une tonte <em>réellement</em> inscrite&nbsp;: un test vérifie que « travail inachevé » ne passe pas pour une réussite alors même que les minutes dépassent l'ancien seuil. Et <strong>sans aucune mesure le bloc disparaît</strong>, plutôt qu'une rangée de tirets qui se lirait comme des zéros mesurés.</p>
+      </div>
+
       <div class="callout w">
         <h3>⚠️ Conséquence assumée</h3>
         <p>Un travail <strong>jamais terminé n'est plus déclaré</strong>. Une journée où la batterie lâche avant la fin ne comptera plus comme une tonte — c'est le but, mais le retard continuera de courir tant que le travail n'est pas bouclé.</p>
       </div>
 
-      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b>&nbsp;: 1193 tests verts, <b>7 mutations</b> détectées par le test visé. ⚠️ Deux trous ont été trouvés par le banc et non par les tests — le premier test du « 100 au repos » ne traversait qu'un des deux chemins, et les trois nouvelles clés n'étaient protégées dans aucune liste de câblage.</p>
+      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b>&nbsp;: 1193 tests verts côté intégration et 29 côté carte, <b>7 + 6 mutations</b> détectées par le test visé. ⚠️ Deux trous ont été trouvés par le banc et non par les tests — le premier test du « 100 au repos » ne traversait qu'un des deux chemins, et les trois nouvelles clés n'étaient protégées dans aucune liste de câblage.</p>
     </section>
 
     <section>
