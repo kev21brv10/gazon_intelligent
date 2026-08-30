@@ -231,7 +231,7 @@
     <h1>Comment le système décide</h1>
     <p class="lede">Arrosage, tonte, phases, produits, capteurs et services : ce que fait chaque brique, où sont les seuils, et ce qui reste à arbitrer. Établi sur l'état réel du code.</p>
     <div class="stats">
-      <span class="stat">version <b>0.60.2</b></span>
+      <span class="stat">version <b>0.61.0</b></span>
       <span class="stat">carte <b>0.26.6</b></span>
       <span class="stat"><b>39</b> modules</span>
       <span class="stat"><b>62</b> entités</span>
@@ -1032,6 +1032,51 @@
 
   <!-- ═══ SANTÉ DU CODE ═══ -->
   <div class="panel" role="tabpanel" id="p-sante" aria-labelledby="t-sante" tabindex="0" hidden>
+    <section>
+      <div class="sec-head"><h2>30/08/2026 — la tonte se déclare sur le TRAVAIL, plus sur une durée</h2><span class="tally done">0.61.0</span></div>
+      <p>Le seuil inscrivait une tonte dès <b>90 min cumulées</b>, quelle que soit la surface faite. Vu en direct ce jour-là&nbsp;: déclarée à 14:32 avec <strong>102,8 min tondues et le travail à 49 %</strong>.</p>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Effet immédiat de la déclaration à 49 %</th><th class="num">avant</th><th class="num">après</th></tr></thead>
+          <tbody>
+            <tr class="r-bad"><td class="rowlabel">Hauteur de gazon estimée</td><td class="num">6,4 cm</td><td class="num">5,5 cm</td></tr>
+            <tr class="r-bad"><td class="rowlabel">Retard de tonte</td><td class="num">3 jours</td><td class="num">0</td></tr>
+            <tr class="r-bad"><td class="rowlabel">Prochaine tonte</td><td>aujourd'hui</td><td>02/09</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>…pendant que la moitié de la pelouse restait haute et que la tondeuse tondait encore. Le seuil mesurait une <em>durée</em> là où il fallait une <em>surface</em>.</p>
+
+      <div class="callout h">
+        <h3>⚠️ Le piège qui aurait tout cassé : « 100 % » est l'état de REPOS</h3>
+        <p><code>progression_de_la_tonte</code> ne vaut pas 100 au moment où le travail se termine&nbsp;: elle y <strong>reste</strong> jusqu'au travail suivant. Relevé sur huit jours d'historique réel&nbsp;:</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>travail</th><th>durée</th><th>puis 100 % pendant</th></tr></thead>
+            <tbody>
+              <tr><td class="rowlabel">25/08, 13:00 → 17:00</td><td class="num">≈ 4 h</td><td class="num">51 h</td></tr>
+              <tr><td class="rowlabel">27/08, 16:00 → 21:00</td><td class="num">≈ 5 h</td><td class="num">62 h</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Un test <code>== 100</code> aurait donc été vrai la quasi-totalité du temps et aurait déclaré une tonte <strong>tous les jours</strong>. On déclare sur le <strong>passage</strong> à 100 d'une tâche qu'on a vue inachevée — jamais sur la valeur seule. C'est précisément l'inconnue que la 0.56.0 avait refusé de brancher tant qu'elle n'était pas levée&nbsp;: publier d'abord, décider ensuite, a évité de livrer le défaut inverse.</p>
+      </div>
+
+      <div class="callout a">
+        <h3>Ce qui rend la règle juste</h3>
+        <p><strong><code>task_id</code> recolle les passes d'un même travail</strong>, recharge comprise — c'est l'unité qu'on cherchait depuis le carnet de passes. Le 30/08, la reprise après charge est repartie de <b>35 %</b>, pas de zéro.</p>
+        <p><strong>Le suivi est persisté des deux côtés.</strong> Un travail dure 4 à 5 h&nbsp;; non persisté, il repartirait vide au milieu, le passage à 100 serait lu comme un repos, et <strong>plus aucune tonte ne serait jamais déclarée</strong> — un silence total, indiscernable d'un capteur muet.</p>
+        <p><strong>Le réglage existant change de sens sans changer de nom</strong>&nbsp;: il ne déclenche plus, il <em>qualifie</em>. Une coupe de bordure est aussi une tâche qui monte à 100, et elle est courte&nbsp;; le plancher de minutes l'écarte.</p>
+      </div>
+
+      <div class="callout w">
+        <h3>⚠️ Conséquence assumée</h3>
+        <p>Un travail <strong>jamais terminé n'est plus déclaré</strong>. Une journée où la batterie lâche avant la fin ne comptera plus comme une tonte — c'est le but, mais le retard continuera de courir tant que le travail n'est pas bouclé.</p>
+      </div>
+
+      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b>&nbsp;: 1193 tests verts, <b>7 mutations</b> détectées par le test visé. ⚠️ Deux trous ont été trouvés par le banc et non par les tests — le premier test du « 100 au repos » ne traversait qu'un des deux chemins, et les trois nouvelles clés n'étaient protégées dans aucune liste de câblage.</p>
+    </section>
+
     <section>
       <div class="sec-head"><h2>29/08/2026 — la garde « il pleut » cesse de deviner</h2><span class="tally done">0.56.1 → 0.60.2</span></div>
       <p>Cinq versions en une journée, toutes sur la même question&nbsp;: <strong>d'où vient l'information « il pleut »</strong>. Depuis le début elle était <em>déduite</em> d'un cumul journalier — un cumul ne dit pas s'il pleut, il dit combien il est tombé. Tout l'appareillage construit pour le deviner (détecteur de hausse, cliquet intra-journée, horodatage sur la dernière hausse) vient de là, et ses défauts aussi.</p>
@@ -1845,7 +1890,7 @@
     </section>
 
     <section>
-      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1187 tests verts</span></div>
+      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1193 tests verts</span></div>
       <p>Cet onglet est le point d'entrée pour « <strong>qu'est-ce qui reste à corriger ou à supprimer ?</strong> ». Il distingue trois choses qu'on confond souvent : ce qui est cassé, ce qui est un choix, et ce qui est déjà mort.</p>
       <div class="tbl-wrap">
         <table>

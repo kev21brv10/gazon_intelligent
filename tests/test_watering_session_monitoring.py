@@ -4679,10 +4679,33 @@ class AutoDeclarationTonteTests(unittest.TestCase):
         if historique:
             coord.brain.history = list(historique)
         coord._current_date = lambda: self.JOUR
+        coord._runtime_state = {}
         return coord
 
-    def _ctx(self, minutes, *, hauteur=None):
-        return {"mower_mowing_minutes_today": minutes, "tondeuse_hauteur_coupe_mm": hauteur}
+    def _ctx(self, minutes, *, hauteur=None, progression=100.0, tache="tache-1", vu_inacheve=True):
+        """Par défaut : un travail SUIVI depuis l'inachevé qui vient d'atteindre 100 %.
+
+        ⚠️ C'est la nouvelle unité de la déclaration. Les minutes ne déclenchent plus rien —
+        elles ne font que qualifier un travail terminé (plancher anti coupe-de-bordure).
+        `vu_inacheve` reproduit la mémoire du cycle précédent, celle qui distingue un travail
+        qu'on a vu s'accomplir de la valeur 100 au repos.
+        """
+        return {
+            "mower_mowing_minutes_today": minutes,
+            "tondeuse_hauteur_coupe_mm": hauteur,
+            "mower_job_progress_pct": progression,
+            "mower_job_id": tache,
+            "_vu_inacheve": vu_inacheve,
+        }
+
+    def _declarer(self, coord, ctx):
+        """Pose la mémoire de suivi attendue, puis déclare — comme deux cycles successifs."""
+        if ctx.pop("_vu_inacheve", False) and ctx.get("mower_job_id"):
+            coord._runtime_state["mower_job_suivi"] = {
+                "task_id": str(ctx["mower_job_id"]),
+                "vu_inacheve": True,
+            }
+        return coord._declarer_tonte_du_jour(ctx)
 
     def _tontes(self, coord):
         return [i for i in coord.brain.history if i.get("type") == "tonte"]
@@ -4693,7 +4716,7 @@ class AutoDeclarationTonteTests(unittest.TestCase):
         autres verts pour rien — l'erreur commise deux fois sur ce projet."""
         coord = self._coord()
         self.assertEqual(self._tontes(coord), [], "l'historique de départ n'était pas vierge")
-        trace = coord._declarer_tonte_du_jour(self._ctx(120.0))
+        trace = self._declarer(coord, self._ctx(120.0))
         self.assertEqual(trace["mower_auto_declaration_state"], "declaree")
         self.assertEqual(len(self._tontes(coord)), 1)
 
@@ -4701,40 +4724,115 @@ class AutoDeclarationTonteTests(unittest.TestCase):
     def test_le_seuil_franchi_inscrit_la_tonte_du_jour(self) -> None:
         """Le 08/08/2026 : 126,6 min tondues, largement au-dessus des 90 min."""
         coord = self._coord()
-        coord._declarer_tonte_du_jour(self._ctx(126.6))
+        self._declarer(coord, self._ctx(126.6))
         self.assertEqual(self._tontes(coord)[0]["date"], self.JOUR.isoformat())
 
     def test_sous_le_seuil_rien_n_est_inscrit(self) -> None:
         """Une sortie avortée (le 08/08 à 13:59 : 3 secondes) n'est pas une tonte."""
         coord = self._coord()
-        trace = coord._declarer_tonte_du_jour(self._ctx(12.0))
-        self.assertEqual(trace["mower_auto_declaration_state"], "sous_seuil")
+        trace = self._declarer(coord, self._ctx(12.0))
+        # Le plancher ne DÉCLENCHE plus, il QUALIFIE : un travail terminé en 12 min n'est pas
+        # une tonte, c'est une coupe de bordure ou une sortie avortée.
+        self.assertEqual(trace["mower_auto_declaration_state"], "travail_trop_court")
         self.assertEqual(self._tontes(coord), [])
 
     def test_la_borne_exacte_du_seuil_declare(self) -> None:
         coord = self._coord(seuil=90)
         self.assertEqual(
-            coord._declarer_tonte_du_jour(self._ctx(90.0))["mower_auto_declaration_state"],
+            self._declarer(coord, self._ctx(90.0))["mower_auto_declaration_state"],
             "declaree",
         )
 
     def test_juste_en_dessous_de_la_borne_ne_declare_pas(self) -> None:
         coord = self._coord(seuil=90)
         self.assertEqual(
-            coord._declarer_tonte_du_jour(self._ctx(89.9))["mower_auto_declaration_state"],
-            "sous_seuil",
+            self._declarer(coord, self._ctx(89.9))["mower_auto_declaration_state"],
+            "travail_trop_court",
         )
 
     def test_le_seuil_est_reellement_configurable(self) -> None:
         coord = self._coord(seuil=30)
-        trace = coord._declarer_tonte_du_jour(self._ctx(45.0))
+        trace = self._declarer(coord, self._ctx(45.0))
         self.assertEqual(trace["mower_auto_declaration_state"], "declaree")
         self.assertEqual(trace["mower_auto_declaration_threshold_minutes"], 30)
+
+    # ---- Le TRAVAIL, pas la durée --------------------------------------------------------
+    def test_un_travail_a_100_jamais_vu_inacheve_ne_declare_rien(self) -> None:
+        """⚠️ LE PIÈGE QUI AURAIT TOUT CASSÉ : 100 % est l'état de REPOS, pas un événement.
+
+        Relevé sur huit jours de `progression_de_la_tonte` : la valeur reste à 100 entre deux
+        travaux — 51 h après celui du 25/08/2026, 62 h après celui du 27/08. Un test `== 100`
+        serait donc vrai la quasi-totalité du temps, et déclarerait une tonte chaque jour.
+        """
+        coord = self._coord()
+        trace = self._declarer(coord, self._ctx(600.0, vu_inacheve=False))
+        self.assertEqual(trace["mower_auto_declaration_state"], "travail_au_repos")
+        self.assertEqual(self._tontes(coord), [], "une tonte a été inscrite sur l'état de repos")
+
+    def test_une_tache_deja_suivie_mais_jamais_vue_inachevee_reste_au_repos(self) -> None:
+        """Second chemin du même piège, et celui que le premier test ne traversait pas.
+
+        Une tâche déjà mémorisée, à 100, dont on n'a JAMAIS vu la progression sous 100 :
+        c'est le repos qui dure (51 h après le travail du 25/08, 62 h après celui du 27/08).
+        Sans ce test, déclarer sur la seule valeur 100 passait le banc de mutations.
+        """
+        coord = self._coord()
+        coord._runtime_state["mower_job_suivi"] = {"task_id": "tache-1", "vu_inacheve": False}
+        trace = coord._declarer_tonte_du_jour(
+            self._ctx(600.0) | {"_vu_inacheve": None}
+        )
+        self.assertEqual(trace["mower_auto_declaration_state"], "travail_au_repos")
+        self.assertEqual(self._tontes(coord), [])
+
+    def test_un_travail_en_cours_ne_declare_rien_meme_avec_beaucoup_de_minutes(self) -> None:
+        """Le 30/08/2026 : déclarée à 14:32 avec 102,8 min tondues et le travail à 49 %.
+
+        Hauteur estimée remise à 5,5 cm, retard remis à 0, prochaine tonte repoussée de trois
+        jours — pendant que la moitié de la pelouse restait haute et que la tondeuse tondait
+        encore. C'est ce cas précis que la nouvelle règle refuse.
+        """
+        coord = self._coord()
+        trace = self._declarer(coord, self._ctx(102.8, progression=49.0))
+        self.assertEqual(trace["mower_auto_declaration_state"], "travail_en_cours")
+        self.assertEqual(self._tontes(coord), [])
+
+    def test_le_passage_a_100_dun_travail_suivi_declare(self) -> None:
+        coord = self._coord()
+        # Cycle 1 : le travail est en cours, on le suit.
+        en_cours = coord._declarer_tonte_du_jour(
+            self._ctx(120.0, progression=87.0) | {"_vu_inacheve": None}
+        )
+        self.assertEqual(en_cours["mower_auto_declaration_state"], "travail_en_cours")
+        self.assertEqual(self._tontes(coord), [])
+        # Cycle 2 : la même tâche atteint 100 — c'est le PASSAGE qui déclare.
+        fin = coord._declarer_tonte_du_jour(self._ctx(150.0, progression=100.0) | {"_vu_inacheve": None})
+        self.assertEqual(fin["mower_auto_declaration_state"], "declaree")
+        self.assertEqual(len(self._tontes(coord)), 1)
+
+    def test_une_progression_absente_ne_vaut_pas_travail_inacheve(self) -> None:
+        """`None` est une absence : tondeuse injoignable, entité absente, ou autre langue."""
+        coord = self._coord()
+        trace = self._declarer(coord, self._ctx(600.0, progression=None))
+        self.assertEqual(trace["mower_auto_declaration_state"], "sans_mesure")
+        self.assertEqual(self._tontes(coord), [])
+
+    def test_le_suivi_du_travail_est_persiste_des_deux_cotes(self) -> None:
+        """Un travail dure 4 à 5 h et traverse les recharges ET les redémarrages.
+
+        Non persisté, le suivi repartirait vide au milieu : le passage à 100 serait alors lu
+        comme un état de repos, et plus AUCUNE tonte ne serait déclarée. Un silence total,
+        indiscernable d'un capteur muet.
+        """
+        source = (PACKAGE_DIR / "coordinator.py").read_text(encoding="utf-8")
+        sauvegarde = source.split("def _serialized_runtime_state")[1].split("def ")[0]
+        restauration = source.split("def _restore_runtime_state")[1].split("\n    def ")[0]
+        self.assertIn("mower_job_suivi", sauvegarde, "le suivi n'est pas SAUVEGARDÉ")
+        self.assertIn("mower_job_suivi", restauration, "le suivi n'est pas RESTAURÉ")
 
     # ---- Les gardes contre une FAUSSE déclaration ----------------------------------------
     def test_l_interrupteur_coupe_interdit_toute_ecriture(self) -> None:
         coord = self._coord(active=False)
-        trace = coord._declarer_tonte_du_jour(self._ctx(600.0))
+        trace = self._declarer(coord, self._ctx(600.0))
         self.assertEqual(trace["mower_auto_declaration_state"], "desactivee")
         self.assertEqual(self._tontes(coord), [])
 
@@ -4742,21 +4840,21 @@ class AutoDeclarationTonteTests(unittest.TestCase):
         """RÈGLE DE LA MAISON : `None` est une absence de mesure, PAS zéro minute — et surtout
         pas une raison d'écrire quoi que ce soit."""
         coord = self._coord()
-        trace = coord._declarer_tonte_du_jour(self._ctx(None))
+        trace = self._declarer(coord, self._ctx(None))
         self.assertEqual(trace["mower_auto_declaration_state"], "sans_mesure")
         self.assertEqual(self._tontes(coord), [])
 
     def test_un_booleen_n_est_pas_une_duree(self) -> None:
         """`True` vaut 1 en Python : sans garde explicite il passerait pour une mesure."""
         coord = self._coord(seuil=1)
-        trace = coord._declarer_tonte_du_jour(self._ctx(True))
+        trace = self._declarer(coord, self._ctx(True))
         self.assertEqual(trace["mower_auto_declaration_state"], "sans_mesure")
         self.assertEqual(self._tontes(coord), [])
 
     def test_une_journee_deja_declaree_ne_l_est_pas_deux_fois(self) -> None:
         """Le filet Node-RED de 23:50 peut avoir devancé l'intégration."""
         coord = self._coord(historique=[{"type": "tonte", "date": self.JOUR.isoformat()}])
-        trace = coord._declarer_tonte_du_jour(self._ctx(200.0))
+        trace = self._declarer(coord, self._ctx(200.0))
         self.assertEqual(trace["mower_auto_declaration_state"], "deja_declaree")
         self.assertEqual(len(self._tontes(coord)), 1)
 
@@ -4764,13 +4862,13 @@ class AutoDeclarationTonteTests(unittest.TestCase):
         """Le cycle tourne toutes les 2 min : sans idempotence, ~300 lignes par après-midi."""
         coord = self._coord()
         for _ in range(10):
-            coord._declarer_tonte_du_jour(self._ctx(126.6))
+            self._declarer(coord, self._ctx(126.6))
         self.assertEqual(len(self._tontes(coord)), 1)
 
     def test_une_tonte_de_la_veille_n_empeche_pas_celle_du_jour(self) -> None:
         veille = (self.JOUR - timedelta(days=1)).isoformat()
         coord = self._coord(historique=[{"type": "tonte", "date": veille}])
-        coord._declarer_tonte_du_jour(self._ctx(126.6))
+        self._declarer(coord, self._ctx(126.6))
         self.assertEqual(
             sorted(i["date"] for i in self._tontes(coord)),
             [veille, self.JOUR.isoformat()],
@@ -4782,7 +4880,7 @@ class AutoDeclarationTonteTests(unittest.TestCase):
         `dt_util.now().date()`. Deux horloges pour un même fait = une tonte déclarée le mauvais
         jour. La date est passée EXPLICITEMENT."""
         coord = self._coord()
-        coord._declarer_tonte_du_jour(self._ctx(126.6))
+        self._declarer(coord, self._ctx(126.6))
         self.assertEqual(self._tontes(coord)[0]["date"], "2026-08-06")
         self.assertNotEqual(
             self._tontes(coord)[0]["date"],
@@ -4793,7 +4891,7 @@ class AutoDeclarationTonteTests(unittest.TestCase):
     # ---- Ce qui est inscrit ---------------------------------------------------------------
     def test_la_hauteur_de_coupe_du_moment_est_conservee(self) -> None:
         coord = self._coord()
-        coord._declarer_tonte_du_jour(self._ctx(126.6, hauteur=60.0))
+        self._declarer(coord, self._ctx(126.6, hauteur=60.0))
         self.assertAlmostEqual(self._tontes(coord)[0]["hauteur_coupe_mm"], 60.0)
 
     # ---- Robustesse -----------------------------------------------------------------------
@@ -4866,6 +4964,11 @@ class AutoDeclarationCablageTests(unittest.TestCase):
         "mower_auto_declaration_state",
         "mower_auto_declaration_threshold_minutes",
         "mower_auto_declared_today",
+        # Ajoutées en 0.61.0 : sans elles dans CETTE liste, retirer une clé du capteur ne
+        # faisait tomber aucun test — le trou que le banc de mutations a trouvé.
+        "mower_job_completion_state",
+        "mower_job_followed_id",
+        "mower_job_seen_incomplete",
     )
 
     def test_les_cles_traversent_la_liste_blanche_du_coordinator(self) -> None:
@@ -4905,7 +5008,12 @@ class AutoDeclarationCablageTests(unittest.TestCase):
         coord.brain = brain_mod.GazonBrain()
         coord.brain.memory["auto_mowing_declaration_enabled"] = True
         coord._current_date = lambda: date(2026, 8, 6)
-        trace = coord._declarer_tonte_du_jour({"mower_mowing_minutes_today": 126.6})
+        coord._runtime_state = {"mower_job_suivi": {"task_id": "t1", "vu_inacheve": True}}
+        trace = coord._declarer_tonte_du_jour({
+            "mower_mowing_minutes_today": 126.6,
+            "mower_job_progress_pct": 100.0,
+            "mower_job_id": "t1",
+        })
         self.assertEqual(trace["mower_auto_declaration_state"], "declaree",
                          msg="prémisse : la trace exercée doit être celle d'une déclaration")
 
