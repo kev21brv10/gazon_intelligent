@@ -617,6 +617,58 @@ class TestDecisionSnapshotMowing(unittest.TestCase):
             {"regle_tiers", "regle_tiers_impossible", "hauteur_trop_faible"},
         )
 
+    def test_le_seuil_de_tonte_suit_la_lame_reelle_pas_la_recommandation(self) -> None:
+        """⚠️ La recommandation servait de seuil sur la hauteur d'HERBE.
+
+        `hauteur_tonte_recommandee_cm` est ce qu'on CONSEILLE de régler sur la lame ; la
+        machine coupe à `tondeuse_hauteur_coupe_mm`. Mesuré le 30/08/2026 : lame à 5,5 et
+        consigne à 6,0 → l'herbe repart de 5,5 mais devait atteindre 6,1 pour débloquer, soit
+        ~2,5 jours imposés après chaque tonte alors que le robot est fait pour raser peu et
+        souvent. Et obéir à la consigne aggravait le cas : lame à 6,0 → déblocage à 6,1, donc
+        1 mm coupé. Arbitré par Kévin : la lame réelle fait foi.
+        """
+        def _bundle(hauteur_gazon, coupe_mm):
+            ctx = decision.DecisionContext.from_legacy_args(
+                history=[{"type": "tonte", "date": "2026-07-10", "hauteur_coupe_mm": coupe_mm}],
+                today=date(2026, 7, 15), hour_of_day=11, temperature=22,
+                pluie_24h=0, pluie_demain=0, humidite=45, type_sol="limoneux", etp_capteur=4.0,
+                hauteur_gazon=hauteur_gazon,
+            )
+            ctx.mower_context = {"tondeuse_hauteur_coupe_mm": coupe_mm}
+            phase = decision_phase.build_phase_bundle(ctx)
+            water = decision_watering.build_water_bundle(ctx, phase)
+            risk = decision_risk.build_risk_bundle(ctx, phase, water)
+            return decision_mowing.build_mowing_bundle(ctx, phase, water, risk)
+
+        # Lame à 5,5 cm. Un gazon à 5,6 la dépasse : plus aucune raison de bloquer sur la
+        # hauteur, même si la recommandation saisonnière est plus haute.
+        juste_au_dessus = _bundle(5.6, 55)
+        self.assertNotEqual(
+            juste_au_dessus["raison_blocage_code"], "hauteur_trop_faible",
+            f"gazon 5,6 cm au-dessus d'une lame à 5,5 : bloqué sur la recommandation "
+            f"({juste_au_dessus.get('hauteur_tonte_recommandee_cm')} cm)",
+        )
+
+        # Sous la lame, le garde-fou tient toujours.
+        sous_la_lame = _bundle(5.2, 55)
+        self.assertEqual(sous_la_lame["raison_blocage_code"], "hauteur_trop_faible")
+
+    def test_sans_reglage_de_lame_connu_le_garde_fou_retombe_sur_la_recommandation(self) -> None:
+        """`None` = réglage inconnu. Une absence ne doit pas DÉSARMER le garde-fou."""
+        ctx = decision.DecisionContext.from_legacy_args(
+            history=[{"type": "tonte", "date": "2026-07-10", "hauteur_coupe_mm": 55}],
+            today=date(2026, 7, 15), hour_of_day=11, temperature=22,
+            pluie_24h=0, pluie_demain=0, humidite=45, type_sol="limoneux", etp_capteur=4.0,
+            hauteur_gazon=1.0,
+        )
+        ctx.mower_context = {}          # tondeuse injoignable
+        phase = decision_phase.build_phase_bundle(ctx)
+        water = decision_watering.build_water_bundle(ctx, phase)
+        risk = decision_risk.build_risk_bundle(ctx, phase, water)
+        bundle = decision_mowing.build_mowing_bundle(ctx, phase, water, risk)
+        self.assertEqual(bundle["raison_blocage_code"], "hauteur_trop_faible",
+                         "sans réglage connu, le garde-fou de hauteur a été désarmé")
+
     def test_contrat_public_tonte_coherent_avec_la_decision(self) -> None:
         # RÉGRESSION (28/07/2026), deux incohérences dans le contrat public :
         #  A) `temp_extreme` absent de `agronomic_block_codes` → `tonte_autorisee` restait à ON

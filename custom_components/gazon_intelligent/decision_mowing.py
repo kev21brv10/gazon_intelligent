@@ -1162,6 +1162,27 @@ def _growth_rate_cm_per_day(phase_bundle: dict[str, Any], month: int) -> float:
     return _GROWTH_RATE_BY_MONTH.get(month, 0.3)
 
 
+def _hauteur_coupe_reelle_cm(context: DecisionContext) -> float | None:
+    """Hauteur à laquelle la lame coupe RÉELLEMENT, en cm — jamais la recommandation.
+
+    Même source que l'amorce de `_estimated_grass_height_cm` : c'est de cette hauteur que
+    l'herbe repart après une tonte, donc c'est elle qui doit servir de référence partout où
+    l'on compare une hauteur d'herbe à une hauteur de coupe.
+
+    ⚠️ `None` = réglage inconnu (tondeuse injoignable, non configurée). L'appelant retombe
+    alors sur la recommandation : une absence ne doit pas désarmer le garde-fou.
+    """
+    mower_context = context.mower_context if isinstance(context.mower_context, dict) else {}
+    brut = mower_context.get("tondeuse_hauteur_coupe_mm")
+    if brut is None:
+        return None
+    try:
+        valeur = float(brut) / 10.0
+    except (TypeError, ValueError):
+        return None
+    return valeur if valeur > 0 else None
+
+
 def _estimated_grass_height_cm(
     context: DecisionContext,
     phase_bundle: dict[str, Any],
@@ -1707,7 +1728,8 @@ def _select_mowing_block_reason(
                 (
                     _MOWING_BLOCK_PRIORITIES["hauteur_trop_faible"],
                     "hauteur_trop_faible",
-                    f"Hauteur actuelle trop faible: vise au moins {target_height:.1f} cm avant de tondre.",
+                    f"Hauteur actuelle trop faible: la lame coupe à {target_height:.1f} cm, "
+                    f"attends que le gazon la dépasse.",
                     True,
                 )
             )
@@ -1980,7 +2002,24 @@ def build_mowing_bundle(
         context.today.month,
     )
     height_recommendation = _recommended_mowing_height(context, phase_bundle, water_bundle, risk_bundle)
-    target_height = float(height_recommendation["hauteur_tonte_recommandee_cm"] or 0.0)
+    # ⚠️ LA LAME RÉELLE FAIT FOI, PAS LA RECOMMANDATION. `hauteur_tonte_recommandee_cm` est ce
+    # qu'on CONSEILLE de régler sur la lame ; la machine, elle, coupe à
+    # `tondeuse_hauteur_coupe_mm`. Les deux servaient indistinctement de seuil sur la hauteur
+    # d'HERBE, ce qui produisait deux effets mesurés le 30/08/2026 :
+    #
+    #   · lame à 5,5 et consigne à 6,0 → l'herbe repart de 5,5 (la lame) mais doit atteindre
+    #     6,1 (la consigne) pour débloquer : ~2,5 jours de croissance imposés après chaque
+    #     tonte, alors que le robot est fait pour raser peu et souvent ;
+    #   · et si on OBÉIT à la consigne en réglant la lame à 6,0, l'herbe repart de 6,0, le
+    #     seuil vaut 6,0, le déblocage arrive à 6,1 : chaque tonte n'ôte plus qu'un millimètre.
+    #     Suivre le conseil dégradait le comportement.
+    #
+    # La règle du tiers l'utilise aussi (plus bas) : la juger sur la consigne validerait une
+    # coupe à 6,0 pendant que la machine descend réellement à 5,5.
+    # Arbitré par Kévin le 30/08/2026. Consigne inconnue → repli sur la recommandation : une
+    # absence ne doit pas désarmer le garde-fou.
+    recommandee_cm = float(height_recommendation["hauteur_tonte_recommandee_cm"] or 0.0)
+    target_height = _hauteur_coupe_reelle_cm(context) or recommandee_cm
     # RÈGLE DU TIERS — ne jamais couper plus d'un tiers du brin d'un coup : au-delà, on retire
     # trop de surface foliaire et le gazon jaunit puis met des jours à repartir.
     # Elle ne lisait QUE `capteur_hauteur_gazon` (un capteur physique que peu d'installations

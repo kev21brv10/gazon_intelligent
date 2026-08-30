@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.62.0
+
+1195 tests verts. **Le seuil qui débloque la tonte suit la lame RÉELLE, plus la recommandation.**
+
+Trouvé en élucidant une incohérence d'affichage signalée par Kévin — le défaut était en fait
+dans la décision, pas dans la carte.
+
+`hauteur_tonte_recommandee_cm` est ce que l'intégration **conseille de régler sur la lame** :
+son calcul part de `_seasonal_base_height` (« hauteur de coupe prudente selon la saison ») et
+elle est bornée par la plage MACHINE. Or elle servait aussi de seuil sur la hauteur d'**herbe** :
+
+```python
+if current_height <= target_height:   # target_height = la recommandation de LAME
+    → « Hauteur actuelle trop faible: vise au moins 6.0 cm avant de tondre. »
+```
+
+Deux effets, tous deux vérifiés sur le code réel :
+
+- **Lame à 5,5 · consigne à 6,0** — l'herbe repart de 5,5 (la lame) après chaque tonte mais doit
+  atteindre 6,1 (la consigne) pour débloquer : **~2,5 jours de croissance imposés** à 0,24 cm/j,
+  alors qu'un robot est fait pour raser peu et souvent.
+- **Obéir à la consigne aggravait le cas** : lame réglée à 6,0 → l'herbe repart de 6,0, le seuil
+  vaut 6,0, le déblocage arrive à 6,1. Chaque tonte n'ôterait plus qu'**un millimètre**. Suivre
+  le conseil publié dégradait le comportement.
+
+**Arbitré par Kévin le 30/08/2026 : la hauteur réelle de la lame fait foi.**
+
+- Nouveau helper `_hauteur_coupe_reelle_cm`, même source que l'amorce de l'estimation d'herbe —
+  c'est de cette hauteur que le gazon repart, donc c'est elle la référence.
+- **La règle du tiers l'utilise aussi**, et c'était nécessaire : la juger sur la consigne
+  validait une coupe à 6,0 pendant que la machine descend réellement à 5,5.
+- **⚠️ `None` ne désarme pas le garde-fou** : réglage inconnu → repli sur la recommandation.
+  Une mutation le verrouille.
+- Le message nomme enfin la bonne grandeur : « la lame coupe à 5,5 cm, attends que le gazon
+  la dépasse » au lieu de « vise au moins 6,0 cm ».
+- Les **4 mutations** du banc sont détectées par le test visé.
+
+⚠️ **Ce que je n'ai PAS fait, et pourquoi.** L'enquête proposait de déclencher selon la règle du
+tiers, soit vers 8,3–9 cm. C'est une règle de tondeuse thermique passée une fois par semaine ;
+un robot est conçu pour raser 1 à 2 mm plusieurs fois par semaine — c'est le régime configuré
+ici (3 passages/semaine). Non retenu.
+
+⚠️ **Défaut LATENT, pas observé.** Sur le 27→30/08, tous les blocages relevés sur l'installation
+sont `wet_grass` : ce seuil n'a pas été constaté en train de gêner. La correction vient d'une
+lecture de code et d'un arbitrage, pas d'une gêne mesurée.
+
 ## 0.61.0
 
 1193 tests verts. **La tonte se déclare sur le TRAVAIL terminé, plus sur une durée.**
