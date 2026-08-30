@@ -231,7 +231,7 @@
     <h1>Comment le système décide</h1>
     <p class="lede">Arrosage, tonte, phases, produits, capteurs et services : ce que fait chaque brique, où sont les seuils, et ce qui reste à arbitrer. Établi sur l'état réel du code.</p>
     <div class="stats">
-      <span class="stat">version <b>0.61.0</b></span>
+      <span class="stat">version <b>0.62.0</b></span>
       <span class="stat">carte <b>0.28.0</b></span>
       <span class="stat"><b>39</b> modules</span>
       <span class="stat"><b>62</b> entités</span>
@@ -1092,6 +1092,8 @@
           </table>
         </div>
         <p><strong>La phrase ne pouvait jamais disparaître.</strong> La lame coupant SOUS la recommandation, le gazon était structurellement à 0,5 cm d'une cible inatteignable, et le message se réaffichait après chaque tonte — indéfiniment. ⚠️ Le commentaire du code montre que ce cas exact avait déjà été vu le <b>30/07/2026</b>&nbsp;: il affichait alors « déjà à la hauteur voulue », ce qui était faux, et le correctif d'alors a introduit la formule fautive d'aujourd'hui. <strong>Le correctif à moitié appliqué, une fois de plus.</strong></p>
+        <p><strong>⚠️ Et le défaut n'était pas que d'affichage.</strong> La même recommandation servait de <strong>seuil sur la hauteur d'herbe</strong> dans la décision (<code>decision_mowing.py</code>, <code>if current_height &lt;= target_height</code>). Deux effets vérifiés sur le code réel&nbsp;: l'herbe repart de la lame (5,5) mais devait atteindre la consigne + 0,1 (6,1) pour débloquer — <strong>~2,5 jours imposés après chaque tonte</strong> —&nbsp;; et <strong>obéir à la consigne aggravait le cas</strong>, une lame réglée à 6,0 faisant repartir l'herbe de 6,0 pour un déblocage à 6,1, soit <strong>1 mm coupé</strong>. Corrigé en <strong>0.62.0</strong>, règle du tiers comprise — la juger sur la consigne validait une coupe à 6,0 pendant que la machine descend à 5,5.</p>
+        <p style="font-size:.9rem;color:var(--muted)"><b>Non retenu</b>&nbsp;: déclencher selon la règle du tiers (~9 cm), comme le proposait l'enquête. C'est une règle de tondeuse thermique passée une fois par semaine&nbsp;; un robot est conçu pour raser 1 à 2 mm plusieurs fois par semaine — le régime configuré ici. <b>Et le défaut est LATENT</b>&nbsp;: sur le 27→30/08 les blocages relevés sur l'installation sont tous <code>wet_grass</code>. La correction vient d'une lecture de code et d'un arbitrage, pas d'une gêne mesurée.</p>
         <p><strong>Arbitré par Kévin le 30/08/2026&nbsp;: la hauteur réelle de la lame fait foi, la recommandation reste une recommandation.</strong> La tuile affiche désormais <code>5,5 cm · réglée sur la lame · recommandé 6,0 cm</code> — l'écart devient visible et actionnable au lieu d'être masqué — et le bloc de pousse se compare à la lame réelle.</p>
       </div>
 
@@ -1916,7 +1918,7 @@
     </section>
 
     <section>
-      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1193 tests verts</span></div>
+      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1195 tests verts</span></div>
       <p>Cet onglet est le point d'entrée pour « <strong>qu'est-ce qui reste à corriger ou à supprimer ?</strong> ». Il distingue trois choses qu'on confond souvent : ce qui est cassé, ce qui est un choix, et ce qui est déjà mort.</p>
       <div class="tbl-wrap">
         <table>
