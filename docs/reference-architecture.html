@@ -232,7 +232,7 @@
     <p class="lede">Arrosage, tonte, phases, produits, capteurs et services : ce que fait chaque brique, où sont les seuils, et ce qui reste à arbitrer. Établi sur l'état réel du code.</p>
     <div class="stats">
       <span class="stat">version <b>0.61.0</b></span>
-      <span class="stat">carte <b>0.27.1</b></span>
+      <span class="stat">carte <b>0.28.0</b></span>
       <span class="stat"><b>39</b> modules</span>
       <span class="stat"><b>62</b> entités</span>
       <span class="stat"><b>15</b> services</span>
@@ -1077,6 +1077,22 @@
         </tbody></table></div>
         <p><strong>⚠️ Livré cassé, et de la pire façon.</strong> La 0.27.0 lisait ces clés sur le binaire <code>…_tonte_autorisee</code> alors qu'elles sont publiées sur <code>sensor.…_etat_de_tonte</code>. Rendu vérifié, tests verts, bloc <strong>invisible en production</strong> — parce que <em>mes tests posaient les attributs là où je croyais qu'ils étaient</em>. Et le garde « absence ≠ zéro » a fait exactement son travail en masquant le bloc plutôt qu'en affichant des tirets, ce qui était juste mais <strong>cachait l'erreur</strong>. Corrigé en 0.27.1, avec un test qui vérifie les DEUX sens et un rendu contrôlé sur les attributs copiés tels quels depuis Home Assistant.</p>
         <p>La déclaration dit <strong>pourquoi</strong> rien n'est inscrit, pas seulement que rien ne l'est. ⚠️ Le vert est réservé à une tonte <em>réellement</em> inscrite&nbsp;: un test vérifie que « travail inachevé » ne passe pas pour une réussite alors même que les minutes dépassent l'ancien seuil. Et <strong>sans aucune mesure le bloc disparaît</strong>, plutôt qu'une rangée de tirets qui se lirait comme des zéros mesurés.</p>
+      </div>
+
+      <div class="callout h">
+        <h3>⚠️ La « hauteur cible » était un réglage de lame déguisé en objectif de pousse <span class="chip ok">carte 0.28.0</span></h3>
+        <p><code>hauteur_tonte_recommandee_cm</code> est ce que l'intégration <strong>conseille de régler sur la lame</strong> — le code l'écrit mot pour mot, « ne pas descendre sous X cm ». Ce n'est pas une hauteur que l'herbe doit atteindre. La carte l'affichait pourtant en « HAUTEUR CIBLE », puis annonçait&nbsp;: <em>« il lui reste 0,5 cm à pousser avant la cible de 6,0 cm »</em>.</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>valeur</th><th class="num">réel</th><th>ce que c'est</th></tr></thead>
+            <tbody>
+              <tr><td class="rowlabel"><code>tondeuse_hauteur_coupe_mm</code></td><td class="num">55 mm</td><td>la lame, <strong>réellement réglée</strong> — l'herbe repart de là après chaque tonte</td></tr>
+              <tr class="r-bad"><td class="rowlabel"><code>hauteur_tonte_recommandee_cm</code></td><td class="num">6,0 cm</td><td>une <em>recommandation</em> de réglage, affichée comme une cible de pousse</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p><strong>La phrase ne pouvait jamais disparaître.</strong> La lame coupant SOUS la recommandation, le gazon était structurellement à 0,5 cm d'une cible inatteignable, et le message se réaffichait après chaque tonte — indéfiniment. ⚠️ Le commentaire du code montre que ce cas exact avait déjà été vu le <b>30/07/2026</b>&nbsp;: il affichait alors « déjà à la hauteur voulue », ce qui était faux, et le correctif d'alors a introduit la formule fautive d'aujourd'hui. <strong>Le correctif à moitié appliqué, une fois de plus.</strong></p>
+        <p><strong>Arbitré par Kévin le 30/08/2026&nbsp;: la hauteur réelle de la lame fait foi, la recommandation reste une recommandation.</strong> La tuile affiche désormais <code>5,5 cm · réglée sur la lame · recommandé 6,0 cm</code> — l'écart devient visible et actionnable au lieu d'être masqué — et le bloc de pousse se compare à la lame réelle.</p>
       </div>
 
       <div class="callout w">
