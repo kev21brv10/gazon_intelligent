@@ -48,6 +48,13 @@ _ACCUMULATION_MAX_STEP_HOURS = 2.0
 # une coupure, seulement de ne pas jeter la mesure pour trois minutes d'absence.
 _ACCUMULATION_FRESH_HOURS = 0.25
 
+# COUVERTURE DE LA VEILLE (heures manquantes tolérées en fin de journée). Le filet de clôture
+# doit distinguer une journée TRONQUÉE (Home Assistant arrêté avant minuit) d'une journée
+# complète mais peu évaporante (pluie). Le registre porte déjà `etp_last_ts` : l'instant du
+# DERNIER cumul de la veille, donc l'heure jusqu'à laquelle la journée a été suivie. Une heure
+# de tolérance couvre largement l'écart entre le dernier cycle (~2 min) et minuit.
+_CLOTURE_COUVERTURE_MAX_HEURES_MANQUANTES = 1.0
+
 
 def _to_float(value: Any) -> float | None:
     if value is None:
@@ -224,6 +231,46 @@ def normalize_soil_balance_state(state: dict[str, Any] | None) -> dict[str, Any]
         "ledger": ledger,
     }
     return clean
+
+
+def _journee_couverte_jusqu_au_bout(entree: dict[str, Any]) -> bool:
+    """La veille a-t-elle été suivie jusqu'à minuit, ou l'intégration s'est-elle arrêtée avant ?
+
+    ⚠️ DÉFAUT CORRIGÉ le 01/09/2026, trouvé en auditant l'historique des entités.
+
+    Le filet de clôture doit écarter une journée TRONQUÉE — Home Assistant arrêté à midi, cumul
+    amputé, eau fantôme laissée dans la réserve d'ouverture. Il jugeait cela sur l'AMPLEUR de
+    l'ET mesurée : « une journée réellement couverte accumule au moins la moitié de
+    l'estimation ». C'est faux les jours de pluie, où la mesure vaut légitimement 38 à 47 % de
+    la prévision. Mesuré sur le registre réel :
+
+        28/08  mesurée 2,388  estimée 5,1  → jetée, sur-débit 2,712 mm
+        29/08  mesurée 1,085  estimée 3,4  → jetée, sur-débit 2,315 mm
+        30/08  mesurée 1,339  estimée 2,9  → jetée, sur-débit 1,561 mm
+
+    …alors que les trois journées avaient tourné jusqu'à 23:58, 23:59 et 23:59. Six millimètres
+    de réserve débités en trop en trois jours, et le repli ne va JAMAIS dans l'autre sens.
+
+    Le registre portait pourtant déjà la bonne information : `etp_last_ts`, l'instant du dernier
+    cumul. C'est la COUVERTURE qui distingue une journée tronquée d'une journée pluvieuse, pas
+    l'ampleur de l'évaporation. On la lit donc là où elle est écrite.
+
+    ⚠️ Horodatage absent ou illisible → on ne conclut rien de rassurant : la journée est traitée
+    comme non couverte, ce qui est le comportement prudent d'avant.
+    """
+    brut = entree.get("etp_last_ts")
+    jour = entree.get("date")
+    if not isinstance(brut, str) or not isinstance(jour, str):
+        return False
+    try:
+        dernier = datetime.fromisoformat(brut)
+        fin_de_journee = datetime.fromisoformat(f"{jour}T23:59:59")
+    except ValueError:
+        return False
+    if dernier.tzinfo is not None:
+        fin_de_journee = fin_de_journee.replace(tzinfo=dernier.tzinfo)
+    manquant_h = (fin_de_journee - dernier).total_seconds() / 3600.0
+    return manquant_h <= _CLOTURE_COUVERTURE_MAX_HEURES_MANQUANTES
 
 
 def _accumulate_elapsed_etp(
@@ -435,15 +482,17 @@ def update_soil_balance(
             _last_etp = _to_float(_last.get("etp_elapsed_mm"))
             if _last_etp is None:
                 _last_etp = _last_etp_estime
-            elif _last_etp_estime is not None and _last_etp < _last_etp_estime * 0.5:
+            elif not _journee_couverte_jusqu_au_bout(_last):
                 _LOGGER.debug(
-                    "Bilan sol : clôture de %s sur l'ET0 estimée (%.2f mm) — cumul horaire "
-                    "amputé (%.2f mm), journée probablement non couverte.",
+                    "Bilan sol : clôture de %s sur l'ET0 estimée (%.2f mm) — dernier cumul à "
+                    "%s, la journée s'est arrêtée avant minuit (mesure amputée : %.2f mm).",
                     _last.get("date"),
-                    _last_etp_estime,
+                    _last_etp_estime if _last_etp_estime is not None else float("nan"),
+                    _last.get("etp_last_ts"),
                     _last_etp,
                 )
-                _last_etp = _last_etp_estime
+                if _last_etp_estime is not None:
+                    _last_etp = _last_etp_estime
             if _last_open is not None and _last_etp is not None:
                 _last_close = (
                     _last_open

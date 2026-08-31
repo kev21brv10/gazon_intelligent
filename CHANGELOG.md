@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.63.0
+
+1200 tests verts. **Le filet de clôture du bilan sol jetait la mesure les jours de pluie.**
+
+Trouvé en auditant l'historique de toutes les entités, à la demande de Kévin.
+
+À la clôture de la veille, l'ETc **réellement mesurée** heure par heure était remplacée par
+l'estimation pleine journée dès qu'elle valait moins de la moitié de la prévision. Le filet
+visait les journées **tronquées** (Home Assistant arrêté avant minuit, cumul amputé, eau
+fantôme laissée dans la réserve). Mais il jugeait sur l'**ampleur** de l'évaporation, or une
+journée de pluie évapore légitimement 38 à 47 % de la prévision.
+
+Relevé sur le registre réel de l'installation :
+
+```
+28/08   mesurée 2,388   estimée 5,1   seuil 2,55   → jetée, sur-débit 2,712 mm
+29/08   mesurée 1,085   estimée 3,4   seuil 1,70   → jetée, sur-débit 2,315 mm
+30/08   mesurée 1,339   estimée 2,9   seuil 1,45   → jetée, sur-débit 1,561 mm
+31/08   mesurée 2,348   estimée 3,5   seuil 1,75   → conservée (le bon chemin existe)
+```
+
+**6,6 mm débités en trop en trois jours**, et le repli ne va jamais dans l'autre sens : la
+réserve ne peut que perdre de l'eau. Effet net observable aujourd'hui, plafond des 24 mm
+appliqué : stock à **19,3 mm au lieu de ~22,8**.
+
+**⚠️ Et les trois journées avaient tourné jusqu'à minuit.** Le registre portait déjà la réponse,
+juste à côté de la valeur jetée :
+
+```
+28/08  dernier cumul 23:58:35     29/08  23:59:01     30/08  23:59:49
+```
+
+C'est la **couverture** qui distingue une journée tronquée d'une journée pluvieuse, pas
+l'ampleur de l'évaporation. Le filet lit désormais `etp_last_ts` — l'instant du dernier cumul —
+et tolère au plus **une heure** manquante avant minuit.
+
+- **Le filet garde sa raison d'être** : une veille arrêtée à midi retombe bien sur l'estimation.
+  Deux tests, un par sens.
+- **⚠️ Une absence ne désarme pas le garde-fou** : horodatage manquant, vide ou illisible →
+  journée réputée non couverte, comportement prudent d'avant.
+- Les **5 mutations** du banc sont détectées par le test visé. ⚠️ La dernière — horodatage
+  illisible réputé couvert — n'était couverte par AUCUN test : trouvée par le banc, pas par la
+  suite.
+- ⚠️ Le test existant de clôture s'arrêtait à 20 h : sous la nouvelle règle c'est une journée
+  réellement tronquée. Sa donnée a été étendue jusqu'à 23:58 **et son taux abaissé** pour qu'il
+  continue de mordre — une extension qui aurait fait passer l'accumulation au-dessus de
+  l'estimation aurait vidé l'assertion de son sens.
+
+**Ce que l'audit a confirmé de sain** : passage de minuit propre des deux côtés (compteurs de
+tonte remis à zéro, carnet cumulatif préservé, part d'ET écoulée repartie de 0), cliquet pluie
+opérant, et aucune fuite d'un jour à l'autre.
+
 ## 0.62.1
 
 1197 tests verts. **Une fin de travail ne vaut qu'une fois.** Défaut introduit par la 0.61.0,
