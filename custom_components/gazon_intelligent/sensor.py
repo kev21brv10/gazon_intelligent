@@ -4636,6 +4636,11 @@ class GazonRisqueGazonSensor(GazonEntityBase, SensorEntity):
         # toujours s'expliquer — même pour dire qu'il n'a rien à signaler.
         raisons = self._decision_value("risque_gazon_raisons")
         attrs["risque_gazon_raisons"] = list(raisons) if raisons else ["aucun motif fourni"]
+        # Le niveau BRUT, à côté du niveau amorti : un amortissement muet serait indiscernable
+        # d'un capteur figé. Publié seulement quand il DIFFÈRE — sinon c'est du bruit.
+        brut = self._decision_value("risque_gazon_brut")
+        if brut and brut != self.native_value:
+            attrs["risque_gazon_brut"] = brut
         # LOT E — risque fongique
         fungal_level = data.get("fungal_risk_level")
         if fungal_level is not None:

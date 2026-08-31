@@ -3614,6 +3614,44 @@ class AmortissementDuRisqueTests(unittest.TestCase):
             "le niveau amorti n'est pas réinjecté : la décision travaille sur le brut",
         )
 
+    def test_la_memoire_atteint_REELLEMENT_le_snapshot_publie(self) -> None:
+        """⚠️ LE DÉFAUT QUE CE TEST AURAIT ÉVITÉ, constaté en production le 01/09/2026.
+
+        `risque_amortissement` était bien produit par le bundle et bien rangé par le
+        coordinateur — mais il n'était NI recopié dans `decision.py` (recopie clé par clé) NI
+        déclaré dans `_COORDINATOR_SNAPSHOT_KEYS`. Il n'atteignait donc jamais le snapshot :
+        `snapshot.get(...)` rendait `None`, la mémoire restait vide, et **l'amortissement ne
+        faisait plus rien** tout en ayant l'air parfaitement branché. Persisté sur le disque :
+        `null`.
+
+        Mes tests d'alors vérifiaient le TEXTE du code — l'appel présent, la persistance
+        écrite. Ce test-ci part de la sortie réelle et la suit jusqu'au snapshot publié.
+        """
+        ctx = decision.DecisionContext.from_legacy_args(
+            history=[], today=date(2026, 7, 15), hour_of_day=14,
+            temperature=19.0, pluie_24h=4.0, pluie_demain=2.0, humidite=75,
+            type_sol="limoneux", etp_capteur=1.5,
+            risk_context={"amortissement": {"publie": "modere", "candidat": None, "compte": 0}},
+        )
+        snapshot = decision.build_decision_result(ctx).to_snapshot()
+        for cle in ("risque_gazon_brut", "risque_amortissement"):
+            with self.subTest(cle=cle):
+                self.assertIn(cle, snapshot,
+                              f"{cle} n'atteint pas le snapshot — recopie ou liste blanche ?")
+        self.assertIsInstance(snapshot["risque_amortissement"], dict,
+                              "la mémoire arrive vide : le coordinateur ne pourra rien ranger")
+        self.assertEqual(snapshot["risque_amortissement"].get("publie"), "modere",
+                         "la mémoire publiée ne reflète pas le niveau réellement tenu")
+
+        # ⚠️ DEUX LISTES BLANCHES, PAS UNE. Le snapshot de décision ci-dessus est filtré une
+        # SECONDE fois par le coordinateur. Le banc l'a montré : retirer la clé de cette
+        # liste-là ne faisait tomber aucun test — « quatre listes blanches, pas deux ».
+        coordinateur = importlib.import_module("custom_components.gazon_intelligent.coordinator")
+        for cle in ("risque_gazon_brut", "risque_amortissement"):
+            with self.subTest(liste="coordinator", cle=cle):
+                self.assertIn(cle, coordinateur._COORDINATOR_SNAPSHOT_KEYS,
+                              f"{cle} est filtrée par la liste blanche du coordinateur")
+
     def test_le_libelle_du_stress_ne_parle_plus_du_SOL(self) -> None:
         """⚠️ Le score mesure la demande de l'ATMOSPHÈRE, pas l'état du sol.
 

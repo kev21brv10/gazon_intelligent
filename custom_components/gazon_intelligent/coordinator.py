@@ -317,6 +317,8 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "fenetre_optimale",
     "risque_gazon",
     "risque_gazon_raisons",
+    "risque_gazon_brut",
+    "risque_amortissement",
     "phase_dominante",
     "phase_dominante_source",
     "sous_phase",

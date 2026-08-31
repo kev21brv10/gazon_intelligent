@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.65.1
+
+1217 tests verts. **L'amortissement de la 0.65.0 ne faisait RIEN.** Constaté en production
+quinze minutes après son déploiement.
+
+`risque_amortissement` — la mémoire que le coordinateur relit au cycle suivant — était bien
+produite par le bundle et bien rangée par le coordinateur, mais elle n'était **ni recopiée dans
+`decision.py`** (recopie clé par clé) **ni déclarée dans `_COORDINATOR_SNAPSHOT_KEYS`**. Elle
+n'atteignait donc jamais le snapshot :
+
+```
+snapshot.get("risque_amortissement")   → None
+persisté sur le disque                 → null
+```
+
+Chaque cycle repartait d'une mémoire vide, prenait la branche « premier cycle » et republiait le
+brut. **L'amortissement avait l'air parfaitement branché et ne servait à rien.**
+
+C'est le **quatrième** défaut de cette même famille en une nuit — « calculer n'est pas
+appliquer », puis « déclarer n'est pas câbler ». Mes tests d'alors vérifiaient le TEXTE du code :
+l'appel présent, la persistance écrite, l'ordre des lignes. Aucun ne suivait la valeur.
+
+- Les deux clés traversent maintenant les **deux** listes blanches, et `risque_gazon_brut` est
+  publié à côté du niveau amorti **seulement quand il diffère** — un amortissement muet serait
+  indiscernable d'un capteur figé.
+- Un test part de la sortie RÉELLE et la suit jusqu'au snapshot publié, puis vérifie la seconde
+  liste blanche. ⚠️ Sans cette seconde vérification, retirer la clé de la liste du coordinateur
+  ne faisait tomber aucun test — « quatre listes blanches, pas deux ».
+- Les **3 mutations** du banc sont détectées.
+
 ## 0.65.0
 
 1216 tests verts. **Le risque cesse de clignoter, et son motif cesse de mentir.**
