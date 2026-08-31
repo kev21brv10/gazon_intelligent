@@ -232,7 +232,7 @@
     <p class="lede">Arrosage, tonte, phases, produits, capteurs et services : ce que fait chaque brique, où sont les seuils, et ce qui reste à arbitrer. Établi sur l'état réel du code.</p>
     <div class="stats">
       <span class="stat">version <b>0.65.2</b></span>
-      <span class="stat">carte <b>0.28.0</b></span>
+      <span class="stat">carte <b>0.28.1</b></span>
       <span class="stat"><b>39</b> modules</span>
       <span class="stat"><b>62</b> entités</span>
       <span class="stat"><b>15</b> services</span>
@@ -1129,6 +1129,7 @@
         </tbody></table></div>
         <p><strong>⚠️ Livré cassé, et de la pire façon.</strong> La 0.27.0 lisait ces clés sur le binaire <code>…_tonte_autorisee</code> alors qu'elles sont publiées sur <code>sensor.…_etat_de_tonte</code>. Rendu vérifié, tests verts, bloc <strong>invisible en production</strong> — parce que <em>mes tests posaient les attributs là où je croyais qu'ils étaient</em>. Et le garde « absence ≠ zéro » a fait exactement son travail en masquant le bloc plutôt qu'en affichant des tirets, ce qui était juste mais <strong>cachait l'erreur</strong>. Corrigé en 0.27.1, avec un test qui vérifie les DEUX sens et un rendu contrôlé sur les attributs copiés tels quels depuis Home Assistant.</p>
         <p>La déclaration dit <strong>pourquoi</strong> rien n'est inscrit, pas seulement que rien ne l'est. ⚠️ Le vert est réservé à une tonte <em>réellement</em> inscrite&nbsp;: un test vérifie que « travail inachevé » ne passe pas pour une réussite alors même que les minutes dépassent l'ancien seuil. Et <strong>sans aucune mesure le bloc disparaît</strong>, plutôt qu'une rangée de tirets qui se lirait comme des zéros mesurés.</p>
+        <p><strong>⚠️ Le miroir du même garde manquait&nbsp;: un zéro MESURÉ s'affichait comme une absence.</strong> <code>fmtDuration</code> rend « — » à zéro — sa convention de valeur manquante, écrite pour les durées d'arrosage. Mais <code>mower_mowing_minutes_today</code> vaut légitimement 0 tous les matins avant la première sortie, et le bloc reste affiché dès qu'une progression existe&nbsp;: « <code>Tondu aujourd'hui —</code> » disait « je ne sais pas » quand l'intégration avait répondu « zéro ». Relevé par la revue de la <b>PR #44</b>, corrigé en <b>carte 0.28.1</b> — le zéro mesuré se lit « <code>0 min</code> », et un test garde l'autre sens&nbsp;: une tondeuse injoignable n'affiche toujours rien.</p>
       </div>
 
       <div class="callout h">
@@ -1147,6 +1148,7 @@
         <p><strong>⚠️ Et le défaut n'était pas que d'affichage.</strong> La même recommandation servait de <strong>seuil sur la hauteur d'herbe</strong> dans la décision (<code>decision_mowing.py</code>, <code>if current_height &lt;= target_height</code>). Deux effets vérifiés sur le code réel&nbsp;: l'herbe repart de la lame (5,5) mais devait atteindre la consigne + 0,1 (6,1) pour débloquer — <strong>~2,5 jours imposés après chaque tonte</strong> —&nbsp;; et <strong>obéir à la consigne aggravait le cas</strong>, une lame réglée à 6,0 faisant repartir l'herbe de 6,0 pour un déblocage à 6,1, soit <strong>1 mm coupé</strong>. Corrigé en <strong>0.62.0</strong>, règle du tiers comprise — la juger sur la consigne validait une coupe à 6,0 pendant que la machine descend à 5,5.</p>
         <p style="font-size:.9rem;color:var(--muted)"><b>Non retenu</b>&nbsp;: déclencher selon la règle du tiers (~9 cm), comme le proposait l'enquête. C'est une règle de tondeuse thermique passée une fois par semaine&nbsp;; un robot est conçu pour raser 1 à 2 mm plusieurs fois par semaine — le régime configuré ici. <b>Et le défaut est LATENT</b>&nbsp;: sur le 27→30/08 les blocages relevés sur l'installation sont tous <code>wet_grass</code>. La correction vient d'une lecture de code et d'un arbitrage, pas d'une gêne mesurée.</p>
         <p><strong>Arbitré par Kévin le 30/08/2026&nbsp;: la hauteur réelle de la lame fait foi, la recommandation reste une recommandation.</strong> La tuile affiche désormais <code>5,5 cm · réglée sur la lame · recommandé 6,0 cm</code> — l'écart devient visible et actionnable au lieu d'être masqué — et le bloc de pousse se compare à la lame réelle.</p>
+        <p><strong>⚠️ Et le correctif était encore à moitié appliqué — troisième fois sur cette même phrase.</strong> Le commentaire déposé en 0.28.0 annonçait « <em>trois cas, et non deux</em> » au-dessus d'un ternaire qui n'en implémentait que <strong>deux</strong>&nbsp;: <code>aCouper</code> vaut 0 quand l'herbe est <em>à</em> la lame <b>comme</b> quand elle est <em>dessous</em>. Une lame remontée de 5,5 à 6,0 fait repartir l'herbe de 5,5 — annoncée « pile à la hauteur de coupe ». Relevé par la revue de la <b>PR #44</b>, corrigé en <b>carte 0.28.1</b>&nbsp;: « <code>0,5 cm sous la lame, réglée à 6,0 cm</code> ». La formulation ne suggère toujours pas que l'herbe doive rejoindre la lame — c'est un réglage, pas un objectif de pousse.</p>
       </div>
 
       <div class="callout w">
@@ -1154,7 +1156,7 @@
         <p>Un travail <strong>jamais terminé n'est plus déclaré</strong>. Une journée où la batterie lâche avant la fin ne comptera plus comme une tonte — c'est le but, mais le retard continuera de courir tant que le travail n'est pas bouclé.</p>
       </div>
 
-      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b>&nbsp;: 1193 tests verts côté intégration et 29 côté carte, <b>7 + 6 mutations</b> détectées par le test visé. ⚠️ Deux trous ont été trouvés par le banc et non par les tests — le premier test du « 100 au repos » ne traversait qu'un des deux chemins, et les trois nouvelles clés n'étaient protégées dans aucune liste de câblage.</p>
+      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b>&nbsp;: 1218 tests verts côté intégration et 40 côté carte, <b>7 + 10 mutations</b> détectées par le test visé. ⚠️ Deux trous ont été trouvés par le banc et non par les tests — le premier test du « 100 au repos » ne traversait qu'un des deux chemins, et les trois nouvelles clés n'étaient protégées dans aucune liste de câblage.</p>
     </section>
 
     <section>
