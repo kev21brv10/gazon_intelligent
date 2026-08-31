@@ -420,6 +420,36 @@ def _watering_related_mowing_block(
     return False, None, None
 
 
+def _est_la_nuit(context: DecisionContext) -> bool:
+    """Fait-il nuit ? SOURCE UNIQUE — le soleil d'abord, l'horloge seulement en repli.
+
+    ⚠️ IL Y EN AVAIT DEUX, et elles se contredisaient à l'écran. Le motif de blocage lisait le
+    SOLEIL (`_select_mowing_block_reason`) ; la fenêtre horaire, elle, ne lisait que l'HEURE et
+    testait « avant 10 h » AVANT « après 22 h ». Toute la plage 00 h–09 h 59 était donc
+    étiquetée « Matin trop tôt : attendre le ressuyage » — en pleine nuit noire.
+
+    Relevé sur l'installation le 01/09/2026 à 00:48, dans une seule et même phrase publiée :
+
+        « Nuit: attendre le lever du soleil. Fenêtre horaire: Matin trop tôt: attendre le
+          ressuyage. »
+
+    Un fait, deux sources, deux réponses. La décision était heureusement la même des deux côtés
+    (bloqué), mais le message se contredisait sous les yeux de l'utilisateur.
+
+    ⚠️ Le repli horaire garde ses bornes 22 h → 7 h, celles de la NUIT. Elles ne doivent pas être
+    confondues avec le « matin trop tôt » de la fenêtre (avant 10 h), qui parle de ROSÉE et de
+    ressuyage, pas d'obscurité — deux notions différentes qui se recouvrent partiellement.
+    """
+    sun_context = context.sun_context if isinstance(context.sun_context, dict) else {}
+    sun_state = str(sun_context.get("sun_state") or "").strip().lower()
+    if sun_context.get("sun_below_horizon") is True or sun_state == "below_horizon":
+        return True
+    if sun_context.get("sun_above_horizon") is not None or sun_state == "above_horizon":
+        return False
+    hour = context.hour_of_day
+    return hour is not None and (hour < 7 or hour >= _MOWING_WINDOW_NIGHT_END)
+
+
 def _resolve_mowing_window(
     context: DecisionContext,
     *,
@@ -486,10 +516,13 @@ def _resolve_mowing_window(
     # Mesuré le 05/08/2026 à 21:38 et 21:40, soleil couché depuis 21:26.
     # ⚠️ Et le défaut ne touchait pas que la nuit : à 3 h du matin par 27 °C, le refus
     # « Matin trop tôt » tombait de la même façon. Toute la plage 22 h → 10 h était concernée.
+    # ⚠️ LA NUIT AVANT LE MATIN, et jugée sur le SOLEIL — pas sur l'horloge. Testé dans
+    # l'autre ordre, « Matin trop tôt : attendre le ressuyage » tombait à 3 h du matin et
+    # contredisait le motif de blocage, qui disait « Nuit » au même instant.
+    if _est_la_nuit(context):
+        return "blocked", "Nuit: attendre le lever du soleil."
     if hour < _MOWING_WINDOW_IDEAL_START:
         return "blocked", "Matin trop tôt: attendre le ressuyage."
-    if hour >= _MOWING_WINDOW_NIGHT_END:
-        return "blocked", "Nuit: attendre le lever du soleil."
     if vent is not None and vent >= _MOWING_WINDOW_DISCOURAGED_WIND:
         return "discouraged", "Vent soutenu: à éviter."
     if (
@@ -1664,11 +1697,7 @@ def _select_mowing_block_reason(
 
     candidates: list[tuple[int, str, str, bool]] = []
 
-    sun_context = context.sun_context if isinstance(context.sun_context, dict) else {}
-    sun_state = str(sun_context.get("sun_state") or "").strip().lower()
-    sun_above_horizon = sun_context.get("sun_above_horizon")
-    sun_below_horizon = sun_context.get("sun_below_horizon")
-    if sun_below_horizon is True or sun_state == "below_horizon":
+    if _est_la_nuit(context):
         candidates.append(
             (
                 _MOWING_BLOCK_PRIORITIES["mowing_night"],
@@ -1677,9 +1706,7 @@ def _select_mowing_block_reason(
                 False,
             )
         )
-    elif sun_above_horizon is None and context.hour_of_day is not None and (
-        context.hour_of_day < 7 or context.hour_of_day >= 22
-    ):
+    elif False:
         candidates.append(
             (
                 _MOWING_BLOCK_PRIORITIES["mowing_night"],

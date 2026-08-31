@@ -93,6 +93,26 @@ from .watering_policy import resolve_semis_stage_program
 _LOGGER = logging.getLogger(__name__)
 
 
+def _passe_a_retenir(passe: dict[str, Any]) -> bool:
+    """Une passe mérite-t-elle d'entrer au carnet ?
+
+    Retenue si elle a tondu, OU si elle a été bloquée — un blocage sans tonte est un fait utile.
+    Écartée seulement quand elle n'a rien fait du tout : le rebond d'état au démarrage, qui
+    ouvre et referme une passe en quelques secondes.
+
+    ⚠️ `None` n'est pas zéro : une durée absente signifie qu'on ne sait pas, et on garde.
+    """
+    tondues = passe.get("minutes_tondues")
+    bloquees = passe.get("minutes_bloquees")
+    if not isinstance(tondues, (int, float)) or isinstance(tondues, bool):
+        return True
+    if float(tondues) > 0.0:
+        return True
+    if isinstance(bloquees, (int, float)) and not isinstance(bloquees, bool) and float(bloquees) > 0.0:
+        return True
+    return str(passe.get("fin_motif") or "") == "bloquee"
+
+
 def _clean_empty_attrs(attrs: dict[str, Any]) -> dict[str, Any] | None:
     """Retire les valeurs vides (None, '', {}, []) d'un dict d'attributs.
 
@@ -2308,8 +2328,24 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             # ── Fin de passe : elle est rentrée ─────────────────────────────────────────
             if en_cours is not None and au_garage:
-                journal.append(self._cloturer_passe(en_cours, maintenant))
-                journal = journal[-_PASSES_JOURNAL_MAX:]
+                fermee = self._cloturer_passe(en_cours, maintenant)
+                # ⚠️ UNE SORTIE QUI N'A RIEN TONDU N'EST PAS UNE PASSE. L'état de la tondeuse
+                # rebondit au démarrage — `starting` → `docked` 9 s → `starting` → `mowing`,
+                # mesuré le 30/08/2026 — et chaque rebond ouvrait puis refermait une passe.
+                # Quatre entrées sur trente au carnet, dont deux de DIX SECONDES, toutes à
+                # 0,0 min tondue.
+                #
+                # Elles ne sont pas neutres : rentrant forcément à ~100 % de batterie, elles
+                # tirent `mower_autonomous_return_battery_median` vers le haut, et elles
+                # gonflent `mower_passes_per_day_median` (le 30/08 comptait 7 passes pour 4
+                # réelles). `mower_full_pass_minutes_median`, lui, ne retenait que les fins
+                # `batterie_vide` et n'était pas touché.
+                #
+                # ⚠️ On ne jette PAS les passes bloquées à 0 minute : un blocage sans tonte est
+                # un fait à conserver, c'est même le plus intéressant du carnet.
+                if _passe_a_retenir(fermee):
+                    journal.append(fermee)
+                    journal = journal[-_PASSES_JOURNAL_MAX:]
                 en_cours = None
 
             # ── Début de passe : elle est sortie ────────────────────────────────────────
