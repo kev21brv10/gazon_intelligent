@@ -3719,6 +3719,7 @@ class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):
             "mower_job_completion_state",
             "mower_job_followed_id",
             "mower_job_seen_incomplete",
+            "mower_job_minutes_total",
             "mower_auto_declaration_state",
             "mower_auto_declaration_threshold_minutes",
             "mower_auto_declared_today",

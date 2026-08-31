@@ -1250,6 +1250,40 @@ def amortir_niveau_risque(brut: str, memoire: dict[str, Any] | None) -> tuple[st
     return publie, {"publie": publie, "candidat": brut, "compte": compte}
 
 
+def raisons_amorties(
+    *,
+    brut: str,
+    publie: str,
+    raisons: list[str] | None,
+    memoire: dict[str, Any] | None,
+) -> list[str]:
+    """Réaligne les motifs sur le niveau PUBLIÉ quand l'amortissement a retenu le brut.
+
+    ⚠️ DÉFAUT INTRODUIT PAR L'AMORTISSEMENT (0.65.0), relevé par la revue de la PR #47.
+    `amortir_niveau_risque` ne remplace que `risque_gazon` — les motifs, eux, ont été
+    calculés pour le niveau BRUT juste avant. Pendant les deux cycles de retenue, le
+    capteur publiait donc « risque faible » accompagné de « conditions asséchantes
+    vigilance » : le lecteur devait choisir laquelle des deux sorties croire.
+
+    ⚠️ C'est EXACTEMENT l'invariant que `_raisons_par_defaut` protège déjà depuis le
+    01/08/2026 — « une raison doit EXPLIQUER le niveau qu'elle accompagne ». L'amortissement
+    l'a contourné par le côté, en changeant le niveau après coup.
+
+    Le motif de retenue dit le vrai : ce qui est publié, ce qui est observé, et combien de
+    cycles manquent. Les motifs bruts ne sont pas perdus — `risque_gazon_brut` et
+    `risque_amortissement` les rendent lisibles de l'extérieur.
+
+    Fonction PURE.
+    """
+    if str(brut or "").strip().lower() == str(publie or "").strip().lower():
+        return list(raisons) if raisons else []
+    memoire = memoire if isinstance(memoire, dict) else {}
+    compte = int(memoire.get("compte") or 0)
+    return [
+        f"niveau {publie} maintenu : {brut} observé {compte}/{_RISQUE_CYCLES_STABLES} cycles"
+    ]
+
+
 def _raisons_par_defaut(
     *,
     risque_gazon: str,
