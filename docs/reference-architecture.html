@@ -231,7 +231,7 @@
     <h1>Comment le système décide</h1>
     <p class="lede">Arrosage, tonte, phases, produits, capteurs et services : ce que fait chaque brique, où sont les seuils, et ce qui reste à arbitrer. Établi sur l'état réel du code.</p>
     <div class="stats">
-      <span class="stat">version <b>0.62.0</b></span>
+      <span class="stat">version <b>0.64.0</b></span>
       <span class="stat">carte <b>0.28.0</b></span>
       <span class="stat"><b>39</b> modules</span>
       <span class="stat"><b>62</b> entités</span>
@@ -1032,6 +1032,50 @@
 
   <!-- ═══ SANTÉ DU CODE ═══ -->
   <div class="panel" role="tabpanel" id="p-sante" aria-labelledby="t-sante" tabindex="0" hidden>
+    <section>
+      <div class="sec-head"><h2>01/09/2026 — audit de l'historique de TOUTES les entités</h2><span class="tally done">0.62.1 → 0.64.0</span></div>
+      <p>Cinq enquêteurs lancés en parallèle sur les familles d'entités, puis une passe de réfutation. Onze constats, deux écartés, et <strong>quatre défauts corrigés dans la nuit</strong> — dont deux que j'avais moi-même introduits la veille.</p>
+
+      <div class="callout h">
+        <h3>⚠️ Le filet de clôture du bilan sol jetait la mesure les jours de pluie <span class="chip ok">0.63.0</span></h3>
+        <p>À la clôture de la veille, l'ETc <strong>mesurée</strong> heure par heure était remplacée par l'estimation pleine journée dès qu'elle valait moins de la <strong>moitié</strong> de la prévision. Le filet visait les journées <em>tronquées</em> (Home Assistant arrêté), mais il jugeait sur l'<strong>ampleur</strong> de l'évaporation — or une journée de pluie évapore légitimement 38 à 47 % de la prévision.</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>jour</th><th class="num">pluie</th><th class="num">ETc mesurée</th><th class="num">estimée</th><th class="num">rapport</th><th>filet</th></tr></thead>
+            <tbody>
+              <tr class="r-bad"><td class="rowlabel">24/08</td><td class="num">29,1 mm</td><td class="num">2,251</td><td class="num">4,6</td><td class="num">49 %</td><td>déclenché</td></tr>
+              <tr class="r-bad"><td class="rowlabel">25/08</td><td class="num">7,7 mm</td><td class="num">1,853</td><td class="num">4,0</td><td class="num">46 %</td><td>déclenché</td></tr>
+              <tr class="r-bad"><td class="rowlabel">28/08</td><td class="num">3,1 mm</td><td class="num">2,388</td><td class="num">5,1</td><td class="num">47 %</td><td>déclenché</td></tr>
+              <tr class="r-bad"><td class="rowlabel">29/08</td><td class="num">1,2 mm</td><td class="num">1,085</td><td class="num">3,4</td><td class="num">32 %</td><td>déclenché</td></tr>
+              <tr class="r-bad"><td class="rowlabel">30/08</td><td class="num">3,6 mm</td><td class="num">1,339</td><td class="num">2,9</td><td class="num">46 %</td><td>déclenché</td></tr>
+              <tr><td class="rowlabel">31/08</td><td class="num">1,1 mm</td><td class="num">2,348</td><td class="num">3,5</td><td class="num">67 %</td><td>conservée</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p><strong>Le rapport oscille entre 46 et 78 % et le seuil est à 50 %</strong> — en plein milieu. Le filet ne détectait donc rien de réel : il basculait au gré de la météo, et il a mordu <strong>cinq jours sur neuf</strong> pendant une période à 48 mm de pluie. Environ 11 mm débités en trop, toujours dans le même sens.</p>
+        <p><strong>Le registre portait déjà la réponse</strong>, juste à côté de la valeur jetée&nbsp;: <code>etp_last_ts</code>, l'instant du dernier cumul. Pour ces journées&nbsp;: <b>23:58</b>, <b>23:59</b>, <b>23:59</b> — elles avaient tourné jusqu'à minuit. Le filet juge désormais la <strong>couverture</strong>, pas l'ampleur, et il garde sa raison d'être&nbsp;: une veille arrêtée à midi retombe bien sur l'estimation. ⚠️ Horodatage absent ou illisible → journée réputée NON couverte&nbsp;: une absence ne désarme pas le garde-fou.</p>
+      </div>
+
+      <div class="callout h">
+        <h3>⚠️ Deux défauts que la veille avait introduits <span class="chip ok">0.62.1</span></h3>
+        <p><strong>Une fin de travail restait offerte pendant des jours.</strong> La progression demeure à 100 % entre deux travaux — 2 à 3 jours — donc la complétion était re-proposée à chaque cycle. Relevé le 01/09 à 00:01, juste après minuit&nbsp;: <code>termine</code> alors que la complétion datait de 23:00 la veille, et le seul rempart restant était le plancher de minutes. <strong>Dès 90 min tondues, la journée aurait été déclarée sur le travail de la veille.</strong> Une fin de travail appartient au jour où elle a eu lieu&nbsp;: elle s'éteint dès qu'elle est traitée.</p>
+      </div>
+
+      <div class="callout a">
+        <h3>Une seule définition de la nuit, et plus de passes fantômes <span class="chip ok">0.64.0</span></h3>
+        <p><strong>Deux sources se contredisaient à l'écran.</strong> Le motif de blocage lisait le soleil, la fenêtre horaire lisait l'heure et testait « avant 10 h » avant « après 22 h ». Relevé à 00:48 dans une seule phrase publiée&nbsp;: <em>« Nuit: attendre le lever du soleil. Fenêtre horaire: Matin trop tôt: attendre le ressuyage. »</em> Les deux partagent désormais <code>_est_la_nuit</code>. ⚠️ « Matin trop tôt » parle de <strong>rosée</strong>, pas d'obscurité — un test le verrouille, sinon la correction l'aurait supprimé.</p>
+        <p><strong>Quatre passes fantômes sur trente</strong> — des rebonds d'état de <b>10 secondes</b> à 0,0 min tondue. Correction du signalement d'origine&nbsp;: les trois médianes ne filtrent pas pareil. <code>full_pass_minutes</code> ne retient que les fins <code>batterie_vide</code> et n'était <strong>pas</strong> touchée&nbsp;; <code>autonomous_return_battery</code> et <code>passes_per_day</code> l'étaient. Une sortie sans tonte n'entre plus au carnet&nbsp;; une passe <em>bloquée</em> y reste.</p>
+        <p style="font-size:.9rem;color:var(--muted)">⚠️ <b>Le banc a trouvé ce que les tests rataient</b>&nbsp;: supprimer le filtre au POINT D'APPEL ne faisait tomber aucun test — seul le prédicat était testé. Vérifier qu'une fonction est correcte ne prouve pas qu'elle est branchée.</p>
+      </div>
+
+      <div class="callout w">
+        <h3>Ce que l'audit a confirmé de sain</h3>
+        <p>Passage de minuit propre des deux côtés&nbsp;: compteurs de tonte remis à zéro, carnet cumulatif préservé, part d'ET écoulée repartie de 0, cliquet pluie opérant. Aucun arrosage inutile, aucune tonte déclarée à tort, aucune fuite d'un jour à l'autre. Le verdict du réfuteur&nbsp;: <em>« Pour le gazon, la journée s'est bien passée. Pour les compteurs, non. »</em></p>
+      </div>
+
+      <p style="font-size:.9rem;color:var(--muted)"><b>Restent ouverts</b>&nbsp;: <code>risque_gazon</code> bistable (14 bascules le 31/08, sans hystérésis) et le libellé « stress hydrique » affiché à côté d'une réserve pleine. Tous deux demandent un arbitrage — une valeur d'hystérésis, un mot — donc laissés à Kévin.</p>
+    </section>
+
     <section>
       <div class="sec-head"><h2>30/08/2026 — la tonte se déclare sur le TRAVAIL, plus sur une durée</h2><span class="tally done">0.61.0</span></div>
       <p>Le seuil inscrivait une tonte dès <b>90 min cumulées</b>, quelle que soit la surface faite. Vu en direct ce jour-là&nbsp;: déclarée à 14:32 avec <strong>102,8 min tondues et le travail à 49 %</strong>.</p>
@@ -1918,7 +1962,7 @@
     </section>
 
     <section>
-      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1195 tests verts</span></div>
+      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1207 tests verts</span></div>
       <p>Cet onglet est le point d'entrée pour « <strong>qu'est-ce qui reste à corriger ou à supprimer ?</strong> ». Il distingue trois choses qu'on confond souvent : ce qui est cassé, ce qui est un choix, et ce qui est déjà mort.</p>
       <div class="tbl-wrap">
         <table>
