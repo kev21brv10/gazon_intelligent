@@ -231,7 +231,7 @@
     <h1>Comment le système décide</h1>
     <p class="lede">Arrosage, tonte, phases, produits, capteurs et services : ce que fait chaque brique, où sont les seuils, et ce qui reste à arbitrer. Établi sur l'état réel du code.</p>
     <div class="stats">
-      <span class="stat">version <b>0.64.0</b></span>
+      <span class="stat">version <b>0.65.0</b></span>
       <span class="stat">carte <b>0.28.0</b></span>
       <span class="stat"><b>39</b> modules</span>
       <span class="stat"><b>62</b> entités</span>
@@ -1073,7 +1073,13 @@
         <p>Passage de minuit propre des deux côtés&nbsp;: compteurs de tonte remis à zéro, carnet cumulatif préservé, part d'ET écoulée repartie de 0, cliquet pluie opérant. Aucun arrosage inutile, aucune tonte déclarée à tort, aucune fuite d'un jour à l'autre. Le verdict du réfuteur&nbsp;: <em>« Pour le gazon, la journée s'est bien passée. Pour les compteurs, non. »</em></p>
       </div>
 
-      <p style="font-size:.9rem;color:var(--muted)"><b>Restent ouverts</b>&nbsp;: <code>risque_gazon</code> bistable (14 bascules le 31/08, sans hystérésis) et le libellé « stress hydrique » affiché à côté d'une réserve pleine. Tous deux demandent un arbitrage — une valeur d'hystérésis, un mot — donc laissés à Kévin.</p>
+      <div class="callout a">
+        <h3>Le risque cesse de clignoter, et son motif cesse de mentir <span class="chip ok">0.65.0</span></h3>
+        <p><strong>Quatorze bascules</strong> <code>faible ↔ modere</code> le 31/08, dont six entre 16 h et 18 h hors de tout redémarrage. La cause est <strong>structurelle</strong>&nbsp;: <code>heat_stress_level</code> sort d'un score ENTIER où chaque facteur vaut +1 et où « vigilance » commence à 3 — n'importe quel facteur qui oscille fait basculer un rang entier. Vérifié&nbsp;: ce n'était <strong>ni le vent</strong> (6 à 8 km/h, seuil 15) <strong>ni l'humidité</strong> (62 à 71 %, seuil 40), donc corriger un capteur n'aurait rien réglé. Et ce n'était pas cosmétique&nbsp;: <code>risque_gazon</code> alimente <code>compute_next_reevaluation</code>.</p>
+        <p>Le niveau publié ne change plus qu'après <strong>trois cycles stables</strong> (~6 min). <strong>⚠️ Asymétrique, et c'est le cœur</strong>&nbsp;: une montée vers <code>eleve</code> passe <em>au cycle même</em> — amortir n'est pas différer une alerte. Amorti <strong>avant</strong> les deux consommateurs, sinon la décision travaillerait sur le brut. <strong>Ni les seuils (3/5/7) ni les poids n'ont bougé</strong>&nbsp;: le défaut était l'absence d'amortissement, pas le calibrage.</p>
+        <p><strong>Et le mot.</strong> « risque modéré — <em>stress hydrique</em> vigilance » s'affichait pendant que le bilan sol annonçait la réserve <strong>pleine</strong> et la déplétion nulle. Le score additionne température, air sec, vent, absence de pluie et déficit&nbsp;: c'est la demande de l'<strong>atmosphère</strong>, pas l'état du <strong>sol</strong>. Il devient <strong>« conditions asséchantes »</strong>, formulé à un seul endroit au lieu de trois — un sol saturé et un air qui tire peuvent enfin coexister sans se contredire.</p>
+        <p style="font-size:.9rem;color:var(--muted)">⚠️ <b>Trois trous trouvés par le banc, pas par les tests</b> — le même piège trois fois, de plus en plus profond&nbsp;: un test qui ne traversait pas le chemin muté&nbsp;; supprimer la <strong>réinjection</strong> du niveau amorti ne faisait tomber personne (<em>calculer n'est pas appliquer</em>)&nbsp;; et deux tests vérifiant l'ABSENCE de « stress hydrique » seraient devenus verts pour la mauvaise raison après le renommage. Un test interdit désormais le mot « hydrique » plutôt que de figer une formulation. <b>Et mypy a rattrapé</b> le passage de <code>risk_context</code> par <code>GazonBrain</code>, que la suite de tests ne franchit pas.</p>
+      </div>
     </section>
 
     <section>
@@ -1962,7 +1968,7 @@
     </section>
 
     <section>
-      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1207 tests verts</span></div>
+      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1216 tests verts</span></div>
       <p>Cet onglet est le point d'entrée pour « <strong>qu'est-ce qui reste à corriger ou à supprimer ?</strong> ». Il distingue trois choses qu'on confond souvent : ce qui est cassé, ce qui est un choix, et ce qui est déjà mort.</p>
       <div class="tbl-wrap">
         <table>
