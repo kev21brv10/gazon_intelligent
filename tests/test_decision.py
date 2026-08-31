@@ -3634,6 +3634,66 @@ class AmortissementDuRisqueTests(unittest.TestCase):
             "le niveau amorti n'est pas réinjecté : la décision travaille sur le brut",
         )
 
+    def test_les_motifs_suivent_le_niveau_PUBLIE_et_non_le_brut(self) -> None:
+        """⚠️ CONTRADICTION RECRÉÉE PAR L'AMORTISSEMENT — relevée par la revue de la PR #47.
+
+        `amortir_niveau_risque` ne remplaçait que `risque_gazon`. Les motifs, eux, venaient
+        d'être calculés pour le niveau BRUT : pendant les deux cycles de retenue le capteur
+        publiait « risque faible » avec pour raison « conditions asséchantes vigilance ».
+
+        C'est exactement l'invariant que `_raisons_par_defaut` protège depuis le 01/08/2026 —
+        « une raison doit EXPLIQUER le niveau qu'elle accompagne ». L'amortissement l'a
+        contourné par le côté, en changeant le niveau APRÈS coup.
+        """
+        def _bundle(memoire):
+            ctx = decision.DecisionContext.from_legacy_args(
+                history=[], today=date(2026, 7, 15), hour_of_day=14,
+                temperature=19.0, pluie_24h=4.0, pluie_demain=2.0, humidite=75,
+                type_sol="limoneux", etp_capteur=1.5,
+                risk_context={"amortissement": memoire},
+            )
+            phase = decision.build_phase_bundle(ctx)
+            water = decision.build_water_bundle(ctx, phase)
+            return decision.build_risk_bundle(ctx, phase, water)
+
+        libre = _bundle(None)
+        brut = libre["risque_gazon_brut"]
+        self.assertNotEqual(brut, "eleve", "prémisse : le montage doit produire un niveau NON-alerte")
+
+        autre = "faible" if brut != "faible" else "modere"
+        tenu = _bundle({"publie": autre, "candidat": brut, "compte": 1})
+        self.assertEqual(tenu["risque_gazon"], autre, "prémisse : la retenue doit s'appliquer")
+
+        raisons = " · ".join(tenu["risque_gazon_raisons"])
+        self.assertIn(autre, raisons,
+                      "les motifs n'expliquent pas le niveau PUBLIÉ : contradiction à l'écran")
+        self.assertIn(brut, raisons,
+                      "le niveau observé n'est pas dit : la retenue est muette")
+        # ⚠️ Et les motifs du brut ne doivent pas SURVIVRE tels quels : c'est précisément eux
+        # qui contredisaient le niveau publié. Ils restent lisibles via `risque_gazon_brut`.
+        for motif in libre["risque_gazon_raisons"]:
+            self.assertNotIn(
+                motif, tenu["risque_gazon_raisons"],
+                f"le motif du niveau brut « {motif} » est publié à côté du niveau {autre}",
+            )
+
+    def test_sans_retenue_les_motifs_ne_sont_PAS_touches(self) -> None:
+        """L'autre sens : hors retenue, l'explication réelle du niveau doit rester intacte."""
+        ctx = decision.DecisionContext.from_legacy_args(
+            history=[], today=date(2026, 7, 15), hour_of_day=14,
+            temperature=19.0, pluie_24h=4.0, pluie_demain=2.0, humidite=75,
+            type_sol="limoneux", etp_capteur=1.5, risk_context={"amortissement": None},
+        )
+        phase = decision.build_phase_bundle(ctx)
+        water = decision.build_water_bundle(ctx, phase)
+        bundle = decision.build_risk_bundle(ctx, phase, water)
+        self.assertEqual(bundle["risque_gazon"], bundle["risque_gazon_brut"], "prémisse")
+        self.assertTrue(bundle["risque_gazon_raisons"], "les motifs réels ont disparu")
+        self.assertNotIn(
+            "maintenu", " ".join(bundle["risque_gazon_raisons"]),
+            "un motif de retenue est publié alors que rien n'est retenu",
+        )
+
     def test_la_memoire_atteint_REELLEMENT_le_snapshot_publie(self) -> None:
         """⚠️ LE DÉFAUT QUE CE TEST AURAIT ÉVITÉ, constaté en production le 01/09/2026.
 

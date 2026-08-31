@@ -231,7 +231,7 @@
     <h1>Comment le système décide</h1>
     <p class="lede">Arrosage, tonte, phases, produits, capteurs et services : ce que fait chaque brique, où sont les seuils, et ce qui reste à arbitrer. Établi sur l'état réel du code.</p>
     <div class="stats">
-      <span class="stat">version <b>0.65.2</b></span>
+      <span class="stat">version <b>0.66.0</b></span>
       <span class="stat">carte <b>0.28.1</b></span>
       <span class="stat"><b>39</b> modules</span>
       <span class="stat"><b>62</b> entités</span>
@@ -1079,6 +1079,7 @@
         <p>Le niveau publié ne change plus qu'après <strong>trois cycles stables</strong> (~6 min). <strong>⚠️ Asymétrique, et c'est le cœur</strong>&nbsp;: une montée vers <code>eleve</code> passe <em>au cycle même</em> — amortir n'est pas différer une alerte. Amorti <strong>avant</strong> les deux consommateurs, sinon la décision travaillerait sur le brut. <strong>Ni les seuils (3/5/7) ni les poids n'ont bougé</strong>&nbsp;: le défaut était l'absence d'amortissement, pas le calibrage.</p>
         <p><strong>Et le mot.</strong> « risque modéré — <em>stress hydrique</em> vigilance » s'affichait pendant que le bilan sol annonçait la réserve <strong>pleine</strong> et la déplétion nulle. Le score additionne température, air sec, vent, absence de pluie et déficit&nbsp;: c'est la demande de l'<strong>atmosphère</strong>, pas l'état du <strong>sol</strong>. Il devient <strong>« conditions asséchantes »</strong>, formulé à un seul endroit au lieu de trois — un sol saturé et un air qui tire peuvent enfin coexister sans se contredire.</p>
         <p><strong>⚠️ Et l'amortissement ne faisait RIEN pendant quinze minutes.</strong> <code>risque_amortissement</code> — la mémoire relue au cycle suivant — n'était ni recopiée dans <code>decision.py</code> (recopie clé par clé) ni déclarée dans <code>_COORDINATOR_SNAPSHOT_KEYS</code>. Elle n'atteignait jamais le snapshot&nbsp;: <code>None</code> au retour, <code>null</code> sur le disque. Chaque cycle repartait d'une mémoire vide et republiait le brut. <strong>Quatrième défaut de la même famille en une nuit</strong> — « calculer n'est pas appliquer », puis « déclarer n'est pas câbler ». Corrigé en <strong>0.65.1</strong>, avec un test qui part de la sortie RÉELLE et la suit jusqu'au snapshot, puis vérifie la <em>seconde</em> liste blanche&nbsp;: sans elle, retirer la clé de celle du coordinateur ne faisait tomber personne.</p>
+        <p><strong>⚠️ Et le niveau amorti publiait les motifs du BRUT.</strong> <code>amortir_niveau_risque</code> ne remplaçait que <code>risque_gazon</code>&nbsp;: pendant les deux cycles de retenue, le capteur sortait « risque <b>faible</b> » accompagné de « <b>conditions asséchantes vigilance</b> ». C'est précisément l'invariant que <code>_raisons_par_defaut</code> protège depuis le <b>01/08/2026</b> — <em>une raison doit EXPLIQUER le niveau qu'elle accompagne</em> — <strong>contourné par le côté</strong>, en changeant le niveau après coup. Relevé par la revue de la <b>PR #47</b>, corrigé en <strong>0.66.0</strong>&nbsp;: le motif dit le vrai, <code>niveau faible maintenu : modere observé 1/3 cycles</code>. Les motifs bruts restent lisibles via <code>risque_gazon_brut</code> et <code>risque_amortissement</code>.</p>
         <p>Et un effet de bord de l'unification de la nuit&nbsp;: les deux sources tombant d'accord au mot près, la phrase publiée répétait « Nuit… Fenêtre horaire: Nuit… ». La fenêtre n'est plus ajoutée que lorsqu'elle apporte du neuf (<strong>0.65.2</strong>).</p>
         <p style="font-size:.9rem;color:var(--muted)">⚠️ <b>Trois trous trouvés par le banc, pas par les tests</b> — le même piège trois fois, de plus en plus profond&nbsp;: un test qui ne traversait pas le chemin muté&nbsp;; supprimer la <strong>réinjection</strong> du niveau amorti ne faisait tomber personne (<em>calculer n'est pas appliquer</em>)&nbsp;; et deux tests vérifiant l'ABSENCE de « stress hydrique » seraient devenus verts pour la mauvaise raison après le renommage. Un test interdit désormais le mot « hydrique » plutôt que de figer une formulation. <b>Et mypy a rattrapé</b> le passage de <code>risk_context</code> par <code>GazonBrain</code>, que la suite de tests ne franchit pas.</p>
       </div>
@@ -1151,12 +1152,20 @@
         <p><strong>⚠️ Et le correctif était encore à moitié appliqué — troisième fois sur cette même phrase.</strong> Le commentaire déposé en 0.28.0 annonçait « <em>trois cas, et non deux</em> » au-dessus d'un ternaire qui n'en implémentait que <strong>deux</strong>&nbsp;: <code>aCouper</code> vaut 0 quand l'herbe est <em>à</em> la lame <b>comme</b> quand elle est <em>dessous</em>. Une lame remontée de 5,5 à 6,0 fait repartir l'herbe de 5,5 — annoncée « pile à la hauteur de coupe ». Relevé par la revue de la <b>PR #44</b>, corrigé en <b>carte 0.28.1</b>&nbsp;: « <code>0,5 cm sous la lame, réglée à 6,0 cm</code> ». La formulation ne suggère toujours pas que l'herbe doive rejoindre la lame — c'est un réglage, pas un objectif de pousse.</p>
       </div>
 
+      <div class="callout h">
+        <h3>⚠️ Le travail qui traversait minuit disparaissait entièrement <span class="chip ok">0.66.0</span></h3>
+        <p><code>mower_mowing_minutes_today</code> est un compteur de <strong>JOURNÉE</strong>&nbsp;: il repart à zéro à minuit. Un travail de 4 à 5 h démarré à 20 h — <b>ce que la tondeuse a fait le 31/08/2026</b> — atteint 100 % après minuit avec quelques dizaines de minutes au compteur du jour. Le plancher de qualification le jugeait « trop court » <strong>et brûlait la complétion</strong>.</p>
+        <p><strong>⚠️ Et la veille n'avait rien déclaré non plus</strong>, puisque depuis la <b>0.62.0</b> la déclaration attend la <em>fin</em> du travail. Le travail entier disparaissait, en silence, comme s'il n'avait pas eu lieu&nbsp;: <strong>un correctif qui creuse le trou d'à côté</strong>. Relevé par la revue de la <b>PR #47</b>.</p>
+        <p>Les minutes s'accumulent désormais <strong>par jour sur la durée de la tâche</strong> — <code>task_id</code> étant stable à travers les recharges, l'unité est la bonne — et le cumul est publié (<code>mower_job_minutes_total</code>). ⚠️ Le plancher continue d'écarter une vraie coupe de bordure&nbsp;: un test verrouille les <em>deux</em> sens, et un troisième vérifie que le travail de la veille ne se reverse pas dans celui du jour.</p>
+        <p style="font-size:.9rem;color:var(--muted)"><b>Hypothèse assumée</b>&nbsp;: une tâche apparue en cours de journée hérite des minutes déjà au compteur ce jour-là. C'est le comportement d'avant et il penche du bon côté — un travail réel qui suit une coupe de bordure qualifie plus facilement, jamais moins. Retrancher une base ferait sous-compter tout travail découvert en cours de route et <em>brûlerait</em> la complétion.</p>
+      </div>
+
       <div class="callout w">
         <h3>⚠️ Conséquence assumée</h3>
         <p>Un travail <strong>jamais terminé n'est plus déclaré</strong>. Une journée où la batterie lâche avant la fin ne comptera plus comme une tonte — c'est le but, mais le retard continuera de courir tant que le travail n'est pas bouclé.</p>
       </div>
 
-      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b>&nbsp;: 1218 tests verts côté intégration et 40 côté carte, <b>7 + 10 mutations</b> détectées par le test visé. ⚠️ Deux trous ont été trouvés par le banc et non par les tests — le premier test du « 100 au repos » ne traversait qu'un des deux chemins, et les trois nouvelles clés n'étaient protégées dans aucune liste de câblage.</p>
+      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b>&nbsp;: 1223 tests verts côté intégration et 40 côté carte, <b>15 + 10 mutations</b> détectées par le test visé. ⚠️ Deux trous ont été trouvés par le banc et non par les tests — le premier test du « 100 au repos » ne traversait qu'un des deux chemins, et les trois nouvelles clés n'étaient protégées dans aucune liste de câblage.</p>
     </section>
 
     <section>
@@ -1972,7 +1981,7 @@
     </section>
 
     <section>
-      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1218 tests verts</span></div>
+      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1223 tests verts</span></div>
       <p>Cet onglet est le point d'entrée pour « <strong>qu'est-ce qui reste à corriger ou à supprimer ?</strong> ». Il distingue trois choses qu'on confond souvent : ce qui est cassé, ce qui est un choix, et ce qui est déjà mort.</p>
       <div class="tbl-wrap">
         <table>

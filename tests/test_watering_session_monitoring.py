@@ -4720,6 +4720,89 @@ class AutoDeclarationTonteTests(unittest.TestCase):
         self.assertEqual(trace["mower_auto_declaration_state"], "declaree")
         self.assertEqual(len(self._tontes(coord)), 1)
 
+    # ---- Minuit ------------------------------------------------------------------------
+    def test_un_travail_qui_traverse_MINUIT_reste_declarable(self) -> None:
+        """⚠️ RELEVÉ PAR LA REVUE DE LA PR #47 — le trou creusé par la 0.62.0.
+
+        `mower_mowing_minutes_today` est un compteur de JOURNÉE : il repart à zéro à minuit.
+        Un travail de 4 à 5 h démarré à 20 h — ce que la tondeuse a fait le 31/08/2026 —
+        atteint 100 % après minuit avec quelques dizaines de minutes au compteur du jour.
+
+        Le plancher le jugeait « trop court » ET brûlait la complétion. La veille n'avait rien
+        déclaré non plus, puisque depuis la 0.62.0 la déclaration attend la fin du travail :
+        le travail entier disparaissait, en silence, exactement comme s'il n'avait pas eu lieu.
+        """
+        coord = self._coord(seuil=90)
+        veille = self.JOUR - timedelta(days=1)
+
+        # 22:00 la veille : le travail tourne depuis deux heures, il n'est pas fini.
+        coord._current_date = lambda: veille
+        coord._runtime_state = {}
+        en_cours = coord._suivre_travail_tondeuse(
+            {"mower_job_progress_pct": 60.0, "mower_job_id": "nuit-1",
+             "mower_mowing_minutes_today": 118.0}
+        )
+        self.assertEqual(en_cours["mower_job_completion_state"], "en_cours", "prémisse")
+
+        # 00:30 : MÊME tâche, compteur du jour remis à zéro puis reparti à 34 min.
+        coord._current_date = lambda: self.JOUR
+        ctx = {"mower_mowing_minutes_today": 34.0, "tondeuse_hauteur_coupe_mm": 55,
+               "mower_job_progress_pct": 100.0, "mower_job_id": "nuit-1"}
+        trace = coord._declarer_tonte_du_jour(ctx)
+
+        self.assertEqual(
+            trace["mower_auto_declaration_state"], "declaree",
+            "un travail de 2 h 32 réparti sur minuit est jugé trop court : il est perdu",
+        )
+        self.assertAlmostEqual(trace["mower_job_minutes_total"], 152.0, places=1)
+        self.assertEqual(len(self._tontes(coord)), 1)
+
+    def test_le_cumul_du_travail_ne_sauve_PAS_une_coupe_de_bordure(self) -> None:
+        """L'autre sens : le plancher doit continuer d'écarter un travail réellement court,
+        minuit ou pas. Sans ce test, cumuler reviendrait à supprimer le plancher."""
+        coord = self._coord(seuil=90)
+        veille = self.JOUR - timedelta(days=1)
+        coord._current_date = lambda: veille
+        coord._runtime_state = {}
+        coord._suivre_travail_tondeuse(
+            {"mower_job_progress_pct": 40.0, "mower_job_id": "bord-1",
+             "mower_mowing_minutes_today": 8.0}
+        )
+        coord._current_date = lambda: self.JOUR
+        trace = coord._declarer_tonte_du_jour(
+            {"mower_mowing_minutes_today": 5.0, "mower_job_progress_pct": 100.0,
+             "mower_job_id": "bord-1"}
+        )
+        self.assertEqual(trace["mower_auto_declaration_state"], "travail_trop_court")
+        self.assertAlmostEqual(trace["mower_job_minutes_total"], 13.0, places=1)
+        self.assertEqual(self._tontes(coord), [])
+
+    def test_le_cumul_est_borne_au_TRAVAIL_pas_a_la_semaine(self) -> None:
+        """Une NOUVELLE tâche repart de zéro : le cumul suit un travail, pas un calendrier.
+
+        ⚠️ Le premier jet de ce test faisait démarrer les deux tâches le MÊME jour — et la
+        mutation qui fait fuiter le suivi d'une tâche à l'autre y survivait, parce que le
+        report ne se déclenche qu'au changement de date. La fuite réelle est celle-là : le
+        travail d'hier reversé dans celui d'aujourd'hui.
+        """
+        coord = self._coord(seuil=90)
+        coord._runtime_state = {}
+        veille = self.JOUR - timedelta(days=1)
+        coord._current_date = lambda: veille
+        coord._suivre_travail_tondeuse(
+            {"mower_job_progress_pct": 50.0, "mower_job_id": "t-1",
+             "mower_mowing_minutes_today": 200.0}
+        )
+        coord._current_date = lambda: self.JOUR
+        suite = coord._suivre_travail_tondeuse(
+            {"mower_job_progress_pct": 10.0, "mower_job_id": "t-2",
+             "mower_mowing_minutes_today": 12.0}
+        )
+        self.assertAlmostEqual(
+            suite["mower_job_minutes_total"], 12.0, places=1,
+            msg="les 200 min du travail de la veille sont reversées dans le travail du jour",
+        )
+
     # ---- Le seuil ----------------------------------------------------------------------
     def test_le_seuil_franchi_inscrit_la_tonte_du_jour(self) -> None:
         """Le 08/08/2026 : 126,6 min tondues, largement au-dessus des 90 min."""
@@ -5009,6 +5092,10 @@ class AutoDeclarationCablageTests(unittest.TestCase):
         "mower_job_completion_state",
         "mower_job_followed_id",
         "mower_job_seen_incomplete",
+        # Ajoutée en 0.66.0 : le cumul du travail à travers minuit. Le banc a montré que la
+        # retirer de `_MOWER_CONTEXT_KEYS` ne faisait tomber AUCUN test — le piège du projet,
+        # pour la deuxième fois sur cette même famille de clés.
+        "mower_job_minutes_total",
     )
 
     def test_les_cles_traversent_la_liste_blanche_du_coordinator(self) -> None:

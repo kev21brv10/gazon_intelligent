@@ -5,7 +5,13 @@ from __future__ import annotations
 from typing import Any
 
 from .decision_models import DecisionContext
-from .guidance import amortir_niveau_risque, _reference_hydric_balance_mm, compute_action_guidance, compute_next_reevaluation
+from .guidance import (
+    _reference_hydric_balance_mm,
+    amortir_niveau_risque,
+    compute_action_guidance,
+    compute_next_reevaluation,
+    raisons_amorties,
+)
 from .scores import compute_internal_scores
 
 _URGENCE_LEVELS: dict[str, int] = {
@@ -113,6 +119,16 @@ def build_risk_bundle(
         _risque_brut, (context.risk_context or {}).get("amortissement")
     )
     action_guidance["risque_gazon"] = _risque_amorti
+    # ⚠️ ET LES MOTIFS AVEC. Ils viennent d'être calculés pour le niveau BRUT : les laisser
+    # tels quels publierait « risque faible » à côté de « conditions asséchantes vigilance »
+    # pendant les deux cycles de retenue — la contradiction exacte que `_raisons_par_defaut`
+    # interdit depuis le 01/08/2026. Relevé par la revue de la PR #47.
+    action_guidance["risque_gazon_raisons"] = raisons_amorties(
+        brut=_risque_brut,
+        publie=_risque_amorti,
+        raisons=action_guidance.get("risque_gazon_raisons"),
+        memoire=_risque_memoire,
+    )
 
     prochaine_reevaluation = compute_next_reevaluation(
         phase_dominante=phase_dominante,

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.66.0
+
+1223 tests verts. **Deux défauts introduits par mes propres correctifs de cette nuit, relevés par la revue de la PR #47.**
+
+**Le travail de tonte qui traverse minuit n'est plus perdu.** `mower_mowing_minutes_today` est un compteur de JOURNÉE : il repart à zéro à minuit. Un travail de 4 à 5 h démarré à 20 h — ce que la tondeuse a fait le 31/08 — atteint 100 % après minuit avec quelques dizaines de minutes au compteur du jour. Le plancher de qualification le jugeait « trop court » **et brûlait la complétion**. Et la veille n'avait rien déclaré non plus, puisque depuis la 0.62.0 la déclaration attend la fin du travail : le travail entier disparaissait, en silence, comme s'il n'avait pas eu lieu. Les minutes s'accumulent désormais par jour sur la durée de la tâche (`mower_job_minutes_total`, publié). ⚠️ Le plancher continue d'écarter une vraie coupe de bordure — un test le verrouille dans les deux sens.
+
+**Les motifs de risque suivent le niveau publié.** `amortir_niveau_risque` (0.65.0) ne remplaçait que `risque_gazon` : pendant les deux cycles de retenue, le capteur publiait « risque faible » avec pour raison « conditions asséchantes vigilance ». C'est exactement l'invariant que `_raisons_par_defaut` protège depuis le 01/08/2026 — *une raison doit EXPLIQUER le niveau qu'elle accompagne* — contourné par le côté, en changeant le niveau après coup. Le motif dit maintenant le vrai : `niveau faible maintenu : modere observé 1/3 cycles`. Les motifs bruts restent lisibles via `risque_gazon_brut` et `risque_amortissement`.
+
+⚠️ **Le banc de mutations a de nouveau trouvé ce que les tests rataient** : sur huit mutations, deux ont survécu au premier jet. Le test de non-débordement du cumul faisait démarrer les deux travaux le MÊME jour — or la fuite ne se produit qu'au changement de date. Et retirer `mower_job_minutes_total` de `_MOWER_CONTEXT_KEYS` ne faisait tomber aucun test : **le piège des listes blanches, deuxième fois sur cette même famille de clés.**
+
 ## 0.65.2
 
 1218 tests verts. **La phrase de blocage ne se répète plus.**

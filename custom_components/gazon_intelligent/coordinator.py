@@ -381,6 +381,7 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "mower_job_completion_state",
     "mower_job_followed_id",
     "mower_job_seen_incomplete",
+    "mower_job_minutes_total",
     "mower_auto_declaration_state",
     "mower_auto_declaration_threshold_minutes",
     "mower_auto_declared_today",
@@ -2533,6 +2534,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "mower_job_completion_state": "sans_mesure",
             "mower_job_followed_id": None,
             "mower_job_seen_incomplete": None,
+            "mower_job_minutes_total": None,
         }
         progression = mower_context.get("mower_job_progress_pct")
         tache = mower_context.get("mower_job_id")
@@ -2553,6 +2555,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "mower_job_completion_state": etat,
                 "mower_job_followed_id": tache,
                 "mower_job_seen_incomplete": bool(suivi["vu_inacheve"]),
+                "mower_job_minutes_total": self._cumuler_minutes_travail(suivi, mower_context),
             }
 
         if float(progression) < 100.0:
@@ -2562,6 +2565,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "mower_job_completion_state": "en_cours",
                 "mower_job_followed_id": tache,
                 "mower_job_seen_incomplete": True,
+                "mower_job_minutes_total": self._cumuler_minutes_travail(suivi, mower_context),
             }
 
         vu_inacheve = bool(suivi.get("vu_inacheve"))
@@ -2569,7 +2573,61 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "mower_job_completion_state": "termine" if vu_inacheve else "repos",
             "mower_job_followed_id": tache,
             "mower_job_seen_incomplete": vu_inacheve,
+            "mower_job_minutes_total": self._cumuler_minutes_travail(suivi, mower_context),
         }
+
+    def _cumuler_minutes_travail(
+        self, suivi: dict[str, Any], mower_context: dict[str, Any]
+    ) -> float | None:
+        """Durée de tonte du TRAVAIL en cours, minuit compris.
+
+        ⚠️ DÉFAUT RELEVÉ PAR LA REVUE DE LA PR #47. `mower_mowing_minutes_today` est un
+        compteur de JOURNÉE : il repart à zéro à minuit. Un travail de 4 à 5 h démarré à 20 h
+        — le cas vu sur l'installation le 31/08/2026 — atteint 100 % après minuit avec un
+        compteur du jour à quelques dizaines de minutes. Le plancher de qualification le
+        jugeait alors « trop court », **et brûlait la complétion** : la veille n'avait rien
+        déclaré non plus, puisque la déclaration attend désormais la fin du travail. Le
+        travail disparaissait entièrement, en silence.
+
+        On additionne donc les minutes par JOUR sur la durée du travail : ce que la journée
+        courante affiche, plus ce que les journées précédentes du même travail avaient
+        atteint. `task_id` étant stable à travers les recharges, l'unité est la bonne.
+
+        ⚠️ Le compteur du jour ne fait que MONTER dans la journée : on retient donc sa
+        dernière valeur vue, et on ne la bascule dans le cumul qu'au changement de date. Une
+        absence de mesure ne remet rien à zéro — elle laisse le cumul en l'état.
+
+        ⚠️ HYPOTHÈSE ASSUMÉE : une tâche apparue en cours de journée hérite des minutes déjà
+        au compteur ce jour-là. C'est le comportement d'avant et il penche du bon côté — un
+        travail réel qui suit une coupe de bordure qualifie plus facilement, jamais moins.
+        Retrancher une base ferait sous-compter tout travail découvert en cours de route
+        (installation neuve, entité apparue tard) et brûlerait la complétion : le risque est
+        du mauvais côté.
+        """
+        minutes = mower_context.get("mower_mowing_minutes_today")
+        anterieur = suivi.get("minutes_anterieures")
+        anterieur = float(anterieur) if isinstance(anterieur, (int, float)) and not isinstance(anterieur, bool) else 0.0
+        if not isinstance(minutes, (int, float)) or isinstance(minutes, bool):
+            jour_courant = suivi.get("minutes_jour")
+            jour_courant = (
+                float(jour_courant)
+                if isinstance(jour_courant, (int, float)) and not isinstance(jour_courant, bool)
+                else None
+            )
+            return None if jour_courant is None and anterieur <= 0.0 else anterieur + (jour_courant or 0.0)
+
+        aujourd_hui = self._current_date().isoformat()
+        if suivi.get("jour") != aujourd_hui:
+            # Changement de date SANS changement de tâche : la journée qui s'achève verse son
+            # dernier total au cumul du travail, et le compteur du jour repart de la mesure.
+            precedent = suivi.get("minutes_jour")
+            if isinstance(precedent, (int, float)) and not isinstance(precedent, bool):
+                anterieur += float(precedent)
+            suivi["minutes_anterieures"] = anterieur
+            suivi["jour"] = aujourd_hui
+        suivi["minutes_jour"] = float(minutes)
+        self._runtime_state["mower_job_suivi"] = suivi
+        return round(anterieur + float(minutes), 1)
 
     def _consommer_travail_termine(self) -> None:
         """Marque la fin de travail comme TRAITÉE : une complétion ne vaut qu'une fois.
@@ -2666,7 +2724,14 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # Le réglage existant garde son nom et change de sens : il ne DÉCLENCHE plus, il
             # QUALIFIE — un travail terminé ne compte que s'il a représenté au moins ce temps
             # de tonte dans la journée.
-            if float(minutes) < float(seuil):
+            # ⚠️ SUR LE TRAVAIL, PAS SUR LA JOURNÉE. `mower_mowing_minutes_today` repart à
+            # zéro à minuit : un travail terminé à 00:30 y pèse quelques dizaines de minutes
+            # et se faisait écarter comme « trop court » — complétion brûlée, veille jamais
+            # déclarée, travail perdu en silence. Le cumul suit la tâche à travers minuit.
+            minutes_travail = suivi.get("mower_job_minutes_total")
+            if not isinstance(minutes_travail, (int, float)) or isinstance(minutes_travail, bool):
+                minutes_travail = float(minutes)
+            if float(minutes_travail) < float(seuil):
                 trace["mower_auto_declaration_state"] = "travail_trop_court"
                 self._consommer_travail_termine()
                 return trace
