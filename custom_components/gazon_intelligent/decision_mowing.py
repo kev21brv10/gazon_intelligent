@@ -2198,7 +2198,13 @@ def build_mowing_bundle(
             if mowing_block_reason_code is None:
                 mowing_block_reason_code = reason_code
                 mowing_block_reason_label = reason
-        else:
+        elif window_msg.strip() and window_msg.strip() not in (reason or ""):
+            # ⚠️ NE PAS RÉPÉTER CE QUI EST DÉJÀ DIT. Depuis que les deux sources partagent
+            # `_est_la_nuit` (0.64.0), elles tombent souvent d'accord au mot près — et la
+            # phrase publiée devenait « Nuit: attendre le lever du soleil. Fenêtre horaire:
+            # Nuit: attendre le lever du soleil. » Les faire concorder était le but ; les
+            # imprimer deux fois n'en faisait pas partie. La fenêtre n'est ajoutée que
+            # lorsqu'elle apporte quelque chose de NEUF.
             reason = f"{reason} Fenêtre horaire: {window_msg}"
 
     agronomic_block_codes = {

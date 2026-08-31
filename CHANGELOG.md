@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.65.2
+
+1218 tests verts. **La phrase de blocage ne se répète plus.**
+
+Effet de bord de la 0.64.0 : depuis que le motif de blocage et la fenêtre horaire partagent
+`_est_la_nuit`, ils tombent souvent d'accord **au mot près**. La phrase publiée devenait :
+
+```
+Nuit: attendre le lever du soleil. Fenêtre horaire: Nuit: attendre le lever du soleil.
+```
+
+Les faire concorder était le but ; les imprimer deux fois n'en faisait pas partie. La fenêtre
+n'est ajoutée que lorsqu'elle apporte quelque chose de **neuf**.
+
+- Le test existant qui protège l'ajout de la fenêtre quand elle dit autre chose reste vert —
+  vérifié par mutation, il tombe si on cesse de l'ajouter.
+- ⚠️ `reason` peut valoir `None` : rattrapé par mypy, pas par les tests.
+
 ## 0.65.1
 
 1217 tests verts. **L'amortissement de la 0.65.0 ne faisait RIEN.** Constaté en production

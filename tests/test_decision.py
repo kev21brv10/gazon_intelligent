@@ -3437,6 +3437,26 @@ class LHeurePasseAvantLesVerdictsAEviterTests(unittest.TestCase):
         self.assertEqual(etat, "blocked")
         self.assertIn("Matin trop tôt", motif)
 
+    def test_la_fenetre_ne_repete_pas_ce_que_le_motif_dit_deja(self) -> None:
+        """Les faire concorder était le but ; les imprimer deux fois n'en faisait pas partie.
+
+        Relevé le 01/09/2026 à 01:25, juste après avoir unifié les deux sources :
+        « Nuit: attendre le lever du soleil. Fenêtre horaire: Nuit: attendre le lever du
+          soleil. »
+        """
+        ctx = decision.DecisionContext.from_legacy_args(
+            history=[], today=date(2026, 9, 1), hour_of_day=1,
+            temperature=18.0, pluie_24h=0, pluie_demain=0, humidite=60,
+            type_sol="limoneux", etp_capteur=3.0,
+        )
+        # `raison_blocage_tonte` est assemblée au niveau DÉCISION, pas dans le bundle tonte :
+        # c'est la phrase publiée, celle que Kévin lit sur la carte.
+        snapshot = decision.build_decision_result(ctx).to_snapshot()
+        raison = snapshot.get("raison_blocage_tonte") or ""
+        self.assertIn("Nuit", raison, "prémisse : on doit bien être bloqué pour la nuit")
+        self.assertEqual(raison.count("attendre le lever du soleil"), 1,
+                         f"le motif est répété : « {raison} »")
+
     def test_les_deux_sources_de_la_nuit_ne_se_contredisent_plus(self) -> None:
         """⚠️ RELEVÉ SUR L'INSTALLATION le 01/09/2026 à 00:48, dans une seule phrase publiée :
 
