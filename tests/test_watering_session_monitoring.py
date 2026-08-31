@@ -4829,6 +4829,46 @@ class AutoDeclarationTonteTests(unittest.TestCase):
         self.assertIn("mower_job_suivi", sauvegarde, "le suivi n'est pas SAUVEGARDÉ")
         self.assertIn("mower_job_suivi", restauration, "le suivi n'est pas RESTAURÉ")
 
+    def test_une_fin_de_travail_ne_vaut_qu_une_fois(self) -> None:
+        """⚠️ DÉFAUT DE LA 0.61.0, trouvé le 01/09/2026 en auditant le passage de minuit.
+
+        La progression reste à 100 % pendant 2 à 3 jours entre deux travaux. La fin de travail
+        était donc RE-OFFERTE à chaque cycle : le lendemain, `mower_job_completion_state` valait
+        encore `termine` et le seul rempart restant était le plancher de minutes. Dès 90 min
+        tondues, la journée aurait été déclarée sur une complétion de LA VEILLE.
+        """
+        coord = self._coord()
+        ctx = self._ctx(120.0) | {"_vu_inacheve": None}
+        coord._runtime_state["mower_job_suivi"] = {"task_id": "tache-1", "vu_inacheve": True}
+
+        premiere = coord._declarer_tonte_du_jour(dict(ctx))
+        self.assertEqual(premiere["mower_auto_declaration_state"], "declaree")
+        self.assertEqual(len(self._tontes(coord)), 1)
+
+        # Cycle suivant, MÊME tâche toujours à 100 % : ce n'est plus un événement.
+        seconde = coord._declarer_tonte_du_jour(dict(ctx))
+        self.assertEqual(seconde["mower_job_completion_state"], "repos",
+                         "la fin de travail est toujours offerte au cycle suivant")
+
+    def test_une_fin_ecartee_comme_trop_courte_ne_revient_pas_le_lendemain(self) -> None:
+        """Une fin de travail appartient au jour où elle a eu lieu.
+
+        Écartée parce que trop courte, elle ne doit pas ressurgir le lendemain quand le
+        compteur de minutes est reparti de zéro puis a franchi le plancher.
+        """
+        coord = self._coord()
+        coord._runtime_state["mower_job_suivi"] = {"task_id": "tache-1", "vu_inacheve": True}
+
+        court = coord._declarer_tonte_du_jour(self._ctx(12.0) | {"_vu_inacheve": None})
+        self.assertEqual(court["mower_auto_declaration_state"], "travail_trop_court")
+        self.assertEqual(self._tontes(coord), [])
+
+        # Lendemain simulé : minutes repassées au-dessus du plancher, même tâche à 100 %.
+        lendemain = coord._declarer_tonte_du_jour(self._ctx(200.0) | {"_vu_inacheve": None})
+        self.assertEqual(lendemain["mower_auto_declaration_state"], "travail_au_repos")
+        self.assertEqual(self._tontes(coord), [],
+                         "une tonte a été inscrite sur une complétion de la veille")
+
     # ---- Les gardes contre une FAUSSE déclaration ----------------------------------------
     def test_l_interrupteur_coupe_interdit_toute_ecriture(self) -> None:
         coord = self._coord(active=False)
