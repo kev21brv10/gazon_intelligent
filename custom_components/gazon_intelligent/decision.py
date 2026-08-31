@@ -484,6 +484,12 @@ def _build_decision_extra(
         "risque_gazon_raisons": watering_bundle.get("risque_gazon_raisons")
         or risk_bundle.get("risque_gazon_raisons")
         or [],
+        # ⚠️ RECOPIE CLÉ PAR CLÉ — le piège documenté de ce fichier. `risque_amortissement` est
+        # la MÉMOIRE que le coordinateur relit au cycle suivant : oubliée ici, elle n'atteint
+        # jamais le snapshot, la mémoire reste vide, et l'amortissement ne fait plus RIEN tout
+        # en ayant l'air branché. Constaté en production le 01/09/2026.
+        "risque_gazon_brut": risk_bundle.get("risque_gazon_brut"),
+        "risque_amortissement": risk_bundle.get("risque_amortissement"),
         "urgence": watering_bundle.get("urgence", risk_bundle.get("urgence")),
         "prochaine_reevaluation": watering_bundle.get("prochaine_reevaluation", risk_bundle.get("prochaine_reevaluation")),
         "decision_resume": watering_bundle.get("decision_resume"),
