@@ -230,11 +230,17 @@ class SoilBalanceHourlyAccumulationTests(unittest.TestCase):
     def test_cloture_de_la_veille_utilise_l_et_accumulee(self) -> None:
         # La veille se clôture sur l'ET RÉELLEMENT accumulée (mesurée), pas sur l'estimation
         # journalière — c'est tout l'intérêt de la bascule.
-        veille = self._state_at(previous_state=None, hour=12, rate=0.5, etp=9.0, fraction=0.4)
+        # Taux abaissé à 0,3 mm/h : la journée va maintenant jusqu'à 23:58, et l'intégration
+        # doit rester SOUS l'estimation journalière pour que l'assertion ci-dessous morde.
+        veille = self._state_at(previous_state=None, hour=12, rate=0.3, etp=9.0, fraction=0.4)
         # Pas de 2 h (borne d'intégration) : au-delà, un « trou » déclencherait la
         # resynchronisation sur le prorata, ce que couvre test_une_coupure_longue_*.
-        for _hour in (14, 16, 18, 20):
-            veille = self._state_at(previous_state=veille, hour=_hour, rate=0.5, etp=9.0, fraction=1.0)
+        # ⚠️ On va jusqu'à 23:58 : depuis le 01/09/2026, le filet de clôture juge la COUVERTURE
+        # de la veille (`etp_last_ts`) et non l'ampleur de l'ET. Une journée qui s'arrête à 20 h
+        # est réellement tronquée — c'est le cas couvert par le test suivant.
+        for _hour in (14, 16, 18, 20, 22):
+            veille = self._state_at(previous_state=veille, hour=_hour, rate=0.3, etp=9.0, fraction=1.0)
+        veille = self._state_at(previous_state=veille, hour=23, minute=58, rate=0.3, etp=9.0, fraction=1.0)
         entry_veille = veille["ledger"][-1]
         ouverture = entry_veille["previous_reserve_mm"]
         accumulee = entry_veille["etp_elapsed_mm"]
@@ -253,6 +259,92 @@ class SoilBalanceHourlyAccumulationTests(unittest.TestCase):
         )
         attendu = max(0.0, ouverture - accumulee)
         self.assertAlmostEqual(lendemain["ledger"][-1]["previous_reserve_mm"], attendu, places=1)
+
+
+    def test_une_journee_pluvieuse_mais_complete_garde_sa_mesure(self) -> None:
+        """⚠️ DÉFAUT MESURÉ SUR LE REGISTRE RÉEL, corrigé le 01/09/2026.
+
+        Le filet de clôture jugeait sur l'AMPLEUR : « une journée couverte accumule au moins la
+        moitié de l'estimation ». Faux les jours de pluie, où la mesure vaut légitimement 38 à
+        47 % de la prévision. Relevé sur l'installation :
+
+            28/08  mesurée 2,388  estimée 5,1  → jetée
+            29/08  mesurée 1,085  estimée 3,4  → jetée
+            30/08  mesurée 1,339  estimée 2,9  → jetée
+
+        …alors que les trois journées avaient tourné jusqu'à 23:58, 23:59 et 23:59. Six
+        millimètres débités en trop en trois jours, et jamais dans l'autre sens.
+        """
+        # Journée pluvieuse : taux horaire faible, estimation journalière haute.
+        veille = self._state_at(previous_state=None, hour=6, rate=0.05, etp=9.0, fraction=0.0)
+        for _hour in (8, 10, 12, 14, 16, 18, 20, 22):
+            veille = self._state_at(previous_state=veille, hour=_hour, rate=0.05, etp=9.0, fraction=0.0)
+        veille = self._state_at(previous_state=veille, hour=23, minute=58, rate=0.05, etp=9.0, fraction=0.0)
+        entree = veille["ledger"][-1]
+        accumulee = entree["etp_elapsed_mm"]
+        ouverture = entree["previous_reserve_mm"]
+        self.assertLess(accumulee, 9.0 * 0.5,
+                        "le montage doit produire une mesure SOUS l'ancien seuil, sinon il ne mord pas")
+
+        lendemain = soil_balance.update_soil_balance(
+            previous_state=veille, today=date(2026, 7, 29),
+            pluie_mm=0.0, arrosage_mm=0.0, etp_mm=9.0, type_sol="limoneux",
+            et_elapsed_fraction=0.0, etc_hourly_mm_h=0.0,
+            now=datetime(2026, 7, 29, 1, 0, tzinfo=self.TZ),
+        )
+        self.assertAlmostEqual(lendemain["ledger"][-1]["previous_reserve_mm"],
+                               max(0.0, ouverture - accumulee), places=1,
+                               msg="la mesure d'une journée COMPLÈTE a été remplacée par l'estimation")
+
+    def test_une_journee_tronquee_retombe_sur_l_estimation(self) -> None:
+        """Le filet garde sa raison d'être : Home Assistant arrêté avant minuit.
+
+        Sans lui, le cumul amputé laisserait de l'eau FANTÔME dans la réserve d'ouverture,
+        définitivement. C'est la COUVERTURE qui le dit désormais, pas l'ampleur de l'ET.
+        """
+        veille = self._state_at(previous_state=None, hour=6, rate=0.05, etp=9.0, fraction=0.0)
+        for _hour in (8, 10, 12):
+            veille = self._state_at(previous_state=veille, hour=_hour, rate=0.05, etp=9.0, fraction=0.0)
+        entree = veille["ledger"][-1]          # dernier cumul à 12 h : 12 h manquantes
+        ouverture = entree["previous_reserve_mm"]
+
+        lendemain = soil_balance.update_soil_balance(
+            previous_state=veille, today=date(2026, 7, 29),
+            pluie_mm=0.0, arrosage_mm=0.0, etp_mm=9.0, type_sol="limoneux",
+            et_elapsed_fraction=0.0, etc_hourly_mm_h=0.0,
+            now=datetime(2026, 7, 29, 1, 0, tzinfo=self.TZ),
+        )
+        self.assertAlmostEqual(lendemain["ledger"][-1]["previous_reserve_mm"],
+                               max(0.0, ouverture - 9.0), places=1,
+                               msg="une journée arrêtée à midi a été clôturée sur sa mesure amputée")
+
+
+    def test_un_horodatage_illisible_ne_desarme_pas_le_filet(self) -> None:
+        """⚠️ Une absence n'est pas une preuve de couverture.
+
+        Sans horodatage exploitable, on ne SAIT pas jusqu'où la veille a tourné : on retient
+        l'estimation pleine journée, comportement prudent d'avant le correctif. Le trou avait
+        été trouvé par le banc de mutations, pas par les tests.
+        """
+        for horodatage in (None, "", "pas-une-date", 12345):
+            with self.subTest(horodatage=horodatage):
+                veille = self._state_at(previous_state=None, hour=23, minute=58,
+                                        rate=0.05, etp=9.0, fraction=0.0)
+                entree = veille["ledger"][-1]
+                ouverture = entree["previous_reserve_mm"]
+                entree["etp_last_ts"] = horodatage      # horodatage perdu / corrompu
+
+                lendemain = soil_balance.update_soil_balance(
+                    previous_state=veille, today=date(2026, 7, 29),
+                    pluie_mm=0.0, arrosage_mm=0.0, etp_mm=9.0, type_sol="limoneux",
+                    et_elapsed_fraction=0.0, etc_hourly_mm_h=0.0,
+                    now=datetime(2026, 7, 29, 1, 0, tzinfo=self.TZ),
+                )
+                self.assertAlmostEqual(
+                    lendemain["ledger"][-1]["previous_reserve_mm"],
+                    max(0.0, ouverture - 9.0), places=1,
+                    msg="sans horodatage, la journée a été réputée couverte",
+                )
 
 
 class SoilBalanceTests(unittest.TestCase):
