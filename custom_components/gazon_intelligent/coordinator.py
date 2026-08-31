@@ -2526,6 +2526,26 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "mower_job_seen_incomplete": vu_inacheve,
         }
 
+    def _consommer_travail_termine(self) -> None:
+        """Marque la fin de travail comme TRAITÉE : une complétion ne vaut qu'une fois.
+
+        ⚠️ DÉFAUT INTRODUIT PAR LA 0.61.0, trouvé le 01/09/2026 à 00:15 en auditant le passage
+        de minuit. La fin de travail restait offerte à CHAQUE cycle tant que la tâche gardait
+        100 % — c'est-à-dire, d'après huit jours d'historique, pendant 2 à 3 JOURS.
+
+        Concrètement le lendemain matin : `mower_job_completion_state` valait encore `termine`
+        et le seul rempart restant était le plancher de minutes. Dès 90 min tondues, la journée
+        aurait été déclarée sur une complétion de LA VEILLE.
+
+        Une fin de travail appartient au jour où elle a eu lieu. Dès qu'on l'a traitée —
+        déclarée, déjà déclarée, ou écartée comme trop courte — on l'éteint : la tâche retombe
+        au repos et il faudra une NOUVELLE tâche vue inachevée pour redéclarer.
+        """
+        suivi = self._runtime_state.get("mower_job_suivi")
+        if isinstance(suivi, dict) and suivi.get("vu_inacheve"):
+            suivi["vu_inacheve"] = False
+            self._runtime_state["mower_job_suivi"] = suivi
+
     def _declarer_tonte_du_jour(self, mower_context: dict[str, Any]) -> dict[str, Any]:
         """Inscrit la tonte du jour dès que le cumul mesuré franchit le seuil.
 
@@ -2603,6 +2623,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # de tonte dans la journée.
             if float(minutes) < float(seuil):
                 trace["mower_auto_declaration_state"] = "travail_trop_court"
+                self._consommer_travail_termine()
                 return trace
 
             # ⚠️ MÊME JOURNÉE des deux côtés. Le cumul est indexé sur `_current_date()` ; la
@@ -2620,6 +2641,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 ):
                     trace["mower_auto_declaration_state"] = "deja_declaree"
                     trace["mower_auto_declared_today"] = True
+                    self._consommer_travail_termine()
                     return trace
 
             # Écriture SYNCHRONE dans le cerveau, jamais `async_record_mowing` : celle-ci
@@ -2641,6 +2663,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             trace["mower_auto_declaration_state"] = "declaree"
             trace["mower_auto_declared_today"] = True
+            self._consommer_travail_termine()
             return trace
         except Exception:  # noqa: BLE001 - une déclaration ratée ne doit pas casser un cycle
             trace["mower_auto_declaration_state"] = "erreur"

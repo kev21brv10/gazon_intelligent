@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.62.1
+
+1197 tests verts. **Une fin de travail ne vaut qu'une fois.** Défaut introduit par la 0.61.0,
+trouvé le 01/09/2026 à 00:15 en auditant le passage de minuit.
+
+`progression_de_la_tonte` reste à 100 % entre deux travaux — 2 à 3 jours, mesuré sur huit jours
+d'historique. La fin de travail était donc **re-offerte à chaque cycle** : au lendemain matin,
+`mower_job_completion_state` valait encore `termine` alors que la complétion datait de la veille.
+
+Relevé en production le 01/09 à 00:01, juste après le passage de minuit :
+
+```
+mower_job_completion_state   termine        ← complétion de la VEILLE, 23:00
+mower_auto_declaration_state travail_trop_court
+mower_mowing_minutes_today   0              ← compteur remis à zéro, correctement
+```
+
+Le seul rempart restant était le plancher de minutes. **Dès 90 min tondues dans la journée, la
+tonte aurait été déclarée sur une complétion de la veille.**
+
+- Une fin de travail appartient au jour où elle a eu lieu. Dès qu'elle est **traitée** —
+  déclarée, déjà déclarée, ou écartée comme trop courte — elle est éteinte : la tâche retombe
+  au repos, et il faut une **nouvelle** tâche vue inachevée pour redéclarer.
+- Deux tests : la même tâche à 100 % ne redéclenche rien au cycle suivant, et une fin écartée
+  comme trop courte ne ressurgit pas quand le compteur repart de zéro le lendemain.
+- **2 mutations sur 3** détectées par le test visé. ⚠️ La troisième — consommer dès la détection
+  plutôt qu'après la décision — est **équivalente** : tous les chemins qui atteignent `termine`
+  sont terminaux et consomment de toute façon. Signalée telle quelle plutôt que maquillée.
+
+**Ce que le passage de minuit a bien fait**, vérifié au même moment : les compteurs du jour
+(`mower_mowing_minutes_today`, `mower_pass_count_today`, `mower_blocked_minutes_today`,
+`mower_block_count_today`) sont tous repartis de zéro, et le carnet cumulatif
+(`mower_passes_observed` = 30) a été correctement préservé.
+
 ## 0.62.0
 
 1195 tests verts. **Le seuil qui débloque la tonte suit la lame RÉELLE, plus la recommandation.**
