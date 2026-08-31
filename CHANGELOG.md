@@ -1,5 +1,66 @@
 # Changelog
 
+## 0.64.0
+
+1207 tests verts. **Trois constats de l'audit corrigés**, tous vérifiés sur l'installation
+avant d'y toucher.
+
+### Deux définitions de la nuit qui se contredisaient à l'écran
+
+Le motif de blocage lisait le **soleil** ; la fenêtre horaire ne lisait que l'**heure**, et
+testait « avant 10 h » AVANT « après 22 h ». Toute la plage 00 h → 09 h 59 était donc étiquetée
+« Matin trop tôt : attendre le ressuyage » — un message de rosée en pleine nuit noire.
+
+Relevé le 01/09/2026 à 00:48, dans une seule et même phrase publiée :
+
+```
+Nuit: attendre le lever du soleil. Fenêtre horaire: Matin trop tôt: attendre le ressuyage.
+```
+
+- **Une seule définition** désormais, `_est_la_nuit` : le soleil d'abord, l'horloge en repli
+  (22 h → 7 h). Les deux sorties partagent la même.
+- **⚠️ « Matin trop tôt » garde son sens** : il parle de ROSÉE, pas d'obscurité. Il ne vaut plus
+  qu'entre le lever du soleil et 10 h — un test le verrouille, sinon la correction l'aurait
+  purement et simplement supprimé.
+- La décision était heureusement la même des deux côtés (bloqué) : c'était un défaut de
+  message, pas de comportement.
+
+### Quatre passes fantômes sur trente au carnet
+
+L'intégration de la tondeuse publie une séquence qui rebondit au démarrage — `starting` →
+`docked` **9 s** → `starting` → `mowing` — et chaque rebond ouvrait puis refermait une passe :
+
+```
+30/08 14:17:18 → 14:17:28   10 s   0,0 min tondue   100→100
+30/08 20:15:41 → 20:15:51   10 s   0,0 min tondue   100→100
+30/08 20:40:16 → 20:42:01    2 min 0,0 min tondue   100→ 99
+```
+
+Elles ne sont pas neutres. **Précision par rapport au signalement d'origine** : les trois
+médianes du profil appris ne filtrent pas de la même façon.
+
+| médiane | filtre | touchée ? |
+|---|---|---|
+| `mower_full_pass_minutes_median` | fins `batterie_vide` | **non** |
+| `mower_autonomous_return_battery_median` | fins `retour_autonome` | **oui** — les fantômes y entrent à 100, 100, 99 |
+| `mower_passes_per_day_median` | tout sauf `bloquee` | **oui** — le 30/08 comptait 7 passes pour 4 réelles |
+
+- Une sortie qui n'a **rien tondu** n'entre plus au carnet. **⚠️ Une passe BLOQUÉE sans tonte y
+  reste** : c'est le fait le plus intéressant du carnet.
+- **⚠️ `None` n'est pas zéro** : une durée absente signifie « on ne sait pas », et la passe est
+  conservée.
+
+Les **6 mutations** du banc sont détectées par le test visé.
+
+⚠️ **Le banc a trouvé ce que les tests rataient** : supprimer le filtre AU POINT D'APPEL ne
+faisait tomber aucun test, parce que je ne testais que le prédicat. Un test rejoue désormais une
+vraie séquence sortie/retour et regarde ce qui atterrit dans le journal — vérifier qu'une
+fonction est correcte ne prouve pas qu'elle est branchée.
+
+⚠️ **Piège d'isolation rencontré** : `test_init.py` remplace le coordinator dans `sys.modules`
+par un faux module. Un test qui réimporte le module récupère le faux et tombe — mais seulement
+quand toute la suite tourne, jamais seul.
+
 ## 0.63.0
 
 1200 tests verts. **Le filet de clôture du bilan sol jetait la mesure les jours de pluie.**

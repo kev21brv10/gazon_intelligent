@@ -5358,6 +5358,64 @@ class CarnetDePassesTondeuseTests(unittest.TestCase):
         sortie = coord._suivre_passes_tondeuse(self._ctx(garage=True, batterie=100))
         self.assertEqual(sortie["mower_passes_observed"], 0)
 
+    def test_une_sortie_sans_une_minute_tondue_n_entre_pas_au_carnet(self) -> None:
+        """⚠️ QUATRE ENTRÉES SUR TRENTE étaient des rebonds d'état, mesuré le 30/08/2026.
+
+        L'intégration de la tondeuse publie une séquence qui rebondit au démarrage —
+        `starting` → `docked` 9 s → `starting` → `mowing` — et chaque rebond ouvrait puis
+        refermait une passe. Deux entrées de DIX SECONDES, 0,0 min tondue, batterie 100 → 100.
+
+        Elles ne sont pas neutres : rentrant à ~100 % de batterie, elles tirent
+        `mower_autonomous_return_battery_median` vers le haut, et gonflent
+        `mower_passes_per_day_median` — le 30/08 comptait 7 passes pour 4 réelles.
+        """
+        # ⚠️ `coordinator_mod`, PAS `importlib.import_module` : test_init.py remplace l'entrée
+        # du coordinator dans `sys.modules` par un faux module. Une réimportation récupère le
+        # faux et le test tombe — mais seulement quand toute la suite tourne, jamais seul.
+        fantome = {"minutes_tondues": 0.0, "minutes_bloquees": 0.0, "fin_motif": "retour_autonome"}
+        self.assertFalse(coordinator_mod._passe_a_retenir(fantome),
+                         "une sortie de 10 s sans tonte est enregistrée comme une passe")
+
+    def test_le_carnet_lui_meme_refuse_la_passe_fantome(self) -> None:
+        """⚠️ LE PRÉDICAT NE PROUVE RIEN S'IL N'EST PAS CÂBLÉ.
+
+        Le banc de mutations l'a montré : supprimer le filtre au point d'appel ne faisait
+        tomber AUCUN test, parce que je ne testais que la fonction. Ce test-ci rejoue une
+        vraie séquence — sortie puis retour immédiat, sans une seconde de tonte — et regarde
+        ce qui atterrit dans le journal.
+        """
+        sortie, coord = self._rejouer([
+            (0, self._ctx(garage=True, batterie=100)),
+            (0.1, self._ctx(garage=False, batterie=100)),   # elle sort — rebond d'état
+            (0.2, self._ctx(garage=True, batterie=100)),    # ...et rentre aussitôt
+        ])
+        self.assertEqual(self._journal(coord), [],
+                         "un aller-retour de garage sans tonte est entré au carnet")
+        self.assertEqual(sortie.get("mower_pass_count_today"), 0)
+
+    def test_le_carnet_garde_une_vraie_passe(self) -> None:
+        """Prémisse du test précédent : le montage doit savoir enregistrer une passe."""
+        _sortie, coord = self._rejouer([
+            (0, self._ctx(garage=True, batterie=100)),
+            (1, self._ctx(garage=False, tonte=True, batterie=100)),
+            (30, self._ctx(garage=False, tonte=True, batterie=70)),
+            (31, self._ctx(garage=True, batterie=68)),
+        ])
+        journal = self._journal(coord)
+        self.assertEqual(len(journal), 1, "une passe réellement tondue n'a pas été enregistrée")
+        self.assertGreater(journal[0]["minutes_tondues"], 0.0)
+
+    def test_une_passe_bloquee_sans_tonte_reste_au_carnet(self) -> None:
+        """Un blocage sans tonte est le fait le PLUS intéressant du carnet : on le garde."""
+        for passe in (
+            {"minutes_tondues": 0.0, "minutes_bloquees": 6.0, "fin_motif": "bloquee"},
+            {"minutes_tondues": 0.0, "minutes_bloquees": 0.0, "fin_motif": "bloquee"},
+            {"minutes_tondues": 14.2, "minutes_bloquees": 0.0, "fin_motif": "retour_autonome"},
+            {"minutes_tondues": None, "minutes_bloquees": None, "fin_motif": "inconnue"},
+        ):
+            with self.subTest(passe=passe.get("fin_motif")):
+                self.assertTrue(coordinator_mod._passe_a_retenir(passe))
+
     def test_le_carnet_n_alimente_AUCUNE_decision(self) -> None:
         """Promesse explicite : il observe, il ne tranche pas. Le jour où une décision lira
         ces clés, ce test doit tomber et forcer une discussion."""

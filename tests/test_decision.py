@@ -3412,10 +3412,66 @@ class LHeurePasseAvantLesVerdictsAEviterTests(unittest.TestCase):
         self.assertIn("Nuit", motif)
 
     def test_le_petit_matin_bloque_aussi_par_temps_chaud(self) -> None:
-        """Le défaut ne touchait pas que la nuit : toute la plage 22 h → 10 h."""
+        """Le défaut ne touchait pas que la nuit : toute la plage 22 h → 10 h.
+
+        ⚠️ Le LIBELLÉ attendu a changé le 01/09/2026. À 3 h du matin, ce test exigeait
+        « Matin trop tôt : attendre le ressuyage » — un message de rosée en pleine nuit noire,
+        qui contredisait le motif de blocage disant « Nuit » au même instant. L'INTENTION du
+        test est conservée : l'heure passe toujours avant le verdict « à éviter » de la chaleur.
+        """
         etat, motif = self._fenetre(hour=3, temperature=27.0)
         self.assertEqual(etat, "blocked")
+        self.assertIn("Nuit", motif)
+        self.assertNotIn("Température", motif, "la chaleur l'a emporté sur l'heure")
+
+    def test_le_matin_trop_tot_garde_son_sens_apres_le_lever_du_soleil(self) -> None:
+        """« Matin trop tôt » parle de ROSÉE, pas d'obscurité : il ne doit valoir qu'en clarté.
+
+        Sans ce test, faire tomber toute la plage 00 h–10 h dans « Nuit » passerait inaperçu et
+        le motif de ressuyage matinal disparaîtrait purement et simplement.
+        """
+        etat, motif = self._fenetre(hour=8, temperature=27.0)
+        self.assertEqual(etat, "blocked")
         self.assertIn("Matin trop tôt", motif)
+
+    def test_les_deux_sources_de_la_nuit_ne_se_contredisent_plus(self) -> None:
+        """⚠️ RELEVÉ SUR L'INSTALLATION le 01/09/2026 à 00:48, dans une seule phrase publiée :
+
+            « Nuit: attendre le lever du soleil. Fenêtre horaire: Matin trop tôt: attendre le
+              ressuyage. »
+
+        Le motif de blocage lisait le SOLEIL, la fenêtre lisait l'HEURE, et les deux étaient
+        concaténés dans le message que lit l'utilisateur. Un fait, deux sources, deux réponses.
+        Elles partagent désormais `_est_la_nuit`.
+        """
+        for heure in (0, 3, 6, 23):
+            with self.subTest(heure=heure):
+                ctx = decision.DecisionContext.from_legacy_args(
+                    history=[], today=date(2026, 9, 1), hour_of_day=heure,
+                    temperature=18.0, pluie_24h=0, pluie_demain=0, humidite=60,
+                    type_sol="limoneux", etp_capteur=3.0,
+                )
+                _etat, motif_fenetre = decision_mowing._resolve_mowing_window(
+                    ctx, weather_profile={}
+                )
+                self.assertIn("Nuit", motif_fenetre or "",
+                              f"à {heure} h la fenêtre ne dit pas la nuit")
+
+    def test_la_nuit_suit_le_soleil_avant_l_horloge(self) -> None:
+        """Le soleil prime : une nuit d'été à 21 h 30 est une nuit, quoi qu'en dise l'horloge."""
+        ctx = decision.DecisionContext.from_legacy_args(
+            history=[], today=date(2026, 9, 1), hour_of_day=21,
+            temperature=20.0, pluie_24h=0, pluie_demain=0, humidite=60,
+            type_sol="limoneux", etp_capteur=3.0,
+        )
+        ctx.sun_context = {"sun_state": "below_horizon", "sun_below_horizon": True}
+        _etat, motif = decision_mowing._resolve_mowing_window(ctx, weather_profile={})
+        self.assertIn("Nuit", motif or "", "le soleil couché n'a pas primé sur l'horloge")
+
+        # Et l'inverse : soleil levé à 6 h → ce n'est plus la nuit, c'est le petit matin.
+        ctx.sun_context = {"sun_state": "above_horizon", "sun_above_horizon": True}
+        _etat, motif = decision_mowing._resolve_mowing_window(ctx, weather_profile={})
+        self.assertNotIn("Nuit", motif or "", "le soleil levé n'a pas primé sur l'horloge")
 
     def test_en_journee_la_chaleur_deconseille_toujours(self) -> None:
         """Garde-fou inverse : on n'a pas supprimé les verdicts « à éviter »."""
