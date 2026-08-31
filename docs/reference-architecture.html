@@ -231,7 +231,7 @@
     <h1>Comment le système décide</h1>
     <p class="lede">Arrosage, tonte, phases, produits, capteurs et services : ce que fait chaque brique, où sont les seuils, et ce qui reste à arbitrer. Établi sur l'état réel du code.</p>
     <div class="stats">
-      <span class="stat">version <b>0.65.0</b></span>
+      <span class="stat">version <b>0.65.2</b></span>
       <span class="stat">carte <b>0.28.0</b></span>
       <span class="stat"><b>39</b> modules</span>
       <span class="stat"><b>62</b> entités</span>
@@ -1078,6 +1078,8 @@
         <p><strong>Quatorze bascules</strong> <code>faible ↔ modere</code> le 31/08, dont six entre 16 h et 18 h hors de tout redémarrage. La cause est <strong>structurelle</strong>&nbsp;: <code>heat_stress_level</code> sort d'un score ENTIER où chaque facteur vaut +1 et où « vigilance » commence à 3 — n'importe quel facteur qui oscille fait basculer un rang entier. Vérifié&nbsp;: ce n'était <strong>ni le vent</strong> (6 à 8 km/h, seuil 15) <strong>ni l'humidité</strong> (62 à 71 %, seuil 40), donc corriger un capteur n'aurait rien réglé. Et ce n'était pas cosmétique&nbsp;: <code>risque_gazon</code> alimente <code>compute_next_reevaluation</code>.</p>
         <p>Le niveau publié ne change plus qu'après <strong>trois cycles stables</strong> (~6 min). <strong>⚠️ Asymétrique, et c'est le cœur</strong>&nbsp;: une montée vers <code>eleve</code> passe <em>au cycle même</em> — amortir n'est pas différer une alerte. Amorti <strong>avant</strong> les deux consommateurs, sinon la décision travaillerait sur le brut. <strong>Ni les seuils (3/5/7) ni les poids n'ont bougé</strong>&nbsp;: le défaut était l'absence d'amortissement, pas le calibrage.</p>
         <p><strong>Et le mot.</strong> « risque modéré — <em>stress hydrique</em> vigilance » s'affichait pendant que le bilan sol annonçait la réserve <strong>pleine</strong> et la déplétion nulle. Le score additionne température, air sec, vent, absence de pluie et déficit&nbsp;: c'est la demande de l'<strong>atmosphère</strong>, pas l'état du <strong>sol</strong>. Il devient <strong>« conditions asséchantes »</strong>, formulé à un seul endroit au lieu de trois — un sol saturé et un air qui tire peuvent enfin coexister sans se contredire.</p>
+        <p><strong>⚠️ Et l'amortissement ne faisait RIEN pendant quinze minutes.</strong> <code>risque_amortissement</code> — la mémoire relue au cycle suivant — n'était ni recopiée dans <code>decision.py</code> (recopie clé par clé) ni déclarée dans <code>_COORDINATOR_SNAPSHOT_KEYS</code>. Elle n'atteignait jamais le snapshot&nbsp;: <code>None</code> au retour, <code>null</code> sur le disque. Chaque cycle repartait d'une mémoire vide et republiait le brut. <strong>Quatrième défaut de la même famille en une nuit</strong> — « calculer n'est pas appliquer », puis « déclarer n'est pas câbler ». Corrigé en <strong>0.65.1</strong>, avec un test qui part de la sortie RÉELLE et la suit jusqu'au snapshot, puis vérifie la <em>seconde</em> liste blanche&nbsp;: sans elle, retirer la clé de celle du coordinateur ne faisait tomber personne.</p>
+        <p>Et un effet de bord de l'unification de la nuit&nbsp;: les deux sources tombant d'accord au mot près, la phrase publiée répétait « Nuit… Fenêtre horaire: Nuit… ». La fenêtre n'est plus ajoutée que lorsqu'elle apporte du neuf (<strong>0.65.2</strong>).</p>
         <p style="font-size:.9rem;color:var(--muted)">⚠️ <b>Trois trous trouvés par le banc, pas par les tests</b> — le même piège trois fois, de plus en plus profond&nbsp;: un test qui ne traversait pas le chemin muté&nbsp;; supprimer la <strong>réinjection</strong> du niveau amorti ne faisait tomber personne (<em>calculer n'est pas appliquer</em>)&nbsp;; et deux tests vérifiant l'ABSENCE de « stress hydrique » seraient devenus verts pour la mauvaise raison après le renommage. Un test interdit désormais le mot « hydrique » plutôt que de figer une formulation. <b>Et mypy a rattrapé</b> le passage de <code>risk_context</code> par <code>GazonBrain</code>, que la suite de tests ne franchit pas.</p>
       </div>
     </section>
@@ -1968,7 +1970,7 @@
     </section>
 
     <section>
-      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1216 tests verts</span></div>
+      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1218 tests verts</span></div>
       <p>Cet onglet est le point d'entrée pour « <strong>qu'est-ce qui reste à corriger ou à supprimer ?</strong> ». Il distingue trois choses qu'on confond souvent : ce qui est cassé, ce qui est un choix, et ce qui est déjà mort.</p>
       <div class="tbl-wrap">
         <table>
