@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.65.0
+
+1216 tests verts. **Le risque cesse de clignoter, et son motif cesse de mentir.**
+
+### Quatorze bascules en une journée
+
+`risque_gazon` a basculé **quatorze fois** entre `faible` et `modere` le 31/08/2026, dont six
+entre 16 h et 18 h hors de tout redémarrage — 16 min à « modéré », 32 min à « faible », 39 min
+à « modéré »…
+
+La cause est **structurelle**. `heat_stress_level` sort d'un score ENTIER où chaque facteur vaut
++1 et où « vigilance » commence à 3 : n'importe quel facteur qui oscille fait basculer un rang
+entier. Vérifié ce jour-là, ce n'était **ni le vent** (6 à 8 km/h, seuil 15) **ni l'humidité**
+(62 à 71 %, seuil 40) — corriger un capteur n'aurait rien réglé.
+
+⚠️ Et ce n'était pas cosmétique : `risque_gazon` alimente `compute_next_reevaluation`. Un risque
+qui clignote fait clignoter la cadence.
+
+- **Amortissement sur le niveau PUBLIÉ** : il ne change qu'après **trois cycles stables** (~6 min).
+- **⚠️ ASYMÉTRIQUE, et c'est le cœur** : une montée vers `eleve` passe **au cycle même**. Amortir
+  n'est pas différer une alerte.
+- **Amorti AVANT** `compute_next_reevaluation` et `_decision_urgence`, qui le lisent tous deux :
+  amortir seulement à la publication aurait laissé la décision travailler sur le brut — deux
+  valeurs pour un même fait.
+- **Rien touché aux seuils (3/5/7) ni aux poids** : le défaut est l'absence d'amortissement, pas
+  le calibrage. Le brut reste publié (`risque_gazon_brut`) — un amortissement muet serait
+  indiscernable d'un capteur figé.
+- Mémoire **persistée des deux côtés** : sans elle, chaque redémarrage relancerait sur le brut.
+
+### « stress hydrique » à côté d'une réserve pleine
+
+Relevé le 01/09 : *« risque modéré — stress hydrique vigilance »* pendant que le bilan sol
+annonçait la réserve **pleine** (12/12) et la déplétion **nulle**. Deux affirmations
+inconciliables sur le même écran.
+
+Le calcul est juste, c'est le **mot** qui ment : le score additionne température, air sec, vent,
+absence de pluie et déficit — c'est la demande de l'**atmosphère**, pas l'état du **sol**. Il
+devient **« conditions asséchantes »**, formulé à un seul endroit (`libelle_stress`) au lieu de
+trois. On peut avoir un sol saturé et un air qui tire : les deux sorties peuvent enfin coexister.
+
+Les **7 mutations** du banc sont détectées par le test visé.
+
+⚠️ **Trois trous trouvés par le banc, pas par les tests** — le même piège trois fois, de plus en
+plus profond : mon test du compteur ne traversait pas le chemin muté ; supprimer la
+**réinjection** du niveau amorti ne faisait tomber personne (calculer n'est pas appliquer) ; et
+deux tests qui vérifiaient l'ABSENCE de « stress hydrique » seraient devenus verts pour la
+mauvaise raison après le renommage. Les assertions partent désormais de la source du libellé,
+et un test interdit le mot « hydrique » plutôt que de figer une formulation.
+
+⚠️ **Et mypy a rattrapé ce que les tests laissaient passer** : `risk_context` devait aussi
+traverser `GazonBrain.compute_snapshot`, que la suite de tests ne franchit pas.
+
 ## 0.64.0
 
 1207 tests verts. **Trois constats de l'audit corrigés**, tous vérifiés sur l'installation

@@ -3180,7 +3180,7 @@ class AlerteNeSeTaitPasSousBlocageTests(unittest.TestCase):
                 raisons = " ".join(g.get("risque_gazon_raisons") or [])
                 if g["risque_gazon"] == "faible":
                     self.assertNotIn(
-                        "stress hydrique", raisons,
+                        guidance_mod._LIBELLE_STRESS, raisons,
                         f"« faible » justifié par « {raisons} » — les deux sorties se "
                         "contredisent",
                     )
@@ -3230,7 +3230,7 @@ class RaisonsExpliquentLeNiveauTests(unittest.TestCase):
                     risque_gazon="faible", heat_stress_level=niveau
                 )
                 self.assertNotIn(
-                    "stress hydrique", " ".join(raisons),
+                    guidance_mod._LIBELLE_STRESS, " ".join(raisons),
                     f"« faible » justifié par « {raisons} »",
                 )
                 self.assertTrue(raisons, "une raison vide est indistinguable d'un attribut absent")
@@ -3242,7 +3242,10 @@ class RaisonsExpliquentLeNiveauTests(unittest.TestCase):
                 raisons = guidance_mod._raisons_par_defaut(
                     risque_gazon=risque, heat_stress_level="eleve"
                 )
-                self.assertIn("stress hydrique eleve", " ".join(raisons))
+                self.assertIn(guidance_mod.libelle_stress("eleve"), " ".join(raisons))
+                # Le libellé doit rester informatif : ni vide, ni réduit au seul niveau.
+                self.assertIn("eleve", " ".join(raisons))
+                self.assertGreater(len(guidance_mod._LIBELLE_STRESS), 3)
 
     def test_le_motif_de_blocage_prime_quand_il_est_fourni(self) -> None:
         raisons = guidance_mod._raisons_par_defaut(
@@ -3489,3 +3492,146 @@ class LHeurePasseAvantLesVerdictsAEviterTests(unittest.TestCase):
         etat, motif = self._fenetre(hour=23, temperature=35.0)
         self.assertEqual(etat, "blocked")
         self.assertIn("trop élevée", motif)
+
+
+class AmortissementDuRisqueTests(unittest.TestCase):
+    """⚠️ QUATORZE BASCULES `faible ↔ modere` le 31/08/2026, dont six entre 16 h et 18 h.
+
+    `heat_stress_level` sort d'un score ENTIER où chaque facteur vaut +1 et où « vigilance »
+    commence à 3 : n'importe quel facteur qui oscille fait basculer un RANG ENTIER. Vérifié ce
+    jour-là, ce n'était ni le vent (6 à 8 km/h, seuil 15) ni l'humidité (62 à 71 %, seuil 40) —
+    corriger un capteur n'aurait donc rien réglé, la fragilité est structurelle.
+
+    Et ce n'est pas cosmétique : `risque_gazon` alimente `compute_next_reevaluation`.
+    """
+
+    def _suite(self, niveaux, memoire=None):
+        """Rejoue une suite de niveaux BRUTS et rend la liste des niveaux PUBLIÉS."""
+        publies = []
+        for brut in niveaux:
+            publie, memoire = guidance_mod.amortir_niveau_risque(brut, memoire)
+            publies.append(publie)
+        return publies, memoire
+
+    def test_un_clignotement_ne_passe_pas(self) -> None:
+        # La séquence réelle du 31/08 : modéré/faible en alternance rapide.
+        publies, _ = self._suite(["faible", "modere", "faible", "modere", "faible"])
+        self.assertEqual(publies, ["faible"] * 5,
+                         "le clignotement traverse encore jusqu'à l'affichage")
+
+    def test_un_changement_qui_TIENT_finit_par_passer(self) -> None:
+        publies, _ = self._suite(["faible", "modere", "modere", "modere", "modere"])
+        self.assertEqual(publies, ["faible", "faible", "faible", "modere", "modere"],
+                         "un changement stable doit passer après trois cycles")
+
+    def test_une_montee_vers_eleve_ne_se_retarde_JAMAIS(self) -> None:
+        """⚠️ Le cœur du réglage : amortir n'est pas différer une alerte."""
+        publies, _ = self._suite(["faible", "eleve"])
+        self.assertEqual(publies[-1], "eleve", "une alerte a été retardée par l'amortissement")
+
+    def test_la_descente_depuis_eleve_est_amortie(self) -> None:
+        """Asymétrie assumée : on monte vite en alerte, on en redescend prudemment."""
+        publies, _ = self._suite(["eleve", "faible", "faible"])
+        self.assertEqual(publies, ["eleve", "eleve", "eleve"])
+        publies2, _ = self._suite(["eleve", "faible", "faible", "faible"])
+        self.assertEqual(publies2[-1], "faible", "la descente ne passe jamais")
+
+    def test_le_premier_cycle_publie_ce_qu_il_voit(self) -> None:
+        """Sans mémoire, on n'invente pas d'inertie — et une mémoire abîmée non plus."""
+        for memoire in (None, {}, {"publie": "n_importe_quoi"}, "pas un dict"):
+            with self.subTest(memoire=memoire):
+                publie, _ = guidance_mod.amortir_niveau_risque("modere", memoire)
+                self.assertEqual(publie, "modere")
+
+    def test_l_amortissement_est_REELLEMENT_cable_et_persiste(self) -> None:
+        """⚠️ UNE FONCTION CORRECTE MAIS NON BRANCHÉE N'EXISTE PAS.
+
+        Le banc l'a montré une heure plus tôt sur le filtre des passes fantômes : tester le
+        prédicat seul ne prouve rien. Ce test suit la mémoire du contexte jusqu'au bundle, et
+        vérifie qu'elle est rangée ET relue dans le coordinateur.
+        """
+        source_risk = (PACKAGE_DIR / "decision_risk.py").read_text(encoding="utf-8")
+        self.assertIn("amortir_niveau_risque(", source_risk,
+                      "le bundle de risque n'appelle pas l'amortissement")
+        # Amorti AVANT les deux consommateurs, sinon la décision travaille sur le brut.
+        self.assertLess(source_risk.index("amortir_niveau_risque("),
+                        source_risk.index("compute_next_reevaluation("),
+                        "le risque est amorti APRÈS avoir servi à la cadence de réévaluation")
+
+        source_coord = (PACKAGE_DIR / "coordinator.py").read_text(encoding="utf-8")
+        sauvegarde = source_coord.split("def _serialized_runtime_state")[1].split("\n    def ")[0]
+        restauration = source_coord.split("def _restore_runtime_state")[1].split("\n    def ")[0]
+        self.assertIn("risque_amortissement", sauvegarde, "la mémoire n'est pas SAUVEGARDÉE")
+        self.assertIn("risque_amortissement", restauration, "la mémoire n'est pas RESTAURÉE")
+
+    def test_le_compteur_repart_si_le_candidat_change(self) -> None:
+        """Deux candidats qui ALTERNENT ne doivent pas s'additionner pour franchir le seuil.
+
+        Depuis `eleve`, les deux candidats possibles sont `modere` et `faible` : ni l'un ni
+        l'autre n'est une alerte, donc aucun ne passe en force. S'ils alternent, aucun ne tient
+        trois cycles — et le niveau publié ne doit pas bouger. Sans remise à zéro du compteur,
+        leurs cycles s'additionneraient et un niveau qui n'a jamais tenu finirait par passer.
+        """
+        publies, _ = self._suite(["eleve", "modere", "faible", "modere", "faible", "modere"])
+        self.assertEqual(publies, ["eleve"] * 6,
+                         "des candidats alternés ont additionné leurs cycles")
+
+    def test_le_niveau_amorti_est_REELLEMENT_reinjecte_dans_la_decision(self) -> None:
+        """⚠️ CALCULER N'EST PAS APPLIQUER — le banc l'a trouvé, pas les tests.
+
+        Supprimer la réinjection (`action_guidance["risque_gazon"] = _risque_amorti`) laissait
+        l'amortissement se calculer dans le vide : la décision continuait sur le niveau brut, et
+        aucun test ne bronchait. Ce test compare le niveau PUBLIÉ à ce que la mémoire impose.
+        """
+        def _bundle(memoire):
+            ctx = decision.DecisionContext.from_legacy_args(
+                history=[], today=date(2026, 7, 15), hour_of_day=14,
+                # Conditions DOUCES à dessein : il faut un niveau brut qui ne soit pas
+                # `eleve`, sinon l'alerte passe en force et le test ne mordrait plus.
+                temperature=19.0, pluie_24h=4.0, pluie_demain=2.0, humidite=75,
+                type_sol="limoneux", etp_capteur=1.5,
+                risk_context={"amortissement": memoire},
+            )
+            phase = decision.build_phase_bundle(ctx)
+            water = decision.build_water_bundle(ctx, phase)
+            return decision.build_risk_bundle(ctx, phase, water)
+
+        # Sans mémoire : le niveau publié EST le brut (premier cycle, aucune inertie inventée).
+        libre = _bundle(None)
+        self.assertEqual(libre["risque_gazon"], libre["risque_gazon_brut"])
+
+        # Avec une mémoire qui tient un autre niveau : c'est ELLE qui doit primer.
+        autre = "faible" if libre["risque_gazon_brut"] != "faible" else "modere"
+        tenu = _bundle({"publie": autre, "candidat": None, "compte": 0})
+        self.assertEqual(
+            tenu["risque_gazon_brut"], libre["risque_gazon_brut"],
+            "prémisse : le niveau brut doit être le même dans les deux cas",
+        )
+        self.assertNotEqual(libre["risque_gazon_brut"], "eleve",
+                            "prémisse : le montage doit produire un niveau NON-alerte")
+        self.assertEqual(
+            tenu["risque_gazon"], autre,
+            "le niveau amorti n'est pas réinjecté : la décision travaille sur le brut",
+        )
+
+    def test_le_libelle_du_stress_ne_parle_plus_du_SOL(self) -> None:
+        """⚠️ Le score mesure la demande de l'ATMOSPHÈRE, pas l'état du sol.
+
+        Relevé le 01/09/2026 : « risque modéré — stress hydrique vigilance » affiché pendant
+        que le bilan sol annonçait la réserve PLEINE (12/12) et la déplétion nulle. Deux
+        affirmations inconciliables sur le même écran.
+
+        Ce test ne fige pas une formulation — il interdit celle qui ment. Le mot « hydrique »
+        renvoie à l'eau du sol ; le score, lui, additionne température, air sec, vent, absence
+        de pluie et déficit.
+        """
+        libelle = guidance_mod._LIBELLE_STRESS.lower()
+        self.assertNotIn("hydrique", libelle,
+                         "le libellé parle encore de l'eau du SOL alors qu'il mesure l'air")
+        self.assertGreater(len(libelle), 3, "un libellé vide n'explique rien")
+        # Et il doit réellement atteindre les raisons publiées.
+        raisons = " ".join(guidance_mod._raisons_par_defaut(
+            risque_gazon="modere", heat_stress_level="vigilance"
+        ))
+        self.assertIn(libelle, raisons.lower())
+        self.assertNotIn("hydrique", raisons.lower())

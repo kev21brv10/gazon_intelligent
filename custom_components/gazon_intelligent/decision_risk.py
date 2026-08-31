@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from .decision_models import DecisionContext
-from .guidance import _reference_hydric_balance_mm, compute_action_guidance, compute_next_reevaluation
+from .guidance import amortir_niveau_risque, _reference_hydric_balance_mm, compute_action_guidance, compute_next_reevaluation
 from .scores import compute_internal_scores
 
 _URGENCE_LEVELS: dict[str, int] = {
@@ -105,6 +105,15 @@ def build_risk_bundle(
         minutes_to_sunset=_minutes_to_sunset,
         fungal_risk_level=_fungal_level,
     )
+    # ⚠️ AMORTI ICI, donc AVANT `compute_next_reevaluation` et `_decision_urgence` qui le
+    # lisent tous deux. Amortir seulement à la publication laisserait la décision travailler
+    # sur le niveau brut : deux valeurs pour un même fait, le défaut que ce projet documente.
+    _risque_brut = action_guidance.get("risque_gazon", "faible")
+    _risque_amorti, _risque_memoire = amortir_niveau_risque(
+        _risque_brut, (context.risk_context or {}).get("amortissement")
+    )
+    action_guidance["risque_gazon"] = _risque_amorti
+
     prochaine_reevaluation = compute_next_reevaluation(
         phase_dominante=phase_dominante,
         niveau_action=action_guidance.get("niveau_action", "a_faire"),
@@ -133,6 +142,10 @@ def build_risk_bundle(
         "fenetre_optimale": action_guidance["fenetre_optimale"],
         "risque_gazon": action_guidance["risque_gazon"],
         "risque_gazon_raisons": action_guidance.get("risque_gazon_raisons") or [],
+        # Observabilité : le brut et la mémoire ressortent pour que l'amortissement se voie
+        # de l'extérieur — un amortissement muet est indiscernable d'un capteur figé.
+        "risque_gazon_brut": _risque_brut,
+        "risque_amortissement": _risque_memoire,
         "watering_window_start_minute": action_guidance.get("watering_window_start_minute"),
         "watering_window_end_minute": action_guidance.get("watering_window_end_minute"),
         "watering_window_optimal_start_minute": action_guidance.get("watering_window_optimal_start_minute"),

@@ -1043,9 +1043,16 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             et0_source=et0_source,
             sun_context=sun_context,
             mower_context=mower_context,
+            risk_context={"amortissement": self._runtime_state.get("risque_amortissement")},
             runtime_context=runtime_context,
         )
         snapshot.update(runtime_context)
+        # ⚠️ LA MÉMOIRE REPART DU CYCLE PRÉCÉDENT, SINON L'AMORTISSEMENT NE SERT À RIEN. Non
+        # rangée ici, elle serait vide à chaque cycle : le niveau brut passerait toujours, et
+        # les quatorze bascules du 31/08 reviendraient telles quelles.
+        _memoire_risque = snapshot.get("risque_amortissement")
+        if isinstance(_memoire_risque, dict):
+            self._runtime_state["risque_amortissement"] = _memoire_risque
         # LOT A — santé capteurs (calculé ici pour garantir la présence dans coordinator.data)
         snapshot["decision_cycle"] = self._tracer_cycle()
         snapshot["sensor_health"] = self._build_sensor_health(
@@ -3646,6 +3653,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "mower_job_suivi": self._serialize_runtime_value(
                 self._runtime_state.get("mower_job_suivi")
             ),
+            # Non persistée, un redémarrage relancerait le risque sur le niveau brut — et les
+            # redémarrages sont fréquents ici.
+            "risque_amortissement": self._serialize_runtime_value(
+                self._runtime_state.get("risque_amortissement")
+            ),
             "persisted_watering_session": persisted_watering_session,
             "last_irrigation_execution_persisted": self._serialize_runtime_value(last_execution),
         }
@@ -3711,6 +3723,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "pluie_cumul": runtime.get("pluie_cumul"),
             "mower_recommendation_ignored_since": runtime.get("mower_recommendation_ignored_since"),
             "mower_job_suivi": runtime.get("mower_job_suivi"),
+            "risque_amortissement": runtime.get("risque_amortissement"),
         }
 
     def _get_active_irrigation_session(self) -> dict[str, Any] | None:

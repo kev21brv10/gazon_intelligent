@@ -13,5 +13,5 @@
     "custom_components.gazon_intelligent"
   ],
   "requirements": [],
-  "version": "0.64.0"
+  "version": "0.65.0"
 }
