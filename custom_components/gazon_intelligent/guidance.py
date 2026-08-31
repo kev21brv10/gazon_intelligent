@@ -1183,6 +1183,73 @@ def _risk_from_rank(rank: int) -> str:
     return {0: "faible", 1: "modere", 2: "eleve"}.get(max(0, min(rank, 2)), "faible")
 
 
+# LIBELLÉ DU SCORE DE STRESS. ⚠️ « stress hydrique » DÉCRIT MAL CE QUE LE SCORE MESURE.
+# Il additionne température, air sec, vent, absence de pluie et déficit : c'est la DEMANDE de
+# l'atmosphère, pas l'état du sol. Relevé le 01/09/2026 : « risque modéré — stress hydrique
+# vigilance » affiché pendant que le bilan sol annonçait la réserve PLEINE (12/12) et la
+# déplétion nulle. Deux affirmations inconciliables sur le même écran, sans moyen de trancher.
+# « Conditions asséchantes » dit ce qui est mesuré et coexiste sans contradiction avec un sol
+# plein — on peut très bien avoir un sol saturé et un air qui tire.
+_LIBELLE_STRESS = "conditions asséchantes"
+
+
+def libelle_stress(niveau: str) -> str:
+    """Raison lisible pour un niveau de stress — SOURCE UNIQUE de la formulation."""
+    return f"{_LIBELLE_STRESS} {niveau}".strip()
+
+
+# AMORTISSEMENT DU RISQUE (cycles). Le niveau publié ne suit une nouvelle valeur que si
+# elle TIENT. Le coordinateur tourne toutes les ~2 min : trois cycles ≈ 6 minutes.
+_RISQUE_CYCLES_STABLES = 3
+
+# ⚠️ UNE MONTÉE VERS L'ALERTE NE SE RETARDE JAMAIS. L'amortissement sert à taire le
+# clignotement, pas à différer un avertissement : `eleve` s'affiche au cycle même.
+_RISQUE_MONTEE_IMMEDIATE = frozenset({"eleve"})
+
+
+def amortir_niveau_risque(brut: str, memoire: dict[str, Any] | None) -> tuple[str, dict[str, Any]]:
+    """Stabilise `risque_gazon` : il change quand il a vraiment changé, pas quand un capteur respire.
+
+    ⚠️ MESURÉ LE 31/08/2026 : **quatorze bascules** `faible ↔ modere` en une journée, dont six
+    entre 16 h et 18 h hors de tout redémarrage — 16 min à « modéré », 32 min à « faible »,
+    39 min à « modéré »…
+
+    La cause est structurelle. `heat_stress_level` sort d'un score ENTIER où chaque facteur vaut
+    +1 et où « vigilance » commence à 3 : n'importe quel facteur qui oscille fait basculer un
+    RANG ENTIER. Vérifié ce jour-là, ce n'était ni le vent (6 à 8 km/h, seuil à 15) ni
+    l'humidité (62 à 71 %, seuil à 40) — donc corriger un capteur n'aurait rien réglé.
+
+    ⚠️ Et ce n'est pas qu'un défaut d'affichage : `risque_gazon` alimente
+    `compute_next_reevaluation`. Un risque qui clignote fait clignoter la cadence.
+
+    On n'a touché NI aux seuils (3/5/7) NI aux poids du score : rien ne dit qu'ils soient mal
+    calibrés, le défaut est l'absence d'amortissement. Seul le niveau PUBLIÉ est stabilisé.
+
+    ⚠️ ASYMÉTRIQUE, et c'est le cœur : une montée vers `eleve` passe au cycle même. Retarder
+    une alerte de six minutes pour faire joli serait exactement le mauvais compromis.
+
+    Fonction PURE : la mémoire entre et ressort, le coordinateur la persiste.
+    """
+    brut = str(brut or "").strip().lower() or "faible"
+    memoire = memoire if isinstance(memoire, dict) else {}
+    publie = str(memoire.get("publie") or "").strip().lower()
+    if publie not in {"faible", "modere", "eleve"}:
+        # Premier cycle, ou mémoire abîmée : on publie ce qu'on voit, sans inventer d'inertie.
+        return brut, {"publie": brut, "candidat": None, "compte": 0}
+
+    if brut == publie:
+        return publie, {"publie": publie, "candidat": None, "compte": 0}
+
+    if brut in _RISQUE_MONTEE_IMMEDIATE and _risk_rank(brut) > _risk_rank(publie):
+        return brut, {"publie": brut, "candidat": None, "compte": 0}
+
+    candidat = str(memoire.get("candidat") or "").strip().lower()
+    compte = int(memoire.get("compte") or 0) + 1 if candidat == brut else 1
+    if compte >= _RISQUE_CYCLES_STABLES:
+        return brut, {"publie": brut, "candidat": None, "compte": 0}
+    return publie, {"publie": publie, "candidat": brut, "compte": compte}
+
+
 def _raisons_par_defaut(
     *,
     risque_gazon: str,
@@ -1208,7 +1275,7 @@ def _raisons_par_defaut(
         and heat_stress_level not in {"normal", "", None}
         and risque_gazon != "faible"
     ):
-        raisons.append(f"stress hydrique {heat_stress_level}")
+        raisons.append(libelle_stress(heat_stress_level))
     if not raisons:
         raisons.append(
             "aucun facteur de risque" if risque_gazon == "faible"
@@ -1300,10 +1367,10 @@ def _evaluer_risque_gazon(
         niveau = "eleve"
     if heat_stress_level == "severe":
         if niveau != "eleve":
-            raisons.append("stress hydrique sévère")
+            raisons.append(libelle_stress("sévères"))
         niveau = "eleve"
     elif heat_stress_level in {"eleve", "vigilance"}:
-        _monter(f"stress hydrique {heat_stress_level}")
+        _monter(libelle_stress(heat_stress_level))
     if heat_stress_phase == "stress_prolonge":
         _monter("stress prolongé")
 

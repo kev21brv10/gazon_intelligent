@@ -170,6 +170,10 @@ class DecisionContext:
     config: dict[str, Any] = field(default_factory=dict)
     sun_context: dict[str, Any] = field(default_factory=dict)
     mower_context: dict[str, Any] = field(default_factory=dict)
+    # Mémoire d'amortissement du risque : elle entre ici, ressort dans le bundle, et c'est le
+    # coordinateur qui la persiste. Sans elle, le niveau publié repartirait du brut à chaque
+    # cycle et l'amortissement ne servirait à rien.
+    risk_context: dict[str, Any] = field(default_factory=dict)
     runtime_context: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -204,6 +208,7 @@ class DecisionContext:
         memory: dict[str, Any] | None = None,
         sun_context: dict[str, Any] | None = None,
         mower_context: dict[str, Any] | None = None,
+        risk_context: dict[str, Any] | None = None,
         runtime_context: dict[str, Any] | None = None,
     ) -> "DecisionContext":
         today = today or dt_util.now().date()
@@ -239,6 +244,7 @@ class DecisionContext:
             config={"type_sol": type_sol},
             sun_context=sun_context or {},
             mower_context=mower_context or {},
+            risk_context=risk_context or {},
             runtime_context=runtime_context or {},
         )
 

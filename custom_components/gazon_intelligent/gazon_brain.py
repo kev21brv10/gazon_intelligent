@@ -862,6 +862,7 @@ class GazonBrain:
         pluie_probabilite_max_3j: float | None = None,
         et0_source: str | None = None,
         sun_context: dict[str, Any] | None = None,
+        risk_context: dict[str, Any] | None = None,
         mower_context: dict[str, Any] | None = None,
         runtime_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -961,6 +962,7 @@ class GazonBrain:
             soil_balance=self.soil_balance,
             memory=self.memory,
             sun_context=sun_context,
+            risk_context=risk_context,
             hauteur_min_tondeuse_cm=hauteur_min_tondeuse_cm,
             hauteur_max_tondeuse_cm=hauteur_max_tondeuse_cm,
             mower_context=mower_context,
