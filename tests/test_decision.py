@@ -3634,6 +3634,199 @@ class AmortissementDuRisqueTests(unittest.TestCase):
             "le niveau amorti n'est pas réinjecté : la décision travaille sur le brut",
         )
 
+    # ── BANDE MORTE SUR LES PALIERS D'ET0 ────────────────────────────────────────────────
+    def test_la_bande_morte_retient_le_palier_a_la_DESCENTE(self) -> None:
+        """⚠️ LE VRAI DÉFAUT DERRIÈRE LES QUATORZE BASCULES DU 31/08/2026.
+
+        Les dix bascules `faible ↔ modere` relevées l'après-midi coïncident À LA SECONDE près
+        avec une mise à jour d'ET0, et toujours dans le bon sens. L'ET0 a passé l'après-midi
+        entre 3,6 et 4,4 mm en franchissant NEUF FOIS le palier 4,0 ; le reste du score valait
+        exactement 2, donc ce pas faisait basculer le seuil « vigilance ».
+
+        On monte au seuil nominal, on ne redescend qu'une bande (0,4 mm) plus bas.
+        """
+        g = guidance_mod
+        # Montée : au seuil nominal, immédiatement — un assèchement réel n'attend pas.
+        self.assertEqual(g.palier_et0_stress(4.0, 1), 2, "la montée au palier a été retardée")
+        self.assertEqual(g.palier_et0_stress(3.9, 1), 1, "un palier a été gagné sous son seuil")
+
+        # Descente : retenue tant qu'on n'est pas franchement sorti.
+        for valeur in (3.9, 3.8, 3.7, 3.6):
+            with self.subTest(et0=valeur):
+                self.assertEqual(
+                    g.palier_et0_stress(valeur, 2), 2,
+                    f"ET0 {valeur} fait retomber le palier alors que la bande vaut 0,4",
+                )
+        self.assertEqual(g.palier_et0_stress(3.5, 2), 1,
+                         "sorti de la bande, le palier doit enfin retomber")
+
+    def test_la_bande_morte_ne_fige_pas_le_score_sans_mesure(self) -> None:
+        """⚠️ Une absence de mesure n'est pas un zéro, et ne doit pas non plus RETENIR.
+
+        Sans ce garde, une station muette figerait le score de stress sur sa dernière valeur
+        connue indéfiniment — le défaut que ce projet documente sous « repli silencieux ».
+        """
+        self.assertEqual(guidance_mod.palier_et0_stress(None, 2), 0)
+        self.assertEqual(guidance_mod.palier_et0_stress("4.2", 2), 0)
+        self.assertEqual(guidance_mod.palier_et0_stress(True, 2), 0,
+                         "un booléen est compté comme une mesure")
+
+    def test_sans_memoire_la_bande_morte_ne_change_RIEN(self) -> None:
+        """Premier cycle, ou mémoire abîmée : on prend ce qu'on voit, sans inventer d'inertie."""
+        for valeur, attendu in ((5.4, 3), (4.1, 2), (3.2, 1), (2.4, 0)):
+            with self.subTest(et0=valeur):
+                self.assertEqual(guidance_mod.palier_et0_stress(valeur, None), attendu)
+                self.assertEqual(guidance_mod.palier_et0_stress(valeur, "deux"), attendu)
+
+    def test_la_serie_REELLE_du_31_08_cesse_de_clignoter(self) -> None:
+        """Le banc part de la série mesurée sur l'installation, pas d'un cas inventé.
+
+        103 relevés d'ET0 du 31/08/2026 00:00 au 01/09 02:24. Sans bande morte, le palier change
+        17 fois ; c'est ce qui faisait clignoter `risque_gazon`. La bande de 0,4 mm est le GENOU
+        de la courbe : elle en supprime 70 %, et l'élargir à 0,5 ou 0,6 n'en supprime pas un de
+        plus — elle colle donc à l'amplitude du bruit sans retarder davantage un vrai virage.
+        """
+        serie = [
+            3.2, 3.9, 4.0, 4.1, 4.0, 4.1, 3.9, 4.0, 3.9, 3.4, 3.3, 3.2, 3.7, 3.6, 3.7, 3.8,
+            3.2, 3.3, 3.1, 3.2, 3.1, 3.4, 3.5, 3.6, 3.8, 3.9, 3.8, 3.9, 3.7, 3.8, 3.7, 3.8,
+            3.7, 3.6, 3.8, 3.7, 3.8, 4.0, 4.2, 4.3, 3.8, 3.7, 3.6, 3.7, 3.8, 3.9, 4.1, 4.2,
+            4.3, 4.2, 4.1, 4.4, 4.3, 4.2, 4.3, 4.1, 4.0, 4.1, 4.2, 4.3, 4.4, 4.3, 4.0, 3.9,
+            4.0, 3.8, 3.6, 3.7, 3.8, 3.7, 4.1, 4.0, 3.9, 3.7, 4.0, 3.9, 3.8, 3.7, 3.5, 3.6,
+            3.5, 3.6, 3.5, 3.4, 3.5, 3.4, 3.3, 3.2, 3.6, 3.8, 3.7, 3.9, 3.6, 3.5, 3.6, 3.1,
+            2.9, 3.1, 2.9, 2.8, 2.3, 2.1, 2.0,
+        ]
+
+        def parcourir(avec_bande: bool) -> int:
+            precedent, changements = None, 0
+            for valeur in serie:
+                palier = guidance_mod.palier_et0_stress(valeur, precedent if avec_bande else None)
+                if precedent is not None and palier != precedent:
+                    changements += 1
+                precedent = palier
+            return changements
+
+        sans = parcourir(False)
+        avec = parcourir(True)
+        self.assertEqual(sans, 17, "prémisse : la série mesurée doit bien produire 17 changements")
+        self.assertLessEqual(avec, 5, f"la bande morte ne calme plus la série réelle ({avec})")
+        self.assertGreater(avec, 0, "la bande morte fige le palier : plus aucun virage n'est vu")
+
+    def _bundles_stress(self, memoire, *, etp=2.7):
+        """Contexte où le palier d'ET0 fait BASCULER le niveau de stress.
+
+        24 °C, 65 % d'humidité, ET0 2,7 : sans mémoire le palier vaut 0 et le score reste
+        « normal » ; avec un palier 1 retenu par la bande morte (2,7 ≥ 3,0 − 0,4) il passe à
+        « vigilance ». C'est la forme exacte du cas réel — une journée douce où l'ET0 flotte
+        juste sous un seuil.
+        """
+        ctx = decision.DecisionContext.from_legacy_args(
+            history=[], today=date(2026, 8, 31), hour_of_day=15,
+            pluie_24h=0.0, pluie_demain=0.0, type_sol="limoneux",
+            temperature=24.0, humidite=65, etp_capteur=etp,
+            risk_context={"amortissement": None, "palier_et0": memoire},
+        )
+        phase = decision.build_phase_bundle(ctx)
+        water = decision.build_water_bundle(ctx, phase)
+        risk = decision.build_risk_bundle(ctx, phase, water)
+        return water, risk
+
+    def test_le_palier_CHANGE_le_score_de_stress_et_ne_le_decore_pas(self) -> None:
+        """⚠️ CALCULER N'EST PAS APPLIQUER — QUATRIÈME FOIS EN DEUX NUITS.
+
+        Le banc de mutations l'a trouvé, pas mes tests : neutraliser la prise en compte de
+        `points_etp` dans `_heat_stress_level` ne faisait tomber AUCUN test. Le palier était
+        calculé, publié, persisté — et n'entrait dans aucun score. Mes tests d'alors
+        vérifiaient la VALEUR de la clé, jamais son EFFET.
+        """
+        g = guidance_mod
+        # Base à 2 points, choisie pour que le SEUL pas d'ET0 fasse franchir « vigilance » (3) :
+        # air sec (35 % ≤ 40) +1, et aucune pluie ni probabilité de pluie +1.
+        commun = dict(temperature=24.0, etp=2.7, humidite=35,
+                      weather_profile={}, deficit_mm_brut=0.0)
+        self.assertEqual(g._heat_stress_level(**commun, points_etp=0), "normal",
+                         "prémisse : sans point d'ET0 le score doit rester sous vigilance")
+        self.assertEqual(
+            g._heat_stress_level(**commun, points_etp=1), "vigilance",
+            "le palier fourni n'entre pas dans le score : la bande morte ne sert à rien",
+        )
+
+    def test_le_palier_atteint_la_chaine_du_RISQUE(self) -> None:
+        libre = self._bundles_stress(None)[1]
+        tenu = self._bundles_stress(1)[1]
+        self.assertEqual(libre["heat_stress_level"], "normal", "prémisse")
+        self.assertEqual(
+            tenu["heat_stress_level"], "vigilance",
+            "le palier n'atteint pas compute_action_guidance : le risque ignore la bande morte",
+        )
+
+    def test_le_palier_atteint_la_chaine_de_l_ARROSAGE(self) -> None:
+        libre = self._bundles_stress(None)[0]
+        tenu = self._bundles_stress(1)[0]
+        self.assertEqual(libre["heat_stress_level"], "normal", "prémisse")
+        self.assertEqual(
+            tenu["heat_stress_level"], "vigilance",
+            "le palier n'atteint pas compute_watering_profile : l'arrosage ignore la bande morte",
+        )
+
+    def test_LES_DEUX_CHAINES_disent_le_meme_stress(self) -> None:
+        """⚠️ LA FAMILLE DE DÉFAUT N°1 DE CE PROJET : deux sorties pour un même fait.
+
+        `_heat_stress_level` est calculé DEUX fois — pour le profil d'arrosage et pour le
+        risque. N'amortir qu'un côté ferait diverger deux valeurs qui décrivent la même
+        atmosphère, et rien ne l'aurait signalé.
+        """
+        for memoire in (None, 0, 1, 2, 3):
+            with self.subTest(memoire=memoire):
+                water, risk = self._bundles_stress(memoire)
+                self.assertEqual(
+                    water["heat_stress_level"], risk["heat_stress_level"],
+                    f"les deux chaînes divergent avec la mémoire {memoire!r}",
+                )
+
+    def test_le_palier_amorti_atteint_REELLEMENT_le_snapshot(self) -> None:
+        """⚠️ LE PIÈGE DU PROJET, POUR LA TROISIÈME FOIS SUR CETTE FAMILLE DE CLÉS.
+
+        `risque_amortissement` (0.65.0) était produit, rangé, persisté — et n'atteignait
+        jamais le snapshot faute d'être dans DEUX listes blanches. L'amortissement n'a rien
+        fait pendant quinze minutes tout en ayant l'air branché.
+
+        Ce test part de la sortie RÉELLE et la suit jusqu'au snapshot publié.
+        """
+        ctx = decision.DecisionContext.from_legacy_args(
+            history=[], today=date(2026, 8, 31), hour_of_day=17,
+            temperature=24.0, pluie_24h=0.0, pluie_demain=0.0, humidite=65,
+            type_sol="limoneux", etp_capteur=4.2,
+            risk_context={"amortissement": None, "palier_et0": None},
+        )
+        snapshot = decision.build_decision_result(ctx).to_snapshot()
+        self.assertIn("stress_palier_et0", snapshot,
+                      "la clé n'atteint pas le snapshot — recopie ou liste blanche ?")
+        self.assertIsInstance(snapshot["stress_palier_et0"], int)
+
+    def test_la_memoire_du_palier_est_REELLEMENT_relue(self) -> None:
+        """⚠️ CALCULER N'EST PAS APPLIQUER. La mémoire doit changer la sortie, pas décorer.
+
+        Le même ET0, avec et sans mémoire, doit donner deux paliers différents — sinon
+        `risk_context["palier_et0"]` n'est pas lu et la bande morte ne sert à rien.
+        """
+        def _palier(memoire):
+            ctx = decision.DecisionContext.from_legacy_args(
+                history=[], today=date(2026, 8, 31), hour_of_day=17,
+                temperature=24.0, pluie_24h=0.0, pluie_demain=0.0, humidite=65,
+                type_sol="limoneux", etp_capteur=3.7,
+                risk_context={"amortissement": None, "palier_et0": memoire},
+            )
+            phase = decision.build_phase_bundle(ctx)
+            water = decision.build_water_bundle(ctx, phase)
+            return decision.build_risk_bundle(ctx, phase, water)["stress_palier_et0"]
+
+        libre = _palier(None)
+        self.assertEqual(libre, 1, "prémisse : ET0 3,7 vaut un seul point sans mémoire")
+        self.assertEqual(
+            _palier(2), 2,
+            "la mémoire du palier n'est pas relue : la bande morte ne fait rien",
+        )
+
     def test_les_motifs_suivent_le_niveau_PUBLIE_et_non_le_brut(self) -> None:
         """⚠️ CONTRADICTION RECRÉÉE PAR L'AMORTISSEMENT — relevée par la revue de la PR #47.
 

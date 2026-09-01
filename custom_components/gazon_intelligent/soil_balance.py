@@ -475,9 +475,13 @@ def update_soil_balance(
             # GARDE ANTI-JOURNÉE-TRONQUÉE : si Home Assistant n'a tourné qu'une fraction de la
             # veille, le cumul est amputé et le figer laisserait de l'eau FANTÔME dans la réserve
             # d'ouverture — définitivement (cas mesuré : un seul cycle avant l'aube → cumul 0,0 mm
-            # alors que la journée a bien évaporé ~5 mm). Une journée réellement couverte accumule
-            # au moins la moitié de l'estimation journalière (celle-ci étant plutôt majorante) :
-            # en dessous, on retient l'estimation pleine journée, plus sûre.
+            # alors que la journée a bien évaporé ~5 mm).
+            # ⚠️ COMMENTAIRE CORRIGÉ le 01/09/2026 : il décrivait encore la règle des 50 % —
+            # « une journée couverte accumule au moins la moitié de l'estimation » — remplacée
+            # en 0.63.0 précisément parce qu'elle était fausse les jours de pluie. Le garde juge
+            # désormais la COUVERTURE (`_journee_couverte_jusqu_au_bout`, qui lit `etp_last_ts`),
+            # pas l'ampleur de l'évaporation. Un commentaire périmé au-dessus d'un garde corrigé
+            # est le meilleur moyen de réintroduire l'ancienne règle en croyant bien faire.
             _last_etp_estime = _to_float(_last.get("etp_mm"))
             _last_etp = _to_float(_last.get("etp_elapsed_mm"))
             if _last_etp is None:

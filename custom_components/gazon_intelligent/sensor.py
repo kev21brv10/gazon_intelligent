@@ -4642,6 +4642,14 @@ class GazonRisqueGazonSensor(GazonEntityBase, SensorEntity):
         brut = self._decision_value("risque_gazon_brut")
         if brut and brut != self.native_value:
             attrs["risque_gazon_brut"] = brut
+        # ⚠️ Le palier d'ET0 retenu par la bande morte. C'est LUI qui oscillait autour de 4,0 mm
+        # et faisait clignoter ce capteur quatorze fois le 31/08/2026 — et le capteur ET0 ne
+        # pouvait pas le montrer, son arrondi au dixième englobant le seuil. Publié toujours :
+        # sans lui, impossible de dire si la bande morte tient ou si la mesure a simplement
+        # cessé de bouger. Exposé même à 0 — un 0 mesuré n'est pas une absence.
+        palier = self._decision_value("stress_palier_et0")
+        if isinstance(palier, int) and not isinstance(palier, bool):
+            attrs["stress_palier_et0"] = palier
         # LOT E — risque fongique
         fungal_level = data.get("fungal_risk_level")
         if fungal_level is not None:

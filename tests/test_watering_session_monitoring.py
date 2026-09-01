@@ -4596,6 +4596,73 @@ class LaFiabiliteDeLaTondeuseEstSuivieTests(unittest.TestCase):
         })
 
 
+class LaBandeMorteDEt0SurvitAuRedemarrageTests(unittest.TestCase):
+    """La mémoire de la bande morte doit faire l'aller-retour complet jusqu'au disque.
+
+    ⚠️ TROISIÈME FOIS SUR CETTE FAMILLE DE CLÉS. `mower_health` (0.50.0) puis
+    `risque_amortissement` (0.65.0) ont tous deux été produits, rangés, et perdus faute
+    d'une liste blanche. Une mémoire non persistée repart vide à chaque redémarrage — et sur
+    cette installation les redémarrages sont fréquents.
+    """
+
+    def _coord(self, palier):
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord._runtime_state = {
+            "active_irrigation_session": None,
+            "last_irrigation_execution": None,
+            "last_auto_irrigation_reason": None,
+            "last_auto_irrigation_completed_at": None,
+            "auto_irrigation_safety_lock": False,
+            "stress_palier_et0": palier,
+        }
+        coord._ensure_irrigation_runtime_bootstrap = lambda: None
+        return coord
+
+    def test_le_palier_atteint_le_disque(self) -> None:
+        serialise = self._coord(2)._serialized_runtime_state()
+        self.assertIn("stress_palier_et0", serialise,
+                      "le palier d'ET0 n'est jamais persisté : bande morte perdue au redémarrage")
+        self.assertEqual(serialise["stress_palier_et0"], 2)
+
+    def test_le_palier_est_relu_au_demarrage(self) -> None:
+        relu = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        relu._restore_runtime_state({"stress_palier_et0": 2})
+        self.assertEqual(relu._runtime_state.get("stress_palier_et0"), 2,
+                         "le palier est écrit sur le disque puis ignoré au rechargement")
+
+    def test_aller_retour_complet(self) -> None:
+        relu = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        relu._restore_runtime_state(self._coord(3)._serialized_runtime_state())
+        self.assertEqual(relu._runtime_state["stress_palier_et0"], 3)
+
+    def test_le_palier_traverse_la_SECONDE_liste_blanche(self) -> None:
+        """⚠️ LE PIÈGE DU PROJET, TROISIÈME FOIS SUR CETTE FAMILLE DE CLÉS.
+
+        Atteindre le snapshot de la décision ne suffit pas : le coordinateur RECOPIE ensuite
+        clé par clé, et seules celles de `_COORDINATOR_SNAPSHOT_KEYS` passent. C'est là que
+        `risque_amortissement` s'était perdu en 0.65.0 — persisté `null`, amortissement
+        inopérant, tout en ayant l'air parfaitement branché.
+
+        Le banc l'a reconfirmé sur cette clé-ci : la retirer de la liste ne faisait tomber
+        aucun test. On rejoue donc la recopie RÉELLE du coordinateur, pas une appartenance.
+        """
+        snapshot = {"stress_palier_et0": 2, "risque_gazon": "modere"}
+        recopie = {cle: snapshot.get(cle) for cle in coordinator_mod._COORDINATOR_SNAPSHOT_KEYS}
+        self.assertIn(
+            "stress_palier_et0", recopie,
+            "la clé meurt dans la recopie du coordinateur : la mémoire repartira vide",
+        )
+        self.assertEqual(recopie["stress_palier_et0"], 2)
+
+    def test_un_palier_a_ZERO_n_est_pas_une_absence(self) -> None:
+        """⚠️ 0 est un palier MESURÉ (ET0 sous 3 mm), pas une mémoire vide. Un garde en
+        `if palier:` le confondrait avec l'absence et relancerait le clignotement bas."""
+        relu = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        relu._restore_runtime_state(self._coord(0)._serialized_runtime_state())
+        self.assertEqual(relu._runtime_state["stress_palier_et0"], 0,
+                         "un palier à zéro est traité comme une absence")
+
+
 class LeCumulTondeuseSurvitAuRedemarrageTests(unittest.TestCase):
     """Un cumul de la JOURNÉE qui ne survit pas au redémarrage ne vaut rien.
 
@@ -5462,6 +5529,96 @@ class CarnetDePassesTondeuseTests(unittest.TestCase):
         fantome = {"minutes_tondues": 0.0, "minutes_bloquees": 0.0, "fin_motif": "retour_autonome"}
         self.assertFalse(coordinator_mod._passe_a_retenir(fantome),
                          "une sortie de 10 s sans tonte est enregistrée comme une passe")
+
+    def test_les_fantomes_DEJA_au_carnet_ne_polluent_plus_ce_qui_est_publie(self) -> None:
+        """⚠️ LE FILTRE N'EXISTAIT QU'À L'ÉCRITURE — mesuré en production le 01/09/2026.
+
+        La 0.64.0 écartait les rebonds au moment de les inscrire, mais les TROIS déjà au carnet
+        continuaient d'alimenter tout ce qu'on publie. Sur le journal réel de l'installation,
+        `mower_autonomous_return_battery_median` sortait **96,5 % au lieu de 85,0** : trois
+        retours à 99-100 % de batterie s'ajoutaient aux cinq vrais.
+
+        Le journal ci-dessous EST celui de l'installation, réduit aux retours autonomes qui
+        entrent dans cette médiane — trois fantômes du 30/08 compris.
+        """
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        reels = [
+            {"date": "2026-08-18", "minutes_tondues": 51.0, "batterie_fin": 48.0, "fin_motif": "retour_autonome"},
+            {"date": "2026-08-30", "minutes_tondues": 31.7, "batterie_fin": 85.0, "fin_motif": "retour_autonome"},
+            {"date": "2026-08-30", "minutes_tondues": 21.4, "batterie_fin": 94.0, "fin_motif": "retour_autonome"},
+            {"date": "2026-08-30", "minutes_tondues": 23.6, "batterie_fin": 100.0, "fin_motif": "retour_autonome"},
+            {"date": "2026-08-30", "minutes_tondues": 14.2, "batterie_fin": 71.0, "fin_motif": "retour_autonome"},
+        ]
+        fantomes = [
+            {"date": "2026-08-30", "minutes_tondues": 0.0, "minutes_bloquees": 0.0, "batterie_fin": 100.0, "fin_motif": "retour_autonome"},
+            {"date": "2026-08-30", "minutes_tondues": 0.0, "minutes_bloquees": 0.0, "batterie_fin": 100.0, "fin_motif": "retour_autonome"},
+            {"date": "2026-08-30", "minutes_tondues": 0.0, "minutes_bloquees": 0.0, "batterie_fin": 99.0, "fin_motif": "retour_autonome"},
+        ]
+        journal = reels + fantomes
+
+        # Prémisse : le journal BRUT donne bien la valeur fausse observée en production.
+        self.assertAlmostEqual(
+            coord._profil_appris_tondeuse(journal)["mower_autonomous_return_battery_median"],
+            96.5, places=1,
+            msg="prémisse : ce journal doit reproduire les 96,5 % publiés à tort",
+        )
+
+        # ⚠️ ET ON PASSE PAR LE POINT D'APPEL RÉEL, pas par `_profil_appris_tondeuse` nourri
+        # d'une liste filtrée à la main : le banc a montré qu'un test qui filtre lui-même
+        # survit à la suppression du filtre AU POINT D'APPEL. C'est le défaut que ce projet
+        # documente sous « muter le point d'appel, pas la fonction ».
+        coord._current_datetime = lambda: datetime(2026, 8, 30, 23, 30, tzinfo=timezone.utc)
+        coord._current_date = lambda: date(2026, 8, 30)
+        coord._tonte_autorisee_au_cycle_precedent = lambda: True
+        coord._runtime_state = {"mower_passes": {"en_cours": None, "journal": list(journal)}}
+        publie = coord._suivre_passes_tondeuse(
+            {"mower_is_docked": True, "mower_operation_state": "idle", "tondeuse_batterie": 100}
+        )
+        self.assertAlmostEqual(
+            publie["mower_autonomous_return_battery_median"], 85.0, places=1,
+            msg="la médiane publiée reste tirée vers le haut par les rebonds",
+        )
+        self.assertEqual(publie["mower_passes_observed"], 5,
+                         "les trois fantômes comptent encore parmi les passes observées")
+
+        # Le carnet PERSISTÉ, lui, n'est pas amputé : on filtre ce qu'on publie, on n'efface pas.
+        self.assertEqual(
+            len(coord._runtime_state["mower_passes"]["journal"]), 8,
+            "le filtre de publication a effacé l'historique au lieu de le masquer",
+        )
+
+    def test_un_fantome_deja_au_carnet_ne_devient_pas_la_DERNIERE_passe(self) -> None:
+        """⚠️ SITE DE LECTURE OUBLIÉ AU PREMIER JET, trouvé en relisant la revue.
+
+        `derniere = journal[-1]` alimente quatre attributs. Aujourd'hui la dernière entrée est
+        réelle, donc rien ne se voyait ; si un rebond avait clôturé en dernier, la carte aurait
+        annoncé une passe de 0,0 min rentrée à 100 % de batterie.
+        """
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord._current_datetime = lambda: datetime(2026, 8, 30, 23, 30, tzinfo=timezone.utc)
+        coord._current_date = lambda: date(2026, 8, 30)
+        coord._tonte_autorisee_au_cycle_precedent = lambda: True
+        coord._runtime_state = {
+            "mower_passes": {
+                "en_cours": None,
+                "journal": [
+                    {"date": "2026-08-30", "minutes_tondues": 14.2, "batterie_debut": 100.0,
+                     "batterie_fin": 71.0, "fin_motif": "retour_autonome"},
+                    {"date": "2026-08-30", "minutes_tondues": 0.0, "minutes_bloquees": 0.0,
+                     "batterie_debut": 100.0, "batterie_fin": 100.0, "fin_motif": "retour_autonome"},
+                ],
+            }
+        }
+        sortie = coord._suivre_passes_tondeuse(
+            {"mower_is_docked": True, "mower_operation_state": "idle", "tondeuse_batterie": 100}
+        )
+        self.assertAlmostEqual(
+            sortie["mower_last_pass_minutes"], 14.2, places=1,
+            msg="un rebond de 0,0 min est publié comme la dernière passe",
+        )
+        self.assertAlmostEqual(sortie["mower_last_pass_battery_end"], 71.0, places=1)
+        self.assertEqual(sortie["mower_passes_observed"], 1,
+                         "le fantôme est encore compté dans le nombre de passes observées")
 
     def test_le_carnet_lui_meme_refuse_la_passe_fantome(self) -> None:
         """⚠️ LE PRÉDICAT NE PROUVE RIEN S'IL N'EST PAS CÂBLÉ.
