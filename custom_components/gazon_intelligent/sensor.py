@@ -4647,9 +4647,15 @@ class GazonRisqueGazonSensor(GazonEntityBase, SensorEntity):
         # pouvait pas le montrer, son arrondi au dixième englobant le seuil. Publié toujours :
         # sans lui, impossible de dire si la bande morte tient ou si la mesure a simplement
         # cessé de bouger. Exposé même à 0 — un 0 mesuré n'est pas une absence.
+        # ⚠️ `(int, float)` ET PAS `int` SEUL — défaut vécu le 01/09/2026, publié en 0.67.0 et
+        # invisible pendant six heures. `_decision_value` passe par `_normalize_exposed_value`,
+        # qui arrondit TOUT nombre sans précision déclarée à 3 décimales : un `int` en ressort
+        # donc en **float**. Le garde `isinstance(palier, int)` était systématiquement faux et
+        # l'attribut n'était jamais posé. Mes tests d'alors s'arrêtaient au snapshot, où la
+        # valeur est encore un entier — ils ne traversaient pas la normalisation.
         palier = self._decision_value("stress_palier_et0")
-        if isinstance(palier, int) and not isinstance(palier, bool):
-            attrs["stress_palier_et0"] = palier
+        if isinstance(palier, (int, float)) and not isinstance(palier, bool):
+            attrs["stress_palier_et0"] = int(palier)
         # LOT E — risque fongique
         fungal_level = data.get("fungal_risk_level")
         if fungal_level is not None:

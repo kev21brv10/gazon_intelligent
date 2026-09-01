@@ -354,6 +354,42 @@ class AssistantDecisionTests(unittest.TestCase):
         self.assertEqual(decision["status"], "blocked_due_to_conditions")
         self.assertEqual(decision["reason"], "Humidité excessive")
 
+    def test_le_palier_d_et0_est_REELLEMENT_publie_par_le_capteur(self) -> None:
+        """⚠️ LA COUCHE QUE MES TESTS NE TRAVERSAIENT PAS — défaut vécu le 01/09/2026.
+
+        `stress_palier_et0` atteignait bien le snapshot (un test le prouvait) et n'apparaissait
+        PAS dans les attributs publiés. Cause : `_decision_value` passe par
+        `_normalize_exposed_value`, qui arrondit tout nombre sans précision déclarée à trois
+        décimales — un `int` en ressort donc en **float**. Le garde `isinstance(palier, int)`
+        que j'avais écrit était systématiquement faux.
+
+        Six heures en production, invisible : le capteur publiait tout le reste normalement.
+        Ce test part de `coordinator.data` et lit `extra_state_attributes`, la vraie sortie.
+        """
+        for brut, attendu in ((0, 0), (1, 1), (2, 2), (3, 3)):
+            with self.subTest(palier=brut):
+                coordinator = _FakeCoordinator(
+                    entry=_FakeEntry(),
+                    data={"risque_gazon": "faible", "stress_palier_et0": brut},
+                )
+                attrs = sensor.GazonRisqueGazonSensor(coordinator).extra_state_attributes
+                self.assertIn(
+                    "stress_palier_et0", attrs,
+                    "le palier n'est pas publié : la bande morte est muette à l'écran",
+                )
+                self.assertEqual(attrs["stress_palier_et0"], attendu)
+                self.assertIsInstance(
+                    attrs["stress_palier_et0"], int,
+                    "un compte de points s'affiche en décimal",
+                )
+
+    def test_un_palier_absent_ne_pose_PAS_l_attribut(self) -> None:
+        """L'autre sens : sans mesure, on n'invente pas un palier à zéro."""
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={"risque_gazon": "faible"})
+        attrs = sensor.GazonRisqueGazonSensor(coordinator).extra_state_attributes
+        self.assertNotIn("stress_palier_et0", attrs,
+                         "un palier inconnu est publié comme un zéro mesuré")
+
     def test_sensor_exposes_contract_from_snapshot(self) -> None:
         coordinator = _FakeCoordinator(
             entry=_FakeEntry(),
