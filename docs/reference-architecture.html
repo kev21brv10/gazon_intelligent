@@ -231,7 +231,7 @@
     <h1>Comment le système décide</h1>
     <p class="lede">Arrosage, tonte, phases, produits, capteurs et services : ce que fait chaque brique, où sont les seuils, et ce qui reste à arbitrer. Établi sur l'état réel du code.</p>
     <div class="stats">
-      <span class="stat">version <b>0.67.0</b></span>
+      <span class="stat">version <b>0.67.1</b></span>
       <span class="stat">carte <b>0.28.1</b></span>
       <span class="stat"><b>39</b> modules</span>
       <span class="stat"><b>62</b> entités</span>
@@ -1096,6 +1096,7 @@
         <p>L'ET0 a passé l'après-midi entre <b>3,6 et 4,4 mm</b>, franchissant neuf fois le palier <code>etp &gt;= 4</code> de <code>_heat_stress_level</code>. Les autres facteurs valaient exactement <b>2</b> ce jour-là (vent 6-8 km/h sous le seuil de 15, humidité 62-71 % au-dessus de 40, température sous 27)&nbsp;: ce pas seul faisait passer le score de 2 à 3, très exactement le seuil « vigilance », qui fait monter le risque d'un rang.</p>
         <p><strong>⚠️ Et le capteur ne pouvait pas le montrer</strong>&nbsp;: il arrondit au dixième, et le seuil tombe <em>dans</em> l'intervalle d'arrondi. Deux valeurs de part et d'autre de 4,0 s'affichent toutes les deux « 4,0 ». C'est pourquoi le défaut avait résisté à un audit visuel.</p>
         <p><strong>Corrigé en 0.67.0 par une bande morte de 0,4 mm</strong> sur les paliers d'ET0 (<code>palier_et0_stress</code>)&nbsp;: on monte au seuil nominal, on ne redescend qu'une bande plus bas. Le 0,4 est le <strong>genou mesuré</strong> sur les 103 relevés réels — 17 changements de palier tombent à 5 (−70 %), et l'élargir à 0,5 ou 0,6 n'en supprime pas un de plus&nbsp;: la bande colle à l'amplitude du bruit sans retarder davantage un vrai virage. ⚠️ Asymétrique du bon côté&nbsp;: un assèchement réel est vu aussi vite qu'avant, seul le retour au calme attend d'être franc. Arbitré par Kévin le 01/09/2026. Le palier retenu est publié (<code>stress_palier_et0</code>) et persisté — et il descend aux <strong>DEUX</strong> chaînes qui calculent le stress, le profil d'arrosage comme le risque&nbsp;: n'en amortir qu'une aurait fait diverger deux sorties décrivant le même fait.</p>
+        <p><strong>⚠️ Et le palier n'a pas été affiché pendant six heures — CINQUIÈME « calculer n'est pas appliquer » en deux nuits.</strong> <code>stress_palier_et0</code> atteignait le snapshot (un test le prouvait) mais pas les attributs du capteur. <code>_decision_value</code> passe par <code>_normalize_exposed_value</code>, qui arrondit <strong>tout nombre sans précision déclarée à trois décimales</strong>&nbsp;: un <code>int</code> en ressort en <code>float</code>, et le garde <code>isinstance(palier, int)</code> était systématiquement faux. La bande morte, elle, fonctionnait — seule son observabilité manquait. Corrigé en <b>0.67.1</b>. <strong>Piège général à retenir&nbsp;: toute valeur lue par <code>_decision_value</code> ressort en <code>float</code> sauf précision explicite.</strong> Le test ajouté part de <code>coordinator.data</code> et lit <code>extra_state_attributes</code> — la couche que mes tests ne traversaient pas.</p>
         <p>Et un effet de bord de l'unification de la nuit&nbsp;: les deux sources tombant d'accord au mot près, la phrase publiée répétait « Nuit… Fenêtre horaire: Nuit… ». La fenêtre n'est plus ajoutée que lorsqu'elle apporte du neuf (<strong>0.65.2</strong>).</p>
         <p style="font-size:.9rem;color:var(--muted)">⚠️ <b>Trois trous trouvés par le banc, pas par les tests</b> — le même piège trois fois, de plus en plus profond&nbsp;: un test qui ne traversait pas le chemin muté&nbsp;; supprimer la <strong>réinjection</strong> du niveau amorti ne faisait tomber personne (<em>calculer n'est pas appliquer</em>)&nbsp;; et deux tests vérifiant l'ABSENCE de « stress hydrique » seraient devenus verts pour la mauvaise raison après le renommage. Un test interdit désormais le mot « hydrique » plutôt que de figer une formulation. <b>Et mypy a rattrapé</b> le passage de <code>risk_context</code> par <code>GazonBrain</code>, que la suite de tests ne franchit pas.</p>
       </div>
@@ -1182,7 +1183,7 @@
         <p>Un travail <strong>jamais terminé n'est plus déclaré</strong>. Une journée où la batterie lâche avant la fin ne comptera plus comme une tonte — c'est le but, mais le retard continuera de courir tant que le travail n'est pas bouclé.</p>
       </div>
 
-      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b>&nbsp;: 1240 tests verts côté intégration et 40 côté carte, <b>30 + 10 mutations</b> détectées par le test visé. ⚠️ Deux trous ont été trouvés par le banc et non par les tests — le premier test du « 100 au repos » ne traversait qu'un des deux chemins, et les trois nouvelles clés n'étaient protégées dans aucune liste de câblage.</p>
+      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b>&nbsp;: 1242 tests verts côté intégration et 40 côté carte, <b>33 + 10 mutations</b> détectées par le test visé. ⚠️ Deux trous ont été trouvés par le banc et non par les tests — le premier test du « 100 au repos » ne traversait qu'un des deux chemins, et les trois nouvelles clés n'étaient protégées dans aucune liste de câblage.</p>
     </section>
 
     <section>
@@ -1998,7 +1999,7 @@
     </section>
 
     <section>
-      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1240 tests verts</span></div>
+      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1242 tests verts</span></div>
       <p>Cet onglet est le point d'entrée pour « <strong>qu'est-ce qui reste à corriger ou à supprimer ?</strong> ». Il distingue trois choses qu'on confond souvent : ce qui est cassé, ce qui est un choix, et ce qui est déjà mort.</p>
       <div class="tbl-wrap">
         <table>

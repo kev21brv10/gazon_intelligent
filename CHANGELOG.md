@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.67.1
+
+1242 tests verts. **Le palier d'ET0 était calculé, persisté… et jamais affiché.**
+
+`stress_palier_et0` atteignait bien le snapshot — un test le prouvait — et n'apparaissait pas dans les attributs du capteur de risque. Cause : `_decision_value` passe par `_normalize_exposed_value`, qui arrondit **tout nombre sans précision déclarée à trois décimales**. Un `int` en ressort donc en `float`, et le garde `isinstance(palier, int)` que j'avais écrit était systématiquement faux.
+
+Six heures en production, invisibles : le capteur publiait tout le reste normalement, et la bande morte, elle, fonctionnait — seule son observabilité manquait.
+
+⚠️ **La couche que mes tests ne traversaient pas.** Ils s'arrêtaient au snapshot, où la valeur est encore un entier. Le test ajouté part de `coordinator.data` et lit `extra_state_attributes`, la vraie sortie. Trois mutations tuées, dont le retour au garde fautif.
+
+⚠️ **Piège général, à retenir** : toute valeur lue par `_decision_value` ressort en `float` sauf précision explicite. Un garde `isinstance(x, int)` sur une telle valeur est toujours faux. Un seul site était concerné dans le code — vérifié.
+
 ## 0.67.0
 
 1240 tests verts. **La cause réelle du risque qui clignote, trouvée en corrélant à la seconde près.**
