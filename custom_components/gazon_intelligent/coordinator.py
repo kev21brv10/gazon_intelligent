@@ -319,6 +319,7 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "risque_gazon_raisons",
     "risque_gazon_brut",
     "risque_amortissement",
+    "stress_palier_et0",
     "phase_dominante",
     "phase_dominante_source",
     "sous_phase",
@@ -1046,13 +1047,19 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             et0_source=et0_source,
             sun_context=sun_context,
             mower_context=mower_context,
-            risk_context={"amortissement": self._runtime_state.get("risque_amortissement")},
+            risk_context={
+                "amortissement": self._runtime_state.get("risque_amortissement"),
+                "palier_et0": self._runtime_state.get("stress_palier_et0"),
+            },
             runtime_context=runtime_context,
         )
         snapshot.update(runtime_context)
         # ⚠️ LA MÉMOIRE REPART DU CYCLE PRÉCÉDENT, SINON L'AMORTISSEMENT NE SERT À RIEN. Non
         # rangée ici, elle serait vide à chaque cycle : le niveau brut passerait toujours, et
         # les quatorze bascules du 31/08 reviendraient telles quelles.
+        _palier_et0 = snapshot.get("stress_palier_et0")
+        if isinstance(_palier_et0, int) and not isinstance(_palier_et0, bool):
+            self._runtime_state["stress_palier_et0"] = _palier_et0
         _memoire_risque = snapshot.get("risque_amortissement")
         if isinstance(_memoire_risque, dict):
             self._runtime_state["risque_amortissement"] = _memoire_risque
@@ -2342,14 +2349,17 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # ⚠️ UNE SORTIE QUI N'A RIEN TONDU N'EST PAS UNE PASSE. L'état de la tondeuse
                 # rebondit au démarrage — `starting` → `docked` 9 s → `starting` → `mowing`,
                 # mesuré le 30/08/2026 — et chaque rebond ouvrait puis refermait une passe.
-                # Quatre entrées sur trente au carnet, dont deux de DIX SECONDES, toutes à
-                # 0,0 min tondue.
+                # TROIS entrées sur trente au carnet — recomptées le 01/09/2026 en exécutant
+                # ce prédicat sur le journal persisté ; le signalement d'origine en annonçait
+                # quatre, à tort. Deux durent DIX SECONDES, toutes sont à 0,0 min tondue, et
+                # toutes datent du 30/08.
                 #
-                # Elles ne sont pas neutres : rentrant forcément à ~100 % de batterie, elles
-                # tirent `mower_autonomous_return_battery_median` vers le haut, et elles
-                # gonflent `mower_passes_per_day_median` (le 30/08 comptait 7 passes pour 4
-                # réelles). `mower_full_pass_minutes_median`, lui, ne retenait que les fins
-                # `batterie_vide` et n'était pas touché.
+                # Elles ne sont pas neutres : rentrant forcément à 99-100 % de batterie, elles
+                # tirent `mower_autonomous_return_battery_median` vers le haut — mesuré
+                # **96,5 % publié au lieu de 85,0** — et elles gonflent le compte de passes du
+                # jour (le 30/08 en comptait 8 pour 5 réelles).
+                # `mower_full_pass_minutes_median`, lui, ne retient que les fins
+                # `batterie_vide` : aucun fantôme ne porte ce motif, il n'a jamais été touché.
                 #
                 # ⚠️ On ne jette PAS les passes bloquées à 0 minute : un blocage sans tonte est
                 # un fait à conserver, c'est même le plus intéressant du carnet.
@@ -2379,19 +2389,36 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             carnet["journal"] = journal
             self._runtime_state["mower_passes"] = carnet
 
-            derniere = journal[-1] if journal else None
+            # ⚠️ FILTRÉ À LA LECTURE AUSSI, PAS SEULEMENT À L'ÉCRITURE. La 0.64.0 n'écartait
+            # les passes fantômes qu'au moment de les inscrire : les TROIS déjà au carnet (30/08,
+            # des rebonds de 10 s à 0,0 min tondue) continuaient d'alimenter tout ce qu'on
+            # publie. Mesuré le 01/09/2026 sur l'installation :
+            # `mower_autonomous_return_battery_median` sortait **96,5 % au lieu de 85,0** —
+            # 11,5 points, parce que trois retours à 99-100 % de batterie s'ajoutaient aux cinq
+            # vrais. Un carnet d'apprentissage nourri de rebonds apprend le mauvais profil.
+            #
+            # ⚠️ `derniere` EN FAIT PARTIE. Aujourd'hui la dernière entrée est réelle, donc rien
+            # ne se voyait ; si un rebond avait clôturé en dernier, `mower_last_pass_minutes` et
+            # les trois attributs voisins auraient annoncé une passe de 0,0 min à 100 %.
+            #
+            # Le carnet PERSISTÉ reste intact : on filtre ce qu'on publie, on n'efface pas
+            # l'historique. `reset_mower_passes` est le seul outil de purge et il vide tout —
+            # les 27 passes légitimes avec les 3 fantômes.
+            journal_publie = [p for p in journal if isinstance(p, dict) and _passe_a_retenir(p)]
+
+            derniere = journal_publie[-1] if journal_publie else None
             sortie = {
                 "mower_pass_in_progress": en_cours is not None,
                 "mower_pass_count_today": sum(
-                    1 for p in journal if isinstance(p, dict) and p.get("date") == aujourd_hui
+                    1 for p in journal_publie if p.get("date") == aujourd_hui
                 ),
                 "mower_last_pass_minutes": (derniere or {}).get("minutes_tondues"),
                 "mower_last_pass_battery_start": (derniere or {}).get("batterie_debut"),
                 "mower_last_pass_battery_end": (derniere or {}).get("batterie_fin"),
                 "mower_last_pass_end_reason": (derniere or {}).get("fin_motif"),
-                "mower_passes_observed": len(journal),
+                "mower_passes_observed": len(journal_publie),
             }
-            sortie.update(self._profil_appris_tondeuse(journal))
+            sortie.update(self._profil_appris_tondeuse(journal_publie))
             return sortie
         except Exception:  # noqa: BLE001 - un carnet ne doit jamais casser un cycle
             return vide
@@ -2582,12 +2609,18 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Durée de tonte du TRAVAIL en cours, minuit compris.
 
         ⚠️ DÉFAUT RELEVÉ PAR LA REVUE DE LA PR #47. `mower_mowing_minutes_today` est un
-        compteur de JOURNÉE : il repart à zéro à minuit. Un travail de 4 à 5 h démarré à 20 h
-        — le cas vu sur l'installation le 31/08/2026 — atteint 100 % après minuit avec un
-        compteur du jour à quelques dizaines de minutes. Le plancher de qualification le
-        jugeait alors « trop court », **et brûlait la complétion** : la veille n'avait rien
-        déclaré non plus, puisque la déclaration attend désormais la fin du travail. Le
-        travail disparaissait entièrement, en silence.
+        compteur de JOURNÉE : il repart à zéro à minuit. Un travail de 4 à 5 h démarré en fin
+        d'après-midi atteint 100 % après minuit avec un compteur du jour à quelques dizaines de
+        minutes. Le plancher de qualification le jugeait alors « trop court », **et brûlait la
+        complétion** : la veille n'avait rien déclaré non plus, puisque la déclaration attend
+        désormais la fin du travail. Le travail disparaissait entièrement, en silence.
+
+        ⚠️ ET LE DÉFAUT EST **LATENT** — prémisse corrigée le 01/09/2026. La justification
+        d'origine invoquait « le travail que la tondeuse a fait le 31/08 » : elle n'est PAS
+        sortie ce jour-là. Le carnet persisté ne porte aucune passe les 31/08 et 01/09, et la
+        dernière du 30/08 s'achève à 23:01:54 — près de minuit, jamais à cheval. Le défaut est
+        établi par lecture du code et par le calendrier de la machine (elle sort volontiers le
+        soir : 22:45→23:01 le 30/08, 22:30→23:44 le 22/08), pas par une perte constatée.
 
         On additionne donc les minutes par JOUR sur la durée du travail : ce que la journée
         courante affiche, plus ce que les journées précédentes du même travail avaient
@@ -3722,6 +3755,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ),
             # Non persistée, un redémarrage relancerait le risque sur le niveau brut — et les
             # redémarrages sont fréquents ici.
+            "stress_palier_et0": self._runtime_state.get("stress_palier_et0"),
             "risque_amortissement": self._serialize_runtime_value(
                 self._runtime_state.get("risque_amortissement")
             ),
@@ -3791,6 +3825,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "mower_recommendation_ignored_since": runtime.get("mower_recommendation_ignored_since"),
             "mower_job_suivi": runtime.get("mower_job_suivi"),
             "risque_amortissement": runtime.get("risque_amortissement"),
+            "stress_palier_et0": runtime.get("stress_palier_et0"),
         }
 
     def _get_active_irrigation_session(self) -> dict[str, Any] | None:

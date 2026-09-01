@@ -26,6 +26,7 @@ from .guidance import (
     _reference_hydric_balance_mm,
     compute_watering_profile,
     is_fertilization_window_open,
+    palier_et0_stress,
 )
 from .memory import compute_application_state
 from .scores import classify_stress_level
@@ -176,7 +177,16 @@ def build_water_bundle(
         balance_snapshot["arrosage_jour_mm"] = context.soil_balance.get("arrosage_mm")
         balance_snapshot["etp_jour_mm"] = context.soil_balance.get("etp_mm")
         balance_snapshot["delta_jour_mm"] = context.soil_balance.get("delta_mm")
+    # ⚠️ CALCULÉ UNE SEULE FOIS, ICI. Le palier d'ET0 du score de stress est amorti par une
+    # bande morte (cf. `palier_et0_stress`) : c'est lui qui oscillait et faisait clignoter
+    # `risque_gazon` quatorze fois le 31/08/2026. Il descend ensuite aux DEUX chaînes qui
+    # calculent le stress — le profil d'arrosage ici, le risque dans `build_risk_bundle` —
+    # via le bundle. Deux calculs séparés donneraient deux niveaux de stress pour un même fait.
+    points_etp_stress = palier_et0_stress(
+        etp, (context.risk_context or {}).get("palier_et0")
+    )
     watering_profile = compute_watering_profile(
+        points_etp_stress=points_etp_stress,
         phase_dominante=phase_bundle["phase_dominante"],
         sous_phase=phase_bundle["sous_phase"],
         water_balance=balance_snapshot,
@@ -262,6 +272,7 @@ def build_water_bundle(
     }
     return {
         "etp": etp,
+        "stress_palier_et0": points_etp_stress,
         "et0_mm": round(max(0.0, et0_mm), 1),
         "et0_source": context.et0_source,
         "kc_gazon": round(min(max(kc_gazon, 0.4), 1.1), 2),

@@ -489,6 +489,7 @@ def _build_decision_extra(
         # jamais le snapshot, la mémoire reste vide, et l'amortissement ne fait plus RIEN tout
         # en ayant l'air branché. Constaté en production le 01/09/2026.
         "risque_gazon_brut": risk_bundle.get("risque_gazon_brut"),
+        "stress_palier_et0": risk_bundle.get("stress_palier_et0"),
         "risque_amortissement": risk_bundle.get("risque_amortissement"),
         "urgence": watering_bundle.get("urgence", risk_bundle.get("urgence")),
         "prochaine_reevaluation": watering_bundle.get("prochaine_reevaluation", risk_bundle.get("prochaine_reevaluation")),

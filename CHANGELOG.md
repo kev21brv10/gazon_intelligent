@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.67.0
+
+1240 tests verts. **La cause réelle du risque qui clignote, trouvée en corrélant à la seconde près.**
+
+### Le risque basculait parce que l'ET0 franchissait 4,0 mm, pas parce qu'il manquait un amortissement
+
+Les **dix** bascules `faible ↔ modere` de l'après-midi du 31/08 coïncident **à la seconde** avec une mise à jour d'ET0, et toujours dans le bon sens :
+
+```
+16:25:51  ET0 4,1 → 4,0   risque → faible    (même seconde)
+17:36:27  ET0 4,0 → 3,9   risque → faible    (même seconde)
+17:48:27  ET0 3,9 → 4,0   risque → modéré    (même seconde)
+18:02:23  ET0 4,0 → 3,8   risque → faible    (même seconde)
+19:14:26  ET0 3,7 → 4,1   risque → modéré    (même seconde)
+```
+
+L'ET0 a passé l'après-midi entre **3,6 et 4,4 mm**, franchissant neuf fois le palier `etp >= 4` de `_heat_stress_level`. Les autres facteurs valaient exactement 2 ce jour-là (vent 6-8 km/h sous le seuil de 15, humidité 62-71 % au-dessus de 40, température sous 27) : ce pas seul faisait passer le score de 2 à 3, très exactement le seuil « vigilance ».
+
+⚠️ **Et le capteur ne pouvait pas le montrer** : il arrondit au dixième, et le seuil tombe *dans* l'intervalle d'arrondi. Deux valeurs de part et d'autre de 4,0 s'affichent toutes deux « 4,0 ».
+
+**Bande morte de 0,4 mm sur les paliers d'ET0** (`palier_et0_stress`) : on monte au seuil nominal, on ne redescend qu'une bande plus bas. Le 0,4 est le **genou mesuré** sur les 103 relevés réels du 31/08 — il fait tomber les changements de palier de 17 à 5 (−70 %), et l'élargir à 0,5 ou 0,6 n'en supprime pas un de plus. ⚠️ Asymétrique du bon côté : un assèchement réel est vu aussi vite qu'avant, seul le retour au calme attend d'être franc. Le palier est publié (`stress_palier_et0`) et persisté.
+
+⚠️ **L'amortissement de la 0.65.0 ne pouvait rien contre ça, et je l'ai dit trop vite.** Sur les quinze paliers du 31/08, le plus court dure **douze minutes** : trois cycles en absorbent **un**. Il ne supprimait aucune bascule, il les décalait. Il reste utile pour les transitoires (double calcul au démarrage), et sa docstring est corrigée : « trois cycles ≈ 6 minutes » était **faux**, la cadence est événementielle (rafraîchissement sur changement de source), donc trois cycles peuvent passer en quelques secondes.
+
+### Les passes fantômes n'étaient écartées qu'à l'écriture
+
+La 0.64.0 filtrait au moment d'inscrire une passe. Les **trois** déjà au carnet — des rebonds du 30/08, dix secondes, 0,0 min tondue — continuaient d'alimenter tout ce qui est publié. Mesuré : `mower_autonomous_return_battery_median` sortait **96,5 % au lieu de 85,0**, soit 11,5 points, trois retours à 99-100 % s'ajoutant aux cinq vrais. Le filtre s'applique désormais aussi à la lecture, `derniere` comprise. ⚠️ Le carnet **persisté** reste intact : on masque, on n'efface pas.
+
+### Corrections de mes propres affirmations
+
+- **Trois** passes fantômes, pas quatre : recomptées en exécutant le prédicat sur le journal réel.
+- ⚠️ **La prémisse de la 0.66.0 était fausse.** Elle invoquait « le travail de 4 à 5 h que la tondeuse a fait le 31/08 » : elle **n'est pas sortie ce jour-là**. Aucune passe les 31/08 et 01/09, la dernière du 30/08 s'achève à 23:01:54 — près de minuit, jamais à cheval. Le défaut du passage de minuit reste réel *par lecture du code* et par le calendrier de la machine (22:45→23:01 le 30/08, 22:30→23:44 le 22/08), mais il est **latent**, pas constaté.
+- Le commentaire au-dessus du garde de clôture du bilan sol décrivait encore la règle des 50 % remplacée en 0.63.0.
+
 ## 0.66.0
 
 1223 tests verts. **Deux défauts introduits par mes propres correctifs de cette nuit, relevés par la revue de la PR #47.**

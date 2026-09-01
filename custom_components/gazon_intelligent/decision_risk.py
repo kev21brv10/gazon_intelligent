@@ -90,6 +90,9 @@ def build_risk_bundle(
         else None
     )
     action_guidance = compute_action_guidance(
+        # Le MÊME palier que celui vu par le profil d'arrosage : calculé une fois dans
+        # `build_water_bundle`, jamais recalculé ici — deux calculs divergeraient.
+        points_etp_stress=water_bundle.get("stress_palier_et0"),
         phase_dominante=phase_dominante,
         sous_phase=sous_phase,
         water_balance=water_balance,
@@ -162,6 +165,9 @@ def build_risk_bundle(
         # de l'extérieur — un amortissement muet est indiscernable d'un capteur figé.
         "risque_gazon_brut": _risque_brut,
         "risque_amortissement": _risque_memoire,
+        # Mémoire de la bande morte d'ET0 : relue au cycle suivant, et visible de l'extérieur —
+        # une bande morte muette est indiscernable d'un capteur figé.
+        "stress_palier_et0": water_bundle.get("stress_palier_et0"),
         "watering_window_start_minute": action_guidance.get("watering_window_start_minute"),
         "watering_window_end_minute": action_guidance.get("watering_window_end_minute"),
         "watering_window_optimal_start_minute": action_guidance.get("watering_window_optimal_start_minute"),

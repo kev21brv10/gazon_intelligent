@@ -887,12 +887,66 @@ def _semis_window_bounds(
     return optimal_start, optimal_end, acceptable_end, band
 
 
+# ── BANDE MORTE SUR LES PALIERS D'ET0 DU SCORE DE STRESS ────────────────────────────────
+# ⚠️ MESURÉ LE 31/08/2026 : les QUATORZE bascules `faible ↔ modere` de `risque_gazon` coïncident
+# À LA SECONDE près avec une mise à jour d'ET0 — dix sur dix, et toujours dans le bon sens.
+# L'ET0 a passé l'après-midi entre 3,6 et 4,4 mm, franchissant NEUF FOIS le palier 4,0. Les
+# autres facteurs valaient exactement 2 ce jour-là (vent 6-8 km/h sous le seuil de 15, humidité
+# 62-71 % au-dessus de 40, température sous 27) : le pas d'ET0 faisait donc passer le score de
+# 2 à 3, soit très exactement le seuil « vigilance », qui fait monter le risque d'un rang.
+#
+# ⚠️ ET LE CAPTEUR NE POUVAIT PAS LE MONTRER : il arrondit au dixième, et le seuil tombe DANS
+# l'intervalle d'arrondi. Deux valeurs de part et d'autre de 4,0 s'affichent toutes deux « 4,0 ».
+#
+# ⚠️ AMORTIR LA SORTIE NE PEUT RIEN CONTRE ÇA. `amortir_niveau_risque` tient trois cycles (~6 min)
+# alors que les paliers observés durent 12 à 41 minutes : sur les quinze paliers du 31/08, il en
+# absorbe UN. Il ne supprime aucune bascule, il les décale. Le défaut est un franchissement de
+# seuil, il se corrige au seuil.
+#
+# La bande de 0,4 mm est le GENOU mesuré sur la série réelle du 31/08 (103 relevés) : elle fait
+# tomber les changements de palier de 17 à 5 (-70 %), et l'élargir à 0,5 ou 0,6 n'en supprime pas
+# un de plus. Elle colle donc à l'amplitude du bruit, sans retarder davantage un vrai virage.
+#
+# ⚠️ ASYMÉTRIQUE, et du bon côté : on MONTE au seuil nominal, on ne redescend qu'une bande plus
+# bas. Un assèchement réel est donc vu aussi vite qu'avant ; c'est seulement le retour au calme
+# qui attend d'être franc. L'inverse aurait retardé une alerte.
+_ET0_STRESS_PALIERS: tuple[tuple[float, int], ...] = ((5.0, 3), (4.0, 2), (3.0, 1))
+_ET0_STRESS_BANDE_MORTE = 0.4
+
+
+def palier_et0_stress(etp: float | None, precedent: int | None) -> int:
+    """Points d'ET0 du score de stress, avec une bande morte à la DESCENTE.
+
+    Fonction PURE : la mémoire (le palier précédent) entre et le nouveau palier ressort ;
+    le coordinateur la persiste, comme pour `amortir_niveau_risque`.
+
+    ⚠️ Une absence de mesure n'est pas un zéro : `None` retombe sur 0 point comme avant, mais
+    ne peut pas non plus RETENIR un palier — sinon une tondeuse ou une station muette figerait
+    le score sur sa dernière valeur connue, indéfiniment.
+    """
+    if not isinstance(etp, (int, float)) or isinstance(etp, bool):
+        return 0
+    valeur = float(etp)
+    brut = 0
+    for seuil, points in _ET0_STRESS_PALIERS:
+        if valeur >= seuil:
+            brut = points
+            break
+    if not isinstance(precedent, int) or isinstance(precedent, bool) or brut >= precedent:
+        return brut
+    seuil_tenu = next((s for s, p in _ET0_STRESS_PALIERS if p == precedent), None)
+    if seuil_tenu is None or valeur < seuil_tenu - _ET0_STRESS_BANDE_MORTE:
+        return brut
+    return precedent
+
+
 def _heat_stress_level(
     temperature: float | None,
     etp: float | None,
     humidite: float | None,
     weather_profile: dict[str, Any] | None,
     deficit_mm_brut: float,
+    points_etp: int | None = None,
 ) -> str:
     weather_profile = weather_profile or {}
     temperature = temperature if temperature is not None else _to_float(weather_profile.get("weather_temperature"))
@@ -913,7 +967,12 @@ def _heat_stress_level(
     elif temperature >= 27:
         score += 1
 
-    if etp >= 5:
+    # ⚠️ Le palier d'ET0 arrive AMORTI de l'extérieur (`palier_et0_stress`) : c'est lui qui
+    # oscillait et faisait clignoter le risque. Sans mémoire fournie, on retombe sur le calcul
+    # direct — ni régression ni comportement caché pour les appelants qui l'ignorent.
+    if isinstance(points_etp, int) and not isinstance(points_etp, bool):
+        score += points_etp
+    elif etp >= 5:
         score += 3
     elif etp >= 4:
         score += 2
@@ -1198,8 +1257,21 @@ def libelle_stress(niveau: str) -> str:
     return f"{_LIBELLE_STRESS} {niveau}".strip()
 
 
-# AMORTISSEMENT DU RISQUE (cycles). Le niveau publié ne suit une nouvelle valeur que si
-# elle TIENT. Le coordinateur tourne toutes les ~2 min : trois cycles ≈ 6 minutes.
+# AMORTISSEMENT DU RISQUE (cycles). Le niveau publié ne suit une nouvelle valeur que si elle
+# TIENT sur trois cycles consécutifs.
+#
+# ⚠️ « TROIS CYCLES ≈ 6 MINUTES » ÉTAIT FAUX, et c'est une correction du 01/09/2026. Le
+# coordinateur a bien un `update_interval` de 2 min, mais il rafraîchit AUSSI sur changement
+# d'une entité source (`_source_refresh_task`) : la cadence réelle est événementielle, et trois
+# cycles peuvent passer en quelques secondes. Ce compteur borne donc un nombre de CALCULS, pas
+# une durée — ne jamais raisonner en minutes à partir de lui.
+#
+# ⚠️ ET IL NE SUFFIT PAS SEUL. Mesuré sur les quinze paliers du 31/08/2026 : le plus court dure
+# DOUZE minutes, l'amortissement en absorbe UN. Il lisse les transitoires (un redémarrage, un
+# double calcul au démarrage) mais ne pouvait rien contre le clignotement réel, qui venait d'un
+# franchissement de seuil — corrigé à sa source par `palier_et0_stress`, la bande morte sur les
+# paliers d'ET0. Les deux se complètent : la bande morte tient le seuil, l'amortissement tient
+# la sortie.
 _RISQUE_CYCLES_STABLES = 3
 
 # ⚠️ UNE MONTÉE VERS L'ALERTE NE SE RETARDE JAMAIS. L'amortissement sert à taire le
@@ -1554,6 +1626,7 @@ def _build_watering_ctx(
     forecast_temperature_today: float | None = None,
     evening_cooling_enabled: bool = True,
     fungal_risk_level: str | None = None,
+    points_etp_stress: int | None = None,
 ) -> _WateringCtx:
     pluie_probabilite_24h_raw = _to_float(weather_profile.get("weather_precipitation_probability"))
     pluie_probabilite_24h = pluie_probabilite_24h_raw if pluie_probabilite_24h_raw is not None else 0.0
@@ -1634,9 +1707,13 @@ def _build_watering_ctx(
     # 0 % HR n'existe pas dans la nature (le désert le plus sec tourne autour de 5 %) : on le
     # traite donc comme « pas de mesure », ce qui laisse le repli météo faire son travail.
     _humidite_pour_stress = humidite if humidite else None
+    # ⚠️ LES DEUX CHAÎNES OU AUCUNE. `_heat_stress_level` est calculé ICI pour le profil
+    # d'arrosage ET dans `compute_action_guidance` pour le risque. N'amortir qu'un côté ferait
+    # diverger deux sorties qui décrivent le MÊME fait — la famille de défaut n°1 de ce projet.
     heat_stress_level = _heat_stress_level(
         temperature=_temp_for_stress, etp=etp, humidite=_humidite_pour_stress,
         weather_profile=weather_profile, deficit_mm_brut=deficit_mm_brut,
+        points_etp=points_etp_stress,
     )
     heat_stress_phase = _heat_stress_phase(
         heat_stress_level=heat_stress_level, temperature=_temp_for_stress, etp=etp,
@@ -2683,6 +2760,7 @@ def compute_watering_profile(
     forecast_temperature_today: float | None = None,
     evening_cooling_enabled: bool = True,
     fungal_risk_level: str | None = None,
+    points_etp_stress: int | None = None,
 ) -> dict[str, Any]:
     today = today or _current_date()
     weather_profile = weather_profile or {}
@@ -2692,6 +2770,7 @@ def compute_watering_profile(
         sous_phase=sous_phase,
         water_balance=water_balance,
         today=today,
+        points_etp_stress=points_etp_stress,
         pluie_24h=pluie_24h or 0.0,
         pluie_demain=pluie_demain or 0.0,
         pluie_j2=pluie_j2 or 0.0,
@@ -2831,6 +2910,7 @@ def compute_action_guidance(
     hauteur_gazon: float | None = None,
     minutes_to_sunset: float | None = None,
     fungal_risk_level: str | None = None,
+    points_etp_stress: int | None = None,
 ) -> dict[str, Any]:
     advanced_context = advanced_context or {}
     pluie_24h = pluie_24h or 0.0
@@ -2867,6 +2947,7 @@ def compute_action_guidance(
     heat_stress_level = _heat_stress_level(
         temperature=temperature,
         etp=etp,
+        points_etp=points_etp_stress,
         # Voir le commentaire du jumeau dans `_build_watering_ctx` : une humidité absente,
         # coercée à 0 en amont, était comptée comme air totalement sec (palier le plus pénalisant).
         humidite=humidite if humidite else None,
