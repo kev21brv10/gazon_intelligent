@@ -60,6 +60,50 @@ class MowerAdapterTests(unittest.TestCase):
         self.assertEqual(payload["tondeuse_hauteur_coupe_mm"], 40)
         self.assertEqual(payload["tondeuse_prochain_depart"], "2026-04-16T13:00:00+02:00")
 
+    def test_un_etat_error_sans_code_n_invente_PAS_de_panne(self) -> None:
+        """⚠️ MESURÉ SUR L'INSTALLATION LE 02/09/2026 À 01:26.
+
+        Le robot est resté en `error` plusieurs minutes pour une MISE À JOUR de firmware
+        (tête caméra 2.5.6+7 → 2.5.7+12 à 01:28:59, sortie de l'état quatre secondes plus
+        tard), pendant que `sensor.…_erreur` affichait `no_error` DU DÉBUT À LA FIN.
+
+        Le repli inventait « Erreur tondeuse. » — une panne que la machine avait explicitement
+        démentie — et ce texte remontait jusqu'au libellé de blocage, donc aux notifications.
+        """
+        payload = build_mower_context(
+            entity_id="lawn_mower.esperance_jr",
+            entity_name="Esperance Jr",
+            raw_state="error",
+            available=True,
+            charging=False,
+            rain=False,
+            error_raw="no_error",
+            battery_percent=100,
+            cutting_height_mm=55,
+        )
+        self.assertEqual(payload["tondeuse_statut"], "erreur",
+                         "prémisse : l'état brut doit encore mener au statut bloquant")
+        self.assertFalse(payload["tondeuse_prete"], "le blocage a disparu avec le libellé")
+        self.assertNotIn(
+            "Erreur tondeuse", payload["tondeuse_raison"],
+            "une panne est affirmée alors que la machine dit `no_error`",
+        )
+        self.assertIn("aucun code d'erreur", payload["tondeuse_raison"])
+
+    def test_un_VRAI_code_d_erreur_garde_son_libelle(self) -> None:
+        """L'autre sens : sans ce test, le correctif rendrait toute panne réelle muette."""
+        payload = build_mower_context(
+            entity_id="lawn_mower.esperance_jr",
+            entity_name="Esperance Jr",
+            raw_state="error",
+            available=True,
+            error_raw="blade_blocked",
+        )
+        self.assertEqual(payload["tondeuse_statut"], "erreur")
+        self.assertNotIn("aucun code d'erreur", payload["tondeuse_raison"],
+                         "un code d'erreur réel est présenté comme une absence de code")
+        self.assertTrue(payload["tondeuse_raison"].strip(), "la raison est vide")
+
     def test_build_mower_context_formats_departure_in_local_time(self) -> None:
         payload = build_mower_context(
             entity_id="lawn_mower.esperance_jr",

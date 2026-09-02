@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.68.0
+
+1244 tests verts. **Une mise à jour de firmware était annoncée comme une panne.**
+
+Le 02/09/2026 à 01:26, le robot est resté en état `error` plusieurs minutes pendant une **mise à jour de firmware** — tête caméra 2.5.6+7 → 2.5.7+12 à 01:28:59, sortie de l'état quatre secondes plus tard. Pendant tout l'épisode, son propre capteur `sensor.…_erreur` affichait **`no_error`**.
+
+L'intégration lisait bien ce capteur et normalisait `no_error` en `None`… puis son repli **inventait** « Erreur tondeuse. ». Ce texte remontait ensuite jusqu'au bandeau : « **Robot en erreur: Erreur tondeuse.** » — à une heure du matin, pour une machine qui allait parfaitement bien, et jusqu'aux notifications.
+
+Deux endroits affirmaient la panne, tous deux corrigés :
+
+- `mower_adapter` : le repli dit désormais « Robot indisponible, aucun code d'erreur signalé ».
+- `decision_mowing` : le préfixe « Robot en erreur: » part de `mower_operation_state == "error"` seul. Sans code d'erreur, le libellé devient « Robot indisponible: il ne signale aucun code d'erreur ».
+
+⚠️ **Le blocage est conservé** — elle ne peut effectivement pas tondre pendant ce temps. Seul le mot change. Un test verrouille les deux moitiés, et un autre garde l'autre sens : un **vrai** code d'erreur conserve son libellé fort, sinon ce correctif rendrait toute panne réelle muette.
+
+⚠️ La liste `_NO_ERROR_CODES` couvre aussi la chaîne vide, et c'est voulu depuis l'origine : un capteur d'erreur muet ne prouve pas une panne non plus.
+
+Corrigé au passage : un commentaire de test parlait encore d'une « Mammotion ». C'est un **Worx Landroid**.
+
 ## 0.67.1
 
 1242 tests verts. **Le palier d'ET0 était calculé, persisté… et jamais affiché.**

@@ -303,7 +303,16 @@ def build_mower_context(
     if status == "pluie":
         reason = "Pluie ou délai pluie actif."
     elif status == "erreur":
-        reason = _human_label(error_code) or "Erreur tondeuse."
+        # ⚠️ « error » N'EST PAS TOUJOURS UNE PANNE — mesuré le 02/09/2026 à 01:26. Le robot est
+        # resté en `error` plusieurs minutes pour une MISE À JOUR de firmware (tête caméra
+        # 2.5.6+7 → 2.5.7+12 à 01:28:59, sortie de l'état quatre secondes plus tard), pendant
+        # que son propre capteur d'erreur affichait `no_error` DU DÉBUT À LA FIN.
+        #
+        # Le repli inventait alors « Erreur tondeuse. » — une panne que la machine avait
+        # explicitement démentie, remontée jusqu'au libellé de blocage et donc jusqu'aux
+        # notifications. Le blocage, lui, reste juste : elle ne peut pas tondre pendant ce temps.
+        # On dit ce qu'on sait, on n'affirme pas ce qu'on ignore.
+        reason = _human_label(error_code) or "Robot indisponible, aucun code d'erreur signalé."
     elif status == "indisponible":
         reason = "Tondeuse indisponible."
     elif status == "en_charge":
