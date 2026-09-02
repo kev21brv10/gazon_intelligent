@@ -603,6 +603,17 @@ def _machine_unavailable_detail(
         or (mower_error_code not in _NO_ERROR_CODES)
     )
     if mower_in_error:
+        # ⚠️ SANS CODE D'ERREUR, ON N'AFFIRME PAS DE PANNE. Le préfixe « Robot en erreur: »
+        # part de `mower_operation_state == "error"` seul. Or le 02/09/2026 à 01:26 le robot a
+        # tenu cet état plusieurs minutes pour une MISE À JOUR de firmware, son capteur d'erreur
+        # affichant `no_error` tout du long : le bandeau annonçait « Robot en erreur: Erreur
+        # tondeuse. » à une heure du matin, pour une machine qui allait parfaitement bien.
+        #
+        # Le blocage est conservé — elle ne peut effectivement pas tondre — seul le mot change.
+        # `_NO_ERROR_CODES` couvre aussi la chaîne vide : un capteur d'erreur muet ne prouve pas
+        # une panne non plus, c'est la raison d'être de cette liste depuis l'origine.
+        if mower_error_code in _NO_ERROR_CODES:
+            return "error", "Robot indisponible: il ne signale aucun code d'erreur."
         message = (
             str(mower_context.get("mower_reason_label") or "").strip()
             or str(mower_context.get("tondeuse_erreur_libelle") or "").strip()

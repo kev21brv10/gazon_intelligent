@@ -1256,17 +1256,42 @@ class TestDecisionSnapshotMowing(unittest.TestCase):
         # `unavailable`/`unknown` étaient pris pour des codes d'erreur → « Robot en erreur :
         # défaut signalé » → tonte bloquée alors que le robot va bien. Cas courant : la plupart
         # des intégrations de tondeuse republient leurs capteurs en `unavailable` à chaque
-        # redémarrage de Home Assistant, et cette Mammotion en a plusieurs en permanence.
+        # redémarrage de Home Assistant, et ce Worx Landroid en a plusieurs par intermittence.
         for _absent in ("unavailable", "unknown"):
             self.assertIsNone(
                 decision_mowing._machine_unavailable_detail({"tondeuse_erreur": _absent}),
                 f"« {_absent} » ne doit pas être lu comme une panne",
             )
 
-        # Compatibilité « toutes tondeuses HA » : l'état standard `error` du domaine
-        # lawn_mower → statut "erreur" (sans capteur d'erreur dédié) → libellé générique.
-        detail_generic = decision_mowing._machine_unavailable_detail({"tondeuse_statut": "erreur"})
-        self.assertEqual(detail_generic, ("error", "Robot en erreur: défaut signalé, vérifier le robot"))
+        # ⚠️ ÉTAT « error » SANS CODE : on bloque, mais on n'affirme PAS de panne.
+        # Mesuré le 02/09/2026 à 01:26 : le robot est resté en `error` plusieurs minutes pour
+        # une MISE À JOUR de firmware (tête caméra 2.5.6+7 → 2.5.7+12 à 01:28:59), pendant que
+        # `sensor.…_erreur` affichait `no_error` du début à la fin. L'ancien libellé annonçait
+        # « Robot en erreur: défaut signalé, vérifier le robot » à une heure du matin, pour une
+        # machine qui allait parfaitement bien. Ce test verrouille les DEUX moitiés : le blocage
+        # tient (elle ne peut effectivement pas tondre), le mot ne ment plus.
+        for contexte in (
+            {"tondeuse_statut": "erreur"},
+            {"mower_operation_state": "error", "tondeuse_erreur": "no_error"},
+            {"mower_reason_code": "error", "tondeuse_erreur": ""},
+        ):
+            with self.subTest(contexte=contexte):
+                detail = decision_mowing._machine_unavailable_detail(contexte)
+                self.assertIsNotNone(detail, "le blocage a disparu avec le libellé")
+                code, libelle = detail
+                self.assertEqual(code, "error", "le code de blocage a changé")
+                self.assertNotIn(
+                    "Robot en erreur", libelle,
+                    "une panne est affirmée alors qu'aucun code d'erreur n'est signalé",
+                )
+                self.assertIn("aucun code d'erreur", libelle)
+
+        # L'AUTRE SENS : un vrai code d'erreur garde le libellé fort, sinon ce correctif
+        # rendrait toute panne réelle silencieuse.
+        detail_reel = decision_mowing._machine_unavailable_detail(
+            {"tondeuse_erreur": "blade_blocked", "mower_reason_label": "Lame bloquée."}
+        )
+        self.assertEqual(detail_reel, ("error", "Robot en erreur: Lame bloquée."))
 
     def test_build_mowing_bundle_does_not_block_on_watering_three_days_old(self) -> None:
         context = decision.DecisionContext.from_legacy_args(

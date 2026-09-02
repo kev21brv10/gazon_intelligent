@@ -231,7 +231,7 @@
     <h1>Comment le système décide</h1>
     <p class="lede">Arrosage, tonte, phases, produits, capteurs et services : ce que fait chaque brique, où sont les seuils, et ce qui reste à arbitrer. Établi sur l'état réel du code.</p>
     <div class="stats">
-      <span class="stat">version <b>0.67.1</b></span>
+      <span class="stat">version <b>0.68.0</b></span>
       <span class="stat">carte <b>0.28.1</b></span>
       <span class="stat"><b>39</b> modules</span>
       <span class="stat"><b>62</b> entités</span>
@@ -1178,12 +1178,26 @@
         <p style="font-size:.9rem;color:var(--muted)"><b>Hypothèse assumée</b>&nbsp;: une tâche apparue en cours de journée hérite des minutes déjà au compteur ce jour-là. C'est le comportement d'avant et il penche du bon côté — un travail réel qui suit une coupe de bordure qualifie plus facilement, jamais moins. Retrancher une base ferait sous-compter tout travail découvert en cours de route et <em>brûlerait</em> la complétion.</p>
       </div>
 
+      <div class="callout h">
+        <h3>⚠️ Une mise à jour de firmware annoncée comme une panne <span class="chip ok">0.68.0</span></h3>
+        <p>Le <b>02/09/2026 à 01:26</b>, le robot est resté en état <code>error</code> plusieurs minutes pendant une <strong>mise à jour de firmware</strong> — tête caméra <code>2.5.6+7</code> → <code>2.5.7+12</code> à 01:28:59, sortie de l'état quatre secondes plus tard. Pendant tout l'épisode, son propre capteur <code>sensor.…_erreur</code> affichait <strong><code>no_error</code></strong>.</p>
+        <p>L'intégration lisait bien ce capteur et normalisait <code>no_error</code> en <code>None</code>… puis son repli <strong>inventait</strong> « Erreur tondeuse. ». Le texte remontait jusqu'au bandeau&nbsp;: « <b>Robot en erreur: Erreur tondeuse.</b> » — à une heure du matin, pour une machine qui allait parfaitement bien, et jusqu'aux notifications.</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>ce que disait la machine</th><th>ce qu'affichait l'intégration</th></tr></thead>
+          <tbody>
+            <tr><td class="rowlabel"><code>sensor.…_erreur</code> = <b>no_error</b></td><td class="r-bad">« Robot en erreur: Erreur tondeuse. »</td></tr>
+            <tr><td class="rowlabel">firmware en cours de mise à jour</td><td class="r-bad">aucune mention</td></tr>
+          </tbody>
+        </table></div>
+        <p>Deux endroits affirmaient la panne, tous deux corrigés&nbsp;: le repli de <code>mower_adapter</code>, et le préfixe « Robot en erreur: » de <code>decision_mowing</code>, qui part de <code>mower_operation_state == "error"</code> seul. ⚠️ <strong>Le blocage est conservé</strong> — elle ne peut effectivement pas tondre pendant ce temps —&nbsp;; seul le mot change. Un test garde l'<em>autre</em> sens&nbsp;: un <strong>vrai</strong> code d'erreur conserve son libellé fort, sinon ce correctif rendrait toute panne réelle muette.</p>
+      </div>
+
       <div class="callout w">
         <h3>⚠️ Conséquence assumée</h3>
         <p>Un travail <strong>jamais terminé n'est plus déclaré</strong>. Une journée où la batterie lâche avant la fin ne comptera plus comme une tonte — c'est le but, mais le retard continuera de courir tant que le travail n'est pas bouclé.</p>
       </div>
 
-      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b>&nbsp;: 1242 tests verts côté intégration et 40 côté carte, <b>33 + 10 mutations</b> détectées par le test visé. ⚠️ Deux trous ont été trouvés par le banc et non par les tests — le premier test du « 100 au repos » ne traversait qu'un des deux chemins, et les trois nouvelles clés n'étaient protégées dans aucune liste de câblage.</p>
+      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b>&nbsp;: 1244 tests verts côté intégration et 40 côté carte, <b>36 + 10 mutations</b> détectées par le test visé. ⚠️ Deux trous ont été trouvés par le banc et non par les tests — le premier test du « 100 au repos » ne traversait qu'un des deux chemins, et les trois nouvelles clés n'étaient protégées dans aucune liste de câblage.</p>
     </section>
 
     <section>
@@ -1999,7 +2013,7 @@
     </section>
 
     <section>
-      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1242 tests verts</span></div>
+      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1244 tests verts</span></div>
       <p>Cet onglet est le point d'entrée pour « <strong>qu'est-ce qui reste à corriger ou à supprimer ?</strong> ». Il distingue trois choses qu'on confond souvent : ce qui est cassé, ce qui est un choix, et ce qui est déjà mort.</p>
       <div class="tbl-wrap">
         <table>
