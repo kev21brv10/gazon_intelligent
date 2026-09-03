@@ -4802,14 +4802,21 @@ class AutoDeclarationTonteTests(unittest.TestCase):
         coord = self._coord(seuil=90)
         veille = self.JOUR - timedelta(days=1)
 
-        # 22:00 la veille : le travail tourne depuis deux heures, il n'est pas fini.
+        # 20:00 la veille : la tâche NAÎT, compteur du jour quasi vide.
         coord._current_date = lambda: veille
         coord._runtime_state = {}
+        coord._suivre_travail_tondeuse(
+            {"mower_job_progress_pct": 3.0, "mower_job_id": "nuit-1",
+             "mower_mowing_minutes_today": 2.0}
+        )
+        # 22:00 : le travail tourne depuis deux heures, il n'est pas fini.
         en_cours = coord._suivre_travail_tondeuse(
             {"mower_job_progress_pct": 60.0, "mower_job_id": "nuit-1",
              "mower_mowing_minutes_today": 118.0}
         )
         self.assertEqual(en_cours["mower_job_completion_state"], "en_cours", "prémisse")
+        self.assertAlmostEqual(en_cours["mower_job_minutes_total"], 116.0, places=1,
+                               msg="les 2 min déjà au compteur à la naissance sont comptées")
 
         # 00:30 : MÊME tâche, compteur du jour remis à zéro puis reparti à 34 min.
         coord._current_date = lambda: self.JOUR
@@ -4821,7 +4828,8 @@ class AutoDeclarationTonteTests(unittest.TestCase):
             trace["mower_auto_declaration_state"], "declaree",
             "un travail de 2 h 32 réparti sur minuit est jugé trop court : il est perdu",
         )
-        self.assertAlmostEqual(trace["mower_job_minutes_total"], 152.0, places=1)
+        # 116 min la veille (118 mesurées − 2 de base) + 34 après minuit.
+        self.assertAlmostEqual(trace["mower_job_minutes_total"], 150.0, places=1)
         self.assertEqual(len(self._tontes(coord)), 1)
 
     def test_le_cumul_du_travail_ne_sauve_PAS_une_coupe_de_bordure(self) -> None:
@@ -4841,7 +4849,9 @@ class AutoDeclarationTonteTests(unittest.TestCase):
              "mower_job_id": "bord-1"}
         )
         self.assertEqual(trace["mower_auto_declaration_state"], "travail_trop_court")
-        self.assertAlmostEqual(trace["mower_job_minutes_total"], 13.0, places=1)
+        # 8 min étaient déjà au compteur à la naissance de la tâche : elles ne lui appartiennent
+        # pas. Son travail propre vaut donc 5 min, pas 13.
+        self.assertAlmostEqual(trace["mower_job_minutes_total"], 5.0, places=1)
         self.assertEqual(self._tontes(coord), [])
 
     def test_le_cumul_est_borne_au_TRAVAIL_pas_a_la_semaine(self) -> None:
@@ -4866,9 +4876,79 @@ class AutoDeclarationTonteTests(unittest.TestCase):
              "mower_mowing_minutes_today": 12.0}
         )
         self.assertAlmostEqual(
-            suite["mower_job_minutes_total"], 12.0, places=1,
+            suite["mower_job_minutes_total"], 0.0, places=1,
             msg="les 200 min du travail de la veille sont reversées dans le travail du jour",
         )
+
+    def test_une_tache_nee_en_cours_de_journee_N_HERITE_PAS_du_compteur(self) -> None:
+        """⚠️ LE DÉFAUT MESURÉ SUR L'INSTALLATION LE 03/09/2026, et c'est MON correctif qui l'a
+        créé — la 0.66.0, avec une hypothèse que j'avais écrite noir sur blanc dans le code.
+
+        Chaîne relevée en production :
+          02/09 21:00  tâche 345a423c née vers 20:31 → minutes_total = 185,8 dès sa naissance
+          03/09 01:00  tâche 67ba4fa7 née vers 23:58 → minutes_total = 328,5 pour 39,4 du jour
+          03/09 19:20  même tâche → 337,1 min annoncées pour ~48 min de travail réel
+
+        86 % du cumul appartenait à la veille, dont à un travail DÉJÀ déclaré. Le plancher de
+        90 min était donc franchi en permanence : une coupe de bordure de 16 min l'a passé le
+        02/09, et la tonte du 03/09 a été déclarée sur une sortie de 8,7 minutes.
+        """
+        coord = self._coord(seuil=90)
+        coord._runtime_state = {}
+
+        # Un vrai travail de la journée : 200 minutes déjà au compteur.
+        coord._suivre_travail_tondeuse(
+            {"mower_job_progress_pct": 100.0, "mower_job_id": "vrai-travail",
+             "mower_mowing_minutes_today": 200.0}
+        )
+        # Puis une COUPE DE BORDURE démarre : nouvelle tâche, même journée.
+        bordure = coord._suivre_travail_tondeuse(
+            {"mower_job_progress_pct": 5.0, "mower_job_id": "bordure",
+             "mower_mowing_minutes_today": 200.0}
+        )
+        self.assertAlmostEqual(
+            bordure["mower_job_minutes_total"], 0.0, places=1,
+            msg="la bordure hérite des minutes du travail précédent",
+        )
+
+        # Seize minutes plus tard elle atteint 100 % — le cas exact du 02/09 à 20:29.
+        trace = coord._declarer_tonte_du_jour(
+            {"mower_mowing_minutes_today": 216.0, "mower_job_progress_pct": 100.0,
+             "mower_job_id": "bordure"}
+        )
+        self.assertAlmostEqual(
+            trace["mower_job_minutes_total"], 16.0, places=1,
+            msg="le cumul de la bordure compte encore les minutes du vrai travail",
+        )
+        self.assertEqual(
+            trace["mower_auto_declaration_state"], "travail_trop_court",
+            "une coupe de bordure de 16 min franchit le plancher de 90",
+        )
+        self.assertEqual(self._tontes(coord), [],
+                         "une coupe de bordure a été inscrite comme une tonte")
+
+    def test_le_travail_PROPRE_reste_declarable_apres_une_bordure(self) -> None:
+        """L'autre sens, et c'est lui qui coûte : sans ce test, retrancher la base pourrait
+        rendre indéclarable un vrai travail qui suit une bordure dans la même journée."""
+        coord = self._coord(seuil=90)
+        coord._runtime_state = {}
+        # Une bordure de 12 min, puis le vrai travail de la journée.
+        coord._suivre_travail_tondeuse(
+            {"mower_job_progress_pct": 100.0, "mower_job_id": "bordure",
+             "mower_mowing_minutes_today": 12.0}
+        )
+        coord._suivre_travail_tondeuse(
+            {"mower_job_progress_pct": 2.0, "mower_job_id": "vrai",
+             "mower_mowing_minutes_today": 12.0}
+        )
+        trace = coord._declarer_tonte_du_jour(
+            {"mower_mowing_minutes_today": 145.0, "mower_job_progress_pct": 100.0,
+             "mower_job_id": "vrai", "tondeuse_hauteur_coupe_mm": 55}
+        )
+        self.assertAlmostEqual(trace["mower_job_minutes_total"], 133.0, places=1)
+        self.assertEqual(trace["mower_auto_declaration_state"], "declaree",
+                         "un vrai travail de 133 min n'est plus déclaré")
+        self.assertEqual(len(self._tontes(coord)), 1)
 
     # ---- Le seuil ----------------------------------------------------------------------
     def test_le_seuil_franchi_inscrit_la_tonte_du_jour(self) -> None:
@@ -4948,13 +5028,21 @@ class AutoDeclarationTonteTests(unittest.TestCase):
 
     def test_le_passage_a_100_dun_travail_suivi_declare(self) -> None:
         coord = self._coord()
-        # Cycle 1 : le travail est en cours, on le suit.
+        # ⚠️ PRÉMISSE CORRIGÉE le 03/09/2026 : la tâche naît AU DÉBUT du travail, compteur du
+        # jour proche de zéro. L'ancienne version la faisait naître à 120 min déjà au compteur —
+        # un cas qui n'arrive que si on découvre un travail en cours de route, et qui masquait
+        # justement le défaut : la tâche héritait de ces 120 minutes sans les avoir produites.
+        naissance = coord._declarer_tonte_du_jour(
+            self._ctx(0.5, progression=4.0) | {"_vu_inacheve": None}
+        )
+        self.assertEqual(naissance["mower_auto_declaration_state"], "travail_en_cours")
+        # Cycle 2 : le travail avance.
         en_cours = coord._declarer_tonte_du_jour(
             self._ctx(120.0, progression=87.0) | {"_vu_inacheve": None}
         )
         self.assertEqual(en_cours["mower_auto_declaration_state"], "travail_en_cours")
         self.assertEqual(self._tontes(coord), [])
-        # Cycle 2 : la même tâche atteint 100 — c'est le PASSAGE qui déclare.
+        # Cycle 3 : la même tâche atteint 100 — c'est le PASSAGE qui déclare.
         fin = coord._declarer_tonte_du_jour(self._ctx(150.0, progression=100.0) | {"_vu_inacheve": None})
         self.assertEqual(fin["mower_auto_declaration_state"], "declaree")
         self.assertEqual(len(self._tontes(coord)), 1)

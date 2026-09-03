@@ -2575,7 +2575,27 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if suivi.get("task_id") != tache:
             # Nouvelle tâche : on ne sait rien d'elle. Si elle apparaît déjà à 100, c'est un
             # état de repos qu'on découvre, pas un travail qu'on a vu s'accomplir.
-            suivi = {"task_id": tache, "vu_inacheve": float(progression) < 100.0}
+            # ⚠️ LA BASE DU JOUR EST MÉMORISÉE ICI, ET C'EST TOUT LE CORRECTIF. Sans elle, une
+            # tâche née en cours de journée héritait de TOUT le compteur du jour — et la 0.66.0
+            # reportait ensuite ce total sur les jours suivants. Mesuré le 03/09/2026 :
+            # `mower_job_minutes_total` annonçait **337,1 min** pour une tâche dont le travail
+            # propre valait ~48 min. Le plancher de 90 min était franchi en permanence, donc
+            # inopérant : une coupe de bordure de 16 min l'a passé le 02/09, et la tonte du
+            # 03/09 a été déclarée sur une sortie de **8,7 minutes**, à 86 % avec des minutes
+            # de la veille appartenant à un travail déjà déclaré.
+            # `jour` est posé ici aussi, sinon la bascule de date ci-dessous effacerait la base
+            # au tout premier cycle.
+            _base_jour = mower_context.get("mower_mowing_minutes_today")
+            suivi = {
+                "task_id": tache,
+                "vu_inacheve": float(progression) < 100.0,
+                "minutes_base": (
+                    float(_base_jour)
+                    if isinstance(_base_jour, (int, float)) and not isinstance(_base_jour, bool)
+                    else 0.0
+                ),
+                "jour": self._current_date().isoformat(),
+            }
             self._runtime_state["mower_job_suivi"] = suivi
             etat = "en_cours" if suivi["vu_inacheve"] else "repos"
             return {
@@ -2630,12 +2650,22 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         dernière valeur vue, et on ne la bascule dans le cumul qu'au changement de date. Une
         absence de mesure ne remet rien à zéro — elle laisse le cumul en l'état.
 
-        ⚠️ HYPOTHÈSE ASSUMÉE : une tâche apparue en cours de journée hérite des minutes déjà
-        au compteur ce jour-là. C'est le comportement d'avant et il penche du bon côté — un
-        travail réel qui suit une coupe de bordure qualifie plus facilement, jamais moins.
-        Retrancher une base ferait sous-compter tout travail découvert en cours de route
-        (installation neuve, entité apparue tard) et brûlerait la complétion : le risque est
-        du mauvais côté.
+        ⚠️ HYPOTHÈSE RENVERSÉE LE 03/09/2026 — je m'étais trompé de sens. J'avais assumé qu'une
+        tâche née en cours de journée pouvait hériter du compteur du jour, en écrivant que « le
+        risque penche du bon côté ». L'installation a montré l'inverse : le cumul atteignait
+        **337,1 min pour ~48 min de travail réel**, le plancher de 90 min ne filtrait plus rien,
+        une coupe de bordure de 16 min l'a franchi le 02/09, et la tonte du 03/09 a été déclarée
+        sur une sortie de **8,7 minutes**.
+
+        Sur-compter DÉCLARE UNE TONTE QUI N'A PAS EU LIEU : la hauteur retombe à la lame, le
+        retard est remis à zéro, la prochaine tonte est repoussée — le modèle est corrompu et
+        rien ne le rattrape. Sous-compter ne fait que retarder une déclaration : le retard
+        continue de courir, la hauteur continue de monter, et la tonte suivante corrigera.
+        Entre les deux erreurs, la seconde est la seule réparable. On retranche donc la base.
+
+        ⚠️ COÛT ACCEPTÉ : une tâche découverte EN COURS de route (installation neuve, entité
+        apparue tard) sous-comptera son propre travail et pourra être jugée trop courte. C'est
+        le côté sûr, et le filet Node-RED de 23:50 reste derrière.
         """
         minutes = mower_context.get("mower_mowing_minutes_today")
         anterieur = suivi.get("minutes_anterieures")
@@ -2649,6 +2679,10 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             return None if jour_courant is None and anterieur <= 0.0 else anterieur + (jour_courant or 0.0)
 
+        # Minutes déjà au compteur quand la tâche est née : elles ne sont PAS son travail.
+        base = suivi.get("minutes_base")
+        base = float(base) if isinstance(base, (int, float)) and not isinstance(base, bool) else 0.0
+
         aujourd_hui = self._current_date().isoformat()
         if suivi.get("jour") != aujourd_hui:
             # Changement de date SANS changement de tâche : la journée qui s'achève verse son
@@ -2658,9 +2692,17 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 anterieur += float(precedent)
             suivi["minutes_anterieures"] = anterieur
             suivi["jour"] = aujourd_hui
-        suivi["minutes_jour"] = float(minutes)
+            # ⚠️ Le compteur de journée vient de repartir de zéro : la base de la veille n'a
+            # plus de sens. L'oublier ici est ce qui rend le report de minuit encore juste.
+            suivi["minutes_base"] = 0.0
+            base = 0.0
+
+        # `max(0, …)` : un compteur qui recule (remise à zéro de la tondeuse, valeur aberrante)
+        # ne doit pas produire un travail négatif qui masquerait les journées déjà cumulées.
+        net = max(0.0, float(minutes) - base)
+        suivi["minutes_jour"] = net
         self._runtime_state["mower_job_suivi"] = suivi
-        return round(anterieur + float(minutes), 1)
+        return round(anterieur + net, 1)
 
     def _consommer_travail_termine(self) -> None:
         """Marque la fin de travail comme TRAITÉE : une complétion ne vaut qu'une fois.

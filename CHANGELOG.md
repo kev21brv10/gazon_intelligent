@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.69.0
+
+1246 tests verts. **Le cumul du travail comptait la journée entière, pas le travail — et le plancher anti coupe-de-bordure était devenu inopérant.**
+
+### Ce que l'installation a montré
+
+```
+02/09 21:00  tâche 345a423c née vers 20:31 → 185,8 min DÈS SA NAISSANCE
+03/09 01:00  tâche 67ba4fa7 née vers 23:58 → 328,5 min pour 39,4 du jour
+03/09 19:20  même tâche                    → 337,1 min pour ~48 min réelles
+```
+
+**86 % du cumul appartenait à la veille**, dont à un travail déjà déclaré. Le plancher de 90 minutes était donc franchi en permanence : une **coupe de bordure de 16 minutes** l'a passé le 02/09 — seul le garde « déjà déclarée aujourd'hui » a empêché l'inscription — et la tonte du 03/09 a été déclarée sur une sortie de **8,7 minutes**.
+
+### La racine, et ce que j'avais écrit à tort
+
+À la naissance d'une tâche, aucune base n'était retranchée : elle héritait de tout `mower_mowing_minutes_today`. La 0.66.0 a ensuite reporté ce total sur les jours suivants. ⚠️ **Le report de minuit n'est pas la cause** — la tâche du 03/09 est née *avant* minuit, les 289 minutes étaient déjà dans son suivi ; annuler la 0.66.0 n'aurait rien changé.
+
+J'avais documenté cet héritage comme une « hypothèse assumée », en écrivant que « le risque penche du bon côté ». **C'était l'inverse.** Sur-compter déclare une tonte qui n'a pas eu lieu : la hauteur retombe à la lame, le retard est remis à zéro, la prochaine tonte est repoussée — le modèle est corrompu et rien ne le rattrape. Sous-compter ne fait que retarder : le retard continue de courir et la tonte suivante corrige.
+
+La base du jour est désormais mémorisée à la naissance de la tâche et retranchée, puis oubliée au changement de date (le compteur repart de zéro). ⚠️ **Coût accepté** : une tâche découverte *en cours* de route sous-comptera son travail et pourra être jugée trop courte — c'est le côté sûr, et le filet Node-RED de 23:50 reste derrière.
+
+⚠️ **Quatre de mes tests encodaient une prémisse irréaliste** : ils faisaient naître la tâche au milieu du travail, avec 120 ou 200 minutes déjà au compteur. C'est exactement le cas qui masquait le défaut. Réécrits sur le cas réel — la tâche naît au démarrage — plus deux tests neufs : la bordure qui suit un vrai travail n'hérite plus de rien, et le vrai travail qui suit une bordure reste déclarable.
+
 ## 0.68.0
 
 1244 tests verts. **Une mise à jour de firmware était annoncée comme une panne.**
