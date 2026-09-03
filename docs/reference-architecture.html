@@ -231,7 +231,7 @@
     <h1>Comment le système décide</h1>
     <p class="lede">Arrosage, tonte, phases, produits, capteurs et services : ce que fait chaque brique, où sont les seuils, et ce qui reste à arbitrer. Établi sur l'état réel du code.</p>
     <div class="stats">
-      <span class="stat">version <b>0.68.0</b></span>
+      <span class="stat">version <b>0.69.0</b></span>
       <span class="stat">carte <b>0.28.1</b></span>
       <span class="stat"><b>39</b> modules</span>
       <span class="stat"><b>62</b> entités</span>
@@ -1173,6 +1173,19 @@
         <h3>⚠️ Le travail qui traversait minuit disparaissait entièrement <span class="chip ok">0.66.0</span></h3>
         <p><code>mower_mowing_minutes_today</code> est un compteur de <strong>JOURNÉE</strong>&nbsp;: il repart à zéro à minuit. Un travail de 4 à 5 h démarré en fin d'après-midi atteint 100 % après minuit avec quelques dizaines de minutes au compteur du jour. Le plancher de qualification le jugeait « trop court » <strong>et brûlait la complétion</strong>.</p>
         <p style="font-size:.9rem;color:var(--muted)"><b>⚠️ Prémisse corrigée le 01/09/2026 — et c'est une erreur de méthode, pas de code.</b> La justification d'origine invoquait « le travail que la tondeuse a fait le 31/08 »&nbsp;: <strong>elle n'est pas sortie ce jour-là</strong>. Le carnet persisté ne porte aucune passe les 31/08 et 01/09, et la dernière du 30/08 s'achève à <b>23:01:54</b> — près de minuit, jamais à cheval. Le défaut reste établi par lecture du code et par le calendrier de la machine (22:45→23:01 le 30/08, 22:30→23:44 le 22/08), mais il est <strong>LATENT</strong>, pas constaté. « Vérifier la prémisse avant d'arbitrer » vaut aussi pour mes propres correctifs.</p>
+        <p><strong>⚠️ ET LE CUMUL COMPTAIT LA JOURNÉE, PAS LE TRAVAIL <span class="chip ok">0.69.0</span></strong> — mesuré sur l'installation le 03/09/2026, et c'est ce correctif-ci qui l'a créé.</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>quand</th><th>tâche</th><th class="num">cumul annoncé</th><th class="num">travail réel</th></tr></thead>
+          <tbody>
+            <tr><td class="rowlabel">02/09 21:00</td><td>345a423c, née à 20:31</td><td class="num r-bad">185,8 min</td><td class="num">~0 min</td></tr>
+            <tr><td class="rowlabel">03/09 01:00</td><td>67ba4fa7, née à 23:58</td><td class="num r-bad">328,5 min</td><td class="num">39,4 min</td></tr>
+            <tr><td class="rowlabel">03/09 19:20</td><td>67ba4fa7</td><td class="num r-bad">337,1 min</td><td class="num">~48 min</td></tr>
+          </tbody>
+        </table></div>
+        <p><strong>86 % du cumul appartenait à la veille</strong>, dont à un travail déjà déclaré. Le plancher de 90 min était donc franchi en permanence&nbsp;: une <strong>coupe de bordure de 16 minutes</strong> l'a passé le 02/09 — seul le garde « déjà déclarée aujourd'hui » a empêché l'inscription — et la tonte du 03/09 a été déclarée sur une sortie de <strong>8,7 minutes</strong>.</p>
+        <p><strong>La racine&nbsp;: aucune base n'était retranchée à la naissance d'une tâche</strong>, qui héritait donc de tout <code>mower_mowing_minutes_today</code>. ⚠️ Le report de minuit n'est PAS la cause — la tâche du 03/09 est née <em>avant</em> minuit, les 289 min étaient déjà dans son suivi&nbsp;; annuler la 0.66.0 n'aurait rien changé.</p>
+        <p><strong>⚠️ Et j'avais documenté cet héritage comme une « hypothèse assumée », en écrivant que le risque penchait du bon côté. C'était l'inverse.</strong> Sur-compter <em>déclare une tonte qui n'a pas eu lieu</em>&nbsp;: hauteur ramenée à la lame, retard remis à zéro, prochaine tonte repoussée — le modèle est corrompu et rien ne le rattrape. Sous-compter ne fait que retarder&nbsp;: le retard continue de courir et la tonte suivante corrige. La base est désormais mémorisée à la naissance et retranchée, puis oubliée au changement de date.</p>
+        <p style="font-size:.9rem;color:var(--muted)"><b>⚠️ Quatre de mes tests encodaient une prémisse irréaliste</b>&nbsp;: ils faisaient naître la tâche <em>au milieu</em> du travail, avec 120 ou 200 minutes déjà au compteur — exactement le cas qui masquait le défaut. Réécrits sur le cas réel. <b>Coût accepté</b>&nbsp;: une tâche découverte en cours de route sous-comptera et pourra être jugée trop courte — c'est le côté sûr.</p>
         <p><strong>⚠️ Et la veille n'avait rien déclaré non plus</strong>, puisque depuis la <b>0.62.0</b> la déclaration attend la <em>fin</em> du travail. Le travail entier disparaissait, en silence, comme s'il n'avait pas eu lieu&nbsp;: <strong>un correctif qui creuse le trou d'à côté</strong>. Relevé par la revue de la <b>PR #47</b>.</p>
         <p>Les minutes s'accumulent désormais <strong>par jour sur la durée de la tâche</strong> — <code>task_id</code> étant stable à travers les recharges, l'unité est la bonne — et le cumul est publié (<code>mower_job_minutes_total</code>). ⚠️ Le plancher continue d'écarter une vraie coupe de bordure&nbsp;: un test verrouille les <em>deux</em> sens, et un troisième vérifie que le travail de la veille ne se reverse pas dans celui du jour.</p>
         <p style="font-size:.9rem;color:var(--muted)"><b>Hypothèse assumée</b>&nbsp;: une tâche apparue en cours de journée hérite des minutes déjà au compteur ce jour-là. C'est le comportement d'avant et il penche du bon côté — un travail réel qui suit une coupe de bordure qualifie plus facilement, jamais moins. Retrancher une base ferait sous-compter tout travail découvert en cours de route et <em>brûlerait</em> la complétion.</p>
@@ -1197,7 +1210,7 @@
         <p>Un travail <strong>jamais terminé n'est plus déclaré</strong>. Une journée où la batterie lâche avant la fin ne comptera plus comme une tonte — c'est le but, mais le retard continuera de courir tant que le travail n'est pas bouclé.</p>
       </div>
 
-      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b>&nbsp;: 1244 tests verts côté intégration et 40 côté carte, <b>36 + 10 mutations</b> détectées par le test visé. ⚠️ Deux trous ont été trouvés par le banc et non par les tests — le premier test du « 100 au repos » ne traversait qu'un des deux chemins, et les trois nouvelles clés n'étaient protégées dans aucune liste de câblage.</p>
+      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b>&nbsp;: 1246 tests verts côté intégration et 40 côté carte, <b>40 + 10 mutations</b> détectées par le test visé. ⚠️ Deux trous ont été trouvés par le banc et non par les tests — le premier test du « 100 au repos » ne traversait qu'un des deux chemins, et les trois nouvelles clés n'étaient protégées dans aucune liste de câblage.</p>
     </section>
 
     <section>
@@ -2013,7 +2026,7 @@
     </section>
 
     <section>
-      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1244 tests verts</span></div>
+      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1246 tests verts</span></div>
       <p>Cet onglet est le point d'entrée pour « <strong>qu'est-ce qui reste à corriger ou à supprimer ?</strong> ». Il distingue trois choses qu'on confond souvent : ce qui est cassé, ce qui est un choix, et ce qui est déjà mort.</p>
       <div class="tbl-wrap">
         <table>
