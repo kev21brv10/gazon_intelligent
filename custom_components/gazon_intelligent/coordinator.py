@@ -101,6 +101,15 @@ def _passe_a_retenir(passe: dict[str, Any]) -> bool:
     ouvre et referme une passe en quelques secondes.
 
     ⚠️ `None` n'est pas zéro : une durée absente signifie qu'on ne sait pas, et on garde.
+
+    ⚠️ ARBITRAGE RÉEXAMINÉ LE 04/09/2026, ET MAINTENU. Un audit proposait d'écarter aussi les
+    passes « bloquee » à ZÉRO minute bloquée, en supposant que le fantôme du 02/09 passait par
+    là. Vérifié : ce fantôme portait **0,8 minute de blocage mesuré** (`mower_blocked_minutes_
+    today` 74,0 → 74,8) — il entrait par la clause précédente, pas par celle-ci.
+    Et surtout, `minutes_bloquees` se crédite depuis l'échantillon PRÉCÉDENT : un blocage réel
+    plus court qu'un cycle crédite légitimement 0,0. Durcir ici perdrait de vrais blocages
+    courts sans rien empêcher. La vraie cause du fantôme était la fausse rentrée sur `idle`,
+    corrigée en 0.70.0.
     """
     tondues = passe.get("minutes_tondues")
     bloquees = passe.get("minutes_bloquees")
@@ -1629,9 +1638,15 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         return {
             **raw_context,
+            # ⚠️ SEUL POINT D'APPEL QUI PORTE `passe_ouverte`, et c'est vérifié : les deux
+            # autres sont les chemins dégradés (tondeuse non résolue, entité indisponible) où
+            # `tondeuse_connectee` vaut False. `_presence_state` y retourne « inconnue » avant
+            # de regarder l'état : l'argument y serait inerte, et le passer quand même
+            # laisserait croire à une couverture qui n'existe pas.
             **build_mower_coordination_context(
                 raw_context,
                 enabled=self.mower_coordination_enabled,
+                passe_ouverte=self._passe_tondeuse_ouverte(),
             ),
         }
 
@@ -2250,6 +2265,21 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             }
         except Exception:  # noqa: BLE001 - un compteur ne doit jamais casser un cycle
             return vide
+
+    def _passe_tondeuse_ouverte(self) -> bool:
+        """Une passe est-elle en cours ? C'est la mémoire de « sortie et pas revenue ».
+
+        ⚠️ Lue par la coordination pour que `idle` ne soit plus pris pour une rentrée. Le carnet
+        est écrit APRÈS la coordination dans le cycle : on lit donc l'état du cycle PRÉCÉDENT,
+        ce qui est exactement ce qu'il faut — les signaux forts (`docked`, charge, tonte, retour)
+        font les transitions du cycle courant, `idle` ne fait que conserver l'état déjà prouvé.
+
+        ⚠️ Les TROIS points d'appel de `build_mower_coordination_context` passent par ce helper.
+        N'en câbler qu'un ferait diverger deux descriptions du même fait — la famille de défaut
+        n°1 de ce projet, déjà payée quatre fois.
+        """
+        carnet = self._runtime_state.get("mower_passes")
+        return isinstance(carnet, dict) and isinstance(carnet.get("en_cours"), dict)
 
     def _suivre_passes_tondeuse(self, mower_context: dict[str, Any]) -> dict[str, Any]:
         """Tient le carnet des passes garage → garage, et en tire un profil mesuré.

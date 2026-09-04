@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.70.0
+
+1253 tests verts. **`idle` était lu comme « rangée » : une tondeuse en plein jardin était déclarée rentrée.**
+
+### Ce qui a été mesuré
+
+Sortie du 02/09 de **22:40:18 à 00:39:52** — jamais `docked`, jamais en charge, batterie 91 → 10 sans discontinuer. À **23:54:12,171** le robot annonce `idle` dans le jardin (son capteur d'erreur passera à `trapped_timeout` 18 ms plus tard, trop tard pour ce cycle) :
+
+```
+tondeuse_statut        = "au_repos"
+mower_presence_label   = "Tondeuse rangée"
+mower_is_docked        = true
+mower_pass_in_progress = true → false     ← la passe est clôturée en pleine tonte
+mower_last_pass_minutes = 73,2  (91 → 52 %, "retour_autonome")
+mower_autonomous_return_battery_median = 85 → 78
+```
+
+La sortie a fini en **trois entrées au carnet** au lieu d'une (73,2 · 0,0 · 42,3 min), et le profil appris porte un « retour autonome à 52 % » qui n'a jamais eu lieu.
+
+⚠️ **Et ce n'est pas qu'un défaut de carnet** : `mower_is_safe_for_watering` vaut `ready and is_docked`. Une tondeuse déclarée rangée alors qu'elle est dehors **autorise l'arrosage sur une pelouse occupée**. La coordination était désactivée ce soir-là ; elle est active depuis.
+
+### La correction
+
+Le savoir était déjà écrit dans `mower_adapter._status_label` — « le robot annonce `idle` quand il est immobilisé en plein jardin ». Et dans le domaine `lawn_mower` de Home Assistant, l'état rangé standard est `docked`, pas `idle`.
+
+Une **passe ouverte** dit exactement ce que `idle` ne dit pas : elle est sortie et n'est pas revenue. Les signaux **forts** (`docked`, charge, tonte, retour) font les transitions ; `idle` ne fait que conserver l'état déjà prouvé.
+
+⚠️ **L'autre sens est verrouillé par un test** : sans passe ouverte, `idle` reste une rentrée. Beaucoup de tondeuses n'annoncent que `idle` à la station — inverser cela aurait bloqué l'arrosage en permanence.
+
+### Portée corrigée par la double vérification
+
+Le constat d'origine annonçait « 74 minutes de blocage disparues ». **C'est faux** : sur la sortie 18:23 → 19:47, le code `trapped_timeout` force le statut « erreur », donc la position « inconnue », donc la passe est restée ouverte et `mower_blocked_minutes_today` est bien monté à 74. Ce cas-là n'était pas concerné.
+
+⚠️ Le banc a montré que je testais la fonction et **pas le câblage** : neutraliser le helper ou retirer l'argument du point d'appel ne faisait tomber aucun test. Un test part désormais de l'état de la tondeuse et va jusqu'à la présence publiée. Et sur les trois points d'appel, seul celui qui peut agir porte l'argument — les deux autres sont les chemins dégradés où `tondeuse_connectee` est `False` et où la position vaut « inconnue » avant tout examen.
+
+Un test de séquence rejoue la sortie complète, échantillonnée toutes les 2 minutes : **trois passes sans le correctif** (70 · 0,0 · 38 min), **une seule avec**. ⚠️ Un premier jet sautait de 72 minutes d'un coup — `_minutes_creditables` plafonne les trous, donc aucune minute n'était créditée et les fragments tombaient comme fantômes : le test aurait été vert pour la mauvaise raison. Et il importait `mower_coordination` à l'exécution, ce qui récupérait le faux module posé par `test_init.py`.
+
+### Le constat « passe fantôme retenue par `a_ete_bloquee` » est RÉFUTÉ
+
+L'audit proposait aussi d'écarter les passes « bloquee » à zéro minute bloquée. Vérification faite : le fantôme du 02/09 portait **0,8 minute de blocage mesuré** (`mower_blocked_minutes_today` 74,0 → 74,8) — il entrait par la clause `bloquees > 0`, pas par le drapeau.
+
+Et durcir ici serait **nuisible** : `minutes_bloquees` se crédite depuis l'échantillon *précédent*, donc un blocage réel plus court qu'un cycle crédite légitimement 0,0. On perdrait de vrais blocages courts sans rien empêcher. L'arbitrage est consigné dans la docstring de `_passe_a_retenir`. La vraie cause du fantôme était la fausse rentrée sur `idle`, corrigée ci-dessus.
+
 ## 0.69.0
 
 1246 tests verts. **Le cumul du travail comptait la journée entière, pas le travail — et le plancher anti coupe-de-bordure était devenu inopérant.**

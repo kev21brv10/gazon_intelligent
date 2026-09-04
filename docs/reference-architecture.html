@@ -231,7 +231,7 @@
     <h1>Comment le système décide</h1>
     <p class="lede">Arrosage, tonte, phases, produits, capteurs et services : ce que fait chaque brique, où sont les seuils, et ce qui reste à arbitrer. Établi sur l'état réel du code.</p>
     <div class="stats">
-      <span class="stat">version <b>0.69.0</b></span>
+      <span class="stat">version <b>0.70.0</b></span>
       <span class="stat">carte <b>0.28.1</b></span>
       <span class="stat"><b>39</b> modules</span>
       <span class="stat"><b>62</b> entités</span>
@@ -1192,6 +1192,25 @@
       </div>
 
       <div class="callout h">
+        <h3>⚠️ <code>idle</code> était lu comme « rangée » : une tondeuse en plein jardin déclarée rentrée <span class="chip ok">0.70.0</span></h3>
+        <p>Sortie du <b>02/09 de 22:40:18 à 00:39:52</b> — jamais <code>docked</code>, jamais en charge, batterie 91 → 10 sans discontinuer. À <b>23:54:12,171</b> le robot annonce <code>idle</code> dans le jardin (son capteur d'erreur passera à <code>trapped_timeout</code> 18 ms plus tard, trop tard pour ce cycle)&nbsp;:</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>attribut publié</th><th>valeur</th></tr></thead>
+          <tbody>
+            <tr class="r-bad"><td class="rowlabel"><code>mower_presence_label</code></td><td>« Tondeuse rangée »</td></tr>
+            <tr class="r-bad"><td class="rowlabel"><code>mower_is_docked</code></td><td>true</td></tr>
+            <tr class="r-bad"><td class="rowlabel"><code>mower_pass_in_progress</code></td><td>true → <b>false</b> — la passe est clôturée en pleine tonte</td></tr>
+            <tr class="r-bad"><td class="rowlabel"><code>mower_last_pass_minutes</code></td><td>73,2 min, 91 → 52 %, « retour_autonome »</td></tr>
+            <tr class="r-bad"><td class="rowlabel"><code>mower_autonomous_return_battery_median</code></td><td>85 → <b>78</b></td></tr>
+          </tbody>
+        </table></div>
+        <p>La sortie a fini en <strong>trois entrées au carnet</strong> au lieu d'une (73,2 · 0,0 · 42,3 min), et le profil appris porte un « retour autonome à 52 % » qui n'a jamais eu lieu.</p>
+        <p><strong>⚠️ Et ce n'est pas qu'un défaut de carnet</strong>&nbsp;: <code>mower_is_safe_for_watering</code> vaut <code>ready and is_docked</code>. Une tondeuse déclarée rangée alors qu'elle est dehors <strong>autorise l'arrosage sur une pelouse occupée</strong>. La coordination était désactivée ce soir-là&nbsp;; elle est active depuis.</p>
+        <p>Le savoir était <em>déjà écrit</em> dans <code>mower_adapter._status_label</code> — « le robot annonce <code>idle</code> quand il est immobilisé en plein jardin ». Et dans le domaine <code>lawn_mower</code> de Home Assistant, l'état rangé standard est <code>docked</code>, pas <code>idle</code>. Une <strong>passe ouverte</strong> dit exactement ce que <code>idle</code> ne dit pas&nbsp;: elle est sortie et n'est pas revenue. Les signaux <strong>forts</strong> font les transitions, <code>idle</code> ne fait que conserver l'état prouvé. ⚠️ L'autre sens est verrouillé&nbsp;: sans passe ouverte, <code>idle</code> reste une rentrée — beaucoup de tondeuses n'annoncent que <code>idle</code> à la station.</p>
+        <p style="font-size:.9rem;color:var(--muted)"><b>⚠️ DEUX constats de l'audit réfutés par la double vérification.</b> <b>(1)</b> « 74 minutes de blocage disparues » — <b>faux</b>&nbsp;: sur la sortie 18:23 → 19:47 le code <code>trapped_timeout</code> force le statut « erreur », donc la position « inconnue », donc la passe est restée ouverte et <code>mower_blocked_minutes_today</code> est bien monté à 74. <b>(2)</b> « passe fantôme retenue par le drapeau <code>a_ete_bloquee</code> » — <b>faux aussi</b>&nbsp;: ce fantôme portait <b>0,8 minute de blocage mesuré</b> (74,0 → 74,8) et entrait par la clause <code>bloquees &gt; 0</code>. Durcir là serait même <em>nuisible</em>, <code>minutes_bloquees</code> se créditant depuis l'échantillon précédent&nbsp;: un blocage plus court qu'un cycle crédite légitimement 0,0, et on perdrait de vrais blocages courts. Arbitrage consigné dans la docstring de <code>_passe_a_retenir</code>. Enfin, le banc a montré que je testais la fonction sans le <b>câblage</b>&nbsp;: un test part désormais de l'état de la tondeuse jusqu'à la présence publiée, et un test de séquence rejoue la sortie entière — <b>trois passes sans le correctif, une seule avec</b>.</p>
+      </div>
+
+      <div class="callout h">
         <h3>⚠️ Une mise à jour de firmware annoncée comme une panne <span class="chip ok">0.68.0</span></h3>
         <p>Le <b>02/09/2026 à 01:26</b>, le robot est resté en état <code>error</code> plusieurs minutes pendant une <strong>mise à jour de firmware</strong> — tête caméra <code>2.5.6+7</code> → <code>2.5.7+12</code> à 01:28:59, sortie de l'état quatre secondes plus tard. Pendant tout l'épisode, son propre capteur <code>sensor.…_erreur</code> affichait <strong><code>no_error</code></strong>.</p>
         <p>L'intégration lisait bien ce capteur et normalisait <code>no_error</code> en <code>None</code>… puis son repli <strong>inventait</strong> « Erreur tondeuse. ». Le texte remontait jusqu'au bandeau&nbsp;: « <b>Robot en erreur: Erreur tondeuse.</b> » — à une heure du matin, pour une machine qui allait parfaitement bien, et jusqu'aux notifications.</p>
@@ -1210,7 +1229,7 @@
         <p>Un travail <strong>jamais terminé n'est plus déclaré</strong>. Une journée où la batterie lâche avant la fin ne comptera plus comme une tonte — c'est le but, mais le retard continuera de courir tant que le travail n'est pas bouclé.</p>
       </div>
 
-      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b>&nbsp;: 1246 tests verts côté intégration et 40 côté carte, <b>40 + 10 mutations</b> détectées par le test visé. ⚠️ Deux trous ont été trouvés par le banc et non par les tests — le premier test du « 100 au repos » ne traversait qu'un des deux chemins, et les trois nouvelles clés n'étaient protégées dans aucune liste de câblage.</p>
+      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b>&nbsp;: 1253 tests verts côté intégration et 40 côté carte, <b>45 + 10 mutations</b> détectées par le test visé. ⚠️ Deux trous ont été trouvés par le banc et non par les tests — le premier test du « 100 au repos » ne traversait qu'un des deux chemins, et les trois nouvelles clés n'étaient protégées dans aucune liste de câblage.</p>
     </section>
 
     <section>
@@ -2026,7 +2045,7 @@
     </section>
 
     <section>
-      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1246 tests verts</span></div>
+      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1253 tests verts</span></div>
       <p>Cet onglet est le point d'entrée pour « <strong>qu'est-ce qui reste à corriger ou à supprimer ?</strong> ». Il distingue trois choses qu'on confond souvent : ce qui est cassé, ce qui est un choix, et ce qui est déjà mort.</p>
       <div class="tbl-wrap">
         <table>

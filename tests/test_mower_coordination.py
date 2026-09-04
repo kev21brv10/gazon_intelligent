@@ -45,6 +45,77 @@ class MowerCoordinationTests(unittest.TestCase):
         self.assertEqual(payload["mower_presence_state"], "dockee")
         self.assertTrue(payload["mower_is_safe_for_watering"])
 
+    # ── `idle` ne prouve pas une rentrée ────────────────────────────────────────────────
+    def _idle_dans_le_jardin(self, passe_ouverte):
+        """Le cas RÉEL du 02/09/2026 à 23:54:12,171, rejoué tel quel.
+
+        Sortie 22:40:18 → 00:39:52 : jamais `docked`, jamais en charge, batterie 91 → 10 en
+        continu. À 23:54:12 le robot annonce `idle` en plein jardin — son capteur d'erreur
+        passera à `trapped_timeout` 18 ms plus tard, mais le cycle a déjà publié.
+        """
+        return build_mower_coordination_context(
+            {
+                "tondeuse_source_entity": "lawn_mower.esperance_jr",
+                "tondeuse_connectee": True,
+                "tondeuse_etat_brut": "idle",
+                "tondeuse_statut": "au_repos",
+                "tondeuse_en_charge": False,
+                "tondeuse_batterie": 52,
+            },
+            enabled=True,
+            passe_ouverte=passe_ouverte,
+        )
+
+    def test_idle_avec_une_passe_ouverte_n_est_PAS_une_rentree(self) -> None:
+        """⚠️ MESURÉ SUR L'INSTALLATION. Le robot a été déclaré « Tondeuse rangée » alors qu'il
+        tondait : la passe en cours a été clôturée à 73,2 min en « retour_autonome » à 52 % de
+        batterie, et `mower_autonomous_return_battery_median` est tombée de 85 à 78 — un retour
+        autonome qui n'a jamais eu lieu. La sortie a fini en TROIS entrées au carnet.
+        """
+        payload = self._idle_dans_le_jardin(True)
+        self.assertEqual(payload["mower_presence_state"], "dehors",
+                         "une tondeuse sortie et non revenue est annoncée rangée")
+        self.assertFalse(payload["mower_is_docked"], "la passe en cours va être clôturée à tort")
+        self.assertTrue(payload["mower_is_outside"])
+
+    def test_et_elle_n_autorise_PAS_l_arrosage(self) -> None:
+        """⚠️ L'autre conséquence, et la plus grave : `mower_is_safe_for_watering` vaut
+        `ready and is_docked`. Une tondeuse déclarée rangée alors qu'elle est dehors ouvrait
+        l'arrosage sur une pelouse occupée. La coordination était désactivée ce soir-là ; elle
+        est active depuis."""
+        self.assertFalse(
+            self._idle_dans_le_jardin(True)["mower_is_safe_for_watering"],
+            "l'arrosage est autorisé alors que la tondeuse est dans le jardin",
+        )
+
+    def test_sans_passe_ouverte_idle_reste_une_rentree(self) -> None:
+        """L'AUTRE SENS, et il coûte cher : sans lui, une tondeuse au repos à la station serait
+        annoncée « dehors », la coordination la dirait non rangée et l'arrosage serait bloqué
+        en permanence. Beaucoup de tondeuses n'annoncent que `idle` à la station."""
+        payload = self._idle_dans_le_jardin(False)
+        self.assertEqual(payload["mower_presence_state"], "dockee")
+        self.assertTrue(payload["mower_is_docked"])
+        self.assertTrue(payload["mower_is_safe_for_watering"])
+
+    def test_un_signal_FORT_prime_toujours_sur_la_passe_ouverte(self) -> None:
+        """`docked` et la charge sont des preuves de rentrée : elles doivent fermer la passe,
+        sinon une passe restée ouverte par erreur figerait la tondeuse « dehors » à jamais."""
+        for brut, statut in (("docked", "au_repos"), ("charging", "en_charge")):
+            with self.subTest(etat=brut):
+                payload = build_mower_coordination_context(
+                    {
+                        "tondeuse_source_entity": "lawn_mower.esperance_jr",
+                        "tondeuse_connectee": True,
+                        "tondeuse_etat_brut": brut,
+                        "tondeuse_statut": statut,
+                        "tondeuse_en_charge": brut == "charging",
+                    },
+                    enabled=True,
+                    passe_ouverte=True,
+                )
+                self.assertEqual(payload["mower_presence_state"], "dockee")
+                self.assertTrue(payload["mower_is_docked"])
+
     def test_idle_counts_as_stowed_when_mower_is_resting(self) -> None:
         payload = build_mower_coordination_context(
             {
