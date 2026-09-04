@@ -231,7 +231,7 @@
     <h1>Comment le système décide</h1>
     <p class="lede">Arrosage, tonte, phases, produits, capteurs et services : ce que fait chaque brique, où sont les seuils, et ce qui reste à arbitrer. Établi sur l'état réel du code.</p>
     <div class="stats">
-      <span class="stat">version <b>0.73.0</b></span>
+      <span class="stat">version <b>0.74.0</b></span>
       <span class="stat">carte <b>0.28.1</b></span>
       <span class="stat"><b>39</b> modules</span>
       <span class="stat"><b>62</b> entités</span>
@@ -1192,6 +1192,24 @@
       </div>
 
       <div class="callout h">
+        <h3>⚠️ Quatre raccords rompus dans le registre du sol, silencieux une semaine <span class="chip ok">0.74.0</span></h3>
+        <p>Contrôle des <b>119 raccords</b> du registre le 04/09/2026 — en comparant l'<em>ouverture</em> de chaque jour à la <em>clôture</em> de la veille. Quatre étaient rompus, chacun valant exactement <code>etp_elapsed_mm − etp_mm</code>&nbsp;: la signature de l'ancien garde de clôture qui remplaçait la mesure par l'estimation.</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>raccord</th><th class="num">écart</th><th class="num">mesurée − estimée</th></tr></thead>
+          <tbody>
+            <tr class="r-bad"><td class="rowlabel">22 → 23/08</td><td class="num">−2,9 mm</td><td class="num">−2,914</td></tr>
+            <tr class="r-bad"><td class="rowlabel">28 → 29/08</td><td class="num">−2,0 mm</td><td class="num">−2,712 <small>(plafond)</small></td></tr>
+            <tr class="r-bad"><td class="rowlabel">29 → 30/08</td><td class="num">−2,3 mm</td><td class="num">−2,315</td></tr>
+            <tr class="r-bad"><td class="rowlabel">30 → 31/08</td><td class="num">−1,6 mm</td><td class="num">−1,561</td></tr>
+          </tbody>
+        </table></div>
+        <p>Le stock avait resaturé à 24,0 mm le 28/08&nbsp;: seules les pertes d'après comptaient encore, soit <strong>5,9 mm</strong>. Sans elles le stock valait 14,6 au lieu de 8,7 — réserve utile pleine, déplétion nulle, <strong>aucun arrosage dû</strong>. L'arrosage prévu partait sur une erreur de comptabilité.</p>
+        <p>La cause est corrigée depuis la <b>0.63.0</b>, et les quatre raccords du 31/08 au 04/09 sont propres — vérifié. Mais <strong>rien n'aurait détecté la suivante</strong>&nbsp;: c'est ce silence que la 0.74.0 casse. <b>L'invariant</b>&nbsp;: à la bascule de date, la clôture <em>recalculée</em> de la veille doit égaler celle <em>déjà stockée</em> — les deux partent de la même ouverture, de la même pluie, du même arrosage et de la même ETc. ⚠️ <b>Sauf sur une journée tronquée</b>, où la clôture retombe volontairement sur l'estimation&nbsp;: l'écart y est délibéré, et crier dessus rendrait l'alerte inutilisable — le piège exact où l'ancien garde était tombé.</p>
+        <p>Quand la rupture est réelle&nbsp;: un <code>WARNING</code> nommé, la valeur écrite dans l'entrée du registre, et l'attribut <code>sol_ecart_raccord_mm</code> publié — <strong>seulement s'il y en a un</strong>, sa présence est l'alerte. ⚠️ Et l'écart <b>survit aux cycles de la journée</b>&nbsp;: sans ce report il disparaîtrait deux minutes après sa détection, aussi silencieusement que le défaut qu'il surveille.</p>
+        <p style="font-size:.9rem;color:var(--muted)"><b>Correction du stock</b>&nbsp;: les 5,9 mm ont été recrédités le 04/09 sur décision de Kévin, via <code>recalibrate_reserve</code> avec <code>figer_la_journee: <b>false</b></code> — le drapeau qui réécrit la réserve d'<em>ouverture</em> et laisse la journée se dérouler, par opposition au défaut <code>true</code> qui fige jusqu'à minuit (celui-là est pour « j'ai sondé mon sol »). Stock 8,7 → 14,6, arrosage du lendemain annulé.</p>
+      </div>
+
+      <div class="callout h">
         <h3>⚠️ Une retenue annoncée alors que rien n'était demandé <span class="chip ok">0.72.0</span></h3>
         <p>Le <b>03/09 à 04:00:15,217</b> l'humidité passe de 77,5 à 88 %. L'affichage bascule de « Aucun besoin » à « <b>Conditions trop humides</b> » — avec <code>besoin_mm = 0</code>, <code>depletion_mm = 0</code> et une réserve à <b>12/12</b>. Rien n'était demandé&nbsp;: annoncer une retenue laissait croire qu'on refusait de l'eau au gazon. Second épisode le même jour, 09:30:29 → 10:19:16.</p>
         <p><code>humidite_excessive</code> s'arme sur le seul <code>humidite &gt;= 85</code>, <strong>sans regarder le besoin</strong> — là où ses voisins immédiats se gardent&nbsp;:</p>
@@ -1274,7 +1292,7 @@
         <p>Un travail <strong>jamais terminé n'est plus déclaré</strong>. Une journée où la batterie lâche avant la fin ne comptera plus comme une tonte — c'est le but, mais le retard continuera de courir tant que le travail n'est pas bouclé.</p>
       </div>
 
-      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b>&nbsp;: 1269 tests verts côté intégration et 40 côté carte, <b>60 + 10 mutations</b> détectées par le test visé. ⚠️ Deux trous ont été trouvés par le banc et non par les tests — le premier test du « 100 au repos » ne traversait qu'un des deux chemins, et les trois nouvelles clés n'étaient protégées dans aucune liste de câblage.</p>
+      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b>&nbsp;: 1274 tests verts côté intégration et 40 côté carte, <b>65 + 10 mutations</b> détectées par le test visé. ⚠️ Deux trous ont été trouvés par le banc et non par les tests — le premier test du « 100 au repos » ne traversait qu'un des deux chemins, et les trois nouvelles clés n'étaient protégées dans aucune liste de câblage.</p>
     </section>
 
     <section>
@@ -2090,7 +2108,7 @@
     </section>
 
     <section>
-      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1269 tests verts</span></div>
+      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1274 tests verts</span></div>
       <p>Cet onglet est le point d'entrée pour « <strong>qu'est-ce qui reste à corriger ou à supprimer ?</strong> ». Il distingue trois choses qu'on confond souvent : ce qui est cassé, ce qui est un choix, et ce qui est déjà mort.</p>
       <div class="tbl-wrap">
         <table>

@@ -55,6 +55,23 @@ _ACCUMULATION_FRESH_HOURS = 0.25
 # de tolérance couvre largement l'écart entre le dernier cycle (~2 min) et minuit.
 _CLOTURE_COUVERTURE_MAX_HEURES_MANQUANTES = 1.0
 
+# ⚠️ INVARIANT DE RACCORD : à la bascule de date, la clôture RECALCULÉE de la veille doit
+# égaler la clôture déjà stockée pour ce jour — sauf si la journée était tronquée, où l'écart
+# est délibéré (on retombe alors volontairement sur l'estimation).
+#
+# Ce garde existe parce que la rupture est restée SILENCIEUSE une semaine. Contrôle manuel du
+# 04/09/2026 sur 119 raccords : quatre étaient rompus (22→23, 28→29, 29→30, 30→31/08), chacun
+# valant exactement `etp_elapsed_mm − etp_mm` — la signature de l'ancien garde de clôture qui
+# remplaçait la mesure par l'estimation. Total encore effectif : 5,9 mm retirés au sol sans
+# raison, soit un arrosage déclenché sur une erreur de comptabilité. Rien ne l'avait signalé.
+#
+# La cause est corrigée depuis la 0.63.0. Ce garde ne la corrige pas : il détecte la SUIVANTE,
+# quelle qu'elle soit.
+#
+# Tolérance : les valeurs sont arrondies au dixième des deux côtés, un double arrondi peut
+# donc produire 0,1. On alerte au-delà.
+_RACCORD_ECART_TOLERANCE_MM = 0.15
+
 
 def _to_float(value: Any) -> float | None:
     if value is None:
@@ -173,6 +190,9 @@ def _normalize_ledger_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
         # Marque une réserve recalée manuellement (service recalibrate_reserve) : la
         # journée correspondante ne doit pas être recalculée depuis l'historique.
         "manual_anchor": True if entry.get("manual_anchor") else None,
+        # Écart constaté au raccord avec la veille (cf. `_RACCORD_ECART_TOLERANCE_MM`). Absent
+        # tant que tout va bien — sa PRÉSENCE est le signal.
+        "ecart_raccord_mm": _to_float(entry.get("ecart_raccord_mm")),
         # Relevés aberrants écrêtés (pluie > 100 mm, arrosage > 50 mm). Absents de cette liste,
         # ils étaient effacés dès le CYCLE SUIVANT — la normalisation tourne à chaque passage,
         # pas seulement au rechargement — donc ~2 minutes de survie. Le marqueur censé signaler
@@ -228,6 +248,9 @@ def normalize_soil_balance_state(state: dict[str, Any] | None) -> dict[str, Any]
         "type_sol": type_sol,
         "reserve_min_mm": reserve_min_mm,
         "reserve_max_mm": reserve_max,
+        # ⚠️ LISTE BLANCHE : sans cette clé ici, l'écart de raccord serait perdu à chaque
+        # passage et le garde resterait muet — exactement le défaut qu'il surveille.
+        "ecart_raccord_mm": _to_float(state.get("ecart_raccord_mm")),
         "ledger": ledger,
     }
     return clean
@@ -508,8 +531,15 @@ def update_soil_balance(
     if reserve_max_mm < reserve_min_mm:
         reserve_max_mm = reserve_min_mm
 
+    # Écart de raccord constaté à la bascule de date, s'il y en a un. `None` = tout va bien —
+    # c'est la PRÉSENCE de la valeur qui est le signal, jamais son absence.
+    ecart_raccord: float | None = None
     if ledger and ledger[-1].get("date") == today_str:
         previous_reserve = _to_float(ledger[-1].get("previous_reserve_mm"))
+        # Un écart déjà constaté aujourd'hui doit SURVIVRE aux cycles suivants de la journée :
+        # sans ce report il disparaîtrait deux minutes après avoir été détecté, et l'alerte
+        # serait aussi silencieuse que le défaut qu'elle surveille.
+        ecart_raccord = _to_float(ledger[-1].get("ecart_raccord_mm"))
         if previous_reserve is None:
             previous_reserve = _to_float(state.get("previous_reserve_mm"))
         # REPLIS OBLIGATOIRES. Sans eux, une entrée du jour dépourvue de réserve d'ouverture
@@ -570,6 +600,32 @@ def update_soil_balance(
                     - _last_etp
                 )
                 previous_reserve = min(max(_last_close, reserve_min_mm), reserve_max_mm)
+                # ⚠️ LE GARDE QUI MANQUAIT. Sur une journée couverte jusqu'au bout, la clôture
+                # recalculée doit égaler celle déjà stockée : les deux partent de la même
+                # ouverture, de la même pluie, du même arrosage et de la MÊME ETc mesurée.
+                # Un écart signifie qu'une des deux voies a utilisé autre chose — c'est ce qui
+                # s'est produit quatre fois entre le 22 et le 31/08/2026, en silence, pour
+                # 5,9 mm encore effectifs. Sur une journée TRONQUÉE l'écart est délibéré (on
+                # retombe volontairement sur l'estimation) : on ne crie pas.
+                _close_stocke = _to_float(_last.get("reserve_mm"))
+                if (
+                    _close_stocke is not None
+                    and _journee_couverte_jusqu_au_bout(_last)
+                    and abs(previous_reserve - _close_stocke) > _RACCORD_ECART_TOLERANCE_MM
+                ):
+                    ecart_raccord = round(previous_reserve - _close_stocke, 3)
+                    _LOGGER.warning(
+                        "Bilan sol : RACCORD ROMPU au passage de %s à %s — la veille avait été "
+                        "clôturée à %.2f mm et rouvre à %.2f mm (écart %+.2f mm), alors que la "
+                        "journée était couverte jusqu'à %s. Le stock du sol vient de bouger sans "
+                        "pluie, sans arrosage et sans évaporation : vérifie le registre.",
+                        _last.get("date"),
+                        today_str,
+                        _close_stocke,
+                        previous_reserve,
+                        ecart_raccord,
+                        _last.get("etp_last_ts"),
+                    )
         if previous_reserve is None:
             previous_reserve = _to_float(state.get("reserve_mm"))
         if previous_reserve is None:
@@ -689,6 +745,8 @@ def update_soil_balance(
         "reserve_mm": _round_half_up_1(reserve_mm),
         "type_sol": type_sol or state.get("type_sol"),
     }
+    if ecart_raccord is not None:
+        entry["ecart_raccord_mm"] = ecart_raccord
     if pluie_suspect:
         entry["pluie_suspect"] = True
     if arrosage_suspect:
@@ -712,6 +770,7 @@ def update_soil_balance(
         "type_sol": type_sol or state.get("type_sol"),
         "reserve_min_mm": _round_half_up_1(reserve_min_mm),
         "reserve_max_mm": _round_half_up_1(reserve_max_mm),
+        "ecart_raccord_mm": ecart_raccord,
         "ledger": ledger,
     }
 
