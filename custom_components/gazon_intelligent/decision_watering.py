@@ -29,6 +29,7 @@ from .guidance import (
     palier_et0_stress,
 )
 from .memory import compute_application_state
+from .soil_balance import biais_etc_mesure
 from .scores import classify_stress_level
 from .water import (
     compute_advanced_context,
@@ -177,6 +178,16 @@ def build_water_bundle(
         balance_snapshot["arrosage_jour_mm"] = context.soil_balance.get("arrosage_mm")
         balance_snapshot["etp_jour_mm"] = context.soil_balance.get("etp_mm")
         balance_snapshot["delta_jour_mm"] = context.soil_balance.get("delta_mm")
+        # ⚠️ LE MODÈLE JOURNALIER SUR-ESTIME, ET LE REGISTRE LE PROUVE. Le ledger débite
+        # l'intégrale du taux HORAIRE mesuré, la projection d'aube utilisait le modèle
+        # ET0 × Kc : deux ETc du même jour, 31 à 35 % d'écart quatre jours d'affilée
+        # (02/09 : 2,991 mesurée contre 4,6 estimée ; 03/09 : 2,886 contre 4,2).
+        # On ne peut pas mesurer le futur — à l'aube la fraction écoulée est quasi nulle. On
+        # corrige donc le modèle par le biais qu'il a montré sur les journées DÉJÀ CLOSES.
+        # Arbitré par Kévin le 04/09/2026 : aligner la projection sur la mesure.
+        balance_snapshot["etc_biais_mesure"] = biais_etc_mesure(
+            context.soil_balance.get("ledger")
+        )
     # ⚠️ CALCULÉ UNE SEULE FOIS, ICI. Le palier d'ET0 du score de stress est amorti par une
     # bande morte (cf. `palier_et0_stress`) : c'est lui qui oscillait et faisait clignoter
     # `risque_gazon` quatorze fois le 31/08/2026. Il descend ensuite aux DEUX chaînes qui

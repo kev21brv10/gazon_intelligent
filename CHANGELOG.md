@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.71.0
+
+1263 tests verts. **Deux ETc du même jour coexistaient : le sol se vidait au rythme mesuré pendant que la décision projetait le modèle.**
+
+### Ce qui a été mesuré
+
+Relevés à 23:59, sur des journées complètes :
+
+| jour | ETc **mesurée** (intégrale horaire) | ETc **estimée** (ET0 × Kc) | écart |
+|---|---|---|---|
+| 02/09 | 2,991 mm | 4,6 mm | −35 % |
+| 03/09 | 2,886 mm | 4,2 mm | −31 % |
+
+Le ledger **débite** la mesurée (intégrale du taux horaire FAO-56, depuis le passage à l'horaire). La projection d'aube qui décide du déclenchement utilisait la **estimée**. Quatre jours d'affilée : ce n'est pas du bruit.
+
+⚠️ **Vérifié avant de corriger** : les deux grandeurs sont bien des **ETc** avec le même Kc (`gazon_brain` passe `etp_mm = etp × kc` au ledger) — l'écart n'est pas un facteur Kc caché. Et l'intégrale horaire est fiable : son code écarte explicitement les trous de capteur, et l'ET0 horaire n'a eu aucune interruption le 02/09.
+
+### La correction
+
+On ne peut pas mesurer le futur : à l'aube la fraction écoulée est quasi nulle et la projection vaut « toute l'ETc du jour ». On corrige donc le **modèle** par le biais qu'il a réellement montré sur les journées **déjà closes** — `soil_balance.biais_etc_mesure`, rapport médian sur sept jours, chez Kévin ≈ 0,68.
+
+⚠️ **Bornes asymétriques, et c'est le garde-fou** : plafond à 1,0, le biais ne peut que *réduire* la projection — le modèle seul reste la borne prudente. Plancher à 0,5, un rapport aberrant ne peut pas effondrer la soif projetée et retarder un arrosage nécessaire. **Médiane** et non moyenne. `None` sous trois journées exploitables → le modèle seul reprend la main.
+
+⚠️ Seules les journées **couvertes jusqu'au bout** comptent, via le prédicat de clôture existant : deux définitions de « journée complète » finiraient par diverger.
+
+**Conséquence, mesurée** : réserve 9,5 mm sur 12 utiles, ET0 5,2 à l'aube. Le modèle seul déclenchait **5 mm** d'arrosage ; corrigé, il attend. **L'arrosage part plus tard** — c'est l'effet arbitré par Kévin le 04/09/2026.
+
+### Ce que le banc a rattrapé
+
+Sur huit mutations, **trois** ont survécu au premier jet.
+
+- La projection ne s'applique pas sans `et_elapsed_fraction` : le repli vaut 1,0, donc « rien à venir », et le biais n'a aucune prise. Mon test était vert **sans exercer une seule ligne**.
+- Une seule journée tronquée ne déplace pas une médiane : il en faut trois, et les plus récentes, pour que le filtre se prouve.
+- Le commentaire de `guidance.py` affirmait « c'est bien l'ETc que le ledger débite (0.17.3) » — faux depuis le passage à l'horaire. Corrigé, avec les mesures et l'arbitrage consignés sur place.
+
 ## 0.70.0
 
 1253 tests verts. **`idle` était lu comme « rangée » : une tondeuse en plein jardin était déclarée rentrée.**

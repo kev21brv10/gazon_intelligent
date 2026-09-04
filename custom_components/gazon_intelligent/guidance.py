@@ -2307,14 +2307,44 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
             _frac_decl_raw = ctx.water_balance.get("et_elapsed_fraction")
             _frac_decl = float(_frac_decl_raw) if _frac_decl_raw is not None else 1.0
             # On projette l'ETc (ET0 × Kc), PAS l'ET0 brute : le sol perd son eau au rythme de
-            # l'herbe, et c'est bien l'ETc que le ledger débite (0.17.3). Projeter l'ET0 gonflait
+            # l'herbe. Projeter l'ET0 gonflait
             # la soif prévue de ~25 % et pouvait déclencher un arrosage le LENDEMAIN d'une recharge
             # complète (réserve pleine, déplétion ≈ 0 : ET0 6,1 → ratio 0,51 > MAD 0,50 → arrosage
             # inutile ; ETc 4,9 → 0,41, pas d'arrosage). Repli sur le Kc typique si l'ETc n'est pas
             # fournie, pour garder la même unité plutôt que de retomber sur l'ET0 brute.
+            #
+            # ⚠️ COMMENTAIRE CORRIGÉ LE 04/09/2026 — il affirmait « c'est bien l'ETc que le
+            # ledger débite (0.17.3) ». Ce n'est PLUS vrai. Depuis que le bilan sol intègre le
+            # taux HORAIRE mesuré (`soil_balance._accumulate_elapsed_etp`), deux ETc du même
+            # jour coexistent dans le même cycle :
+            #
+            #     jour     ETc mesurée (intégrale horaire)   ETc estimée (ET0 × Kc)   écart
+            #     02/09              2,991 mm                      4,6 mm            −35 %
+            #     03/09              2,886 mm                      4,2 mm            −31 %
+            #
+            # (relevés à 23:59, journées complètes ; le ledger DÉBITE la mesurée, cette
+            # projection utilise l'estimée.)
+            #
+            # ⚠️ ARBITRAGE EN ATTENTE, PAS UN OUBLI. Basculer cette projection sur la mesure
+            # rendrait la soif projetée ~30 % plus petite, donc le seuil MAD atteint plus tard,
+            # donc l'arrosage déclenché plus tard : c'est un changement AGRONOMIQUE, et le
+            # CLAUDE.md du projet interdit de toucher à la dose ou au seuil MAD de
+            # `_profile_for_normal` sans raison agronomique explicite. À trancher par Kévin.
+            # Le biais actuel va dans le sens prudent (on projette plus de soif qu'il n'en
+            # vient) — mais c'est la cause directe de la date de prochain arrosage qui recule.
             _etc_projection = ctx.water_balance.get("etc_mm")
             if _etc_projection is None:
                 _etc_projection = float(ctx.water_balance.get("et0_mm") or 0.0) * _GUARDRAIL_KC_TYPIQUE
+            # ⚠️ ET CORRIGÉE PAR LE BIAIS MESURÉ. `etc_biais_mesure` est le rapport médian
+            # « ETc mesurée / ETc estimée » des dernières journées COMPLÈTES du registre
+            # (cf. `soil_balance.biais_etc_mesure`) : chez Kévin il vaut ~0,68, le modèle
+            # journalier sur-estimant d'environ 30 % ce que le sol perd réellement.
+            # `None` tant qu'il n'y a pas trois journées exploitables → le modèle seul reprend
+            # la main, comportement d'avant. Une correction apprise sur deux points serait une
+            # opinion, pas une correction.
+            _biais = ctx.water_balance.get("etc_biais_mesure")
+            if isinstance(_biais, (int, float)) and not isinstance(_biais, bool) and _biais > 0.0:
+                _etc_projection = float(_etc_projection or 0.0) * float(_biais)
             _etc_restant = float(_etc_projection or 0.0) * max(0.0, 1.0 - _frac_decl)
             depletion_ratio = min(1.0, (depletion_mm + _etc_restant) / _reserve_utile_decl)
         if depletion_ratio < mad_ratio:

@@ -233,6 +233,71 @@ def normalize_soil_balance_state(state: dict[str, Any] | None) -> dict[str, Any]
     return clean
 
 
+# ── BIAIS DU MODÈLE JOURNALIER FACE À LA MESURE HORAIRE ─────────────────────────────────
+# ⚠️ DEUX ETc DU MÊME JOUR COEXISTENT, et elles ne disent pas la même chose. Le ledger DÉBITE
+# l'intégrale du taux horaire mesuré ; la projection d'aube qui décide du déclenchement utilise
+# le modèle journalier ET0 × Kc. Relevé à 23:59 sur des journées complètes :
+#
+#     jour     mesurée (intégrale horaire)   estimée (ET0 × Kc)   rapport
+#     02/09            2,991 mm                   4,6 mm            0,65
+#     03/09            2,886 mm                   4,2 mm            0,69
+#
+# Le modèle sur-estime donc d'environ 30 %, quatre jours d'affilée — ce n'est pas du bruit.
+# On ne peut pas mesurer le futur : à l'aube la fraction écoulée est quasi nulle et la
+# projection vaut « toute l'ETc du jour ». Ce qu'on peut faire, c'est corriger le modèle par le
+# biais qu'il a RÉELLEMENT montré sur les journées déjà closes, mesurées chez Kévin.
+_BIAIS_ETC_JOURS = 7
+_BIAIS_ETC_MIN_JOURS = 3
+# ⚠️ Bornes ASYMÉTRIQUES, et c'est voulu. Plafond à 1,0 : le biais ne peut que RÉDUIRE la
+# projection, jamais la gonfler — le modèle seul reste la borne prudente. Plancher à 0,5 : un
+# rapport aberrant (journée de pluie, capteur qui bafouille) ne peut pas effondrer la soif
+# projetée et retarder un arrosage nécessaire. C'est le sens dangereux, on s'en protège.
+_BIAIS_ETC_MIN = 0.5
+_BIAIS_ETC_MAX = 1.0
+
+
+def biais_etc_mesure(ledger: Any) -> float | None:
+    """Rapport médian « ETc mesurée / ETc estimée » sur les dernières journées COMPLÈTES.
+
+    ⚠️ Seules les journées couvertes jusqu'au bout comptent : une journée tronquée a une mesure
+    amputée et donnerait un rapport artificiellement bas. On réutilise le prédicat de clôture,
+    `_journee_couverte_jusqu_au_bout` — deux définitions de « journée complète » finiraient par
+    diverger, et l'une des deux mentirait sans qu'on sache laquelle.
+
+    ⚠️ MÉDIANE et non moyenne : une seule journée aberrante ne doit pas déplacer la correction.
+
+    Rend `None` tant qu'on n'a pas assez de jours : le modèle seul reprend la main, comportement
+    d'avant. Une correction apprise sur deux points n'est pas une correction, c'est une opinion.
+
+    Fonction PURE.
+    """
+    if not isinstance(ledger, list):
+        return None
+    rapports: list[float] = []
+    for entree in reversed(ledger):
+        if not isinstance(entree, dict):
+            continue
+        if len(rapports) >= _BIAIS_ETC_JOURS:
+            break
+        if not _journee_couverte_jusqu_au_bout(entree):
+            continue
+        estimee = _to_float(entree.get("etp_mm"))
+        mesuree = _to_float(entree.get("etp_elapsed_mm"))
+        if estimee is None or mesuree is None or estimee <= 0.0 or mesuree < 0.0:
+            continue
+        rapports.append(mesuree / estimee)
+    if len(rapports) < _BIAIS_ETC_MIN_JOURS:
+        return None
+    rapports.sort()
+    milieu = len(rapports) // 2
+    mediane = (
+        rapports[milieu]
+        if len(rapports) % 2
+        else (rapports[milieu - 1] + rapports[milieu]) / 2.0
+    )
+    return round(min(_BIAIS_ETC_MAX, max(_BIAIS_ETC_MIN, mediane)), 3)
+
+
 def _journee_couverte_jusqu_au_bout(entree: dict[str, Any]) -> bool:
     """La veille a-t-elle été suivie jusqu'à minuit, ou l'intégration s'est-elle arrêtée avant ?
 
