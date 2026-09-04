@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.72.0
+
+1267 tests verts. **Une retenue était annoncée alors que rien n'était demandé.**
+
+Le 03/09 à 04:00:15,217 l'humidité passe de 77,5 à 88 %. L'affichage bascule de « Aucun besoin » à « **Conditions trop humides** » — avec `besoin_mm = 0`, `depletion_mm = 0` et une réserve à **12/12**. Rien n'était demandé : annoncer une retenue laissait croire qu'on refusait de l'eau au gazon. Second épisode le même jour, de 09:30:29 à 10:19:16.
+
+**Le mécanisme.** `humidite_excessive` s'arme sur le seul `humidite >= 85`, sans regarder le besoin — là où ses voisins immédiats se gardent :
+
+```
+pluie_prevue_suffisante  → and not _sol_reclame_de_l_eau
+sol_deja_humide          → and not _ledger_demande_eau
+humidite >= 85           → (aucun garde)
+```
+
+Puis l'affichage promeut ce motif au-dessus de « aucun besoin », par un correctif de juillet dont l'intention était juste : ne pas annoncer « réserve suffisante » quand on retient volontairement l'eau.
+
+**La correction, côté affichage seulement.** Un motif ne remplace « aucun besoin » que s'il a **effectivement** retenu de l'eau — `_motif_de_blocage_effectif`, **une seule définition** partagée par les deux capteurs qui l'affichent.
+
+⚠️ **L'autre sens est verrouillé** : dire « aucun besoin » alors qu'on refuse de l'eau à un sol qui en demande serait le mensonge inverse — précisément celui que ces capteurs corrigeaient déjà (31/07, « Non requis » avec `garde_fou_hebdomadaire` en attribut). Et **absence ≠ zéro** : sans besoin publié, on garde le motif.
+
+⚠️ **Non touché volontairement** : le motif reste posé dans la décision. Le neutraliser là ferait passer l'objectif par le plancher de dose et changerait la fenêtre de rafraîchissement — une correction d'affichage n'a pas à déplacer une décision d'arrosage.
+
+⚠️ Le banc a montré que seul l'un des deux capteurs était couvert : retirer le helper de « prochain arrosage » ne faisait tomber aucun test.
+
+### Étape 4 : le constat est réfuté
+
+« La hauteur estimée aveugle à la seconde déclaration » — le gel de 25 h venait de la **fausse déclaration du 03/09 à 01:56**, causée par le cumul de travail que la 0.69.0 corrige. Vérifié le 04/09 : la hauteur repousse normalement (5,7 cm, +0,24 cm/j). Le « zéro pousse le jour de la tonte » est un choix documenté dont l'erreur est bornée à 0,1 cm — sous l'arrondi du capteur.
+
 ## 0.71.0
 
 1263 tests verts. **Deux ETc du même jour coexistaient : le sol se vidait au rythme mesuré pendant que la décision projetait le modèle.**

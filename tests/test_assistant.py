@@ -354,6 +354,63 @@ class AssistantDecisionTests(unittest.TestCase):
         self.assertEqual(decision["status"], "blocked_due_to_conditions")
         self.assertEqual(decision["reason"], "Humidité excessive")
 
+    def _blocage(self, *, besoin, motif="humidite_excessive"):
+        """Capteur de blocage d'arrosage, avec un motif posé et un besoin donné."""
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={
+                "auto_irrigation_block_reason": "no_objective",
+                "block_reason": motif,
+                "besoin_mm": besoin,
+                "objectif_mm": 0.0,
+            },
+        )
+        return sensor.GazonArrosageAutoBlocageSensor(coordinator)
+
+    def test_un_blocage_qui_n_a_RIEN_bloque_ne_s_affiche_pas(self) -> None:
+        """⚠️ MESURÉ LE 03/09/2026 À 04:00:15,217. L'humidité passe de 77,5 à 88 et l'affichage
+        bascule de « Aucun besoin » à « Conditions trop humides » — avec besoin_mm = 0,
+        depletion_mm = 0 et une réserve à 12/12. Rien n'était demandé : annoncer une retenue
+        laissait croire qu'on refusait de l'eau au gazon. Second épisode le même jour,
+        09:30:29 → 10:19:16.
+
+        `humidite_excessive` s'arme sur le seul `humidite >= 85`, sans regarder le besoin — là
+        où ses voisins immédiats se gardent.
+        """
+        self.assertEqual(self._blocage(besoin=0.0).native_value, "Aucun besoin",
+                         "un motif qui n'a rien retenu est affiché comme une retenue")
+
+    def test_un_blocage_qui_a_VRAIMENT_retenu_reste_affiche(self) -> None:
+        """L'autre sens, et c'est lui qui compte : dire « aucun besoin » alors qu'on refuse de
+        l'eau à un sol qui en demande serait le mensonge inverse — celui que ce capteur
+        corrigeait déjà (31/07/2026, « Non requis » avec garde_fou_hebdomadaire en attribut)."""
+        self.assertEqual(self._blocage(besoin=6.4).native_value, "Conditions trop humides",
+                         "une vraie retenue est masquée derrière « aucun besoin »")
+
+    def test_LES_DEUX_capteurs_partagent_la_meme_definition(self) -> None:
+        """⚠️ Le banc a montré que seul le premier capteur était couvert : retirer le helper du
+        capteur « prochain arrosage » ne faisait tomber aucun test.
+
+        Deux définitions de « blocage effectif » finiraient par diverger, et l'une des deux
+        mentirait sans qu'on sache laquelle — c'est la famille de défaut n°1 de ce projet.
+        """
+        for besoin, attendu in ((0.0, None), (6.4, "humidite_excessive"), (None, "humidite_excessive")):
+            with self.subTest(besoin=besoin):
+                coordinator = _FakeCoordinator(
+                    entry=_FakeEntry(),
+                    data={"block_reason": "humidite_excessive", "besoin_mm": besoin},
+                )
+                self.assertEqual(
+                    sensor.GazonProchainArrosageSensor(coordinator)._motif_de_blocage(),
+                    attendu,
+                    "« prochain arrosage » n'utilise pas la définition partagée",
+                )
+
+    def test_un_besoin_ABSENT_n_est_pas_un_besoin_nul(self) -> None:
+        """⚠️ Ne pas savoir n'autorise pas à conclure : sans besoin publié, on garde le motif,
+        comportement d'avant."""
+        self.assertEqual(self._blocage(besoin=None).native_value, "Conditions trop humides")
+
     def test_le_palier_d_et0_est_REELLEMENT_publie_par_le_capteur(self) -> None:
         """⚠️ LA COUCHE QUE MES TESTS NE TRAVERSAIENT PAS — défaut vécu le 01/09/2026.
 
