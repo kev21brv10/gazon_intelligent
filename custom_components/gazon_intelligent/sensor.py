@@ -2086,6 +2086,14 @@ class GazonReserveActuelleSensor(GazonEntityBase, SensorEntity):
         if isinstance(soil_balance, dict):
             attrs["sol_reserve_precedente_mm"] = soil_balance.get("previous_reserve_mm")
             attrs["sol_delta_mm"] = soil_balance.get("delta_mm")
+            # ⚠️ RACCORD ROMPU : le stock du sol a bougé sans pluie, sans arrosage et sans
+            # évaporation. Publié SEULEMENT quand il y en a un — sa présence est l'alerte.
+            # Quatre ruptures sont passées inaperçues une semaine entre le 22 et le 31/08/2026,
+            # pour 5,9 mm retirés au sol et un arrosage déclenché sur cette erreur. Rien ne
+            # l'avait signalé : c'est ce silence que cet attribut casse.
+            _ecart = soil_balance.get("ecart_raccord_mm")
+            if isinstance(_ecart, (int, float)) and not isinstance(_ecart, bool):
+                attrs["sol_ecart_raccord_mm"] = _ecart
         hydric_state = _hydric_state_for_objective_sensor(self, attrs)
         if hydric_state is not None:
             attrs["hydric_state"] = hydric_state

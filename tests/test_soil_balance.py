@@ -347,6 +347,109 @@ class SoilBalanceHourlyAccumulationTests(unittest.TestCase):
                 )
 
 
+class RaccordDuRegistreTests(unittest.TestCase):
+    """⚠️ QUATRE RUPTURES SILENCIEUSES PENDANT UNE SEMAINE — trouvées à la main le 04/09/2026.
+
+    Contrôle des 119 raccords du registre : les 22→23, 28→29, 29→30 et 30→31/08 étaient rompus,
+    chacun d'exactement `etp_elapsed_mm − etp_mm` — la signature de l'ancien garde de clôture
+    qui remplaçait la mesure par l'estimation. **5,9 mm** encore effectifs, et un arrosage
+    déclenché sur cette erreur de comptabilité. Rien ne l'avait signalé.
+
+    La cause est corrigée depuis la 0.63.0. Ce garde-ci ne la corrige pas : il détecte la
+    SUIVANTE, quelle qu'elle soit.
+    """
+
+    def _veille(self, *, ouverture, pluie, etc_estimee, etc_mesuree, cloture, couverte=True):
+        """Journée d'hier, telle qu'elle est stockée au registre."""
+        entree = {
+            "date": "2026-08-30",
+            "previous_reserve_mm": ouverture,
+            "pluie_mm": pluie,
+            "arrosage_mm": 0.0,
+            "etp_mm": etc_estimee,
+            "etp_elapsed_mm": etc_mesuree,
+            "etp_hourly": True,
+            "reserve_mm": cloture,
+            "type_sol": "limoneux",
+        }
+        entree["etp_last_ts"] = (
+            "2026-08-30T23:59:49+02:00" if couverte else "2026-08-30T12:00:00+02:00"
+        )
+        return entree
+
+    def _basculer(self, veille):
+        """Passe au lendemain — c'est la bascule de date qui recalcule la clôture."""
+        etat = {
+            "date": "2026-08-30",
+            "reserve_mm": veille["reserve_mm"],
+            "previous_reserve_mm": veille["previous_reserve_mm"],
+            "type_sol": "limoneux",
+            "reserve_min_mm": 0.0,
+            "reserve_max_mm": 24.0,
+            "ledger": [veille],
+        }
+        return soil_balance.update_soil_balance(
+            etat, today=date(2026, 8, 31), pluie_mm=0.0, arrosage_mm=0.0, etp_mm=3.5,
+            type_sol="limoneux", et_elapsed_fraction=0.0,
+        )
+
+    def test_un_raccord_ROMPU_est_signale(self) -> None:
+        """La rupture RÉELLE du 30→31/08, rejouée telle quelle.
+
+        Ouverture 19,8 · pluie 3,6 · ETc mesurée 1,339 → clôture 22,1 (ce qui est stocké).
+        L'ancien garde clôturait sur l'estimation 2,9 → réouverture à 20,5. Écart −1,6 mm.
+        """
+        rompu = self._veille(ouverture=19.8, pluie=3.6, etc_estimee=2.9,
+                             etc_mesuree=1.339, cloture=22.1)
+        # On force la clôture recalculée à diverger, comme le faisait l'ancien garde.
+        rompu["etp_elapsed_mm"] = 2.9
+        etat = self._basculer(rompu)
+        ecart = etat.get("ecart_raccord_mm")
+        self.assertIsNotNone(ecart, "un raccord rompu n'est pas signalé : le défaut reste muet")
+        self.assertAlmostEqual(ecart, -1.6, places=1)
+
+    def test_un_raccord_SAIN_ne_signale_rien(self) -> None:
+        """L'autre sens, et il compte : une alerte qui crie tous les jours ne sert à rien.
+
+        C'est le cas des quatre raccords du 31/08 au 04/09, tous propres depuis la 0.63.0.
+        """
+        sain = self._veille(ouverture=19.8, pluie=3.6, etc_estimee=2.9,
+                            etc_mesuree=1.339, cloture=22.1)
+        self.assertIsNone(self._basculer(sain).get("ecart_raccord_mm"))
+
+    def test_une_journee_TRONQUEE_n_est_pas_une_rupture(self) -> None:
+        """⚠️ Sur une journée arrêtée avant minuit, la clôture retombe VOLONTAIREMENT sur
+        l'estimation : l'écart est délibéré, pas un défaut. Crier là-dessus rendrait l'alerte
+        inutilisable — c'est exactement le piège dans lequel l'ancien garde était tombé, en
+        jugeant l'ampleur au lieu de la couverture."""
+        tronquee = self._veille(ouverture=19.8, pluie=3.6, etc_estimee=2.9,
+                                etc_mesuree=1.339, cloture=22.1, couverte=False)
+        self.assertIsNone(self._basculer(tronquee).get("ecart_raccord_mm"),
+                          "une journée tronquée est signalée comme une rupture")
+
+    def test_un_ecart_SOUS_la_tolerance_ne_crie_pas(self) -> None:
+        """Les deux valeurs sont arrondies au dixième : un double arrondi peut produire 0,1."""
+        limite = self._veille(ouverture=19.8, pluie=3.6, etc_estimee=2.9,
+                              etc_mesuree=1.339, cloture=22.2)
+        self.assertIsNone(self._basculer(limite).get("ecart_raccord_mm"))
+
+    def test_l_ecart_SURVIT_aux_cycles_de_la_journee(self) -> None:
+        """⚠️ Sans report, l'alerte disparaîtrait deux minutes après avoir été détectée — aussi
+        silencieuse que le défaut qu'elle surveille. Le coordinateur tourne toutes les 2 min."""
+        rompu = self._veille(ouverture=19.8, pluie=3.6, etc_estimee=2.9,
+                             etc_mesuree=1.339, cloture=22.1)
+        rompu["etp_elapsed_mm"] = 2.9
+        etat = self._basculer(rompu)
+        self.assertIsNotNone(etat.get("ecart_raccord_mm"), "prémisse")
+        # Second cycle du MÊME jour : rien ne bascule, mais l'écart doit tenir.
+        encore = soil_balance.update_soil_balance(
+            etat, today=date(2026, 8, 31), pluie_mm=0.0, arrosage_mm=0.0, etp_mm=3.5,
+            type_sol="limoneux", et_elapsed_fraction=0.2,
+        )
+        self.assertAlmostEqual(encore.get("ecart_raccord_mm"), -1.6, places=1,
+                               msg="l'alerte s'efface au cycle suivant")
+
+
 class BiaisEtcMesureTests(unittest.TestCase):
     """⚠️ DEUX ETc DU MÊME JOUR, 31 à 35 % D'ÉCART — mesuré sur l'installation.
 

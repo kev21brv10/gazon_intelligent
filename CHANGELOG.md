@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.74.0
+
+1274 tests verts. **Un raccord rompu dans le registre du sol ne peut plus passer inaperçu.**
+
+### Ce qui s'est passé, et que rien n'avait signalé
+
+Contrôle manuel des **119 raccords** du registre le 04/09/2026 — en comparant l'*ouverture* de chaque jour à la *clôture* de la veille. Quatre étaient rompus, chacun valant exactement `etp_elapsed_mm − etp_mm`, la signature de l'ancien garde de clôture qui remplaçait la mesure par l'estimation :
+
+```
+22 → 23/08   −2,9 mm        28 → 29/08   −2,0 mm  (le plafond absorbe 0,7)
+29 → 30/08   −2,3 mm        30 → 31/08   −1,6 mm
+```
+
+Le stock avait resaturé à 24,0 mm le 28/08 : seules les pertes d'après comptaient encore, soit **5,9 mm**. Sans elles le stock valait 14,6 au lieu de 8,7 — réserve utile pleine, déplétion nulle, **aucun arrosage dû**. L'arrosage prévu partait sur une erreur de comptabilité.
+
+La cause est corrigée depuis la **0.63.0**, et les quatre raccords du 31/08 au 04/09 sont propres — vérifié. Mais **rien n'aurait détecté la suivante**. C'est ce silence que cette version casse.
+
+### L'invariant
+
+À la bascule de date, la clôture **recalculée** de la veille doit égaler celle **déjà stockée** : les deux partent de la même ouverture, de la même pluie, du même arrosage et de la même ETc mesurée. Un écart signifie qu'une des deux voies a utilisé autre chose.
+
+⚠️ **Sauf sur une journée tronquée**, où la clôture retombe volontairement sur l'estimation : l'écart y est délibéré. Crier là-dessus rendrait l'alerte inutilisable — c'est exactement le piège dans lequel l'ancien garde était tombé, en jugeant l'ampleur au lieu de la couverture.
+
+Quand la rupture est réelle : un `WARNING` nommé dans le journal, la valeur écrite dans l'entrée du registre, et l'attribut **`sol_ecart_raccord_mm`** publié sur l'objectif d'arrosage. Publié **seulement s'il y en a un** — sa présence est l'alerte.
+
+⚠️ L'écart **survit aux cycles de la journée** : sans ce report il disparaîtrait deux minutes après avoir été détecté, aussi silencieusement que le défaut qu'il surveille.
+
+### Correction du stock
+
+Les 5,9 mm ont été recrédités le 04/09 sur décision de Kévin, via `recalibrate_reserve` avec **`figer_la_journee: false`** — le drapeau qui réécrit la réserve d'*ouverture* et laisse la journée se dérouler normalement, par opposition au défaut `true` qui fige la valeur jusqu'à minuit (celui-là est pour « j'ai sondé mon sol au tournevis »). Stock 8,7 → 14,6, réserve utile de nouveau pleine, arrosage du lendemain annulé.
+
 ## 0.73.0
 
 1269 tests verts. **La date de prochain arrosage séchait le sol au modèle pendant que la décision suivait la mesure.**
