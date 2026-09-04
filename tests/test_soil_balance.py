@@ -347,6 +347,109 @@ class SoilBalanceHourlyAccumulationTests(unittest.TestCase):
                 )
 
 
+class BiaisEtcMesureTests(unittest.TestCase):
+    """⚠️ DEUX ETc DU MÊME JOUR, 31 à 35 % D'ÉCART — mesuré sur l'installation.
+
+    Le ledger débite l'intégrale du taux HORAIRE mesuré ; la projection d'aube qui décide du
+    déclenchement utilisait le modèle journalier ET0 × Kc. Relevé à 23:59, journées complètes :
+
+        02/09   mesurée 2,991 mm   estimée 4,6 mm   → 0,65
+        03/09   mesurée 2,886 mm   estimée 4,2 mm   → 0,69
+
+    Arbitré par Kévin le 04/09/2026 : aligner la projection sur la mesure.
+    """
+
+    def _jour(self, date_str, estimee, mesuree, *, derniere_heure="23:59:30"):
+        return {
+            "date": date_str,
+            "etp_mm": estimee,
+            "etp_elapsed_mm": mesuree,
+            "etp_last_ts": f"{date_str}T{derniere_heure}+02:00",
+        }
+
+    def test_le_biais_reprend_les_deux_journees_reelles(self) -> None:
+        ledger = [
+            self._jour("2026-09-01", 3.8, 2.766),
+            self._jour("2026-09-02", 4.6, 2.991),
+            self._jour("2026-09-03", 4.2, 2.886),
+        ]
+        biais = soil_balance.biais_etc_mesure(ledger)
+        self.assertIsNotNone(biais)
+        # médiane de 0,728 · 0,650 · 0,687
+        self.assertAlmostEqual(biais, 0.687, places=2)
+
+    def test_une_journee_TRONQUEE_ne_compte_pas(self) -> None:
+        """⚠️ Une journée arrêtée à midi a une mesure amputée : son rapport serait
+        artificiellement bas et tirerait la correction vers le sens dangereux. On réutilise le
+        prédicat de clôture, pas une seconde définition de « journée complète »."""
+        complets = [
+            self._jour("2026-09-01", 4.0, 2.8),
+            self._jour("2026-09-02", 4.0, 2.8),
+            self._jour("2026-09-03", 4.0, 2.8),
+        ]
+        self.assertAlmostEqual(soil_balance.biais_etc_mesure(complets), 0.7, places=2)
+
+        # ⚠️ TROIS journées tronquées, et les plus RÉCENTES : une seule ne déplacerait pas la
+        # médiane, et le test serait vert sans rien exercer — le banc l'a montré.
+        # Sans le filtre, la médiane de [0,1 · 0,1 · 0,1 · 0,7 · 0,7 · 0,7] tombe à 0,4, puis
+        # au plancher de 0,5. Avec le filtre, elle reste à 0,7.
+        avec_tronquees = complets + [
+            self._jour(f"2026-09-0{4 + i}", 4.0, 0.4, derniere_heure="12:00:00")
+            for i in range(3)
+        ]
+        self.assertAlmostEqual(
+            soil_balance.biais_etc_mesure(avec_tronquees), 0.7, places=2,
+            msg="des journées tronquées sont entrées dans la correction",
+        )
+
+    def test_moins_de_trois_journees_rend_None(self) -> None:
+        """Une correction apprise sur deux points est une opinion. Le modèle seul reprend
+        la main — le comportement d'avant, sans surprise."""
+        for n in (0, 1, 2):
+            with self.subTest(jours=n):
+                ledger = [self._jour(f"2026-09-0{i + 1}", 4.0, 2.8) for i in range(n)]
+                self.assertIsNone(soil_balance.biais_etc_mesure(ledger))
+
+    def test_les_bornes_protegent_du_sens_DANGEREUX(self) -> None:
+        """⚠️ Bornes asymétriques, et c'est le cœur du garde-fou.
+
+        Plafond 1,0 : le biais ne peut que RÉDUIRE la projection, jamais la gonfler — le modèle
+        seul reste la borne prudente. Plancher 0,5 : un rapport aberrant ne peut pas effondrer
+        la soif projetée et retarder un arrosage nécessaire.
+        """
+        effondre = [self._jour(f"2026-09-0{i + 1}", 4.0, 0.2) for i in range(3)]
+        self.assertAlmostEqual(soil_balance.biais_etc_mesure(effondre), 0.5, places=3,
+                               msg="un rapport aberrant peut retarder un arrosage nécessaire")
+        gonfle = [self._jour(f"2026-09-0{i + 1}", 2.0, 6.0) for i in range(3)]
+        self.assertAlmostEqual(soil_balance.biais_etc_mesure(gonfle), 1.0, places=3,
+                               msg="le biais gonfle la projection au-dessus du modèle")
+
+    def test_la_mediane_resiste_a_une_journee_aberrante(self) -> None:
+        ledger = [
+            self._jour("2026-09-01", 4.0, 2.8),
+            self._jour("2026-09-02", 4.0, 0.1),   # journée de pluie, mesure très basse
+            self._jour("2026-09-03", 4.0, 2.8),
+        ]
+        self.assertAlmostEqual(soil_balance.biais_etc_mesure(ledger), 0.7, places=2,
+                               msg="une seule journée aberrante déplace la correction")
+
+    def test_une_estimation_absente_ou_nulle_est_ignoree(self) -> None:
+        ledger = [
+            self._jour("2026-08-30", None, 2.8),
+            self._jour("2026-08-31", 0.0, 2.8),
+            self._jour("2026-09-01", 4.0, 2.8),
+            self._jour("2026-09-02", 4.0, 2.8),
+            self._jour("2026-09-03", 4.0, None),
+        ]
+        self.assertIsNone(soil_balance.biais_etc_mesure(ledger),
+                          "des entrées inexploitables ont été comptées comme des journées")
+
+    def test_un_registre_absent_ou_abime_ne_casse_rien(self) -> None:
+        for ledger in (None, [], "pas une liste", [None, 3, "x"]):
+            with self.subTest(ledger=type(ledger).__name__):
+                self.assertIsNone(soil_balance.biais_etc_mesure(ledger))
+
+
 class SoilBalanceTests(unittest.TestCase):
     def test_update_soil_balance_initializes_from_soil_type(self) -> None:
         state = soil_balance.update_soil_balance(

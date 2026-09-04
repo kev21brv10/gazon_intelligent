@@ -3783,6 +3783,90 @@ class AmortissementDuRisqueTests(unittest.TestCase):
                     f"les deux chaînes divergent avec la mémoire {memoire!r}",
                 )
 
+    def _bundle_avec_registre(self, ledger, *, reserve=6.0):
+        """Contexte d'aube en phase Normal, avec un registre de sol fourni.
+
+        ⚠️ La projection ne mord QUE si le pilotage par épuisement est actif : phase Normal ET
+        réserve issue du registre. Sans registre, on retombe sur le modèle déficit et le test
+        serait vert sans rien exercer.
+        """
+        ctx = decision.DecisionContext.from_legacy_args(
+            history=[], today=date(2026, 9, 4), hour_of_day=6,
+            temperature=24.0, pluie_24h=0.0, pluie_demain=0.0, humidite=60,
+            type_sol="limoneux", etp_capteur=5.2,
+            # ⚠️ SANS FRACTION ÉCOULÉE, LA PROJECTION NE S'APPLIQUE PAS : le repli vaut 1,0,
+            # donc « rien à venir aujourd'hui » et le biais n'a aucune prise. Le banc l'a
+            # montré — le premier jet de ce test était vert sans exercer une seule ligne.
+            weather_profile={"et_elapsed_fraction": 0.05},
+            soil_balance={
+                "date": "2026-09-04",
+                "reserve_mm": reserve,
+                "previous_reserve_mm": reserve,
+                "pluie_mm": 0.0,
+                "arrosage_mm": 0.0,
+                "etp_mm": 4.2,
+                "type_sol": "limoneux",
+                "reserve_min_mm": 0.0,
+                "reserve_max_mm": 24.0,
+                "ledger": ledger,
+            },
+        )
+        phase = decision.build_phase_bundle(ctx)
+        return decision.build_water_bundle(ctx, phase)
+
+    def _registre(self, mesuree):
+        return [
+            {
+                "date": f"2026-09-0{i + 1}",
+                "etp_mm": 4.2,
+                "etp_elapsed_mm": mesuree,
+                "etp_last_ts": f"2026-09-0{i + 1}T23:59:30+02:00",
+            }
+            for i in range(3)
+        ]
+
+    def test_le_biais_mesure_atteint_REELLEMENT_le_bilan(self) -> None:
+        """⚠️ « DÉCLARER N'EST PAS CÂBLER » — le banc a pris ce projet en défaut cinq fois.
+
+        Le biais est calculé dans `soil_balance`, posé dans le bilan par `decision_watering`,
+        et lu par la projection de `_profile_for_normal`. Ce test part du REGISTRE et va
+        jusqu'au bilan publié.
+        """
+        bundle = self._bundle_avec_registre(self._registre(2.9))
+        biais = bundle["water_balance"].get("etc_biais_mesure")
+        self.assertIsNotNone(biais, "le biais n'atteint pas le bilan : la projection l'ignore")
+        self.assertAlmostEqual(biais, 2.9 / 4.2, places=2)
+
+    def test_sans_registre_exploitable_le_biais_reste_None(self) -> None:
+        self.assertIsNone(self._bundle_avec_registre([])["water_balance"].get("etc_biais_mesure"))
+
+    def test_le_biais_CHANGE_la_soif_projetee_et_ne_la_decore_pas(self) -> None:
+        """⚠️ CALCULER N'EST PAS APPLIQUER — et le banc a pris ce projet en défaut six fois.
+
+        Le point de bascule est mesuré : réserve 9,5 mm sur 12 utiles, soit 2,5 mm de déplétion,
+        ET0 5,2 à l'aube. Le modèle seul projette 4,2 mm de soif à venir → ratio 0,56 au-dessus
+        du seuil MAD de 0,50 → il déclenche 5 mm. Corrigé par la mesure (0,69), il projette
+        2,9 mm → ratio 0,45 → il attend.
+
+        C'est exactement la conséquence arbitrée le 04/09/2026 : l'arrosage part plus tard,
+        parce que le sol perd moins d'eau que ce que le modèle journalier annonce.
+        """
+        juste = self._bundle_avec_registre(self._registre(4.2), reserve=9.5)
+        sur_estime = self._bundle_avec_registre(self._registre(2.9), reserve=9.5)
+
+        self.assertAlmostEqual(juste["water_balance"]["etc_biais_mesure"], 1.0, places=2,
+                               msg="prémisse : le premier registre doit donner un biais neutre")
+        self.assertLess(sur_estime["water_balance"]["etc_biais_mesure"], 0.75, "prémisse")
+
+        self.assertGreater(
+            juste["objectif_mm"], 0.0,
+            "prémisse : sans correction, ce montage DOIT déclencher un arrosage",
+        )
+        self.assertEqual(
+            sur_estime["objectif_mm"], 0.0,
+            "le biais mesuré ne change pas la décision : il ne sert à rien",
+        )
+
     def test_le_palier_amorti_atteint_REELLEMENT_le_snapshot(self) -> None:
         """⚠️ LE PIÈGE DU PROJET, POUR LA TROISIÈME FOIS SUR CETTE FAMILLE DE CLÉS.
 

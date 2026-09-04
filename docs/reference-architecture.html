@@ -231,7 +231,7 @@
     <h1>Comment le système décide</h1>
     <p class="lede">Arrosage, tonte, phases, produits, capteurs et services : ce que fait chaque brique, où sont les seuils, et ce qui reste à arbitrer. Établi sur l'état réel du code.</p>
     <div class="stats">
-      <span class="stat">version <b>0.70.0</b></span>
+      <span class="stat">version <b>0.71.0</b></span>
       <span class="stat">carte <b>0.28.1</b></span>
       <span class="stat"><b>39</b> modules</span>
       <span class="stat"><b>62</b> entités</span>
@@ -1192,6 +1192,21 @@
       </div>
 
       <div class="callout h">
+        <h3>⚠️ Deux ETc du même jour&nbsp;: le sol se vidait au rythme mesuré, la décision projetait le modèle <span class="chip ok">0.71.0</span></h3>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>jour</th><th class="num">ETc mesurée<br><small>intégrale horaire</small></th><th class="num">ETc estimée<br><small>ET0 × Kc</small></th><th class="num">écart</th></tr></thead>
+          <tbody>
+            <tr><td class="rowlabel">02/09</td><td class="num">2,991 mm</td><td class="num r-bad">4,6 mm</td><td class="num r-bad">−35 %</td></tr>
+            <tr><td class="rowlabel">03/09</td><td class="num">2,886 mm</td><td class="num r-bad">4,2 mm</td><td class="num r-bad">−31 %</td></tr>
+          </tbody>
+        </table></div>
+        <p>Le ledger <strong>débite</strong> la mesurée&nbsp;; la projection d'aube qui décide du déclenchement utilisait l'<strong>estimée</strong>. Quatre jours d'affilée — ce n'est pas du bruit. ⚠️ <b>Vérifié avant de corriger</b>&nbsp;: les deux sont bien des <b>ETc</b> avec le même Kc (<code>gazon_brain</code> passe <code>etp_mm = etp × kc</code> au ledger), l'écart n'est pas un Kc caché&nbsp;; et l'intégrale horaire écarte explicitement les trous de capteur.</p>
+        <p><strong>On ne peut pas mesurer le futur</strong>&nbsp;: à l'aube la fraction écoulée est quasi nulle et la projection vaut « toute l'ETc du jour ». On corrige donc le <em>modèle</em> par le biais qu'il a réellement montré sur les journées <strong>déjà closes</strong> (<code>biais_etc_mesure</code>, médiane sur 7 jours, ≈ 0,68 ici). ⚠️ <strong>Bornes asymétriques</strong>&nbsp;: plafond 1,0 — le biais ne peut que <em>réduire</em> la projection, le modèle seul reste la borne prudente&nbsp;; plancher 0,5 — un rapport aberrant ne peut pas effondrer la soif projetée et retarder un arrosage nécessaire. Seules les journées couvertes jusqu'au bout comptent, via le prédicat de clôture existant.</p>
+        <p><strong>Conséquence mesurée</strong>&nbsp;: réserve 9,5 mm sur 12 utiles, ET0 5,2 à l'aube — le modèle seul déclenchait <b>5 mm</b>, corrigé il attend. <strong>L'arrosage part plus tard.</strong> Arbitré par Kévin le 04/09/2026.</p>
+        <p style="font-size:.9rem;color:var(--muted)"><b>⚠️ Trois mutations sur huit ont survécu au premier jet.</b> La projection ne s'applique pas sans <code>et_elapsed_fraction</code> (repli 1,0 = « rien à venir »)&nbsp;: mon test était vert <em>sans exercer une seule ligne</em>. Une seule journée tronquée ne déplace pas une médiane — il en faut trois, et les plus récentes. Et le commentaire de <code>guidance.py</code> affirmait « c'est bien l'ETc que le ledger débite (0.17.3) », faux depuis le passage à l'horaire.</p>
+      </div>
+
+      <div class="callout h">
         <h3>⚠️ <code>idle</code> était lu comme « rangée » : une tondeuse en plein jardin déclarée rentrée <span class="chip ok">0.70.0</span></h3>
         <p>Sortie du <b>02/09 de 22:40:18 à 00:39:52</b> — jamais <code>docked</code>, jamais en charge, batterie 91 → 10 sans discontinuer. À <b>23:54:12,171</b> le robot annonce <code>idle</code> dans le jardin (son capteur d'erreur passera à <code>trapped_timeout</code> 18 ms plus tard, trop tard pour ce cycle)&nbsp;:</p>
         <div class="tbl-wrap"><table>
@@ -1229,7 +1244,7 @@
         <p>Un travail <strong>jamais terminé n'est plus déclaré</strong>. Une journée où la batterie lâche avant la fin ne comptera plus comme une tonte — c'est le but, mais le retard continuera de courir tant que le travail n'est pas bouclé.</p>
       </div>
 
-      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b>&nbsp;: 1253 tests verts côté intégration et 40 côté carte, <b>45 + 10 mutations</b> détectées par le test visé. ⚠️ Deux trous ont été trouvés par le banc et non par les tests — le premier test du « 100 au repos » ne traversait qu'un des deux chemins, et les trois nouvelles clés n'étaient protégées dans aucune liste de câblage.</p>
+      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b>&nbsp;: 1263 tests verts côté intégration et 40 côté carte, <b>53 + 10 mutations</b> détectées par le test visé. ⚠️ Deux trous ont été trouvés par le banc et non par les tests — le premier test du « 100 au repos » ne traversait qu'un des deux chemins, et les trois nouvelles clés n'étaient protégées dans aucune liste de câblage.</p>
     </section>
 
     <section>
@@ -2045,7 +2060,7 @@
     </section>
 
     <section>
-      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1253 tests verts</span></div>
+      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1263 tests verts</span></div>
       <p>Cet onglet est le point d'entrée pour « <strong>qu'est-ce qui reste à corriger ou à supprimer ?</strong> ». Il distingue trois choses qu'on confond souvent : ce qui est cassé, ce qui est un choix, et ce qui est déjà mort.</p>
       <div class="tbl-wrap">
         <table>
