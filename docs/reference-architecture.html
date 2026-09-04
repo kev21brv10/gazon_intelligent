@@ -231,7 +231,7 @@
     <h1>Comment le système décide</h1>
     <p class="lede">Arrosage, tonte, phases, produits, capteurs et services : ce que fait chaque brique, où sont les seuils, et ce qui reste à arbitrer. Établi sur l'état réel du code.</p>
     <div class="stats">
-      <span class="stat">version <b>0.71.0</b></span>
+      <span class="stat">version <b>0.72.0</b></span>
       <span class="stat">carte <b>0.28.1</b></span>
       <span class="stat"><b>39</b> modules</span>
       <span class="stat"><b>62</b> entités</span>
@@ -1192,6 +1192,22 @@
       </div>
 
       <div class="callout h">
+        <h3>⚠️ Une retenue annoncée alors que rien n'était demandé <span class="chip ok">0.72.0</span></h3>
+        <p>Le <b>03/09 à 04:00:15,217</b> l'humidité passe de 77,5 à 88 %. L'affichage bascule de « Aucun besoin » à « <b>Conditions trop humides</b> » — avec <code>besoin_mm = 0</code>, <code>depletion_mm = 0</code> et une réserve à <b>12/12</b>. Rien n'était demandé&nbsp;: annoncer une retenue laissait croire qu'on refusait de l'eau au gazon. Second épisode le même jour, 09:30:29 → 10:19:16.</p>
+        <p><code>humidite_excessive</code> s'arme sur le seul <code>humidite &gt;= 85</code>, <strong>sans regarder le besoin</strong> — là où ses voisins immédiats se gardent&nbsp;:</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>motif</th><th>garde</th></tr></thead>
+          <tbody>
+            <tr><td class="rowlabel"><code>pluie_prevue_suffisante</code></td><td><code>and not _sol_reclame_de_l_eau</code></td></tr>
+            <tr><td class="rowlabel"><code>sol_deja_humide</code></td><td><code>and not _ledger_demande_eau</code></td></tr>
+            <tr class="r-bad"><td class="rowlabel"><code>humidite &gt;= 85</code></td><td><b>aucun</b></td></tr>
+          </tbody>
+        </table></div>
+        <p><strong>Corrigé côté AFFICHAGE seulement</strong>&nbsp;: un motif ne remplace « aucun besoin » que s'il a <em>effectivement</em> retenu de l'eau (<code>_motif_de_blocage_effectif</code>, une seule définition partagée par les deux capteurs). ⚠️ <b>L'autre sens est verrouillé</b>&nbsp;: dire « aucun besoin » alors qu'on refuse de l'eau à un sol qui en demande serait le mensonge inverse — celui que ces capteurs corrigeaient déjà le 31/07. Et <b>absence ≠ zéro</b>&nbsp;: sans besoin publié, on garde le motif.</p>
+        <p style="font-size:.9rem;color:var(--muted)"><b>⚠️ Non touché volontairement</b>&nbsp;: le motif reste posé dans la décision. Le neutraliser là ferait passer l'objectif par le plancher de dose et changerait la fenêtre de rafraîchissement — une correction d'affichage n'a pas à déplacer une décision d'arrosage. <b>Et le banc a montré que seul l'un des deux capteurs était couvert.</b></p>
+      </div>
+
+      <div class="callout h">
         <h3>⚠️ Deux ETc du même jour&nbsp;: le sol se vidait au rythme mesuré, la décision projetait le modèle <span class="chip ok">0.71.0</span></h3>
         <div class="tbl-wrap"><table>
           <thead><tr><th>jour</th><th class="num">ETc mesurée<br><small>intégrale horaire</small></th><th class="num">ETc estimée<br><small>ET0 × Kc</small></th><th class="num">écart</th></tr></thead>
@@ -1244,7 +1260,7 @@
         <p>Un travail <strong>jamais terminé n'est plus déclaré</strong>. Une journée où la batterie lâche avant la fin ne comptera plus comme une tonte — c'est le but, mais le retard continuera de courir tant que le travail n'est pas bouclé.</p>
       </div>
 
-      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b>&nbsp;: 1263 tests verts côté intégration et 40 côté carte, <b>53 + 10 mutations</b> détectées par le test visé. ⚠️ Deux trous ont été trouvés par le banc et non par les tests — le premier test du « 100 au repos » ne traversait qu'un des deux chemins, et les trois nouvelles clés n'étaient protégées dans aucune liste de câblage.</p>
+      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b>&nbsp;: 1267 tests verts côté intégration et 40 côté carte, <b>57 + 10 mutations</b> détectées par le test visé. ⚠️ Deux trous ont été trouvés par le banc et non par les tests — le premier test du « 100 au repos » ne traversait qu'un des deux chemins, et les trois nouvelles clés n'étaient protégées dans aucune liste de câblage.</p>
     </section>
 
     <section>
@@ -2060,7 +2076,7 @@
     </section>
 
     <section>
-      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1263 tests verts</span></div>
+      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1267 tests verts</span></div>
       <p>Cet onglet est le point d'entrée pour « <strong>qu'est-ce qui reste à corriger ou à supprimer ?</strong> ». Il distingue trois choses qu'on confond souvent : ce qui est cassé, ce qui est un choix, et ce qui est déjà mort.</p>
       <div class="tbl-wrap">
         <table>

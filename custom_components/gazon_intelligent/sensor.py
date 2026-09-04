@@ -1349,6 +1349,36 @@ _AUTO_IRRIGATION_BLOCK_INFO: dict[str, tuple[str, bool, str, str]] = {
 _AUTO_IRRIGATION_READY_REASONS = {"ready", "post_application_ready"}
 
 
+def _motif_de_blocage_effectif(entite) -> str | None:
+    """Motif de blocage qui a RÉELLEMENT empêché un arrosage, ou `None`.
+
+    ⚠️ UN BLOCAGE N'EXPLIQUE UN OBJECTIF À ZÉRO QUE S'IL A EMPÊCHÉ QUELQUE CHOSE. Le motif est
+    posé par la décision même quand le sol ne demande rien — `humidite_excessive` s'arme sur le
+    seul `humidite >= 85`, sans regarder le besoin, là où ses voisins immédiats se gardent
+    (`pluie_prevue_suffisante` teste `not _sol_reclame_de_l_eau`, `sol_deja_humide` teste
+    `not _ledger_demande_eau`).
+
+    Mesuré le 03/09/2026 à 04:00:15,217 : l'humidité passe de 77,5 à 88 et l'affichage bascule
+    de « Aucun besoin » à « Conditions trop humides », de « Non requis » à un état de retenue —
+    avec `besoin_mm = 0`, `depletion_mm = 0`, réserve 12/12. Rien n'était demandé : annoncer une
+    retenue laissait croire qu'on refusait de l'eau au gazon. Second épisode le même jour de
+    09:30:29 à 10:19:16.
+
+    ⚠️ ABSENCE ≠ ZÉRO : si le besoin n'est pas publié, on garde le motif. C'est le comportement
+    d'avant, et il est le bon — ne pas savoir n'autorise pas à conclure.
+
+    ⚠️ UNE SEULE DÉFINITION pour les deux capteurs qui l'affichent. Deux copies finiraient par
+    diverger, et l'une des deux mentirait sans qu'on sache laquelle.
+    """
+    motif = str(entite._decision_value("block_reason") or "").strip() or None
+    if motif is None:
+        return None
+    besoin = entite._decision_value("besoin_mm")
+    if isinstance(besoin, (int, float)) and not isinstance(besoin, bool) and float(besoin) <= 0.0:
+        return None
+    return motif
+
+
 class GazonArrosageAutoBlocageSensor(GazonEntityBase, SensorEntity):
     """Diagnostic : dit explicitement pourquoi l'arrosage automatique ne se déclenche pas."""
 
@@ -1376,7 +1406,10 @@ class GazonArrosageAutoBlocageSensor(GazonEntityBase, SensorEntity):
         """
         reason = self._coordinator_data().get("auto_irrigation_block_reason")
         if reason == "no_objective":
-            decision_block = str(self._decision_value("block_reason") or "").strip()
+            # ⚠️ Le motif ne remplace « aucun besoin » que s'il a EFFECTIVEMENT retenu de l'eau
+            # (cf. `_motif_de_blocage_effectif`). Sans ce garde, une humidité de 88 % affichait
+            # « Conditions trop humides » sur une réserve pleine qui ne demandait rien.
+            decision_block = _motif_de_blocage_effectif(self) or ""
             if decision_block and decision_block in _AUTO_IRRIGATION_BLOCK_INFO:
                 return decision_block
         return reason
@@ -4470,8 +4503,13 @@ class GazonProchainArrosageSensor(GazonFenetreOptimaleSensor):
         return _human_date_text(target_date) if target_date else None
 
     def _motif_de_blocage(self) -> str | None:
-        """Motif de blocage courant, ou None. Lu au même endroit que ce qui est publié."""
-        return str(self._decision_value("block_reason") or "").strip() or None
+        """Motif de blocage courant, ou None. Lu au même endroit que ce qui est publié.
+
+        ⚠️ Le motif ne compte que s'il a RÉELLEMENT retenu de l'eau : cf.
+        `_motif_de_blocage_effectif`. Sinon « Non requis » devenait une retenue sur une réserve
+        pleine, exactement le mensonge inverse de celui que ce capteur corrigeait déjà.
+        """
+        return _motif_de_blocage_effectif(self)
 
     @property
     def native_value(self):
