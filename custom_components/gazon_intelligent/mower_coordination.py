@@ -104,7 +104,9 @@ def _operation_state(context: dict[str, Any]) -> str:
     return "unknown"
 
 
-def _presence_state(context: dict[str, Any], operation_state: str) -> str:
+def _presence_state(
+    context: dict[str, Any], operation_state: str, passe_ouverte: bool | None = None
+) -> str:
     raw_state = _normalized_raw_state(context)
     connected = context.get("tondeuse_connectee") is True
     status = _text(context.get("tondeuse_statut")).lower()
@@ -114,6 +116,29 @@ def _presence_state(context: dict[str, Any], operation_state: str) -> str:
     if operation_state == "charging" or raw_state in _DOCKED_RAW_STATES:
         return "dockee"
     if operation_state == "idle" and (raw_state in _IDLE_RAW_STATES or status == "au_repos"):
+        # ⚠️ `idle` NE PROUVE PAS QU'ELLE EST RENTRÉE. Le savoir est déjà écrit dans
+        # `mower_adapter._status_label` : « le robot annonce `idle` quand il est immobilisé en
+        # plein jardin — soulevé, coincé, roue bloquée, retourné ». Et dans le domaine
+        # `lawn_mower` de Home Assistant, l'état rangé standard est `docked`, pas `idle`.
+        #
+        # Mesuré le 02/09/2026 à 23:54:12,171 sur une sortie de 22:40 à 00:39 qui n'est JAMAIS
+        # passée par `docked` et n'a JAMAIS chargé (batterie 91 → 10 en continu) :
+        #   tondeuse_statut « au_repos » · presence « dockee » · « Tondeuse rangée »
+        #   mower_pass_in_progress true → false  ← la passe est clôturée en pleine tonte
+        #   une passe fantôme de 73,2 min inscrite « retour_autonome » à 52 % de batterie
+        #   mower_autonomous_return_battery_median 85 → 78 : un retour autonome INVENTÉ
+        # La sortie a fini en TROIS entrées au carnet au lieu d'une.
+        #
+        # ⚠️ Et ce n'est pas qu'un défaut de carnet : `mower_is_safe_for_watering` vaut
+        # `ready and is_docked`. Une tondeuse déclarée rangée alors qu'elle est dehors autorise
+        # l'arrosage sur une pelouse occupée. La coordination était désactivée ce soir-là ; elle
+        # est active depuis.
+        #
+        # Une passe ouverte dit exactement ce que `idle` ne dit pas : elle est sortie et n'est
+        # pas revenue. Les signaux FORTS (`docked`, charge, tonte, retour) font les transitions ;
+        # `idle` ne fait que conserver l'état prouvé.
+        if passe_ouverte:
+            return "dehors"
         return "dockee"
     if operation_state == "transit":
         return "retour"
@@ -180,11 +205,12 @@ def build_mower_coordination_context(
     mower_context: dict[str, Any] | None,
     *,
     enabled: bool,
+    passe_ouverte: bool | None = None,
 ) -> dict[str, Any]:
     context = dict(mower_context or {})
     raw_state = _normalized_raw_state(context)
     operation_state = _operation_state(context)
-    presence_state = _presence_state(context, operation_state)
+    presence_state = _presence_state(context, operation_state, passe_ouverte)
     ready, reason_code, reason_label = _reliability(context, enabled, operation_state, presence_state)
 
     if ready:

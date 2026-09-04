@@ -126,6 +126,12 @@ coordinator_mod = importlib.import_module("custom_components.gazon_intelligent.c
 shared_state_mod = importlib.import_module("custom_components.gazon_intelligent.shared_state")
 watering_plan_mod = importlib.import_module("custom_components.gazon_intelligent.watering_plan")
 mower_adapter_mod = importlib.import_module("custom_components.gazon_intelligent.mower_adapter")
+# ⚠️ Importé ICI et pas dans un test : `test_init.py` remplace des entrées de `sys.modules`
+# par de faux modules. Une réimportation tardive récupère le faux — le test passe seul et
+# tombe (ou pire, ment) quand toute la suite tourne.
+mower_coordination_mod = importlib.import_module(
+    "custom_components.gazon_intelligent.mower_coordination"
+)
 water_mod = importlib.import_module("custom_components.gazon_intelligent.water")
 
 
@@ -3005,6 +3011,60 @@ class CoordinatorMowerResolutionTests(unittest.TestCase):
         self.assertIn("sensor.esperance_jr_prochain_programme", source_ids)
         self.assertIn("number.esperance_jr_hauteur_de_coupe", source_ids)
 
+    def _coord_idle_dans_le_jardin(self):
+        """Le robot annonce `idle`, sans code d'erreur, batterie à 52 % et pas en charge."""
+        instant = datetime(2026, 9, 2, 21, 54, tzinfo=timezone.utc)
+        return self._build_coordinator(
+            mower_states=[
+                _FakeMowerState(entity_id="lawn_mower.esperance_jr", state="idle", name="Esperance Jr"),
+            ],
+            entity_states={
+                "lawn_mower.esperance_jr": _FakeState("idle", instant),
+                "sensor.esperance_jr_batterie": _FakeState("52", instant),
+                "binary_sensor.esperance_jr_en_charge": _FakeState("off", instant),
+                "binary_sensor.esperance_jr_capteur_de_pluie": _FakeState("off", instant),
+                "sensor.esperance_jr_erreur": _FakeState("no_error", instant),
+            },
+        )
+
+    def test_le_carnet_ouvert_atteint_REELLEMENT_la_coordination(self) -> None:
+        """⚠️ LE CÂBLAGE, PAS LA FONCTION — le banc a montré que je testais la seconde sans la
+        première : neutraliser `_passe_tondeuse_ouverte` ou retirer l'argument des TROIS points
+        d'appel ne faisait tomber aucun test.
+
+        Ce test part de l'état de la tondeuse et va jusqu'à la présence publiée.
+        """
+        coord = self._coord_idle_dans_le_jardin()
+
+        # Carnet vide : `idle` vaut une rentrée, comme avant.
+        coord._runtime_state["mower_passes"] = {"en_cours": None, "journal": []}
+        self.assertEqual(coord._build_mower_snapshot()["mower_presence_state"], "dockee",
+                         "prémisse : sans passe ouverte, `idle` reste une rentrée")
+
+        # Une passe est ouverte : elle est sortie et n'est pas revenue.
+        coord._runtime_state["mower_passes"] = {
+            "en_cours": {"debut": "2026-09-02T22:40:31+02:00", "batterie_debut": 91},
+            "journal": [],
+        }
+        snapshot = coord._build_mower_snapshot()
+        self.assertEqual(
+            snapshot["mower_presence_state"], "dehors",
+            "la passe ouverte n'atteint pas la coordination : `idle` referme la passe à tort",
+        )
+        self.assertFalse(snapshot["mower_is_docked"])
+
+    def test_le_helper_lit_bien_le_carnet(self) -> None:
+        coord = self._coord_idle_dans_le_jardin()
+        for carnet, attendu in (
+            (None, False),
+            ({}, False),
+            ({"en_cours": None}, False),
+            ({"en_cours": {"debut": "x"}}, True),
+        ):
+            with self.subTest(carnet=carnet):
+                coord._runtime_state["mower_passes"] = carnet
+                self.assertIs(coord._passe_tondeuse_ouverte(), attendu)
+
     def test_manual_cutting_height_is_used_when_mower_height_is_missing(self) -> None:
         coord = self._build_coordinator(
             entry_data={"hauteur_coupe_tondeuse_mm": 48},
@@ -5389,6 +5449,86 @@ class CarnetDePassesTondeuseTests(unittest.TestCase):
 
     def _journal(self, coord):
         return coord._runtime_state["mower_passes"]["journal"]
+
+    # ---- LA SORTIE DU 02/09/2026, DE BOUT EN BOUT ----------------------------------------
+    def _rejouer_avec_presence(self, sequence, coord):
+        """Rejoue une séquence en passant par le VRAI résolveur de présence.
+
+        ⚠️ `_ctx` fournit `mower_is_docked` à la main : il court-circuite exactement le code
+        qu'on veut exercer. Ici la présence est calculée par `build_mower_coordination_context`,
+        avec la mémoire de passe ouverte — la chaîne complète.
+        """
+        t0 = datetime(2026, 9, 2, 20, 40, tzinfo=timezone.utc)
+        sortie = {}
+        for minutes, brut, statut, erreur, batterie in sequence:
+            instant = t0 + timedelta(minutes=minutes)
+            coord._current_datetime = lambda t=instant: t
+            coord._current_date = lambda t=instant: t.date()
+            base = {
+                "tondeuse_source_entity": "lawn_mower.esperance_jr",
+                "tondeuse_connectee": True,
+                "tondeuse_etat_brut": brut,
+                "tondeuse_statut": statut,
+                "tondeuse_erreur": erreur,
+                "tondeuse_en_charge": brut == "charging",
+                "tondeuse_batterie": batterie,
+                "mower_battery": batterie,
+            }
+            contexte = {
+                **base,
+                **mower_coordination_mod.build_mower_coordination_context(
+                    base, enabled=True, passe_ouverte=coord._passe_tondeuse_ouverte()
+                ),
+            }
+            sortie = coord._suivre_passes_tondeuse(contexte)
+        return sortie, coord
+
+    def test_la_sortie_du_2_septembre_ne_fait_plus_QU_UNE_passe(self) -> None:
+        """⚠️ LE CAS RÉEL, rejoué de bout en bout.
+
+            22:40:18  starting → mowing      ┐ une seule sortie
+            23:53:51  idle    (dans le jardin)│ jamais `docked`
+            23:54:12  idle    ⚠️ fausse rentrée mesurée
+            23:56:12  erreur  trapped_timeout │ jamais en charge
+            23:56:58  idle    ⚠️ seconde fausse rentrée → passe fantôme
+            23:57:12  mowing                  │ batterie 91 → 10
+            00:39:52  docked                  ┘ la SEULE vraie rentrée
+
+        L'installation a inscrit TROIS entrées (73,2 · 0,0 · 42,3 min) et fait tomber
+        `mower_autonomous_return_battery_median` de 85 à 78 — un retour autonome inventé.
+        """
+        coord = self._coord(datetime(2026, 9, 2, 20, 40, tzinfo=timezone.utc))
+        sortie, coord = self._rejouer_avec_presence([
+            (0, "docked", "au_repos", None, 100),
+            (1, "mowing", "tonte_en_cours", None, 91),
+            (73, "idle", "au_repos", None, 52),          # fausse rentrée n°1
+            (76, "idle", "erreur", "trapped_timeout", 52),
+            (78, "idle", "au_repos", None, 52),          # fausse rentrée n°2
+            (79, "mowing", "tonte_en_cours", None, 52),
+            (119, "docked", "au_repos", None, 10),       # la vraie rentrée
+        ], coord)
+
+        journal = self._journal(coord)
+        self.assertEqual(
+            len(journal), 1,
+            f"la sortie est découpée en {len(journal)} passes au lieu d'une seule",
+        )
+        passe = journal[0]
+        # ⚠️ La passe couvre TOUTE la sortie : elle démarre batterie pleine et finit à plat.
+        # Sans le correctif, `journal[0]` s'arrête à 52 % — le tronçon avant la fausse rentrée.
+        self.assertAlmostEqual(passe["batterie_fin"], 10.0, places=1,
+                               msg="la passe s'arrête à la fausse rentrée au lieu du vrai retour")
+        self.assertEqual(passe["fin_motif"], "bloquee",
+                         "elle a été coincée pendant la sortie : le fait doit rester au carnet")
+        self.assertGreater(passe["minutes_bloquees"], 0.0,
+                           "le blocage réel a disparu du carnet")
+        self.assertEqual(sortie["mower_passes_observed"], 1)
+        # ⚠️ ET SURTOUT : aucun « retour autonome » ne doit être inventé. C'est ce faux retour à
+        # 52 % qui a fait tomber la médiane publiée de 85 à 78 sur l'installation.
+        self.assertIsNone(
+            sortie["mower_autonomous_return_battery_median"],
+            "un « retour autonome » a été inventé au milieu de la sortie",
+        )
 
     # ---- PRÉMISSE ------------------------------------------------------------------------
     def test_premisse_une_passe_se_ferme_bien(self) -> None:
