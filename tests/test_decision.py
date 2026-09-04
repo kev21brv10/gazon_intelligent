@@ -3867,6 +3867,45 @@ class AmortissementDuRisqueTests(unittest.TestCase):
             "le biais mesuré ne change pas la décision : il ne sert à rien",
         )
 
+    def test_la_date_estimee_seche_au_rythme_MESURE(self) -> None:
+        """⚠️ « DEMAIN » TROIS JOURS DE SUITE, sans qu'aucun arrosage ne parte.
+
+        Relevé à 20:00 : 01/09 → 02/09 · 02/09 → 03/09 · 03/09 → 04/09, avec
+        `arrosage_recent_7j = 0` sur toute la période. La formule séchait le sol à 4,1 mm/j
+        (modèle ET0 × Kc) quand le registre en débitait réellement 2,9.
+
+        ⚠️ Et c'est d'abord une question de COHÉRENCE : depuis la 0.71.0 la projection de
+        déclenchement utilise le rythme mesuré. Laisser l'estimation sur le modèle, c'est
+        publier deux réponses à la même question.
+        """
+        lent = self._bundle_avec_registre(self._registre(2.8), reserve=14.0)
+        rapide = self._bundle_avec_registre(self._registre(4.2), reserve=14.0)
+
+        self.assertLess(lent["water_balance"]["etc_biais_mesure"], 0.75, "prémisse")
+        self.assertAlmostEqual(rapide["water_balance"]["etc_biais_mesure"], 1.0, places=2,
+                               msg="prémisse : le second registre doit donner un biais neutre")
+
+        jours_lent = lent["jours_avant_arrosage_estime"]
+        jours_rapide = rapide["jours_avant_arrosage_estime"]
+        self.assertIsNotNone(jours_lent, "l'estimation n'est plus calculée")
+        self.assertGreater(
+            jours_lent, jours_rapide,
+            "un sol qui sèche plus lentement doit repousser la date, pas l'avancer",
+        )
+
+    def test_le_biais_n_est_PAS_applique_deux_fois(self) -> None:
+        """⚠️ `guidance._profile_for_normal` multiplie DÉJÀ `etc_mm` par le biais. Le
+        pré-multiplier dans le bilan l'appliquerait une seconde fois, et la soif projetée
+        tomberait à ~0,46 de sa valeur au lieu de 0,68."""
+        bundle = self._bundle_avec_registre(self._registre(2.8), reserve=14.0)
+        wb = bundle["water_balance"]
+        et0 = float(wb["et0_mm"])
+        kc = float(wb["kc_gazon"])
+        self.assertAlmostEqual(
+            float(wb["etc_mm"]), round(et0 * kc, 1), places=1,
+            msg="etc_mm publié est déjà corrigé : le biais sera appliqué deux fois",
+        )
+
     def test_le_palier_amorti_atteint_REELLEMENT_le_snapshot(self) -> None:
         """⚠️ LE PIÈGE DU PROJET, POUR LA TROISIÈME FOIS SUR CETTE FAMILLE DE CLÉS.
 

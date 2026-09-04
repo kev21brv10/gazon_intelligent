@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.73.0
+
+1269 tests verts. **La date de prochain arrosage séchait le sol au modèle pendant que la décision suivait la mesure.**
+
+Relevé à 20:00 : `date_prochain_arrosage_estime` annonçait **01/09 → 02/09**, puis **02/09 → 03/09**, puis **03/09 → 04/09** — « demain » trois jours de suite, avec `arrosage_recent_7j = 0` sur toute la période. Aucun arrosage n'est parti.
+
+La formule séchait le sol à **4,1 mm/j** (modèle ET0 × Kc) quand le registre en débitait réellement **2,9**.
+
+⚠️ **Et c'est d'abord une question de cohérence.** Depuis la 0.71.0, la projection de déclenchement utilise le rythme **mesuré**. Laisser l'estimation d'affichage sur le modèle, c'était publier deux réponses à la même question — la famille de défaut n°1 de ce projet, reproduite par mon propre correctif de la veille.
+
+Le biais est désormais calculé **une seule fois**, en amont, et sert aux deux.
+
+⚠️ **`etc_mm` reste brut** : `guidance._profile_for_normal` applique le biais lui-même. Le pré-multiplier l'appliquerait **deux fois**, et la soif projetée tomberait à 0,46 de sa valeur au lieu de 0,68. Un test verrouille ce piège.
+
+⚠️ **Constat non vérifié à l'origine** : les deux sceptiques de l'audit avaient été coupés par une limite de session. Repris à zéro — la seconde cause qu'il avançait (« la marge est évaluée sur la réserve de l'instant, pas à l'aube ») n'a **pas** été retenue : l'écart entre 19 h et l'aube suivante est de ~0,3 mm, et le terme `− rate` de la formule couvre déjà une journée entière de séchage.
+
+### Le seuil de température à 27 °C : diagnostic consigné, pas de bande morte
+
+Le score de stress contient **neuf seuils entiers** et un seul est amorti. Chaque palier vaut +1 point et « vigilance » commence à 3 : tout franchissement fait basculer un rang entier. Relevé du 01 au 04/09 (501 mesures) :
+
+| facteur | seuils | valeurs réelles | franchissements (4 j) |
+|---|---|---|---|
+| **ET0** | 3 / 4 / 5 mm | 3,6 – 4,8 | **9 en un après-midi** |
+| température | 27 / 30 / 34 / 38 °C | 15 – 29,4 | 3 (cycle jour/nuit) |
+| humidité | ≤ 40 / ≤ 30 % | 60 – 89 % | 0 |
+| vent | 15 / 25 km/h | 6 – 8 km/h | 0 |
+| déficit | 8 mm | — | 0 |
+
+L'ET0 est la seule à osciller *au voisinage* d'un seuil : c'est une grandeur **calculée** qui hérite du bruit du rayonnement, du vent, de l'humidité et de la pression. La température a l'inertie thermique de l'air — bruit médian **0,10 °C**, 53 changements de sens sur 500 mouvements, et ses trois franchissements sont des transitions franches tenues des heures.
+
+⚠️ **Le défaut reste générique et latent** : une après-midi qui hésiterait autour de 27,0 °C reclignoterait comme l'ET0 autour de 4,0. Mais étendre la bande demande une largeur **par facteur**, et une largeur ne s'invente pas — celle de l'ET0 (0,4 mm) est le genou *mesuré* de sa propre courbe de clignotement. Tant qu'aucun de ces seuils n'oscille, il n'y a pas de courbe à mesurer. Diagnostic consigné dans le code et dans l'onglet « Santé du code », à rouvrir le jour où l'un d'eux se met à battre.
+
 ## 0.72.0
 
 1267 tests verts. **Une retenue était annoncée alors que rien n'était demandé.**
