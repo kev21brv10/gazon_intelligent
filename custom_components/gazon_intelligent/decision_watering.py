@@ -145,15 +145,29 @@ def build_water_bundle(
     kc_gazon = compute_kc_gazon(phase_bundle["phase_dominante"], phase_bundle["sous_phase"], days_since_mowing)
     et0_mm = float(water_balance.get("et0_mm") or etp or 0.0)
     etc_mm = round(max(0.0, et0_mm * kc_gazon), 1)
+    # ⚠️ LE BIAIS MESURÉ, CALCULÉ UNE SEULE FOIS ICI. Il sert à l'estimation d'affichage
+    # ci-dessous ET à la projection de déclenchement (posé plus bas dans le bilan). Deux calculs
+    # séparés donneraient deux rythmes de séchage pour le même sol — la famille de défaut n°1.
+    # ⚠️ Et `etc_mm` reste BRUT : `guidance._profile_for_normal` applique le biais lui-même.
+    # Le pré-multiplier ici l'appliquerait DEUX FOIS.
+    _biais_etc = biais_etc_mesure(
+        context.soil_balance.get("ledger") if isinstance(context.soil_balance, dict) else None
+    )
+    _etc_sechage = round(etc_mm * _biais_etc, 1) if _biais_etc else etc_mm
     reserve_utile_mm = float(water_balance.get("reserve_utile_mm") or 0.0)
     reserve_actuelle_mm = float(water_balance.get("reserve_actuelle_mm") or 0.0)
     mm_cible_depletion = round(max(0.0, reserve_utile_mm - reserve_actuelle_mm), 1)
     # Estimation indicative du prochain jour d'arrosage (AFFICHAGE seul, n'entre dans aucune
     # décision) : nb de jours avant que la réserve atteigne le seuil MAD, au rythme ~ETc/jour.
+    # ⚠️ AU RYTHME MESURÉ, PAS AU MODÈLE. Cette estimation décrit le MÊME déclenchement que la
+    # projection d'aube : lui donner un autre rythme de séchage, c'est publier deux réponses à
+    # la même question. Mesuré du 01 au 03/09 : elle annonçait « demain » trois jours de suite
+    # sans qu'aucun arrosage ne parte, parce qu'elle séchait le sol à 4,1 mm/j quand le registre
+    # en débitait 2,9.
     jours_avant_arrosage_estime = estimate_days_until_watering(
         reserve_actuelle_mm,
         water_balance.get("reserve_minimale_mm"),
-        etc_mm,
+        _etc_sechage,
     )
     # PLANCHER À DEMAIN QUAND ON A DÉJÀ ARROSÉ AUJOURD'HUI. `estimate_days_until_watering` ne
     # raisonne que sur la réserve : elle répond « quand le sol aura-t-il soif », pas « quand
@@ -185,9 +199,7 @@ def build_water_bundle(
         # On ne peut pas mesurer le futur — à l'aube la fraction écoulée est quasi nulle. On
         # corrige donc le modèle par le biais qu'il a montré sur les journées DÉJÀ CLOSES.
         # Arbitré par Kévin le 04/09/2026 : aligner la projection sur la mesure.
-        balance_snapshot["etc_biais_mesure"] = biais_etc_mesure(
-            context.soil_balance.get("ledger")
-        )
+        balance_snapshot["etc_biais_mesure"] = _biais_etc
     # ⚠️ CALCULÉ UNE SEULE FOIS, ICI. Le palier d'ET0 du score de stress est amorti par une
     # bande morte (cf. `palier_et0_stress`) : c'est lui qui oscillait et faisait clignoter
     # `risque_gazon` quatorze fois le 31/08/2026. Il descend ensuite aux DEUX chaînes qui

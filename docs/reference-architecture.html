@@ -231,7 +231,7 @@
     <h1>Comment le système décide</h1>
     <p class="lede">Arrosage, tonte, phases, produits, capteurs et services : ce que fait chaque brique, où sont les seuils, et ce qui reste à arbitrer. Établi sur l'état réel du code.</p>
     <div class="stats">
-      <span class="stat">version <b>0.72.0</b></span>
+      <span class="stat">version <b>0.73.0</b></span>
       <span class="stat">carte <b>0.28.1</b></span>
       <span class="stat"><b>39</b> modules</span>
       <span class="stat"><b>62</b> entités</span>
@@ -1219,6 +1219,20 @@
         <p>Le ledger <strong>débite</strong> la mesurée&nbsp;; la projection d'aube qui décide du déclenchement utilisait l'<strong>estimée</strong>. Quatre jours d'affilée — ce n'est pas du bruit. ⚠️ <b>Vérifié avant de corriger</b>&nbsp;: les deux sont bien des <b>ETc</b> avec le même Kc (<code>gazon_brain</code> passe <code>etp_mm = etp × kc</code> au ledger), l'écart n'est pas un Kc caché&nbsp;; et l'intégrale horaire écarte explicitement les trous de capteur.</p>
         <p><strong>On ne peut pas mesurer le futur</strong>&nbsp;: à l'aube la fraction écoulée est quasi nulle et la projection vaut « toute l'ETc du jour ». On corrige donc le <em>modèle</em> par le biais qu'il a réellement montré sur les journées <strong>déjà closes</strong> (<code>biais_etc_mesure</code>, médiane sur 7 jours, ≈ 0,68 ici). ⚠️ <strong>Bornes asymétriques</strong>&nbsp;: plafond 1,0 — le biais ne peut que <em>réduire</em> la projection, le modèle seul reste la borne prudente&nbsp;; plancher 0,5 — un rapport aberrant ne peut pas effondrer la soif projetée et retarder un arrosage nécessaire. Seules les journées couvertes jusqu'au bout comptent, via le prédicat de clôture existant.</p>
         <p><strong>Conséquence mesurée</strong>&nbsp;: réserve 9,5 mm sur 12 utiles, ET0 5,2 à l'aube — le modèle seul déclenchait <b>5 mm</b>, corrigé il attend. <strong>L'arrosage part plus tard.</strong> Arbitré par Kévin le 04/09/2026.</p>
+        <p><strong>⚠️ Et j'ai reproduit la famille de défaut le lendemain <span class="chip ok">0.73.0</span></strong>&nbsp;: la projection de déclenchement suivait la mesure, mais <code>date_prochain_arrosage_estime</code> continuait de sécher le sol au modèle. Deux réponses à la même question. Relevé à 20:00, la date annonçait « demain » <b>trois jours de suite</b> (01→02, 02→03, 03→04/09) avec <code>arrosage_recent_7j = 0</code> — aucun arrosage n'est parti. Le biais est désormais calculé <strong>une seule fois</strong> en amont et sert aux deux. ⚠️ <code>etc_mm</code> reste BRUT&nbsp;: <code>_profile_for_normal</code> applique le biais lui-même, le pré-multiplier l'appliquerait deux fois (0,46 au lieu de 0,68) — un test verrouille ce piège.</p>
+        <p><strong>⚠️ NEUF SEUILS DANS LE SCORE, UN SEUL AMORTI — et c'est mesuré, pas assumé.</strong> Chaque palier vaut +1 point et « vigilance » commence à 3&nbsp;: tout franchissement fait basculer un rang entier. Relevé du 01 au 04/09/2026 (501 mesures)&nbsp;:</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>facteur</th><th>seuils</th><th class="num">valeurs réelles</th><th class="num">franchissements (4 j)</th></tr></thead>
+          <tbody>
+            <tr class="r-bad"><td class="rowlabel">ET0</td><td>3 / 4 / 5 mm</td><td class="num">3,6 – 4,8</td><td class="num"><b>9 en un après-midi</b></td></tr>
+            <tr><td class="rowlabel">température</td><td>27 / 30 / 34 / 38 °C</td><td class="num">15 – 29,4</td><td class="num">3 <small>(cycle jour/nuit)</small></td></tr>
+            <tr><td class="rowlabel">humidité</td><td>≤ 40 / ≤ 30 %</td><td class="num">60 – 89 %</td><td class="num">0</td></tr>
+            <tr><td class="rowlabel">vent</td><td>15 / 25 km/h</td><td class="num">6 – 8 km/h</td><td class="num">0</td></tr>
+            <tr><td class="rowlabel">déficit</td><td>8 mm</td><td class="num">—</td><td class="num">0</td></tr>
+          </tbody>
+        </table></div>
+        <p>L'ET0 est la seule à osciller <em>au voisinage</em> d'un seuil&nbsp;: c'est une grandeur CALCULÉE qui hérite du bruit du rayonnement, du vent, de l'humidité et de la pression. La température a l'inertie thermique de l'air — bruit médian <b>0,10 °C</b>, 53 changements de sens sur 500 mouvements, et ses 3 franchissements sont des transitions franches tenues des heures. ⚠️ <strong>Le défaut reste générique et LATENT</strong>&nbsp;: une après-midi qui hésiterait autour de 27,0 °C reclignoterait comme l'ET0 autour de 4,0. Étendre la bande demande une largeur PAR facteur, et une largeur ne s'invente pas — celle de l'ET0 (0,4 mm) est le genou mesuré de sa propre courbe. Tant qu'aucun de ces seuils n'oscille, il n'y a pas de courbe à mesurer. <b>À rouvrir le jour où l'un d'eux se met à battre.</b></p>
+        <p style="font-size:.9rem;color:var(--muted)"><b>Non retenu</b>&nbsp;: la seconde cause avancée par l'audit (« la marge est évaluée sur la réserve de l'instant, pas à l'aube ») — l'écart entre 19 h et l'aube suivante est de ~0,3 mm, et le terme <code>− rate</code> de la formule couvre déjà une journée entière de séchage. ⚠️ Ce constat, comme celui des deux ETc, n'avait <b>jamais été vérifié</b>&nbsp;: ses deux sceptiques avaient été coupés par une limite de session.</p>
         <p style="font-size:.9rem;color:var(--muted)"><b>⚠️ Trois mutations sur huit ont survécu au premier jet.</b> La projection ne s'applique pas sans <code>et_elapsed_fraction</code> (repli 1,0 = « rien à venir »)&nbsp;: mon test était vert <em>sans exercer une seule ligne</em>. Une seule journée tronquée ne déplace pas une médiane — il en faut trois, et les plus récentes. Et le commentaire de <code>guidance.py</code> affirmait « c'est bien l'ETc que le ledger débite (0.17.3) », faux depuis le passage à l'horaire.</p>
       </div>
 
@@ -1260,7 +1274,7 @@
         <p>Un travail <strong>jamais terminé n'est plus déclaré</strong>. Une journée où la batterie lâche avant la fin ne comptera plus comme une tonte — c'est le but, mais le retard continuera de courir tant que le travail n'est pas bouclé.</p>
       </div>
 
-      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b>&nbsp;: 1267 tests verts côté intégration et 40 côté carte, <b>57 + 10 mutations</b> détectées par le test visé. ⚠️ Deux trous ont été trouvés par le banc et non par les tests — le premier test du « 100 au repos » ne traversait qu'un des deux chemins, et les trois nouvelles clés n'étaient protégées dans aucune liste de câblage.</p>
+      <p style="font-size:.9rem;color:var(--muted)"><b>Vérification</b>&nbsp;: 1269 tests verts côté intégration et 40 côté carte, <b>60 + 10 mutations</b> détectées par le test visé. ⚠️ Deux trous ont été trouvés par le banc et non par les tests — le premier test du « 100 au repos » ne traversait qu'un des deux chemins, et les trois nouvelles clés n'étaient protégées dans aucune liste de câblage.</p>
     </section>
 
     <section>
@@ -2076,7 +2090,7 @@
     </section>
 
     <section>
-      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1267 tests verts</span></div>
+      <div class="sec-head"><h2>Où en est le code</h2><span class="tally done">1269 tests verts</span></div>
       <p>Cet onglet est le point d'entrée pour « <strong>qu'est-ce qui reste à corriger ou à supprimer ?</strong> ». Il distingue trois choses qu'on confond souvent : ce qui est cassé, ce qui est un choix, et ce qui est déjà mort.</p>
       <div class="tbl-wrap">
         <table>

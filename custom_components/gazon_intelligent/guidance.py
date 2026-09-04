@@ -956,6 +956,29 @@ def _heat_stress_level(
     pluie_24h = _to_float(weather_profile.get("weather_precipitation")) or 0.0
     pluie_prob = _to_float(weather_profile.get("weather_precipitation_probability")) or 0.0
 
+    # ⚠️ NEUF SEUILS ENTIERS ICI, ET UN SEUL EST AMORTI — c'est délibéré, et mesuré.
+    # Chaque palier vaut +1 point, et « vigilance » commence à 3 : n'importe quel franchissement
+    # fait donc basculer un RANG entier de `risque_gazon` via `_monter`. C'est le mécanisme
+    # diagnostiqué le 31/08/2026, corrigé pour l'ET0 seule par la bande morte de la 0.67.0.
+    #
+    # Relevé du 01 au 04/09/2026 sur l'installation (501 mesures), franchissements par seuil :
+    #
+    #     ET0          3 / 4 / 5 mm        valeurs 3,6-4,8      NEUF en un seul après-midi
+    #     température  27 / 30 / 34 / 38   valeurs 15-29,4      3 (le cycle jour/nuit)
+    #     humidité     ≤ 40 / ≤ 30 %       valeurs 60-89        0
+    #     vent         15 / 25 km/h        valeurs 6-8          0
+    #     déficit      8 mm                                     0
+    #
+    # L'ET0 est le seul à osciller AU VOISINAGE d'un seuil : c'est une grandeur calculée qui
+    # hérite du bruit du rayonnement, du vent, de l'humidité et de la pression. La température,
+    # elle, a l'inertie thermique de l'air — bruit médian 0,10 °C, 53 changements de sens sur
+    # 500 mouvements, et ses 3 franchissements sont des transitions FRANCHES tenues des heures.
+    #
+    # ⚠️ Le défaut reste GÉNÉRIQUE et LATENT : une après-midi qui hésiterait autour de 27,0 °C
+    # reclignoterait comme l'ET0 autour de 4,0. Étendre la bande morte demande une largeur par
+    # facteur, et une largeur ne s'invente pas — celle de l'ET0 (0,4 mm) est le genou mesuré de
+    # sa propre courbe de clignotement. Tant qu'aucun de ces seuils n'oscille, il n'y a pas de
+    # courbe à mesurer. À rouvrir le jour où l'un d'eux se met à battre.
     score = 0
     temperature = temperature if temperature is not None else 0.0
     if temperature >= 38:
