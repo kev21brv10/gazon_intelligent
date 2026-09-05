@@ -3042,9 +3042,13 @@ class CoordinatorMowerResolutionTests(unittest.TestCase):
                          "prémisse : sans passe ouverte, `idle` reste une rentrée")
 
         # Une passe est ouverte : elle est sortie et n'est pas revenue.
+        # ⚠️ `dock_signal_vu` est la prémisse, pas un détail de fixture : le cliquet ne vaut
+        # que pour une machine dont on a DÉJÀ vu un signal fort de station. Celle de Kévin
+        # annonce `docked` et la charge, elle est donc dans ce cas.
         coord._runtime_state["mower_passes"] = {
             "en_cours": {"debut": "2026-09-02T22:40:31+02:00", "batterie_debut": 91},
             "journal": [],
+            "dock_signal_vu": True,
         }
         snapshot = coord._build_mower_snapshot()
         self.assertEqual(
@@ -3052,6 +3056,62 @@ class CoordinatorMowerResolutionTests(unittest.TestCase):
             "la passe ouverte n'atteint pas la coordination : `idle` referme la passe à tort",
         )
         self.assertFalse(snapshot["mower_is_docked"])
+
+    def test_une_tondeuse_qui_ne_dit_que_idle_ne_reste_pas_dehors_pour_toujours(self) -> None:
+        """⚠️ LE VERROU CIRCULAIRE (revue Codex, PR #48).
+
+        `mower_is_docked` dérive de la présence, `au_garage` en dérive, et une passe ne se
+        ferme QUE si `au_garage`. Sur une machine dont `idle` est le seul état de repos, le
+        cliquet de la 0.70.0 se refermait sur lui-même : la passe ne pouvait plus jamais être
+        fermée, `mower_is_safe_for_watering` restait faux, et plus AUCUN arrosage ne partait.
+        """
+        coord = self._coord_idle_dans_le_jardin()
+        en_cours = {"debut": "2026-09-02T22:40:31+02:00", "batterie_debut": 91}
+
+        # Jamais vu de signal fort : `idle` est la seule rentrée qu'elle sache annoncer.
+        coord._runtime_state["mower_passes"] = {"en_cours": dict(en_cours), "journal": []}
+        snapshot = coord._build_mower_snapshot()
+        self.assertEqual(
+            snapshot["mower_presence_state"], "dockee",
+            "sans signal fort connu, le cliquet enferme la tondeuse dehors pour toujours",
+        )
+        self.assertTrue(
+            snapshot["mower_is_docked"],
+            "la passe ne pourra jamais se fermer si la présence ne repasse pas `dockee`",
+        )
+
+        # Le drapeau est collant : une fois le signal fort vu, le cliquet reprend ses droits.
+        coord._runtime_state["mower_passes"] = {
+            "en_cours": dict(en_cours),
+            "journal": [],
+            "dock_signal_vu": True,
+        }
+        self.assertEqual(
+            coord._build_mower_snapshot()["mower_presence_state"], "dehors",
+            "le drapeau posé, la protection de la 0.70.0 doit revenir intacte",
+        )
+
+    def test_le_drapeau_dock_est_REELLEMENT_pose_par_un_signal_fort(self) -> None:
+        """⚠️ POSER, PAS SEULEMENT LIRE. Un drapeau lu partout et écrit nulle part reste faux
+        pour toujours : le cliquet de la 0.70.0 serait mort-né sans que rien ne le signale.
+        """
+        coord = self._coord_idle_dans_le_jardin()
+        coord._runtime_state["mower_passes"] = {"en_cours": None, "journal": []}
+        self.assertFalse(coord._dock_signal_tondeuse_vu(), "prémisse : rien de vu au départ")
+
+        coord._suivre_passes_tondeuse(
+            {"tondeuse_connectee": True, "mower_dock_signal_fort": True, "mower_battery": 100}
+        )
+        self.assertTrue(
+            coord._dock_signal_tondeuse_vu(),
+            "un signal fort de station doit armer le drapeau, sinon le cliquet ne sert jamais",
+        )
+
+        # Et il ne se retire pas au premier `idle` venu.
+        coord._suivre_passes_tondeuse(
+            {"tondeuse_connectee": True, "mower_dock_signal_fort": False, "mower_battery": 88}
+        )
+        self.assertTrue(coord._dock_signal_tondeuse_vu(), "le drapeau doit être collant")
 
     def test_le_helper_lit_bien_le_carnet(self) -> None:
         coord = self._coord_idle_dans_le_jardin()

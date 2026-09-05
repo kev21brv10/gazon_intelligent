@@ -1647,6 +1647,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 raw_context,
                 enabled=self.mower_coordination_enabled,
                 passe_ouverte=self._passe_tondeuse_ouverte(),
+                dock_signal_vu=self._dock_signal_tondeuse_vu(),
             ),
         }
 
@@ -2281,6 +2282,25 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         carnet = self._runtime_state.get("mower_passes")
         return isinstance(carnet, dict) and isinstance(carnet.get("en_cours"), dict)
 
+    def _dock_signal_tondeuse_vu(self) -> bool:
+        """A-t-on DÉJÀ vu cette tondeuse annoncer sa station par un signal fort ?
+
+        ⚠️ Mémoire collante, et c'est le point : elle décide si le cliquet « passe ouverte »
+        de la coordination a le droit de tenir. Une tondeuse qui ne dit que `idle` à sa station
+        ne repassera jamais `dockee` ; sans ce drapeau, sa passe reste ouverte pour toujours
+        et l'arrosage ne repart plus jamais (signalé par la revue Codex sur la PR #48).
+
+        ⚠️ Le drapeau vit DANS le carnet de passes, pas à côté : `mower_passes` est déjà
+        sérialisé et restauré en bloc. Une clé de plus au même endroit voyage toute seule,
+        là où une clé sœur aurait dû traverser les deux listes blanches — le piège n°1 du projet.
+
+        Faux tant qu'aucun signal fort n'a été vu : le cliquet est alors relâché. C'est le bon
+        sens de la panne — au pire on retombe sur le comportement d'avant la 0.70.0 pendant
+        quelques cycles, là où l'inverse bloque l'arrosage définitivement.
+        """
+        carnet = self._runtime_state.get("mower_passes")
+        return isinstance(carnet, dict) and carnet.get("dock_signal_vu") is True
+
     def _suivre_passes_tondeuse(self, mower_context: dict[str, Any]) -> dict[str, Any]:
         """Tient le carnet des passes garage → garage, et en tire un profil mesuré.
 
@@ -2340,6 +2360,14 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             en_tonte = connectee and bool(mower_context.get("mower_is_mowing"))
             au_garage = connectee and bool(mower_context.get("mower_is_docked"))
             batterie = _to_float_or_none(mower_context.get("mower_battery"))
+
+            # ── Mémoire collante : cette machine SAIT-ELLE annoncer sa station ? ─────────
+            # Posée ici et jamais retirée. Sans elle, `_dock_signal_tondeuse_vu` renverrait
+            # toujours faux et le cliquet `idle` de la 0.70.0 serait mort-né ; avec elle
+            # posée trop large, le cliquet se refermerait sur une machine incapable de le
+            # rouvrir. C'est donc le signal FORT, celui-là seulement, qui l'arme.
+            if connectee and bool(mower_context.get("mower_dock_signal_fort")):
+                carnet["dock_signal_vu"] = True
 
             en_cours = carnet.get("en_cours")
             en_cours = en_cours if isinstance(en_cours, dict) else None

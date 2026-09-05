@@ -104,8 +104,22 @@ def _operation_state(context: dict[str, Any]) -> str:
     return "unknown"
 
 
+def _signal_dock_fort(context: dict[str, Any], operation_state: str) -> bool:
+    """La machine signale-t-elle sa station par un signal FORT, à cet instant ?
+
+    ⚠️ C'est la condition exacte de la première branche de `_presence_state`. Elle est isolée
+    ici parce que le coordinateur doit pouvoir mémoriser qu'elle a été vraie AU MOINS UNE FOIS :
+    sans cette mémoire, le cliquet de passe ouverte ci-dessous ne se relâche jamais sur une
+    tondeuse qui ne dit que `idle` à sa station.
+    """
+    return operation_state == "charging" or _normalized_raw_state(context) in _DOCKED_RAW_STATES
+
+
 def _presence_state(
-    context: dict[str, Any], operation_state: str, passe_ouverte: bool | None = None
+    context: dict[str, Any],
+    operation_state: str,
+    passe_ouverte: bool | None = None,
+    dock_signal_vu: bool | None = None,
 ) -> str:
     raw_state = _normalized_raw_state(context)
     connected = context.get("tondeuse_connectee") is True
@@ -137,7 +151,16 @@ def _presence_state(
         # Une passe ouverte dit exactement ce que `idle` ne dit pas : elle est sortie et n'est
         # pas revenue. Les signaux FORTS (`docked`, charge, tonte, retour) font les transitions ;
         # `idle` ne fait que conserver l'état prouvé.
-        if passe_ouverte:
+        #
+        # ⚠️ MAIS LE CLIQUET DOIT POUVOIR SE RELÂCHER. `mower_is_docked` dérive de cette
+        # présence, `au_garage` en dérive, et une passe ne se ferme QUE `si au_garage`
+        # (coordinator.py). Sur une tondeuse qui ne signale JAMAIS `docked` ni la charge —
+        # `idle` est son seul état de repos — la boucle se referme sur elle-même : sortie,
+        # passe ouverte, retour lu « dehors », passe jamais fermée, cliquet jamais relâché.
+        # `mower_is_safe_for_watering` reste faux POUR TOUJOURS et plus aucun arrosage ne part.
+        # Le cliquet ne vaut donc que pour les machines dont on a DÉJÀ vu un signal fort de
+        # station : pour les autres, `idle` est la seule rentrée qu'elles sauront annoncer.
+        if passe_ouverte and dock_signal_vu is not False:
             return "dehors"
         return "dockee"
     if operation_state == "transit":
@@ -206,11 +229,13 @@ def build_mower_coordination_context(
     *,
     enabled: bool,
     passe_ouverte: bool | None = None,
+    dock_signal_vu: bool | None = None,
 ) -> dict[str, Any]:
     context = dict(mower_context or {})
     raw_state = _normalized_raw_state(context)
     operation_state = _operation_state(context)
-    presence_state = _presence_state(context, operation_state, passe_ouverte)
+    presence_state = _presence_state(context, operation_state, passe_ouverte, dock_signal_vu)
+    dock_signal_fort = _signal_dock_fort(context, operation_state)
     ready, reason_code, reason_label = _reliability(context, enabled, operation_state, presence_state)
 
     if ready:
@@ -235,6 +260,9 @@ def build_mower_coordination_context(
         "mower_operation_state": operation_state,
         "mower_operation_label": _operation_label(operation_state, raw_state),
         "mower_is_docked": is_docked,
+        # ⚠️ Signal FORT de station observé à cet instant. Le coordinateur en fait une mémoire
+        # collante dans le carnet de passes : c'est elle qui autorise le cliquet `idle`.
+        "mower_dock_signal_fort": bool(dock_signal_fort),
         "mower_is_outside": is_outside,
         "mower_is_mowing": is_mowing,
         "mower_is_returning": is_returning,

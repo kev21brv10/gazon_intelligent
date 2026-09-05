@@ -1167,6 +1167,38 @@ class DecisionResultChainTests(unittest.TestCase):
         # La stratégie suit mécaniquement le niveau : « excédentaire » → « reporter ».
         self.assertEqual(attrs["hydric_strategy"], "reporter")
 
+    def test_lalerte_de_raccord_atteint_une_entite_ACTIVE_par_defaut(self) -> None:
+        """⚠️ PUBLIER SUR UNE ENTITÉ ÉTEINTE, C'EST NE PAS PUBLIER (revue Codex, PR #48).
+
+        La 0.74.0 câblait `sol_ecart_raccord_mm` sur la seule « Réserve utile actuelle », qui
+        porte `_attr_entity_registry_enabled_default = False` : sur une installation neuve
+        l'entité n'est même pas créée. Le garde censé rompre une semaine de silence était donc
+        muet, alors que son propre CHANGELOG promettait l'attribut « sur l'objectif d'arrosage ».
+
+        Ce test tient les DEUX bouts : la valeur arrive, et elle arrive sur une entité active.
+        """
+        result = _make_result()
+        result.extra.update({"soil_balance": {"reserve_mm": 12.5, "ecart_raccord_mm": -2.9}})
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=result, history=[], memory={})
+
+        objectif = sensor.GazonObjectifMmSensor(coordinator)
+        self.assertNotEqual(
+            getattr(objectif, "_attr_entity_registry_enabled_default", True), False,
+            "l'entité porteuse de l'alerte doit être active par défaut, sinon l'alerte n'existe pas",
+        )
+        self.assertEqual(
+            objectif.extra_state_attributes["sol_ecart_raccord_mm"], -2.9,
+            "l'écart de raccord n'atteint pas l'objectif d'arrosage",
+        )
+
+    def test_pas_de_raccord_rompu_pas_dattribut(self) -> None:
+        """Sa PRÉSENCE est l'alerte : sans rupture, l'attribut ne doit pas exister."""
+        result = _make_result()
+        result.extra.update({"soil_balance": {"reserve_mm": 12.5, "ecart_raccord_mm": None}})
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=result, history=[], memory={})
+        attrs = sensor.GazonObjectifMmSensor(coordinator).extra_state_attributes or {}
+        self.assertNotIn("sol_ecart_raccord_mm", attrs)
+
     def test_objectif_sensor_fort_deficit_atteignable_via_recentrage_mad(self) -> None:
         # [8] Le libellé hydrique était nourri par la réserve brute (≥ 0) → « fort déficit »
         # inatteignable. Recentré sur le seuil MAD (`reserve_minimale_mm`), une réserve bien SOUS le

@@ -782,6 +782,25 @@ def _hydric_state_from_reserve_ratio(current: Any, useful: Any) -> str | None:
     return "critique"
 
 
+def _ecart_raccord_publiable(soil_balance: Any) -> float | None:
+    """L'écart de raccord du registre du sol, ou `None` s'il n'y en a pas.
+
+    ⚠️ SOURCE UNIQUE, appelée par DEUX entités. L'attribut avait été câblé en 0.74.0 sur la
+    seule « Réserve utile actuelle » — entité de diagnostic **désactivée par défaut**
+    (`_attr_entity_registry_enabled_default = False`). Sur une installation neuve l'entité
+    n'est même pas créée : le garde censé rompre le silence était lui-même muet, et le
+    CHANGELOG de la 0.74.0 promettait pourtant l'attribut « publié sur l'objectif d'arrosage ».
+    Publier depuis deux endroits est ce qui fait diverger deux descriptions du même fait —
+    d'où ce helper plutôt que deux copies de la condition.
+    """
+    if not isinstance(soil_balance, dict):
+        return None
+    ecart = soil_balance.get("ecart_raccord_mm")
+    if isinstance(ecart, (int, float)) and not isinstance(ecart, bool):
+        return float(ecart)
+    return None
+
+
 def _hydric_state_for_objective_sensor(entity: GazonEntityBase, attrs: dict[str, Any]) -> str | None:
     hydric_state = _hydric_state_from_depletion_ratio(attrs.get("depletion_ratio"))
     if hydric_state is not None:
@@ -1802,6 +1821,12 @@ class GazonObjectifMmSensor(GazonEntityBase, SensorEntity):
             attrs["hydric_balance_level"] = harmonized_level
         if harmonized_strategy is not None:
             attrs["hydric_strategy"] = harmonized_strategy
+        # ⚠️ RACCORD ROMPU : le stock du sol a bougé sans pluie, sans arrosage et sans
+        # évaporation. Publié SEULEMENT quand il y en a un — sa présence est l'alerte.
+        # Ici et pas seulement sur la réserve : cette entité-ci est ACTIVE par défaut.
+        _ecart = _ecart_raccord_publiable(self._decision_value("soil_balance"))
+        if _ecart is not None:
+            attrs["sol_ecart_raccord_mm"] = _ecart
         return attrs or None
 
 
@@ -2091,8 +2116,10 @@ class GazonReserveActuelleSensor(GazonEntityBase, SensorEntity):
             # Quatre ruptures sont passées inaperçues une semaine entre le 22 et le 31/08/2026,
             # pour 5,9 mm retirés au sol et un arrosage déclenché sur cette erreur. Rien ne
             # l'avait signalé : c'est ce silence que cet attribut casse.
-            _ecart = soil_balance.get("ecart_raccord_mm")
-            if isinstance(_ecart, (int, float)) and not isinstance(_ecart, bool):
+            # ⚠️ Cette entité-ci est DÉSACTIVÉE par défaut : l'objectif d'arrosage porte le
+            # même attribut, via le même helper, et c'est lui que voit une installation neuve.
+            _ecart = _ecart_raccord_publiable(soil_balance)
+            if _ecart is not None:
                 attrs["sol_ecart_raccord_mm"] = _ecart
         hydric_state = _hydric_state_for_objective_sensor(self, attrs)
         if hydric_state is not None:
