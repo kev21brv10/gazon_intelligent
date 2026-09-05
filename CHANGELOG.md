@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.75.0
+
+1278 tests verts. **Deux correctifs trouvés par la revue Codex sur la PR #48 — les deux dans mes propres commits de cette série.**
+
+### Une alerte publiée sur une entité éteinte
+
+La 0.74.0 ajoutait `sol_ecart_raccord_mm` à la seule « Réserve utile actuelle ». Cette entité porte `_attr_entity_registry_enabled_default = False` et la catégorie `DIAGNOSTIC` : **sur une installation neuve elle n'est même pas créée**. Le garde construit pour rompre une semaine de silence sur le registre du sol était donc lui-même muet — et le CHANGELOG de la 0.74.0 promettait pourtant l'attribut « publié sur l'objectif d'arrosage ». Le code contredisait sa propre note de version.
+
+L'attribut est désormais publié aussi sur `sensor.gazon_intelligent_objectif_d_arrosage`, entité active par défaut, via un helper unique (`_ecart_raccord_publiable`) appelé par les deux capteurs : deux copies de la même condition, c'est deux descriptions du même fait qui finissent par diverger.
+
+### Un cliquet qui ne pouvait plus se rouvrir
+
+La 0.70.0 a appris à la coordination que `idle` ne prouve pas une rentrée : tant qu'une passe est ouverte, la tondeuse est déclarée « dehors ». Correct pour une machine qui annonce `docked` ou la charge — elle finit toujours par le dire.
+
+Mais `mower_is_docked` dérive de cette présence, `au_garage` en dérive, et **une passe ne se ferme QUE si `au_garage`**. Sur une tondeuse dont `idle` est le seul état de repos, la boucle se refermait sur elle-même : sortie, passe ouverte, retour lu « dehors », passe jamais fermée, cliquet jamais relâché. `mower_is_safe_for_watering` restait faux **pour toujours** et plus aucun arrosage ne partait. La Landroid Vision y échappe — elle signale `docked` et la charge.
+
+Le cliquet ne vaut désormais que pour les machines dont un signal FORT de station a déjà été observé (`dock_signal_vu`, mémoire collante rangée **dans** le carnet de passes — déjà sérialisé et restauré en bloc, donc aucune des deux listes blanches à traverser). Faux par défaut : au pire on retombe quelques cycles sur le comportement d'avant la 0.70.0, là où l'inverse bloquait l'arrosage définitivement.
+
+### Ce qui manquait pour que ça se voie
+
+Aucun test ne couvrait `sol_ecart_raccord_mm` — c'est par là que le défaut est passé. Quatre mutations vérifiées, chacune faisant tomber un seul test, le bon : cliquet privé du drapeau, drapeau jamais posé, argument retiré du point d'appel, attribut retiré de l'entité active.
+
 ## 0.74.0
 
 1274 tests verts. **Un raccord rompu dans le registre du sol ne peut plus passer inaperçu.**
