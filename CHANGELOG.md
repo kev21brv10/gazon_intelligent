@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.77.0
+
+1286 tests verts. **Le Sursemis n'usurpe plus le verdict de la tonte — étape 1 sur 2 du déverrouillage.**
+
+### Une usurpation, pas un bug
+
+`_resolve_sursemis_override` rendait, sur ses **trois** sorties, deux verdicts qui ne lui appartiennent pas : `tonte_autorisee` et `arrosage_auto_autorise`. Or `base_bundle` porte déjà `mowing_bundle["tonte_autorisee"]` et `tonte_statut` (`decision_watering.py:654-655`), et `decision.py:451` fait le **ET** des deux bundles. Les figer à `False` écrasait donc la décision de `decision_mowing`.
+
+Conséquence : **la tonte était interdite les 45 jours de la phase**, alors que le module de tonte ne bloque que Germination et Enracinement — 24 jours (`_SURSEMIS_MOWING_BLOCKED_SUBPHASES`, `decision_mowing.py:185`). Deux sorties de l'intégration se contredisaient, et c'est l'arrosage qui gagnait.
+
+### Le verrou était circulaire
+
+`seeding_transition_ready` exige **deux tontes déclarées** depuis le début de la phase (`guidance.py:361`) — des tontes que la phase interdisait elle-même. Un sursemis ne pouvait donc **jamais** se terminer.
+
+Mesuré sur un snapshot réel, Sursemis démarré le 01/03 :
+
+| | avant | après |
+|---|---|---|
+| J+5 Germination | interdite | **interdite** (inchangé, c'est le bon verdict) |
+| J+18 Enracinement | interdite | **interdite** (inchangé) |
+| J+30 Reprise | interdite | **autorisée avec précaution** |
+| transition prête (2 tontes) | jamais | **oui** |
+
+### Ce qui n'est PAS dans cette version
+
+`arrosage_auto_autorise` reste forcé à `False` : le programme de micro-cycles semis est toujours calculé sans jamais être appliqué. C'est l'étape 2, volontairement séparée — c'est elle qui fait couler de l'eau en autonomie, trois à quatre fois par jour, dans une phase que l'installation n'a **jamais exercée**. Elle doit être observée sur un premier cycle réel avant de tourner 45 jours sur un semis.
+
+### Ce qui le prouve
+
+Quatre tests. Le correctif tient en une **absence** — trois lignes retirées — donc rien n'empêcherait de les réintroduire « pour être sûr » : un test lit le corps de la fonction et refuse toute réécriture de la tonte sur n'importe laquelle des trois sorties.
+
+⚠️ **Couverture mesurée au banc de mutation**, et consignée dans le test : des trois sorties, seule la dernière est atteinte par un test comportemental — les deux premières dépendent de `runtime_context["semis_followup_state"]`, que `build_decision_snapshot` n'expose pas. Fabriquer un `state` à la main (12 clés dont trois objets composites) reviendrait à tester une fiction. Dette assumée.
+
 ## 0.76.0
 
 1282 tests verts. **Les valeurs que le modèle utilise réellement sont enfin visibles.**
