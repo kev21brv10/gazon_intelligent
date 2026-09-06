@@ -4361,7 +4361,8 @@ class LesDrapeauxDeSanteTestentLaSourceTests(unittest.TestCase):
     """
 
     def _sante(self, *, temperature_source, humidite_capteur, vent_capteur, weather_profile,
-               conf=("sensor.t", "sensor.h", "sensor.v")):
+               conf=("sensor.t", "sensor.h", "sensor.v"),
+               temperature=None, humidite=None, vent=None):
         """Appelle la VRAIE méthode du coordinateur, pas une reproduction de son expression."""
         conf_t, conf_h, conf_v = conf
         coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
@@ -4381,7 +4382,63 @@ class LesDrapeauxDeSanteTestentLaSourceTests(unittest.TestCase):
             pluie_24h_sensor=0.0,
             weather_profile=weather_profile,
             eto_hourly={"radiation_source": "capteur", "pressure_source": "capteur", "value": 0.3},
+            temperature=temperature,
+            humidite=humidite,
+            vent=vent,
         )
+
+    def test_les_valeurs_utilisees_sont_publiees_avec_leur_unite(self) -> None:
+        """⚠️ LE DRAPEAU DIT D'OÙ, LA VALEUR DIT QUOI — les deux sont nécessaires.
+
+        Sans la valeur, impossible de décomposer une ET0 surprenante, de vérifier qu'un
+        changement de capteur a bougé le nombre, ni de contrôler une conversion d'unité :
+        `wind_speed_to_kmh` et `pression_vers_hpa` transforment selon l'unité DÉCLARÉE, et une
+        unité inattendue passe avec tous les voyants au vert (le WS90 publie des kPa).
+        """
+        s = self._sante(temperature_source="capteur", humidite_capteur=55.0,
+                        vent_capteur=6.0, weather_profile={"weather_temperature": 24.0},
+                        temperature=28.34, humidite=55.27, vent=6.049)
+        self.assertEqual(s["temperature_utilisee_c"], 28.3)
+        self.assertEqual(s["humidite_utilisee_pct"], 55.3)
+        self.assertEqual(s["vent_utilise_kmh"], 6.05)
+
+    def test_la_valeur_publiee_est_la_RESOLUE_pas_celle_du_capteur(self) -> None:
+        """Sous repli, le drapeau tombe au rouge MAIS la valeur reste lisible.
+
+        C'est tout l'intérêt de la paire : on voit que la mesure vient de la météo, ET on voit
+        sur quel nombre la décision a été prise. Le 29/07, deux secondes de repli du vent ont
+        posé le pic d'ET0 du jour à 12,4 — invisible sans cette valeur.
+        """
+        s = self._sante(temperature_source="weather", humidite_capteur=None,
+                        vent_capteur=None, weather_profile={"weather_temperature": 24.0},
+                        temperature=24.0, humidite=70.0, vent=12.1)
+        self.assertFalse(s["temperature_valid"], "prémisse : on est bien sur un repli")
+        self.assertEqual(s["temperature_utilisee_c"], 24.0)
+        self.assertEqual(s["vent_utilise_kmh"], 12.1, "la valeur du repli doit rester visible")
+
+    def test_le_point_d_APPEL_transmet_bien_les_trois_valeurs(self) -> None:
+        """⚠️ LE CÂBLAGE, PAS LA FONCTION — défaut n°1 du projet, payé cinq fois.
+
+        Les trois paramètres ont un défaut `None` : un point d'appel qui ne les passe pas
+        laisserait les clés publiées mais TOUJOURS nulles, et aucun test de la fonction seule
+        ne le verrait. On lit donc le point d'appel réel dans le code source.
+        """
+        source = (PACKAGE_DIR / "coordinator.py").read_text(encoding="utf-8")
+        bloc = source.split("self._build_sensor_health(", 1)
+        self.assertEqual(len(bloc), 2, "le point d'appel a disparu")
+        appel = bloc[1].split(")", 1)[0]
+        for kwarg in ("temperature=temperature", "humidite=humidite", "vent=vent"):
+            with self.subTest(kwarg=kwarg):
+                self.assertIn(kwarg, appel, f"{kwarg} n'est pas transmis au point d'appel")
+
+    def test_une_mesure_absente_publie_None_pas_zero(self) -> None:
+        """« Absent » et « zéro » ne sont pas la même chose — piège récurrent du projet."""
+        s = self._sante(temperature_source="non disponible", humidite_capteur=None,
+                        vent_capteur=None, weather_profile={},
+                        temperature=None, humidite=None, vent=None)
+        for cle in ("temperature_utilisee_c", "humidite_utilisee_pct", "vent_utilise_kmh"):
+            with self.subTest(cle=cle):
+                self.assertIsNone(s[cle])
 
     def test_le_repli_meteo_ne_maintient_plus_les_voyants_au_vert(self) -> None:
         """Le cas du 29/07 : capteur tombé, valeur résolue depuis la météo."""

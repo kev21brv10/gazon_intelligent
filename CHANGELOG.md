@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.76.0
+
+1282 tests verts. **Les valeurs que le modèle utilise réellement sont enfin visibles.**
+
+### Le drapeau dit d'où, jamais ce que ça vaut
+
+`sensor_health` publiait un booléen par entrée — « la mesure vient bien de ton capteur, pas du repli ». Ces drapeaux sont justes depuis leur correction : ils testent la SOURCE, avant repli. Mais aucun ne dit **quel nombre** est entré dans le modèle après conversion.
+
+Or c'est là que vivent les pièges. `wind_speed_to_kmh` et `pression_vers_hpa` transforment la valeur selon l'unité **déclarée par l'entité** : une unité absente ou inattendue passe sans un mot, tous les voyants au vert. Le Shelly/Ecowitt WS90 publie des **kPa** — sans `pression_vers_hpa` il donnerait 101 hPa au lieu de 1010, en plein calcul FAO-56, et `eto_pressure_measured` resterait `true`.
+
+Trois questions restaient sans réponse, vécues le 06/09/2026 :
+
+- **décomposer une ET0 surprenante** — le vent ? la température ? l'humidité ? Il fallait refaire le calcul à la main depuis les entités sources.
+- **vérifier qu'un changement de capteur a bougé le nombre** — les drapeaux ne distinguent pas le capteur A du capteur B, tous deux « configurés ».
+- **contrôler une unité** — un capteur publiant des m/s sans déclarer son unité donnerait un vent **3,6 fois trop faible**, `wind_measured` au vert. Et le vent est le levier majeur de l'ET0 : le repli est chiffré à **+36 %** sur les entrées réelles du 29/07.
+
+### Ce qui est ajouté
+
+Trois valeurs, unité dans le nom, à lire **avec** le drapeau voisin : `temperature_utilisee_c`, `humidite_utilisee_pct`, `vent_utilise_kmh`. Ce sont les valeurs **résolues** — celles qui entrent réellement dans le modèle, repli compris : sous repli le drapeau tombe au rouge et la valeur reste lisible, ce qui rend enfin visible le genre d'incident du 29/07 où **deux secondes de repli du vent** ont posé le pic d'ET0 du jour à 12,4 avant que le cliquet ne le fige.
+
+`sensor_health` étant déjà publié en bloc, aucune liste blanche à traverser.
+
+### Ce qui le prouve
+
+Quatre tests, dont un sur le **point d'appel** : les trois paramètres ont un défaut `None`, donc un câblage oublié laisserait les clés publiées mais éternellement nulles sans qu'aucun test de la fonction seule ne le voie. Deux mutations vérifiées — débrancher le point d'appel fait tomber **trois** tests, transformer l'absence en zéro en fait tomber un.
+
 ## 0.75.0
 
 1278 tests verts. **Deux correctifs trouvés par la revue Codex sur la PR #48 — les deux dans mes propres commits de cette série.**
