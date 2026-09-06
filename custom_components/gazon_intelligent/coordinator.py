@@ -1082,6 +1082,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             pluie_24h_sensor=pluie_24h_sensor,
             weather_profile=weather_profile,
             eto_hourly=eto_hourly,
+            temperature=temperature,
+            humidite=humidite,
+            vent=vent,
         )
         # LOT E — risque fongique (calculé ici pour garantir la présence dans coordinator.data)
         _fungal = _compute_fungal_risk(
@@ -2944,13 +2947,39 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         pluie_24h_sensor: float | None,
         weather_profile: dict[str, Any],
         eto_hourly: dict[str, Any],
+        temperature: float | None = None,
+        humidite: float | None = None,
+        vent: float | None = None,
     ) -> dict[str, Any]:
         """Voyants de santé des ENTRÉES. Extrait pour être testable directement.
 
         ⚠️ Chaque drapeau doit tester sa SOURCE, jamais la valeur résolue : une valeur résolue
         l'est aussi par un repli, et le voyant reste alors au vert pendant que la mesure manque.
+
+        ⚠️ ET LES VALEURS ELLES-MÊMES SONT PUBLIÉES À CÔTÉ. Les drapeaux disent d'où vient la
+        mesure, jamais ce qu'elle vaut APRÈS conversion — or c'est là que vivent les pièges :
+        `wind_speed_to_kmh` et `pression_vers_hpa` transforment la valeur selon l'unité déclarée
+        par l'entité, et une unité absente ou inattendue passe sans un mot avec tous les voyants
+        au vert. Le WS90 publie des kPa : sans `pression_vers_hpa` il donnerait 101 hPa au lieu
+        de 1010, en plein calcul FAO-56, et `eto_pressure_measured` resterait `true`.
+        Trois conséquences directes, vécues le 06/09/2026 : on ne pouvait pas décomposer une ET0
+        surprenante, ni vérifier qu'un changement de capteur avait bougé le nombre (les drapeaux
+        ne distinguent pas le capteur A du capteur B, tous deux « configurés »), ni contrôler une
+        unité. Publier la valeur RÉSOLUE — celle qui entre réellement dans le modèle — ferme
+        les trois.
         """
         return {
+            # ── Ce que le modèle a RÉELLEMENT utilisé ce cycle, unité dans le nom ────────────
+            # À lire AVEC le drapeau voisin : le drapeau dit d'où ça vient, la valeur dit quoi.
+            "temperature_utilisee_c": (
+                round(float(temperature), 1) if isinstance(temperature, (int, float)) else None
+            ),
+            "humidite_utilisee_pct": (
+                round(float(humidite), 1) if isinstance(humidite, (int, float)) else None
+            ),
+            "vent_utilise_kmh": (
+                round(float(vent), 2) if isinstance(vent, (int, float)) else None
+            ),
             # Teste la SOURCE, pas la valeur résolue (cf. le commentaire sur `humidite_capteur`).
             # `temperature_source` vaut « capteur » uniquement quand la mesure vient du capteur
             # configuré ; « weather », « meteo_forecast » et « non disponible » sont des replis.
