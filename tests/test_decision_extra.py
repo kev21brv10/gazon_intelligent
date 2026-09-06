@@ -393,6 +393,85 @@ class TestDecisionSnapshotSursemisRules(unittest.TestCase):
         self.assertEqual(not_ready["risque_gazon"], "modere")
         self.assertEqual(ready["risque_gazon"], "modere")
 
+class TestSursemisNUsurpePlusLeVerdictDeTonte(unittest.TestCase):
+    """⚠️ Le Sursemis figeait `tonte_autorisee=False` sur ses TROIS sorties.
+
+    Deux sorties de l'intégration se contredisaient : `_resolve_sursemis_override` interdisait
+    la tonte les **45 jours** de la phase, alors que `decision_mowing` ne bloque que Germination
+    et Enracinement (24 j, `_SURSEMIS_MOWING_BLOCKED_SUBPHASES`). C'est l'arrosage qui gagnait,
+    parce que `decision.py:451` fait le ET des deux bundles.
+
+    Et le verrou était CIRCULAIRE : `seeding_transition_ready` exige deux tontes déclarées
+    depuis le début de la phase — des tontes que la phase interdisait elle-même. Le sursemis
+    ne pouvait jamais se terminer.
+    """
+
+    D0 = date(2026, 3, 1)
+
+    def _snap(self, jour: int, history_extra=()):
+        return decision.build_decision_snapshot(
+            history=[{"type": "Sursemis", "date": "2026-03-01"}, *history_extra],
+            today=self.D0 + timedelta(days=jour), hour_of_day=11, temperature=18,
+            pluie_24h=0.0, pluie_demain=0.0, humidite=60,
+            type_sol="limoneux", etp_capteur=2.0,
+        )
+
+    def test_germination_et_enracinement_restent_interdites(self) -> None:
+        """Non-régression agronomique : on ne tond PAS sur des plantules."""
+        for jour, sous_phase in ((5, "Germination"), (18, "Enracinement")):
+            with self.subTest(jour=jour):
+                snap = self._snap(jour)
+                self.assertEqual(snap["sous_phase"], sous_phase)
+                self.assertFalse(snap["tonte_autorisee"])
+                self.assertEqual(snap["tonte_statut"], "interdite")
+
+    def test_la_tonte_redevient_possible_en_Reprise(self) -> None:
+        """LE correctif : au-delà de j24 c'est `decision_mowing` qui tranche, plus la phase."""
+        snap = self._snap(30)
+        self.assertEqual(snap["sous_phase"], "Reprise")
+        self.assertTrue(
+            snap["tonte_autorisee"],
+            "la phase Sursemis usurpe encore le verdict du module de tonte",
+        )
+        self.assertEqual(snap["tonte_statut"], "autorisee_avec_precaution")
+
+    def test_le_verrou_circulaire_de_transition_se_denoue(self) -> None:
+        """Deux tontes déclarées ⇒ transition prête. Impossible tant que la tonte était bannie.
+
+        ⚠️ `_count_tonte_events_since_latest_phase_start` compare à « tonte » en MINUSCULE :
+        un jeu d'essai en « Tonte » compte zéro et donne un faux négatif silencieux.
+        """
+        snap = self._snap(32, history_extra=(
+            {"type": "tonte", "date": "2026-03-27"},
+            {"type": "tonte", "date": "2026-03-31"},
+        ))
+        self.assertEqual(snap["sous_phase"], "Reprise")
+        self.assertIs(snap["seeding_transition_ready"], True)
+
+    def test_aucune_des_trois_sorties_ne_reecrit_le_verdict_de_tonte(self) -> None:
+        """⚠️ ANTI-RETOUR PAR LA PORTE DE DERRIÈRE.
+
+        Le correctif tient en une ABSENCE : trois lignes retirées. Rien n'empêche de les
+        réintroduire « pour être sûr » lors d'une prochaine passe. Ce test lit le corps de la
+        fonction et refuse toute réécriture de la tonte, sur n'importe laquelle des sorties.
+
+        ⚠️ COUVERTURE RÉELLE, mesurée au banc de mutation le 06/09/2026 : des trois sorties,
+        seule la dernière (le cycle de surface) est atteinte par un test COMPORTEMENTAL — les
+        deux premières dépendent de `runtime_context["semis_followup_state"]`, que
+        `build_decision_snapshot` n'expose pas. Fabriquer un `state` à la main (12 clés, dont
+        `base_bundle`, `water_bundle` et `context`) reviendrait à tester une fiction ; ce test-ci
+        est donc l'unique garde des sorties 1 et 2, et il a bien mordu sur les trois mutations.
+        Dette assumée, à lever le jour où un banc construira un `state` réel.
+        """
+        source = (PACKAGE_DIR / "decision_watering.py").read_text(encoding="utf-8")
+        debut = source.index("def _resolve_sursemis_override")
+        corps = source[debut:source.index("\ndef ", debut + 10)]
+        self.assertNotIn("tonte_autorisee=False", corps)
+        self.assertNotIn('tonte_statut="interdite"', corps)
+        # Les autres overrides, eux, ont le droit de trancher la tonte : c'est leur rôle.
+        self.assertIn("tonte_autorisee=False", source, "les autres overrides ont disparu")
+
+
 class TestDecisionSnapshotApplicationsAndSensors(unittest.TestCase):
     def test_build_decision_snapshot_fertilisation_uses_application_technique(self) -> None:
         snapshot = decision.build_decision_snapshot(

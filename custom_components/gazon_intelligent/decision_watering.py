@@ -1267,8 +1267,15 @@ def _resolve_sursemis_override(state: dict[str, Any]) -> dict[str, Any] | None:
             mm_final=0.0,
             mm_requested=0.0,
             mm_applied=0.0,
-            tonte_autorisee=False,
-            tonte_statut="interdite",
+            # ⚠️ LA TONTE N'EST PAS À NOUS. `base_bundle` porte déjà `mowing_bundle["tonte_autorisee"]`
+            # et `tonte_statut` (l.654-655), et `decision.py:451` fait le ET des deux bundles.
+            # Les figer ici à False, c'était USURPER le verdict de `decision_mowing` : la tonte
+            # se retrouvait interdite les 45 JOURS de la phase, alors que le module de tonte ne
+            # bloque que Germination + Enracinement (24 j, `_SURSEMIS_MOWING_BLOCKED_SUBPHASES`).
+            # Deux sorties de l'intégration se contredisaient, et c'est l'arrosage qui gagnait.
+            # Pire, le verrou était CIRCULAIRE : `seeding_transition_ready` exige DEUX tontes
+            # déclarées depuis le début de la phase — des tontes que la phase interdisait
+            # elle-même. Le sursemis ne pouvait donc jamais se terminer.
             arrosage_auto_autorise=False,
             arrosage_recommande=False,
             type_arrosage="aucune_action",
@@ -1339,8 +1346,15 @@ def _resolve_sursemis_override(state: dict[str, Any]) -> dict[str, Any] | None:
             mm_final=0.0,
             mm_requested=0.0,
             mm_applied=0.0,
-            tonte_autorisee=False,
-            tonte_statut="interdite",
+            # ⚠️ LA TONTE N'EST PAS À NOUS. `base_bundle` porte déjà `mowing_bundle["tonte_autorisee"]`
+            # et `tonte_statut` (l.654-655), et `decision.py:451` fait le ET des deux bundles.
+            # Les figer ici à False, c'était USURPER le verdict de `decision_mowing` : la tonte
+            # se retrouvait interdite les 45 JOURS de la phase, alors que le module de tonte ne
+            # bloque que Germination + Enracinement (24 j, `_SURSEMIS_MOWING_BLOCKED_SUBPHASES`).
+            # Deux sorties de l'intégration se contredisaient, et c'est l'arrosage qui gagnait.
+            # Pire, le verrou était CIRCULAIRE : `seeding_transition_ready` exige DEUX tontes
+            # déclarées depuis le début de la phase — des tontes que la phase interdisait
+            # elle-même. Le sursemis ne pouvait donc jamais se terminer.
             arrosage_auto_autorise=False,
             arrosage_recommande=False,
             type_arrosage="bloque",
@@ -1460,8 +1474,15 @@ def _resolve_sursemis_override(state: dict[str, Any]) -> dict[str, Any] | None:
         mm_final=objectif_mm,
         mm_requested=objectif_mm,
         mm_applied=objectif_mm,
-        tonte_autorisee=False,
-        tonte_statut="interdite",
+        # ⚠️ LA TONTE N'EST PAS À NOUS. `base_bundle` porte déjà `mowing_bundle["tonte_autorisee"]`
+        # et `tonte_statut` (l.654-655), et `decision.py:451` fait le ET des deux bundles.
+        # Les figer ici à False, c'était USURPER le verdict de `decision_mowing` : la tonte
+        # se retrouvait interdite les 45 JOURS de la phase, alors que le module de tonte ne
+        # bloque que Germination + Enracinement (24 j, `_SURSEMIS_MOWING_BLOCKED_SUBPHASES`).
+        # Deux sorties de l'intégration se contredisaient, et c'est l'arrosage qui gagnait.
+        # Pire, le verrou était CIRCULAIRE : `seeding_transition_ready` exige DEUX tontes
+        # déclarées depuis le début de la phase — des tontes que la phase interdisait
+        # elle-même. Le sursemis ne pouvait donc jamais se terminer.
         arrosage_auto_autorise=False,
         arrosage_recommande=objectif_mm > 0,
         type_arrosage=type_arrosage,
