@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.78.0
+
+1291 tests verts. **L'arrosage du sursemis n'est plus seulement calculé : il s'exécute — étape 2 sur 2.**
+
+### Calculé, publié, jamais appliqué
+
+Le programme de micro-cycles semis existait déjà en entier : 1,5 mm en Germination, 3,0 en Enracinement, 2,5 en Reprise, créneaux 10h/12h/14h/16h. Il était publié à chaque cycle et **le portail du coordinateur le refusait systématiquement** en `auto_not_allowed`. Sur les dix jours de germination, 45 mm devenaient environ **35 appels de service à la main**, sur un semis qui ne pardonne pas une surface sèche.
+
+Deux verrous en série :
+
+- `auto_ok` (`decision_watering.py:1694`) listait Normal, Fertilisation, Biostimulant, Agent Mouillant et Scarification — **pas Sursemis**.
+- Les trois sorties de `_resolve_sursemis_override` forçaient `arrosage_auto_autorise=False`.
+
+### La liste blanche qu'on oublie
+
+Ajouter « Sursemis » à `auto_ok` **ne suffisait pas** : les résolveurs de priorité court-circuitent par un `return` anticipé le bloc qui pose `arrosage_auto_autorise = auto_ok`. Un override n'avait donc aucun moyen de savoir si l'automatisme était permis — il ne pouvait que le refuser en dur.
+
+`auto_ok` est désormais publié dans `priority_state` et relu par l'override. C'est la variante exacte du défaut n°1 du projet, et un test lit le dictionnaire pour l'empêcher de revenir.
+
+### Le contrat public ne ment plus
+
+Quand un cycle est dû et l'automatisme permis, `type_arrosage` passe de `manuel_frequent` à `auto` : annoncer « manuel » pendant que le coordinateur arrose seul, c'était la façade qui mentait. `watering_strategy` continue de porter `semis_frequent`, la nuance de régime n'est pas perdue.
+
+### Le garde qui rend cette version livrable
+
+`auto_irrigation_enabled` est **à False par défaut** (`DEFAULT_AUTO_IRRIGATION_ENABLED`) et reste vérifié en amont : personne ne se réveille avec un arrosage autonome qu'il n'a pas armé. Vérifié par un test dédié, et le contourner fait tomber trois tests.
+
+| switch utilisateur | objectif | type | `arrosage_auto_autorise` |
+|---|---|---|---|
+| OFF (défaut) | 1,5 mm | `manuel_frequent` | **False** |
+| ON | 1,5 mm | `auto` | **True** |
+
+### Ce que le banc de mutation a dit, et qui est consigné
+
+⚠️ La clause `sursemis_allowed and surface_cycle_mm > 0` de `sursemis_auto_ok` est **redondante** : en la retirant, aucun test ne rougit — un garde en amont ferme déjà le robinet quand le cycle est reporté. Elle est **conservée volontairement**, parce que c'est la seule ligne du projet qui ouvre un arrosage autonome dans une phase jamais exercée en production, et que l'intention doit être lisible au point de décision. Le test concerné le dit explicitement pour que personne ne s'y fie à tort.
+
 ## 0.77.0
 
 1286 tests verts. **Le Sursemis n'usurpe plus le verdict de la tonte — étape 1 sur 2 du déverrouillage.**
