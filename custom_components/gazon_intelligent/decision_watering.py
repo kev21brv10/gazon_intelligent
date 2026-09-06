@@ -1423,9 +1423,25 @@ def _resolve_sursemis_override(state: dict[str, Any]) -> dict[str, Any] | None:
             },
         )
 
+    # ⚠️ L'AUTOMATISME NE S'OUVRE QUE SUR UN CYCLE RÉELLEMENT DÛ. `auto_ok` porte déjà le
+    # switch utilisateur `arrosage_auto_autorise` ET la liste des phases permises ; on y ajoute
+    # la seule condition propre au semis : qu'un cycle de surface soit effectivement calculé.
+    # Les deux autres sorties de cette fonction (« complete » et « waiting ») restent à False :
+    # dans les deux cas, rien n'est dû à cet instant.
+    # ⚠️ `sursemis_allowed and surface_cycle_mm > 0` est REDONDANT, mesuré au banc de mutation
+    # le 06/09/2026 : en le retirant, aucun test ne rougit — un garde en amont ferme déjà le
+    # robinet quand le cycle est reporté (cas pluie : `type_arrosage="bloque"`,
+    # `block_reason="sol_deja_humide"`, `arrosage_auto_autorise` False sans cette clause).
+    # Gardé quand même, et c'est un choix : c'est la SEULE ligne du projet qui ouvre un
+    # arrosage autonome dans une phase jamais exercée en production. L'intention doit être
+    # lisible au point de décision, pas déduite d'un garde situé trois fonctions plus loin.
+    sursemis_auto_ok = bool(state.get("auto_ok")) and sursemis_allowed and surface_cycle_mm > 0
     if sursemis_allowed and surface_cycle_mm > 0:
         objectif_mm = surface_cycle_mm
-        type_arrosage = "manuel_frequent"
+        # ⚠️ Le contrat public doit suivre : annoncer « manuel_frequent » pendant que le
+        # coordinateur arrose tout seul, c'est la façade qui ment. `watering_strategy` porte
+        # déjà `semis_frequent`, la nuance de régime n'est donc pas perdue.
+        type_arrosage = "auto" if sursemis_auto_ok else "manuel_frequent"
         conseil_principal = (
             f"Sursemis {watering_stage}: maintiens la surface humide avec une stratégie {watering_strategy}."
         )
@@ -1483,7 +1499,7 @@ def _resolve_sursemis_override(state: dict[str, Any]) -> dict[str, Any] | None:
         # Pire, le verrou était CIRCULAIRE : `seeding_transition_ready` exige DEUX tontes
         # déclarées depuis le début de la phase — des tontes que la phase interdisait
         # elle-même. Le sursemis ne pouvait donc jamais se terminer.
-        arrosage_auto_autorise=False,
+        arrosage_auto_autorise=sursemis_auto_ok,
         arrosage_recommande=objectif_mm > 0,
         type_arrosage=type_arrosage,
         arrosage_conseille="personnalise",
@@ -1688,6 +1704,13 @@ def build_watering_bundle(
         "Biostimulant",
         "Agent Mouillant",
         "Scarification",
+        # ⚠️ SURSEMIS : sans lui, tout le programme de micro-cycles semis était CALCULÉ et
+        # JAMAIS APPLIQUÉ — doses de 1,5 à 3 mm, créneaux 10h/12h/14h/16h, publiés puis
+        # ignorés. 45 mm sur 10 jours devenaient ~35 appels de service à la main.
+        # ⚠️ Ajouter la phase ici ne suffit PAS : les résolveurs de priorité court-circuitent
+        # le bloc qui pose `arrosage_auto_autorise = auto_ok` (l.1800+). C'est pourquoi
+        # `auto_ok` est publié dans `priority_state` et relu par l'override Sursemis.
+        "Sursemis",
     }
     block_reason_value = water_bundle.get("block_reason")
     watering_passages = 1
@@ -1718,6 +1741,12 @@ def build_watering_bundle(
         "etp": etp,
         "stress_level": stress_level,
         "fenetre_optimale": fenetre_optimale,
+        # ⚠️ LA LISTE BLANCHE QU'ON OUBLIE. Les résolveurs ci-dessous court-circuitent le bloc
+        # qui pose `arrosage_auto_autorise = auto_ok` : sans cette clé, un override n'a AUCUN
+        # moyen de savoir si l'automatisme est permis, et ne peut que le refuser en dur. C'est
+        # exactement ce qui rendait le programme de cycles semis inapplicable — calculé, publié,
+        # jamais exécuté.
+        "auto_ok": auto_ok,
         # Autorisation du soir : on prend la valeur du profil (qui reçoit le coucher du soleil
         # et fait le vrai test) si elle existe, sinon le risk bundle. Sans ça, le coordinateur
         # voyait False (risk bundle sans coucher) et bloquait le lancement du cooling.

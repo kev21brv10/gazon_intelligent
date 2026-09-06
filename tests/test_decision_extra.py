@@ -408,13 +408,75 @@ class TestSursemisNUsurpePlusLeVerdictDeTonte(unittest.TestCase):
 
     D0 = date(2026, 3, 1)
 
-    def _snap(self, jour: int, history_extra=()):
+    def _snap(self, jour: int, history_extra=(), memory=None, pluie_24h=0.0, hour_of_day=11):
         return decision.build_decision_snapshot(
             history=[{"type": "Sursemis", "date": "2026-03-01"}, *history_extra],
-            today=self.D0 + timedelta(days=jour), hour_of_day=11, temperature=18,
-            pluie_24h=0.0, pluie_demain=0.0, humidite=60,
-            type_sol="limoneux", etp_capteur=2.0,
+            today=self.D0 + timedelta(days=jour), hour_of_day=hour_of_day, temperature=18,
+            pluie_24h=pluie_24h, pluie_demain=0.0, humidite=60,
+            type_sol="limoneux", etp_capteur=2.0, memory=memory or {},
         )
+
+    # ── ÉTAPE 2 : l'arrosage automatique en Sursemis ────────────────────────────────────
+    AUTO_ON = {"auto_irrigation_enabled": True}
+
+    def test_le_cycle_semis_du_devient_REELLEMENT_executable(self) -> None:
+        """⚠️ CALCULÉ N'EST PAS APPLIQUÉ — le cœur de l'étape 2.
+
+        Le programme de micro-cycles (1,5 mm en Germination, 3,0 en Enracinement, 2,5 en
+        Reprise, créneaux 10h/12h/14h/16h) était publié puis ignoré : le portail du
+        coordinateur refusait en `auto_not_allowed`. 45 mm sur 10 jours devenaient ~35 appels
+        de service à la main, sur un semis qu'on ne peut pas laisser sécher.
+        """
+        for jour, sous_phase, dose in ((5, "Germination", 1.5), (20, "Enracinement", 3.0)):
+            with self.subTest(sous_phase=sous_phase):
+                snap = self._snap(jour, memory=self.AUTO_ON, hour_of_day=12)
+                self.assertEqual(snap["sous_phase"], sous_phase)
+                self.assertEqual(snap["objectif_mm"], dose, "la dose du programme semis a bougé")
+                self.assertIs(snap["arrosage_auto_autorise"], True)
+
+    def test_la_facade_ne_dit_plus_manuel_quand_elle_arrose_seule(self) -> None:
+        """Annoncer « manuel_frequent » pendant que le coordinateur arrose, c'est mentir.
+
+        `watering_strategy` continue de porter `semis_frequent` : la nuance de régime — petits
+        apports rapprochés — n'est pas perdue, seul le contrat d'exécution est corrigé.
+        """
+        snap = self._snap(5, memory=self.AUTO_ON, hour_of_day=12)
+        self.assertEqual(snap["type_arrosage"], "auto")
+        self.assertEqual(snap["watering_strategy"], "semis_frequent")
+
+    def test_le_switch_utilisateur_n_est_JAMAIS_contourne(self) -> None:
+        """⚠️ LE GARDE QUI COMPTE. `auto_irrigation_enabled` est à False PAR DÉFAUT.
+
+        Ce test est la raison pour laquelle l'étape 2 peut être livrée : personne ne se
+        réveille avec un arrosage autonome qu'il n'a pas armé.
+        """
+        snap = self._snap(5, hour_of_day=12)  # mémoire vide → DEFAULT_AUTO_IRRIGATION_ENABLED
+        self.assertGreater(snap["objectif_mm"], 0.0, "prémisse : un cycle est bien dû")
+        self.assertIs(snap["arrosage_auto_autorise"], False)
+        self.assertEqual(snap["type_arrosage"], "manuel_frequent")
+
+    def test_la_pluie_qui_reporte_le_cycle_garde_le_robinet_ferme(self) -> None:
+        """Propriété de bout en bout : cycle reporté ⇒ pas d'arrosage autonome.
+
+        ⚠️ CE QUE CE TEST NE PROUVE PAS, mesuré au banc de mutation : il ne teste PAS la clause
+        `sursemis_allowed and surface_cycle_mm > 0` de `sursemis_auto_ok`. En la retirant, ce
+        test reste vert — un garde en amont ferme déjà le robinet (`type_arrosage="bloque"`).
+        La clause est conservée pour la lisibilité de l'intention au point de décision, pas
+        parce qu'un test la tiendrait. Dit ici pour que personne ne s'y fie à tort.
+        """
+        snap = self._snap(5, memory=self.AUTO_ON, pluie_24h=12.0, hour_of_day=12)
+        self.assertEqual(snap["objectif_mm"], 0.0, "prémisse : la pluie reporte le cycle")
+        self.assertIs(snap["arrosage_auto_autorise"], False)
+
+    def test_auto_ok_traverse_bien_la_liste_blanche(self) -> None:
+        """⚠️ LE CÂBLAGE. Les résolveurs court-circuitent le bloc qui pose `arrosage_auto_autorise`.
+
+        Ajouter « Sursemis » à `auto_ok` sans publier `auto_ok` dans `priority_state` serait
+        parfaitement INERTE — la variante exacte du défaut n°1 du projet.
+        """
+        source = (PACKAGE_DIR / "decision_watering.py").read_text(encoding="utf-8")
+        bloc = source.split("priority_state = {", 1)[1].split("\n    }", 1)[0]
+        self.assertIn('"auto_ok": auto_ok', bloc, "`auto_ok` n'atteint pas les résolveurs")
 
     def test_germination_et_enracinement_restent_interdites(self) -> None:
         """Non-régression agronomique : on ne tond PAS sur des plantules."""
