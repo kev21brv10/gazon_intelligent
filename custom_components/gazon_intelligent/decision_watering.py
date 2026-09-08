@@ -8,6 +8,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from .const import (
+    POST_APPLICATION_STATUS_TERMINE,
     APPLICATION_TYPE_FOLIAIRE,
     APPLICATION_TYPE_SOL,
     DEFAULT_AUTO_IRRIGATION_ENABLED,
@@ -208,7 +209,19 @@ def build_water_bundle(
     points_etp_stress = palier_et0_stress(
         etp, (context.risk_context or {}).get("palier_et0")
     )
+    # ⚠️ LE PLANCHER D'ACTIVATION DOIT S'ÉTEINDRE UNE FOIS LE PRODUIT DISSOUS. Sans cette
+    # information, `_apply_watering_floor_constraints` renvoie le plancher de la phase dès que le
+    # déficit est nul — donc en particulier sur un sol PLEIN. Mesuré le 08/09/2026 : Floranid
+    # incorporé la veille (5 mm, statut « termine »), réserve 11,3/12, déplétion 0,7 pour un
+    # seuil à 6, pluie en cours — et 5 mm de plus annoncés pour le lendemain matin.
+    _incorporation_terminee = (
+        str((context.memory or {}).get("application_post_watering_status") or "").strip().lower()
+        == POST_APPLICATION_STATUS_TERMINE
+        if isinstance(context.memory, dict)
+        else False
+    )
     watering_profile = compute_watering_profile(
+        incorporation_terminee=_incorporation_terminee,
         points_etp_stress=points_etp_stress,
         phase_dominante=phase_bundle["phase_dominante"],
         sous_phase=phase_bundle["sous_phase"],

@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.80.0
+
+1298 tests verts. **Le plancher d'activation s'éteint quand le produit est déjà dissous.**
+
+### Le cas réel
+
+Floranid Twin Permanent épandu le 07/09/2026, **incorporé automatiquement le soir même** — 5 mm sur trois zones, `application_post_watering_status = "termine"`. Le lendemain, sous la pluie, réserve à **11,3 mm sur 12** et déplétion de **0,7 mm** pour un seuil MAD à 6, l'assistant annonçait **5 mm de plus** pour le matin suivant, motif « Fertilisation active ».
+
+Le plancher d'activation existe pour dissoudre un produit épandu, et il avait raison la veille. Le lendemain, il ignorait la seule information qui compte : **le produit était déjà dissous**.
+
+⚠️ L'arrosage n'est pas parti, mais **par accident** : la phase Fertilisation dure 2 jours et expirait à minuit, avant le créneau de 03h45. Scarification en dure **7** — le même enchaînement y aurait arrosé un sol détrempé six jours d'affilée.
+
+### Trois endroits posent ce plancher, pas un
+
+C'est ce qui a rendu le correctif difficile, et le banc de mutation l'a montré à chaque étape :
+
+1. le **clamp** `_clamp(besoin, minimum, maximum)`, qui remonte la cible au minimum de la politique **avant tout garde-fou** ;
+2. la branche « politique » de `_profile_for_agro_phases` (`target_range.min_mm`) ;
+3. la branche « table des modes » (`MODE_MIN_WATERING_MM`).
+
+Les phases d'application définissent toutes un `event_target_mm` : elles passent donc par 1 et 2, jamais par 3. Câbler d'abord la branche 3 seule n'a **rien changé**. Câbler ensuite 2 et 3 n'a **rien changé non plus** — le clamp avait déjà remonté la cible, et aucune fonction en aval ne pouvait la redescendre. Le drapeau arrivait pourtant bien à `True`.
+
+Les trois points passent désormais par une **règle unique**, `_plancher_activation_effectif`, et un test compte les points d'application pour qu'aucun ne reparte seul.
+
+### Ce qui n'est PAS désarmé
+
+Seules les phases où le plancher sert à **activer un produit** : Fertilisation, Biostimulant, Agent Mouillant, Scarification. Les planchers de **Normal (10 mm)** et **Sursemis (0,5 mm)** sont agronomiques — « en dessous, arroser ne sert à rien » — et restent en place quoi qu'il arrive. Un test le verrouille.
+
+Et une mémoire muette ne désarme rien : l'absence d'information n'est pas une incorporation faite.
+
+### Vérification
+
+Sur le cas réel reproduit : objectif **5,0 mm** avant incorporation, **0,9 mm** après — l'objectif redevient le besoin réel au lieu d'un forfait. Trois mutations vérifiées, une par point de câblage.
+
 ## 0.79.0
 
 1293 tests verts. **Le total de pluie dérivé du compteur propre devient la source du bilan sol.**

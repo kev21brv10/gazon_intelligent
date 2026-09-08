@@ -412,12 +412,62 @@ def _select_sursemis_policy(
     return policy_key, policy, transition_ready, tonte_count
 
 
-def _mode_min_watering_mm(phase_dominante: str) -> float:
-    return float(MODE_MIN_WATERING_MM.get(phase_dominante, 0.0))
+# ⚠️ Phases dont le plancher est un plancher d'ACTIVATION : il existe pour dissoudre un produit
+# épandu, pas pour recharger le sol. Normal (10 mm) et Sursemis (0,5 mm) n'en font PAS partie —
+# leurs planchers disent « en dessous, arroser ne sert à rien », ce qui reste vrai en permanence.
+_PHASES_A_PLANCHER_D_ACTIVATION = frozenset(
+    {"Fertilisation", "Biostimulant", "Agent Mouillant", "Scarification"}
+)
 
 
-def _apply_mode_watering_constraints(candidate_mm: float, deficit_mm_brut: float, phase_dominante: str) -> float:
-    floor_mm = _mode_min_watering_mm(phase_dominante)
+def _plancher_activation_effectif(
+    phase_dominante: str, plancher_mm: float, incorporation_terminee: bool
+) -> float:
+    """Le plancher d'activation, ramené à zéro une fois le produit dissous.
+
+    ⚠️ SOURCE UNIQUE, appelée par les DEUX branches du plancher. Il y en a deux, et c'est le
+    piège : `_profile_for_agro_phases` prend celle de la POLITIQUE (`target_range.min_mm`) quand
+    la phase en définit une, et celle de la table des modes sinon. Fertilisation, Biostimulant,
+    Agent Mouillant et Scarification définissent toutes un `event_target_mm` — elles passent donc
+    par la première. Ne câbler que la seconde laisse le correctif parfaitement inerte : mesuré au
+    banc le 08/09/2026, le drapeau n'avait aucun effet sur le cas réel.
+    """
+    if incorporation_terminee and phase_dominante in _PHASES_A_PLANCHER_D_ACTIVATION:
+        return 0.0
+    return plancher_mm
+
+
+def _mode_min_watering_mm(phase_dominante: str, incorporation_terminee: bool = False) -> float:
+    """Plancher d'arrosage de la phase — nul quand l'incorporation est déjà faite.
+
+    ⚠️ MESURÉ LE 08/09/2026, SUR L'INSTALLATION RÉELLE. Floranid épandu le 07/09, incorporé
+    automatiquement le soir même (5 mm, `application_post_watering_status = "termine"`). Le
+    lendemain, sous la pluie, réserve à 11,3 mm sur 12 et déplétion de 0,7 mm pour un seuil à 6,
+    l'assistant annonçait **5 mm de plus** — parce que `_apply_watering_floor_constraints`
+    renvoie le plancher dès que le déficit est nul ou négatif, et que le plancher Fertilisation
+    vaut 5,0 mm.
+
+    Le plancher avait raison la veille et tort le lendemain : il ne connaissait pas la seule
+    information qui compte, à savoir que le produit était **déjà dissous**. Il ne s'applique donc
+    plus une fois l'incorporation terminée — et seulement sur les phases où il sert à activer un
+    produit, jamais sur les planchers agronomiques de Normal et Sursemis.
+
+    Ce jour-là l'arrosage n'est pas parti, mais par accident : la phase Fertilisation dure 2 jours
+    et expirait à minuit, avant le créneau de 03h45. Un produit à phase plus longue — Scarification
+    en dure 7 — aurait bel et bien arrosé un sol détrempé.
+    """
+    return _plancher_activation_effectif(
+        phase_dominante, float(MODE_MIN_WATERING_MM.get(phase_dominante, 0.0)), incorporation_terminee
+    )
+
+
+def _apply_mode_watering_constraints(
+    candidate_mm: float,
+    deficit_mm_brut: float,
+    phase_dominante: str,
+    incorporation_terminee: bool = False,
+) -> float:
+    floor_mm = _mode_min_watering_mm(phase_dominante, incorporation_terminee)
     return _apply_watering_floor_constraints(candidate_mm, deficit_mm_brut, floor_mm)
 
 
@@ -1587,6 +1637,7 @@ class _WateringCtx:
     sous_phase_progression: float | None
     hauteur_gazon: float | None
     application_type: str | None
+    incorporation_terminee: bool
     evening_cooling_enabled: bool
     fungal_risk_level: str | None
     # computed — shared preamble
@@ -1646,6 +1697,7 @@ def _build_watering_ctx(
     sous_phase_progression: float | None,
     hauteur_gazon: float | None,
     application_type: str | None,
+    incorporation_terminee: bool,
     forecast_temperature_today: float | None = None,
     evening_cooling_enabled: bool = True,
     fungal_risk_level: str | None = None,
@@ -1773,6 +1825,7 @@ def _build_watering_ctx(
         sous_phase_progression=sous_phase_progression,
         hauteur_gazon=hauteur_gazon,
         application_type=application_type,
+        incorporation_terminee=incorporation_terminee,
         evening_cooling_enabled=evening_cooling_enabled,
         fungal_risk_level=fungal_risk_level,
         now_hour=now.hour,
@@ -2647,7 +2700,17 @@ def _profile_for_agro_phases(ctx: _WateringCtx) -> dict[str, Any]:
         humidite=ctx.humidite,
         saturation_block=ctx.saturation_block,
     )
-    minimum = resolved_policy.target_range.min_mm if resolved_policy.target_range is not None else 0.0
+    # ⚠️ LE PLANCHER AGIT ICI EN PREMIER, ET C'EST LE VRAI. `_clamp(besoin, minimum, maximum)`
+    # remonte la cible au minimum de la politique AVANT tout garde-fou de déficit : les fonctions
+    # de plancher en aval ne peuvent alors plus la faire redescendre. Trois endroits appliquent
+    # donc le même plancher — le clamp, la branche « politique », la branche « table des modes » —
+    # et ne corriger que les deux dernières laisse le défaut intact. Mesuré au banc le 08/09/2026 :
+    # le drapeau arrivait bien à `True` et l'objectif restait à 5,0 mm.
+    minimum = _plancher_activation_effectif(
+        ctx.phase_dominante,
+        resolved_policy.target_range.min_mm if resolved_policy.target_range is not None else 0.0,
+        ctx.incorporation_terminee,
+    )
     maximum = resolved_policy.target_range.max_mm if resolved_policy.target_range is not None else 0.0
     if ctx.phase_dominante == "Fertilisation":
         mm_cible = _clamp((ctx.besoin_court * 0.4) + (ctx.besoin_tendance * 0.08), minimum, maximum)
@@ -2670,9 +2733,19 @@ def _profile_for_agro_phases(ctx: _WateringCtx) -> dict[str, Any]:
         block_reason = "humidite_elevee"
     if block_reason is None:
         if resolved_policy.target_range is not None:
-            mm_cible = _apply_watering_floor_constraints(mm_cible, ctx.deficit_mm_brut, resolved_policy.target_range.min_mm)
+            mm_cible = _apply_watering_floor_constraints(
+                mm_cible,
+                ctx.deficit_mm_brut,
+                _plancher_activation_effectif(
+                    ctx.phase_dominante,
+                    resolved_policy.target_range.min_mm,
+                    ctx.incorporation_terminee,
+                ),
+            )
         else:
-            mm_cible = _apply_mode_watering_constraints(mm_cible, ctx.deficit_mm_brut, ctx.phase_dominante)
+            mm_cible = _apply_mode_watering_constraints(
+            mm_cible, ctx.deficit_mm_brut, ctx.phase_dominante, ctx.incorporation_terminee
+        )
     mm_final = 0.0 if block_reason else mm_cible
     if (
         resolved_policy is not None
@@ -2744,7 +2817,9 @@ def _profile_for_generic(ctx: _WateringCtx) -> dict[str, Any]:
     elif ctx.humidite >= 85:
         block_reason = "humidite_elevee"
     if block_reason is None:
-        mm_cible = _apply_mode_watering_constraints(mm_cible, ctx.deficit_mm_brut, ctx.phase_dominante)
+        mm_cible = _apply_mode_watering_constraints(
+            mm_cible, ctx.deficit_mm_brut, ctx.phase_dominante, ctx.incorporation_terminee
+        )
     mm_final = 0.0 if block_reason else mm_cible
     passages = 1 if mm_final <= 12.0 else 2
     pause_minutes = 25 if passages > 1 else 0
@@ -2810,6 +2885,7 @@ def compute_watering_profile(
     sous_phase_progression: float | None = None,
     hauteur_gazon: float | None = None,
     application_type: str | None = None,
+    incorporation_terminee: bool = False,
     forecast_temperature_today: float | None = None,
     evening_cooling_enabled: bool = True,
     fungal_risk_level: str | None = None,
@@ -2839,6 +2915,7 @@ def compute_watering_profile(
         sous_phase_progression=sous_phase_progression,
         hauteur_gazon=hauteur_gazon,
         application_type=application_type,
+        incorporation_terminee=incorporation_terminee,
         forecast_temperature_today=forecast_temperature_today,
         evening_cooling_enabled=evening_cooling_enabled,
         fungal_risk_level=fungal_risk_level,
