@@ -659,6 +659,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         pluie_24h_sensor: float | None,
         pluie_demain_sensor: float | None,
         forecast_summary: dict[str, Any],
+        pluie_cumul_jour: float | None = None,
     ) -> tuple[float | None, str, float | None, str]:
         forecast_pluie_24h = forecast_summary.get("forecast_pluie_24h")
         forecast_pluie_demain = forecast_summary.get("forecast_pluie_demain")
@@ -666,7 +667,21 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # et le libellé de source dit explicitement « non disponible » dans ce cas.
         pluie_24h: float | None
         pluie_demain: float | None
-        if pluie_24h_sensor is not None:
+        # ⚠️ PRIORITÉ AU TOTAL DÉRIVÉ DU COMPTEUR PROPRE. Quand `capteur_pluie_cumul` est
+        # renseigné, l'intégration dérive elle-même le total du jour depuis un compteur monotone,
+        # avec cliquet sur le maximum et mémoire persistée. C'est structurellement meilleur qu'un
+        # cumul journalier fourni tel quel :
+        #   · il ne peut PAS redescendre — mesuré sur le Netatmo du voisin : 3,6 → 3,0 mm dans la
+        #     même journée, ce qui est impossible pour une pluie et a imposé un cliquet correctif ;
+        #   · sa remise à zéro tombe à NOTRE minuit, pas plusieurs dizaines de minutes après ;
+        #   · il vient du jardin, pas de chez le voisin. Mesuré le 08/09/2026 sur le même épisode :
+        #     station 1,4 mm contre Netatmo 0,7 — un facteur DEUX.
+        # ⚠️ Le libellé commence par « capteur » à dessein : `gazon_brain` teste ce PRÉFIXE pour
+        # décider si la valeur est une mesure (à créditer au sol) ou une prévision (à ignorer).
+        if pluie_cumul_jour is not None:
+            pluie_24h = float(pluie_cumul_jour)
+            pluie_24h_source = "capteur_cumul_station"
+        elif pluie_24h_sensor is not None:
             pluie_24h = pluie_24h_sensor
             pluie_24h_source = "capteur"
         else:
@@ -933,6 +948,10 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             pluie_24h_sensor=pluie_24h_sensor,
             pluie_demain_sensor=pluie_demain_sensor,
             forecast_summary=forecast_summary,
+            # Renseigné par `_suivre_pluie_du_jour()` juste au-dessus, et `None` tant que
+            # `capteur_pluie_cumul` n'est pas configuré — l'installation sans compteur garde
+            # donc exactement son comportement actuel.
+            pluie_cumul_jour=weather_profile.get("pluie_cumul_jour_mm"),
         )
         raw_temperature, temperature_source, temperature_reference_hydrique = self._resolve_temperature_inputs(
             weather_profile=weather_profile,

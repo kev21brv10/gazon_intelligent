@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.79.0
+
+1293 tests verts. **Le total de pluie dérivé du compteur propre devient la source du bilan sol.**
+
+### La condition posée par le code est remplie
+
+Depuis la 0.74.0, l'intégration dérive elle-même un total journalier depuis un compteur cumulatif monotone (`capteur_pluie_cumul`), avec cliquet sur le maximum et mémoire persistée. Cette valeur était **volontairement en observation seule** : « tant qu'on ne l'a pas vue vivre sur une vraie station ».
+
+Elle a vécu, le 08/09/2026 : pluie réelle dès 01h36, `precipitation` montant de 0,1 mm toutes les ~15 min, 0 → 1,4 mm. Total dérivé **exact**, pic suivi, **aucun gain rejeté**, réserve créditée de +0,3 mm, aucun arrosage déclenché à tort.
+
+### Pourquoi c'est mieux que le cumul journalier fourni
+
+| | station (dérivé) | Netatmo du voisin |
+|---|---|---|
+| même épisode, 08/09 | **1,4 mm** | 0,7 mm |
+| peut redescendre ? | non, monotone par construction | **oui** — 3,6 → 3,0 mm mesuré le 30/08 |
+| remise à zéro | à NOTRE minuit | plusieurs dizaines de minutes après |
+| emplacement | le jardin | chez le voisin |
+
+Un cumul journalier qui **perd** 0,6 mm est physiquement impossible ; c'est ce défaut qui avait imposé le cliquet correctif `appliquer_cliquet_pluie`. Le total dérivé n'en a pas besoin : il n'ajoute que les hausses au-dessus du pic du jour.
+
+### Le câblage
+
+Priorité dans `_resolve_precipitation_inputs` : total dérivé → `capteur_pluie_24h` → prévision. **Sans `capteur_pluie_cumul` configuré, rien ne change** — le paramètre vaut `None` et l'ordre historique s'applique.
+
+⚠️ Le libellé de source est `capteur_cumul_station`, et le préfixe est porteur : `gazon_brain` teste `startswith("capteur")` pour décider si la valeur est une **mesure** (à créditer au sol) ou une **prévision** (à ignorer). Le renommer sans ce préfixe ferait silencieusement disparaître la pluie du bilan — une mutation le vérifie.
+
+### Une garde qui gardait la mauvaise porte
+
+`test_elle_n_alimente_aucune_decision` promettait : « le jour où une décision voudra la lire, ce test tombera et forcera la discussion ». **Il n'est pas tombé.** Il vérifiait l'absence de la clé dans les quatre modules de décision, alors que la consommation passe par le **coordinateur** — le cinquième fichier. Un faux vert.
+
+Il est remplacé par l'affirmation du nouveau contrat, et son remplacement est expliqué dans le test lui-même pour que la leçon ne se perde pas.
+
 ## 0.78.0
 
 1291 tests verts. **L'arrosage du sursemis n'est plus seulement calculé : il s'exécute — étape 2 sur 2.**
