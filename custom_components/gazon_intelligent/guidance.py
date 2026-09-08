@@ -420,6 +420,19 @@ _PHASES_A_PLANCHER_D_ACTIVATION = frozenset(
 )
 
 
+def _plancher_brut_de_phase(phase_dominante: str, resolved_policy: Any) -> float:
+    """Le plancher de la phase AVANT tout désarmement — sert de seuil d'utilité.
+
+    Même ordre de priorité que le calcul de la cible : la politique d'abord quand elle définit
+    une plage, la table des modes sinon. Sans ça, le seuil d'utilité et le plancher pourraient
+    diverger et l'on retomberait sur « deux descriptions du même fait ».
+    """
+    plage = getattr(resolved_policy, "target_range", None) if resolved_policy is not None else None
+    if plage is not None:
+        return float(plage.min_mm)
+    return float(MODE_MIN_WATERING_MM.get(phase_dominante, 0.0))
+
+
 def _plancher_activation_effectif(
     phase_dominante: str, plancher_mm: float, incorporation_terminee: bool
 ) -> float:
@@ -2744,8 +2757,20 @@ def _profile_for_agro_phases(ctx: _WateringCtx) -> dict[str, Any]:
             )
         else:
             mm_cible = _apply_mode_watering_constraints(
-            mm_cible, ctx.deficit_mm_brut, ctx.phase_dominante, ctx.incorporation_terminee
-        )
+                mm_cible, ctx.deficit_mm_brut, ctx.phase_dominante, ctx.incorporation_terminee
+            )
+        # ⚠️ REFUSER, PAS SEULEMENT REMONTER. Un plancher d'ACTIVATION remonte la dose : pour
+        # dissoudre un produit, il faut en mettre assez. Un plancher HYDRIQUE doit au contraire
+        # refuser : si le besoin est dérisoire, on n'arrose pas du tout. Les phases d'application
+        # ne connaissaient que la première logique — et une fois le plancher désarmé par
+        # l'incorporation (0.80.0), plus rien n'arrêtait les doses ridicules.
+        # Mesuré le 08/09/2026, une heure après ce désarmement : objectif **0,2 mm** publié et
+        # « recommandé », soit CINQUANTE SECONDES de vanne par zone. Ça ne mouille rien.
+        # `_profile_for_normal` possède déjà ce garde (`useful_threshold`, l.2459) ; on l'applique
+        # ici avec le plancher BRUT de la phase — celui d'avant désarmement — comme seuil d'utilité.
+        _seuil_utile = _plancher_brut_de_phase(ctx.phase_dominante, resolved_policy)
+        if 0.0 < mm_cible < _seuil_utile:
+            mm_cible = 0.0
     mm_final = 0.0 if block_reason else mm_cible
     if (
         resolved_policy is not None

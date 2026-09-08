@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.81.0
+
+1299 tests verts. **En dessous du minimum utile, on n'arrose plus du tout.**
+
+### La porte que la 0.80.0 avait entrouverte
+
+Désarmer le plancher d'activation une fois le produit dissous était juste — mais l'objectif retombait alors sur le besoin réel, si petit soit-il. Mesuré en production **une heure après** la mise en service de la 0.80.0 : objectif **0,2 mm**, annoncé et « recommandé ».
+
+0,2 mm sur trois zones, c'est **cinquante secondes de vanne chacune**. Ça mouille le feuillage, ça s'évapore, ça n'atteint pas les racines — et ça consomme un cycle complet. Exactement le phénomène qu'on avait diagnostiqué sur la bruine du 06/09.
+
+### Deux logiques, une seule était codée
+
+- Un plancher d'**activation** doit **remonter** la dose : pour dissoudre un produit épandu, il faut en mettre assez.
+- Un plancher **hydrique** doit **refuser** : si le besoin est dérisoire, on n'arrose pas du tout.
+
+Les phases d'application ne connaissaient que la première. `_profile_for_normal` possède la seconde depuis toujours (`useful_threshold`) — et c'est pour ça qu'un arrosage de 0,2 mm est impossible en mode Normal, où le déclencheur MAD (6 mm) et la dose minimale de session (5 mm) le rendent inatteignable.
+
+La même règle s'applique désormais aux phases d'application, avec le plancher **brut** de la phase — celui d'avant désarmement — comme seuil d'utilité.
+
+### Une seule source pour le seuil et le plancher
+
+`_plancher_brut_de_phase` suit le même ordre de priorité que le calcul de la cible : la politique quand elle définit une plage, la table des modes sinon. Un seuil d'utilité qui divergerait du plancher laisserait une bande de doses ni remontées ni refusées — « deux descriptions du même fait », le défaut que ce projet traque.
+
+### Vérification
+
+Sur le cas réel reproduit, incorporation terminée : objectif **0,0 mm** et `arrosage_recommande` à **False**, au lieu de 0,9 mm « recommandé ». Avant incorporation, les 5 mm d'activation restent intacts. Deux mutations vérifiées.
+
 ## 0.80.0
 
 1298 tests verts. **Le plancher d'activation s'éteint quand le produit est déjà dissous.**

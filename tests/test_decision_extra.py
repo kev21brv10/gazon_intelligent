@@ -422,10 +422,46 @@ class TestPlancherActivationSEteintApresIncorporation(unittest.TestCase):
         """Non-régression : tant que le produit n'est pas dissous, les 5 mm sont LÉGITIMES."""
         self.assertEqual(self._snap("en_attente")["objectif_mm"], 5.0)
 
-    def test_apres_incorporation_le_plancher_s_efface(self) -> None:
-        """LE correctif : l'objectif redevient le besoin réel, pas un forfait."""
-        objectif = self._snap("termine")["objectif_mm"]
-        self.assertLess(objectif, 5.0, "le plancher d'activation force encore sa dose")
+    def test_apres_incorporation_on_n_arrose_PAS_DU_TOUT(self) -> None:
+        """⚠️ REFUSER, PAS SEULEMENT REMONTER — la porte que la 0.80.0 avait entrouverte.
+
+        Désarmer le plancher d'activation faisait retomber l'objectif sur le besoin réel, soit
+        **0,2 mm** mesuré en production le 08/09/2026 une heure plus tard : cinquante secondes de
+        vanne par zone, qui ne mouillent rien et coûtent un cycle complet.
+
+        Un plancher d'ACTIVATION remonte la dose — pour dissoudre un produit, il faut en mettre
+        assez. Un plancher HYDRIQUE doit REFUSER. Les phases d'application ne connaissaient que
+        la première logique ; `_profile_for_normal` possède la seconde depuis toujours
+        (`useful_threshold`). Elle est désormais appliquée ici aussi.
+        """
+        snap = self._snap("termine")
+        self.assertEqual(snap["objectif_mm"], 0.0)
+        self.assertIs(snap["arrosage_recommande"], False, "une dose dérisoire reste « recommandée »")
+
+    def test_le_seuil_d_utilite_suit_le_plancher_de_la_phase(self) -> None:
+        """Le seuil de refus et le plancher doivent venir de la MÊME source.
+
+        Sinon on retombe sur « deux descriptions du même fait » : un seuil d'utilité qui
+        diverge du plancher laisserait une bande de doses ni remontées ni refusées.
+        """
+        guidance_mod = importlib.import_module("custom_components.gazon_intelligent.guidance")
+        watering_policy = importlib.import_module("custom_components.gazon_intelligent.watering_policy")
+
+        class _PlageBidon:
+            min_mm = 5.0
+
+        class _PolitiqueBidon:
+            target_range = _PlageBidon()
+
+        self.assertEqual(
+            guidance_mod._plancher_brut_de_phase("Fertilisation", _PolitiqueBidon()), 5.0,
+            "la politique doit primer quand elle définit une plage",
+        )
+        self.assertEqual(
+            guidance_mod._plancher_brut_de_phase("Fertilisation", None), 3.0,
+            "sans plage de politique, on retombe sur la table des modes",
+        )
+        del watering_policy
 
     def test_une_memoire_muette_ne_desarme_rien(self) -> None:
         """Absence d'information ≠ incorporation faite — le plancher reste, par prudence."""
