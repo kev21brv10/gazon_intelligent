@@ -393,6 +393,71 @@ class TestDecisionSnapshotSursemisRules(unittest.TestCase):
         self.assertEqual(not_ready["risque_gazon"], "modere")
         self.assertEqual(ready["risque_gazon"], "modere")
 
+class TestPlancherActivationSEteintApresIncorporation(unittest.TestCase):
+    """⚠️ LE CAS RÉEL DU 08/09/2026, reproduit à l'identique.
+
+    Floranid Twin Permanent épandu le 07/09, incorporé automatiquement le soir même — 5 mm,
+    `application_post_watering_status = "termine"`. Le lendemain sous la pluie, réserve à
+    11,3 mm sur 12 et déplétion de 0,7 mm pour un seuil à 6, l'assistant annonçait **5 mm de
+    plus** pour le matin suivant, motif « Fertilisation active ».
+
+    Le plancher d'activation existe pour dissoudre un produit épandu, et il avait raison la
+    veille. Le lendemain il ignorait la seule chose qui compte : le produit était **déjà dissous**.
+
+    ⚠️ L'arrosage n'est pas parti ce jour-là, mais par ACCIDENT : la phase Fertilisation dure
+    2 jours et expirait à minuit, avant le créneau de 03h45. Scarification en dure 7 — le même
+    enchaînement y aurait arrosé un sol détrempé pendant six jours.
+    """
+
+    def _snap(self, statut: str | None):
+        return decision.build_decision_snapshot(
+            history=[{"type": "Fertilisation", "date": "2026-09-07"}],
+            today=date(2026, 9, 8), hour_of_day=13, temperature=22.7,
+            pluie_24h=1.5, pluie_demain=0.0, humidite=79,
+            type_sol="limoneux", etp_capteur=3.1,
+            memory={"application_post_watering_status": statut} if statut else {},
+        )
+
+    def test_avant_incorporation_le_plancher_tient(self) -> None:
+        """Non-régression : tant que le produit n'est pas dissous, les 5 mm sont LÉGITIMES."""
+        self.assertEqual(self._snap("en_attente")["objectif_mm"], 5.0)
+
+    def test_apres_incorporation_le_plancher_s_efface(self) -> None:
+        """LE correctif : l'objectif redevient le besoin réel, pas un forfait."""
+        objectif = self._snap("termine")["objectif_mm"]
+        self.assertLess(objectif, 5.0, "le plancher d'activation force encore sa dose")
+
+    def test_une_memoire_muette_ne_desarme_rien(self) -> None:
+        """Absence d'information ≠ incorporation faite — le plancher reste, par prudence."""
+        self.assertEqual(self._snap(None)["objectif_mm"], 5.0)
+
+    def test_les_TROIS_points_appliquent_la_meme_regle(self) -> None:
+        """⚠️ TROIS ENDROITS POSENT CE PLANCHER, et n'en corriger que deux ne change RIEN.
+
+        Mesuré au banc : le clamp `_clamp(besoin, minimum, maximum)` remonte la cible au minimum
+        de la politique AVANT tout garde-fou, si bien que les fonctions de plancher en aval ne
+        peuvent plus la faire redescendre. Le drapeau arrivait à `True` et l'objectif restait à
+        5,0 mm. Ce test interdit qu'un des trois points reparte sans la règle commune.
+        """
+        source = (PACKAGE_DIR / "guidance.py").read_text(encoding="utf-8")
+        self.assertEqual(
+            source.count("_plancher_activation_effectif("), 4,
+            "attendu : 1 définition + 3 points d'application (clamp, branche politique, table des modes)",
+        )
+        self.assertIn("minimum = _plancher_activation_effectif(", source, "le CLAMP n'est plus câblé")
+
+    def test_normal_garde_son_plancher(self) -> None:
+        """⚠️ Le plancher de Normal (10 mm) n'est PAS un plancher d'activation.
+
+        Il dit « en dessous, arroser ne sert à rien » — vrai en permanence, incorporation ou pas.
+        Le désarmer ferait partir des arrosages inutiles toute l'année.
+        """
+        guidance_mod = importlib.import_module("custom_components.gazon_intelligent.guidance")
+        self.assertEqual(guidance_mod._mode_min_watering_mm("Normal", True), 10.0)
+        self.assertEqual(guidance_mod._mode_min_watering_mm("Fertilisation", True), 0.0)
+        self.assertEqual(guidance_mod._mode_min_watering_mm("Fertilisation", False), 3.0)
+
+
 class TestSursemisNUsurpePlusLeVerdictDeTonte(unittest.TestCase):
     """⚠️ Le Sursemis figeait `tonte_autorisee=False` sur ses TROIS sorties.
 
