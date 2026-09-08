@@ -7079,10 +7079,58 @@ class PluieDuJourDepuisCumulTests(unittest.TestCase):
         relu._restore_runtime_state(serialise)
         self.assertEqual(relu._runtime_state["pluie_cumul"]["pic"], 251.0)
 
-    def test_elle_n_alimente_aucune_decision(self) -> None:
-        for module in ("decision_mowing.py", "guidance.py", "decision.py", "decision_watering.py"):
-            with self.subTest(module=module):
-                self.assertNotIn("pluie_cumul_jour_mm", (PACKAGE_DIR / module).read_text(encoding="utf-8"))
+    def test_elle_alimente_MAINTENANT_le_bilan_du_sol(self) -> None:
+        """⚠️ CE TEST EN REMPLACE UN AUTRE, ET IL FAUT DIRE POURQUOI.
+
+        Il existait ici `test_elle_n_alimente_aucune_decision`, qui vérifiait l'absence de
+        `pluie_cumul_jour_mm` dans les quatre modules de décision, avec cette promesse :
+        « le jour où une décision voudra la lire, ce test tombera et forcera la discussion ».
+
+        Ce jour est le 08/09/2026 — et **il n'est PAS tombé**. La valeur est devenue la source
+        de pluie du bilan sol par le COORDINATEUR (`_resolve_precipitation_inputs`), soit le
+        cinquième fichier, que ce test ne regardait pas. Un faux vert, exactement ce que le
+        projet traque : une garde qui surveille la mauvaise porte.
+
+        Il est donc remplacé par l'affirmation du NOUVEAU contrat. La condition posée à
+        l'origine — « tant qu'on ne l'a pas vue vivre sur une vraie station » — a été remplie
+        le 08/09 : pluie réelle, `precipitation` 0 → 1,4 mm par pas de 0,1, total dérivé exact,
+        réserve créditée de +0,3 mm, aucun gain rejeté.
+        """
+        coord = self._coord()
+        resolu = coordinator_mod.GazonIntelligentCoordinator._resolve_precipitation_inputs(
+            coord, pluie_24h_sensor=0.7, pluie_demain_sensor=None,
+            forecast_summary={}, pluie_cumul_jour=1.4,
+        )
+        pluie_24h, source = resolu[0], resolu[1]
+        self.assertEqual(pluie_24h, 1.4, "le total dérivé doit primer sur le cumul fourni")
+        self.assertTrue(
+            source.startswith("capteur"),
+            "⚠️ `gazon_brain` teste ce PRÉFIXE pour décider de créditer le sol : sans lui, "
+            "la pluie serait lue comme une prévision et n'atteindrait jamais la réserve",
+        )
+
+    def test_sans_compteur_le_comportement_est_inchange(self) -> None:
+        """Une installation sans `capteur_pluie_cumul` ne doit RIEN voir changer."""
+        coord = self._coord()
+        avec_capteur = coordinator_mod.GazonIntelligentCoordinator._resolve_precipitation_inputs(
+            coord, pluie_24h_sensor=0.7, pluie_demain_sensor=None,
+            forecast_summary={}, pluie_cumul_jour=None,
+        )
+        self.assertEqual((avec_capteur[0], avec_capteur[1]), (0.7, "capteur"))
+        sans_rien = coordinator_mod.GazonIntelligentCoordinator._resolve_precipitation_inputs(
+            coord, pluie_24h_sensor=None, pluie_demain_sensor=None,
+            forecast_summary={"forecast_pluie_24h": 2.0}, pluie_cumul_jour=None,
+        )
+        self.assertEqual((sans_rien[0], sans_rien[1]), (2.0, "meteo_forecast"))
+
+    def test_le_point_d_APPEL_transmet_le_total_derive(self) -> None:
+        """⚠️ LE CÂBLAGE. Le paramètre a un défaut `None` : oublier de le passer laisserait
+        la priorité inerte, sans qu'aucun test de la fonction seule ne le voie."""
+        source = (PACKAGE_DIR / "coordinator.py").read_text(encoding="utf-8")
+        # Fenêtre après le marqueur d'appel plutôt qu'un découpage sur « ) » : un commentaire
+        # à l'intérieur de l'appel contient des parenthèses et tronquerait la lecture.
+        appel = source.split("self._resolve_precipitation_inputs(", 1)[1][:900]
+        self.assertIn('pluie_cumul_jour=weather_profile.get("pluie_cumul_jour_mm")', appel)
 
     def test_l_entree_de_configuration_existe(self) -> None:
         flow = (PACKAGE_DIR / "config_flow.py").read_text(encoding="utf-8")
