@@ -4204,6 +4204,181 @@ class TestRessuyageApresPluie(unittest.TestCase):
         self.assertIsNone(decision_mowing._minutes_depuis_derniere_pluie(self._ctx(heure=12.0, memoire={})))
 
 
+class TestRessuyageProportionnelALaLame(unittest.TestCase):
+    """⚠️ LE BLOCAGE DU 09/09/2026, ET LES TROIS CORRECTIONS QUE KÉVIN A DEMANDÉES ENSEMBLE.
+
+    À 20:12 le pluviomètre du voisin passe de 0,0 à **0,1 mm** — un basculement d'auget. Le
+    garde arme aussitôt 180 minutes de ressuyage, empruntées au délai d'après-arrosage, pendant
+    que la station DU JARDIN ne mesure rien : compteur figé à 2,3 mm de 04:14 à minuit. La tonte
+    est restée bloquée jusqu'à 23:12 pour une pluie que la pelouse n'a pas reçue.
+
+    Trois corrections, tenues par les tests ci-dessous : un MINIMUM (0,3 mm), une durée
+    PROPORTIONNELLE, et les DEUX pluviomètres — la plus grande des deux lames commande.
+    """
+
+    def _ctx(self, *, heure, memoire, lame_voisin=None, lame_station=None, plein=180):
+        profil = {"weather_condition": "sunny"}
+        if lame_voisin is not None:
+            profil["pluie_mesuree_lame_mm"] = lame_voisin
+        if lame_station is not None:
+            profil["pluie_cumul_lame_mm"] = lame_station
+        return decision.DecisionContext.from_legacy_args(
+            history=[], today=date(2026, 9, 9), hour_of_day=heure, temperature=18.0,
+            humidite=60.0, memory=memoire, weather_profile=profil,
+            runtime_context={"mowing_cooldown_after_watering_minutes": plein},
+        )
+
+    def _bloc(self, ctx):
+        return decision_mowing._resolve_mowing_block(ctx, {}, {})
+
+    # ---- LE CAS RÉEL ---------------------------------------------------------------------
+    def test_le_basculement_du_09_09_n_arme_PLUS_trois_heures(self) -> None:
+        """0,1 mm chez le voisin, rien à la station : aucun ressuyage.
+
+        ⚠️ Le point d'appel, pas seulement la formule : on interroge `_resolve_mowing_block`,
+        celui-là même qui produisait « Herbe mouillée: ressuyage après la pluie (101 min
+        restantes) » à 21:31 ce soir-là.
+        """
+        memoire = {"derniere_pluie_active": {"date": "2026-09-09", "heure": 20.2}}
+        bloque, code, motif, _, _ = self._bloc(
+            self._ctx(heure=21.5, memoire=memoire, lame_voisin=0.1, lame_station=0.0)
+        )
+        self.assertFalse(bloque, f"la tonte est encore bloquée : {motif}")
+        self.assertNotEqual(code, "wet_grass")
+
+    def test_la_meme_soiree_bloquait_AVANT_le_correctif(self) -> None:
+        """Prémisse : sans les lames, le montage reproduit bien l'ancien blocage de 3 h.
+
+        Sans ce test, le précédent pourrait passer au vert pour une raison étrangère au
+        correctif — un montage qui n'atteint jamais la branche testée, l'erreur commise deux
+        fois sur ce projet.
+        """
+        memoire = {"derniere_pluie_active": {"date": "2026-09-09", "heure": 20.2}}
+        bloque, code, motif, _, _ = self._bloc(self._ctx(heure=21.5, memoire=memoire))
+        self.assertTrue(bloque)
+        self.assertEqual(code, "wet_grass")
+        self.assertIn("101 min restantes", motif)
+
+    # ---- 1. LE MINIMUM -------------------------------------------------------------------
+    def test_sous_le_minimum_aucun_ressuyage(self) -> None:
+        for lame in (0.0, 0.1, 0.29):
+            with self.subTest(lame=lame):
+                self.assertEqual(decision_mowing._ressuyage_effectif(180.0, lame), 0.0)
+
+    def test_a_la_borne_exacte_le_plancher_s_applique(self) -> None:
+        self.assertAlmostEqual(decision_mowing._ressuyage_effectif(180.0, 0.3), 45.0, places=6)
+
+    def test_une_absence_de_mesure_ne_raccourcit_RIEN(self) -> None:
+        """⚠️ RÈGLE DE LA MAISON. `None` veut dire « aucun pluviomètre ne parle », jamais
+        « il n'est rien tombé » — sinon deux capteurs muets supprimeraient le ressuyage."""
+        self.assertAlmostEqual(decision_mowing._ressuyage_effectif(180.0, None), 180.0)
+        memoire = {"derniere_pluie_active": {"date": "2026-09-09", "heure": 20.2}}
+        bloque, code, _, _, _ = self._bloc(self._ctx(heure=21.5, memoire=memoire))
+        self.assertTrue(bloque, "sans mesure, le comportement d'avant doit être intact")
+        self.assertEqual(code, "wet_grass")
+
+    # ---- 2. LA PROPORTION ----------------------------------------------------------------
+    def test_la_duree_croit_avec_la_lame(self) -> None:
+        durees = [decision_mowing._ressuyage_effectif(180.0, mm) for mm in (0.3, 1.0, 2.0, 3.0)]
+        self.assertEqual(durees, sorted(durees), "la durée ne croît pas avec la lame d'eau")
+        self.assertAlmostEqual(durees[1], 70.5, places=1)   # 1,0 mm
+        self.assertAlmostEqual(durees[2], 107.0, places=0)  # 2,0 mm
+
+    def test_a_saturation_du_couvert_le_delai_est_PLEIN(self) -> None:
+        """4,0 mm : le couvert est saturé, l'eau ruisselle. Rien n'est raccourci.
+
+        Repère pris sur la capacité de rétention d'un gazon — 4,4 mm avant que la première
+        goutte n'atteigne le sol (Serena et al., PLOS ONE 2022).
+        """
+        for lame in (4.0, 6.0, 20.0):
+            with self.subTest(lame=lame):
+                self.assertAlmostEqual(
+                    decision_mowing._ressuyage_effectif(180.0, lame), 180.0, places=6
+                )
+
+    def test_le_plancher_ne_depasse_JAMAIS_le_reglage(self) -> None:
+        """Si Kévin descend le délai plein à 30 min, une petite pluie ne doit pas attendre 45."""
+        self.assertLessEqual(decision_mowing._ressuyage_effectif(30.0, 0.5), 30.0)
+        self.assertEqual(decision_mowing._ressuyage_effectif(0.0, 10.0), 0.0)
+
+    # ---- 3. LES DEUX PLUVIOMÈTRES --------------------------------------------------------
+    def test_la_station_du_jardin_COMMANDE_quand_elle_voit_plus(self) -> None:
+        """L'inverse du 09/09 : l'averse tombe ICI et le voisin la rate.
+
+        Sans la station dans le calcul, 0,2 mm passeraient sous le minimum et la tonte partirait
+        sur une pelouse détrempée.
+        """
+        memoire = {"derniere_pluie_active": {"date": "2026-09-09", "heure": 20.2}}
+        bloque, code, motif, _, _ = self._bloc(
+            self._ctx(heure=21.0, memoire=memoire, lame_voisin=0.2, lame_station=2.5)
+        )
+        self.assertTrue(bloque, "l'averse mesurée sur la pelouse n'a armé aucun ressuyage")
+        self.assertEqual(code, "wet_grass")
+        self.assertIn("2,5 mm", motif)
+
+    def test_le_voisin_commande_quand_la_station_est_muette(self) -> None:
+        """L'angle mort inverse : la station était `unavailable` 16 min autour du basculement du
+        09/09. Un capteur absent ne doit pas ramener l'épisode à zéro."""
+        self.assertAlmostEqual(
+            decision_mowing._lame_de_pluie_recente(
+                {"pluie_mesuree_lame_mm": 3.0, "pluie_cumul_lame_mm": None}
+            ),
+            3.0,
+        )
+
+    def test_c_est_le_MAXIMUM_des_deux_jamais_la_premiere_trouvee(self) -> None:
+        for voisin, station, attendu in ((0.1, 2.0, 2.0), (2.0, 0.1, 2.0), (None, None, None)):
+            with self.subTest(voisin=voisin, station=station):
+                self.assertEqual(
+                    decision_mowing._lame_de_pluie_recente(
+                        {"pluie_mesuree_lame_mm": voisin, "pluie_cumul_lame_mm": station}
+                    ),
+                    attendu,
+                )
+
+    def test_une_valeur_illisible_ne_vaut_pas_zero(self) -> None:
+        self.assertIsNone(
+            decision_mowing._lame_de_pluie_recente(
+                {"pluie_mesuree_lame_mm": "beaucoup", "pluie_cumul_lame_mm": None}
+            )
+        )
+
+    # ---- LE BLOQUANT DU PREMIER JET ------------------------------------------------------
+    def test_un_auget_TARDIF_ne_SUPPRIME_pas_le_ressuyage_d_une_vraie_averse(self) -> None:
+        """⚠️ LE DÉFAUT QU'UNE REVUE ADVERSARIALE A TROUVÉ DANS MON PREMIER CORRECTIF.
+
+        Le 12/09 (rejeu), 6,0 mm de 14:00 à 14:50 : ressuyage plein armé jusqu'à 17:50. À 16:25,
+        UN auget de traîne sur chaque capteur. La lame était alors un « épisode » remis à zéro
+        après une heure de trou : elle retombait à 0,1 mm, donc sous le minimum, donc
+        **ressuyage supprimé**. La tonte redevenait autorisée à 17:00 sur une pelouse ayant reçu
+        6,1 mm — moins bien que le code qu'on remplaçait. Plus il pleuvait, moins on bloquait.
+
+        La fenêtre glissante additionne au lieu d'effacer : ici on relit 6,1 mm.
+        """
+        memoire = {"derniere_pluie_active": {"date": "2026-09-09", "heure": 16.42}}
+        bloque, code, motif, _, _ = self._bloc(
+            self._ctx(heure=17.0, memoire=memoire, lame_voisin=6.1, lame_station=6.1)
+        )
+        self.assertTrue(bloque, "la tonte est autorisée 35 min après 6,1 mm de pluie")
+        self.assertEqual(code, "wet_grass")
+        self.assertIn("6,1 mm", motif)
+        self.assertAlmostEqual(
+            decision_mowing._ressuyage_effectif(180.0, 6.1), 180.0, places=6,
+            msg="6,1 mm n'arment plus le délai plein",
+        )
+
+    # ---- LE MOTIF ------------------------------------------------------------------------
+    def test_le_motif_ANNONCE_la_lame_de_pluie(self) -> None:
+        """« 3 h de ressuyage » sans dire pour quelle pluie, c'est ce qui a fait chercher une
+        demi-heure d'où venait le blocage du 09/09. Virgule décimale, comme le reste."""
+        memoire = {"derniere_pluie_active": {"date": "2026-09-09", "heure": 20.0}}
+        _, _, motif, _, _ = self._bloc(
+            self._ctx(heure=21.0, memoire=memoire, lame_voisin=1.2, lame_station=0.0)
+        )
+        self.assertIn("1,2 mm", motif)
+        self.assertNotIn("1.2", motif)
+
+
 class TestHorodatageSurLaDerniereHausse(unittest.TestCase):
     """L'averse est horodatée à sa DERNIÈRE HAUSSE mesurée, pas au dernier cycle de garde.
 

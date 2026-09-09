@@ -82,6 +82,7 @@ _SNAPSHOT_KEYS: tuple[str, ...] = (
     "mower_auto_declaration_state",
     "mower_auto_declared_today",
     "mower_auto_declaration_threshold_minutes",
+    "mower_travail_termine_minutes_jour",
     "tondeuse_resolution_state",
     "tondeuse_resolution_reason",
     "tondeuse_resolution_candidate_count",

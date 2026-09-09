@@ -3791,6 +3791,9 @@ class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):
             "mower_auto_declaration_state",
             "mower_auto_declaration_threshold_minutes",
             "mower_auto_declared_today",
+            # 0.82.0 : la grandeur réellement comparée au plancher — les minutes des travaux
+            # TERMINÉS du jour. « travail_trop_court » sans ce nombre ne dit pas de combien.
+            "mower_travail_termine_minutes_jour",
             # Carnet de passes : ce que la machine fait vraiment, passe par passe.
             "mower_pass_in_progress",
             "mower_pass_count_today",

@@ -1,5 +1,124 @@
 # Changelog
 
+## 0.83.0
+
+1336 tests verts. **Le ressuyage de la tonte dépend enfin de la LAME D'EAU tombée — et la station du jardin y a voix.**
+
+### Un basculement d'auget valait trois heures
+
+Le 09/09/2026 à 20:12, `sensor.meteo_netatmo_precipitation_aujourd_hui` — le pluviomètre du **voisin** — passe de 0,0 à **0,1 mm**. Un auget. Le garde `wet_grass` arme aussitôt les **180 minutes** de ressuyage empruntées au délai d'après-arrosage, calibrées pour un cycle d'irrigation de plusieurs millimètres.
+
+Pendant ce temps la station du jardin, celle qui est **sur la pelouse**, n'a rien mesuré : compteur figé à 2,3 mm de 04:14 à minuit. Tonte bloquée jusqu'à 23:12 pour une pluie que le gazon n'a pas reçue.
+
+Deux causes, pas une : **aucun minimum de quantité** (0,1 mm et 10 mm armaient le même délai), et **une seule source**, qui n'est pas la bonne.
+
+### Les trois corrections, tenues ensemble
+
+| | |
+|---|---|
+| **un minimum** | sous **0,3 mm**, aucun ressuyage n'est armé. La tonte reste bloquée tant qu'il *pleut* — c'est un autre garde, intact — mais sans traîne de trois heures |
+| **une durée proportionnelle** | 0,3 mm → 45 min · 1,0 → 71 · 2,0 → 107 · **≥ 4,0 → le délai plein configuré** |
+| **les deux pluviomètres** | la lame retenue est la **plus grande** des deux. Quand la station du jardin voit une averse que le voisin sous-estime, c'est elle qui commande |
+
+**D'où viennent 0,3 et 4,0.** Un couvert de gazon retient plusieurs millimètres avant qu'une goutte n'atteigne le sol — **4,4 mm** mesurés sur zoysia et agrostide par pluviomètres co-localisés (PLOS ONE 2022, *Measuring turfgrass canopy interception and throughfall using co-located pluviometers*). C'est la bonne échelle pour la vraie question de la tonte : **l'eau sur la feuille**. 4,0 mm vaut donc saturation du couvert, et 0,3 mm — moins d'un dixième — le film que les premières minutes d'évaporation enlèvent. Ce sont des repères réglables, pas des constantes physiques : la mesure porte sur des gazons plus ras et plus denses que celui-ci.
+
+### Le premier jet était pire que le défaut, et une revue adversariale l'a montré
+
+Il cumulait une « lame d'épisode » **remise à zéro** dès qu'une hausse arrivait après une heure de trou. Rejoué sur du code réel :
+
+| heure | événement | verdict |
+|---|---|---|
+| 14:00 → 14:50 | **6,0 mm** sur les deux pluviomètres | ressuyage plein, jusqu'à 17:50 |
+| 16:24 | — | bloqué, « ressuyage après 6,0 mm (85 min restantes) » |
+| 16:25 | **un auget de traîne** (6,0 → 6,1) | l'épisode est remis à 0, puis rechargé à **0,1 mm** |
+| 17:00 | — | **tonte AUTORISÉE**, sur une pelouse ayant reçu 6,1 mm |
+
+Sans le correctif, la même chronologie bloquait jusqu'à 19:25. **Plus il pleuvait, moins on bloquait.** Quatre relecteurs indépendants ont convergé ; deux autres défauts de la même racine ont suivi — un pluviomètre `unavailable` faisait disparaître sa lame au lieu d'être ignoré, et une bruine fractionnée n'armait jamais rien.
+
+**Un accumulateur qu'on détruit n'est pas une mesure.** La lame est désormais une **fenêtre glissante de 4 h** : chaque hausse est horodatée, celles qui sortent tombent d'elles-mêmes, et rien ne peut être effacé par une pluie plus récente. Une hausse ne peut qu'**ajouter**. La fenêtre est plus large que le ressuyage le plus long (180 min), sinon la lame s'évanouirait avant la fin du délai qu'elle a armé.
+
+Et elle **vieillit à l'horloge, pas à la lecture** : une coupure du capteur ne l'efface plus — vérifié des deux côtés, par un test et par une mutation.
+
+### Ce qui n'a pas bougé
+
+`is_active_rain_weather` et `active_rain_source` sont intacts : bloquer **pendant** la pluie est un autre garde, et il commande aussi l'arrosage. Le cliquet anti-oscillation, l'horodatage de l'averse et sa garde « une prévision que la mesure dément n'arme rien » (29/08), le total du jour qui alimente le bilan du sol depuis la 0.79.0 : inchangés, sous test.
+
+### Visible à l'écran
+
+`sensor_health` publie **`pluie_lame_voisin_mm`** et **`pluie_lame_station_mm`** côte à côte — c'est leur écart qui a expliqué le blocage du 09/09. Et le motif annonce désormais la lame : « Herbe mouillée: ressuyage après 1,2 mm de pluie (48 min restantes) ». Le blocage du 09/09 a coûté une demi-heure de recherche parce que rien à l'écran ne disait de quelle pluie il parlait.
+
+`mower_travail_termine_minutes_jour` (0.82.0) est corrigé au passage, **deux fois**. Il n'était renseigné que sur le cycle traitant une complétion — deux ou trois fois par jour sur ~700 cycles. Et une fois cela réparé, il restait invisible : `_attrs_from_data` **filtre les valeurs `None`**, et tant qu'aucun travail ne s'est terminé la valeur était `None`. Trois listes blanches traversées, tests de câblage verts, et personne ne voyait rien — la variante « entité éteinte » du défaut n°1 du projet. La règle « une absence n'est pas un zéro » vaut pour une **mesure** dont la source peut se taire ; ce cumul-là est notre propre comptabilité, et « zéro minute de travail terminé aujourd'hui » est un fait connu. Vérifié sur l'installation le 10/09.
+
+### Trois affirmations du code remises d'aplomb
+
+- `_lire_progression_tonte` : « rien n'est branché sur une décision » — faux depuis la 0.61.0, ses sorties pilotent l'écriture de la tonte.
+- « même délai que après un arrosage », à trois lignes du correctif : celui-ci n'en est plus que le **plafond**.
+- La citation des 4,4 mm ne nomme plus d'auteurs : le titre et la revue, vérifiables, suffisent.
+
+### Vérification
+
+Sept mutations, chacune vérifiée pour qu'elle fasse tomber le test visé — dont **le premier jet lui-même** (une hausse qui efface les précédentes), la fenêtre qui ne vieillit plus, les deux survies à une coupure, la station retirée du calcul, et les deux sources croisées à l'affichage.
+
+## 0.82.0
+
+1308 tests verts. **Une journée de tonte découpée en travaux courts est enfin déclarée — sans qu'une coupe de bordure puisse le faire à sa place.**
+
+### 164 minutes de lame, zéro tonte inscrite
+
+Le 08/09/2026 la tondeuse est sortie **trois fois** : 15:29→16:27, 19:47→20:07, 20:44→22:11. Deux heures quarante-cinq de lame sur la pelouse.
+
+Trois sorties, trois `task_id`, donc **trois travaux**. Le plancher de qualification s'appliquait au travail courant : chacun pris isolément restait sous les 90 min, le dernier compté à **88** — raté de deux minutes. Chaque complétion a été consommée en `travail_trop_court`, et la journée n'a rien inscrit.
+
+Le 09/09 au matin : hauteur estimée montée de 5,1 à **5,3 cm**, `mowing_is_overdue` à `true`, **3 jours de retard** annoncés — sur une pelouse tondue la veille au soir.
+
+Et ce n'était pas un accident isolé. Minutes réellement tondues du 04 au 08/09 : **188 · 135 · 149 · 0 · 164**. La machine sort presque tous les jours ; c'est le **découpage** qui passait sous le plancher.
+
+### Ce n'est pas de l'affichage
+
+`overdue_relaxed_baseline` (`decision_mowing.py`) ouvre une voie alternative vers `tonte_ok` **et contourne les blocages agronomiques**. Se croire en retard relâche des gardes qui devaient tenir. Le retard est un levier de décision, pas un compteur décoratif.
+
+### Le premier correctif était faux, et c'est une revue adversariale qui l'a montré
+
+Le premier jet qualifiait sur `max(cumul du travail, mower_mowing_minutes_today)`. Quatre relecteurs indépendants ont convergé sur le même défaut **bloquant**, rejoué sur le code :
+
+| heure | événement | verdict |
+|---|---|---|
+| 09:00 | la tâche A naît | — |
+| 11:40 | A à **55 %**, journée 160 min — puis elle se bloque et rentre. Elle n'atteindra jamais 100 %. | `travail_en_cours` |
+| 18:00 | coupe de bordure B | — |
+| 18:12 | B à 100 %, journée 172 → `max(12, 172) = 172` | **`declaree`** |
+
+Une bordure de **douze minutes** inscrivait la tonte du jour avec les minutes d'un travail abandonné : hauteur ré-ancrée sur la lame, retard remis à zéro, surveillance endormie sur une pelouse tondue à 55 %. C'était le défaut du 30/08/2026 revenu par une autre porte.
+
+`mower_mowing_minutes_today` mesure du temps de lame **toutes tâches confondues, abouties ou non**. Il ne prouve rien sur ce qui a été mené à son terme.
+
+### Ce qu'on cumule à la place : les travaux **terminés**
+
+Chaque travail ne verse que ses minutes propres — base du jour déjà retranchée (0.69.0) — et **il ne les verse qu'en atteignant 100 %**. La somme dit exactement ce qu'on veut savoir : combien de temps de lame a été mené à son terme aujourd'hui.
+
+- Le 08/09 : 58 → 77,4 → **164,6** — les trois travaux étaient terminés, la tonte part au troisième.
+- Le travail abandonné à 55 % : ses 160 minutes ne sont versées **nulle part**. La bordure vaut 12, et 12 ne franchit rien.
+- Le 30/08 (déclarée à 49 % de progression) : aucun travail terminé, donc rien versé, donc rien déclaré.
+- Le 03/09 (337 min dont 86 % appartenant à la veille) : le cumul est indexé sur la date. Ce chemin reste fermé, et un test le prouve au lieu de l'affirmer.
+
+Le cumul est **persisté des deux côtés** : sans cela, un redémarrage en milieu de journée oublierait les travaux déjà terminés et une soirée découpée redeviendrait indéclarable — le défaut qu'on corrige, sur une installation qui redémarre souvent.
+
+### Un nouvel attribut, parce qu'un automatisme muet est indiscernable d'un automatisme cassé
+
+`mower_travail_termine_minutes_jour` publie la grandeur **réellement comparée au plancher**. Sans elle, `travail_trop_court` ne dit pas s'il manquait dix minutes ou une heure — et c'est précisément ce qu'il fallait savoir pour trouver le défaut du 08/09. Trois listes blanches traversées, une de plus dans le banc de câblage.
+
+### Trois affirmations du code qui mentaient
+
+- `_suivre_pluie_du_jour` : « **observation seule, n'alimente aucune décision** ». Faux depuis la 0.79.0 — elle alimente le bilan du sol. Vérifié sur la station dans la nuit du 08→09/09 : compteur 2,1 → 2,3, cumul du jour 0,2 mm, réserve 10,8 → 11,0.
+- `_lire_progression_tonte` : « **rien n'est branché sur une décision** ». Faux depuis la 0.61.0 — ses deux sorties pilotent l'écriture de la tonte. Le mensonge jumeau du précédent, resté debout côté tonte.
+- La docstring de `_declarer_tonte_du_jour` annonçait « quatre gardes » et oubliait celle du **travail terminé** — née du 30/08, et précisément celle sur laquelle l'ouverture s'appuie. Elles sont cinq.
+
+Et la ligne de journal lisait `suivi.get("mower_job_id")`, une clé que `_suivre_travail_tondeuse` n'a jamais produite : elle s'appelle `mower_job_followed_id`. Depuis la 0.61.0 le journal écrivait « travail ? » à chaque déclaration, là où l'identifiant sert. Sous test.
+
+### Vérification
+
+Sept mutations, chacune vérifiée pour qu'elle fasse tomber le test visé — dont **le premier correctif lui-même** (`max` avec le compteur du jour), désormais attrapé par le test du travail jamais terminé. Les six autres : retour au comportement 0.81.0, le compteur du jour seul, un cumul qui ne repart pas à zéro le lendemain, une complétion re-offerte, le cumul sauvegardé mais non restauré, et la clé retirée des attributs du capteur.
+
 ## 0.81.0
 
 1299 tests verts. **En dessous du minimum utile, on n'arrose plus du tout.**
