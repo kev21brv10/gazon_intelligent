@@ -1019,6 +1019,12 @@ def compute_advanced_context(
         "pluie_mesuree_minutes_depuis_hausse": weather_profile.get(
             "pluie_mesuree_minutes_depuis_hausse"
         ),
+        # ⚠️ Les DEUX lames d'épisode (0.83.0). Le ressuyage de la tonte les lit sur
+        # `weather_profile`, pas ici — mais une clé produite par le coordinateur et absente de
+        # cette recopie est une clé qui meurt dès qu'un consommateur passe par
+        # `advanced_context`. Un test part de la sortie RÉELLE du coordinateur et l'exige.
+        "pluie_mesuree_lame_mm": weather_profile.get("pluie_mesuree_lame_mm"),
+        "pluie_cumul_lame_mm": weather_profile.get("pluie_cumul_lame_mm"),
     }
 
 

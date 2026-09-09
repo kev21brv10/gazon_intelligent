@@ -277,6 +277,32 @@ _PLUIE_MESUREE_FENETRE_MINUTES: float = 30.0
 # le plus petit incrément réel, donc toute vraie hausse est vue et aucune ne s'invente.
 _PLUIE_MESUREE_HAUSSE_MIN_MM: float = 0.05
 
+# ── LAME D'EAU RÉCENTE — FENÊTRE GLISSANTE ────────────────────────────────────────────────
+# ⚠️ « IL A PLU » NE DIT PAS COMBIEN, et c'est ce qui manquait au ressuyage de la tonte. Le
+# 09/09/2026 à 20:12, UN basculement d'auget du pluviomètre voisin — 0,0 → 0,1 mm — a armé les
+# mêmes 180 minutes de ressuyage qu'une vraie averse, sur une pelouse où la station du jardin
+# n'a rien mesuré (compteur figé à 2,3 de 04:14 à minuit).
+#
+# ⚠️ ET LE PREMIER JET DU CORRECTIF FAISAIT PIRE QUE LE DÉFAUT. Il cumulait un « épisode »
+# remis à zéro dès qu'une hausse arrivait après un trou d'une heure. Une revue adversariale l'a
+# rejoué sur du code réel : 6,0 mm de 14:00 à 14:50, ressuyage armé jusqu'à 17:50 — puis UN
+# auget de traîne à 16:25 REMETTAIT l'épisode à 0,1 mm, donc sous le minimum, donc **ressuyage
+# supprimé**. La tonte redevenait autorisée à 17:00 sur une pelouse ayant reçu 6,1 mm. Plus il
+# pleuvait, moins on bloquait. Un accumulateur qu'on DÉTRUIT n'est pas une mesure.
+#
+# On tient donc une FENÊTRE GLISSANTE : chaque hausse est horodatée, celles qui sortent de la
+# fenêtre tombent d'elles-mêmes, et la lame est leur somme. Rien n'est jamais effacé par une
+# pluie plus récente ; une bruine fractionnée s'additionne au lieu de se découper ; et une pluie
+# vieille de plusieurs heures sort du calcul sans qu'on ait à la « fermer ».
+#
+# 240 min : le ressuyage le plus long vaut 180 min à partir de la DERNIÈRE goutte. La fenêtre
+# doit donc rester plus large que lui, sinon la lame s'évanouirait avant la fin du délai
+# qu'elle a elle-même armé.
+_PLUIE_LAME_FENETRE_MINUTES: float = 240.0
+# Filet mémoire : une averse tique au plus une fois par cycle (2 min), soit 120 entrées sur la
+# fenêtre. Le plafond ne sert qu'à borner une horloge qui reculerait ou un état corrompu.
+_PLUIE_LAME_MAX_ENTREES: int = 200
+
 # ── TOTAL DU JOUR DEPUIS UN COMPTEUR CUMULATIF ────────────────────────────────────────────
 # Le compteur du WS90 ne se remet JAMAIS à zéro, et il chute parfois brutalement à 0 avant de
 # revenir à sa valeur — trames corrompues documentées, simultanées à des rafales à plus de
@@ -395,6 +421,10 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "mower_auto_declaration_state",
     "mower_auto_declaration_threshold_minutes",
     "mower_auto_declared_today",
+    # Ajoutée en 0.82.0 : la grandeur RÉELLEMENT comparée au plancher. Sans elle à l'écran,
+    # « travail_trop_court » ne dit pas s'il manquait dix minutes ou une heure — et c'est
+    # justement ce qu'il fallait savoir pour trouver le défaut du 08/09.
+    "mower_travail_termine_minutes_jour",
     # ⚠️ CARNET DE PASSES — observation pure, aucune décision n'en dépend. Préfixe `mower_`
     # obligatoire : deux filtres de recopie (decision_mowing, decision) ne laissent passer du
     # contexte tondeuse que `tondeuse_` et `mower_`. Une clé `mowing_…` y meurt en silence.
@@ -1966,19 +1996,30 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _lire_progression_tonte(self) -> dict[str, Any]:
         """Où en est le TRAVAIL en cours, d'après la tondeuse elle-même.
 
-        ⚠️ OBSERVATION SEULE — RIEN N'EST BRANCHÉ SUR UNE DÉCISION. Le carnet compte des
-        PASSES ; il n'a jamais su ce qu'est un TRAVAIL. Cette entité le dit : une progression
-        0 → 100 % et un `task_id` stable qui survit à la recharge, donc qui recolle deux
-        passes séparées par une charge en un seul travail.
+        ⚠️ ELLE PILOTE L'ÉCRITURE DE LA TONTE DEPUIS LA 0.61.0. Ce bloc a longtemps porté
+        « observation seule — rien n'est branché sur une décision », vrai le jour où il a été
+        écrit et faux dès la 0.61.0 — puis resté en place huit versions de plus.
+        `mower_job_progress_pct` et `mower_job_id` alimentent `_suivre_travail_tondeuse`, donc
+        la détection du PASSAGE à 100 % — la garde qui décide si une tonte s'inscrit dans
+        l'historique. Un commentaire périmé est pire qu'une absence de commentaire : il autorise
+        à toucher au code en croyant qu'il ne décide de rien. (Corrigé le 09/09/2026, en même
+        temps que le mensonge jumeau de `_suivre_pluie_du_jour`.)
+
+        Le carnet compte des PASSES ; il n'a jamais su ce qu'est un TRAVAIL. Cette entité le
+        dit : une progression 0 → 100 % et un `task_id` stable qui survit à la recharge, donc
+        qui recolle deux passes séparées par une charge en un seul travail.
 
         Mesuré le 25/08/2026 : 13:20:38 progression → 0 (nouvelle tâche), montée régulière,
         17:24:11 → 100, au garage à 17:26:51.
 
-        ⚠️ DEUX INCONNUES INTERDISENT DE S'EN SERVIR POUR DÉCIDER, et c'est pour les lever
-        qu'on publie d'abord :
-          · `task_status` vaut 2 — on ignore son vocabulaire, donc on le publie BRUT ;
-          · une COUPE DE BORDURE monte-t-elle aussi à 100 ? Si oui, « progression = 100 »
-            veut dire « une tâche s'est terminée », pas « le gazon est tondu ».
+        ⚠️ LES DEUX INCONNUES D'ALORS, ET CE QU'ELLES SONT DEVENUES :
+          · `task_status` vaut 2 — on ignore toujours son vocabulaire, donc on le publie BRUT
+            et **aucune décision ne s'y appuie** ;
+          · « une COUPE DE BORDURE monte-t-elle aussi à 100 ? » — **oui**, mesuré le 02/09/2026.
+            « progression = 100 » veut donc bien dire « une tâche s'est terminée », jamais « le
+            gazon est tondu ». C'est de là que vient le plancher de minutes, et c'est pour la
+            même raison que la 0.82.0 cumule les travaux terminés de la journée plutôt que de
+            faire confiance à une complétion isolée.
 
         ⚠️ Le suffixe de l'entité dépend de la langue de l'intégration tondeuse. Absente,
         la réponse est `None` partout — une absence, jamais un zéro.
@@ -2058,11 +2099,60 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.debug("Suivi de la recommandation ignorée indisponible", exc_info=True)
             return vide
 
+    def _cumuler_lame_glissante(
+        self, suivi: dict[str, Any], gain: float, maintenant: datetime
+    ) -> float:
+        """Lame d'eau tombée dans les dernières heures. Source unique des DEUX pluviomètres.
+
+        ⚠️ ON N'EFFACE JAMAIS, ON LAISSE VIEILLIR. C'est toute la différence avec l'« épisode »
+        du premier jet, qui remettait le compteur à zéro dès qu'une hausse arrivait après un
+        trou : un auget de traîne annulait alors le ressuyage de l'averse précédente. Ici une
+        hausse ne peut qu'AJOUTER ; ce qui sort de la fenêtre part de lui-même.
+
+        ⚠️ APPELÉ MÊME SANS LECTURE FRAÎCHE (`gain = 0`). Un pluviomètre `unavailable` ne doit
+        pas faire disparaître la pluie qu'il a mesurée dix minutes plus tôt — c'est le second
+        défaut qu'a trouvé la revue : la lame de la station s'évanouissait pendant ses coupures,
+        et le maximum des deux retombait alors sur le seul voisin. Le vieillissement est une
+        affaire d'horloge, pas de lecture.
+
+        ⚠️ Rend toujours un nombre, jamais `None` : quand le suivi existe, « rien dans la
+        fenêtre » est une MESURE (0 mm), pas une absence. L'absence, c'est l'appelant qui la
+        signale en ne nous appelant pas.
+        """
+        historique = suivi.get("lame_gains")
+        if not isinstance(historique, list):
+            historique = []
+        if gain > 0.0:
+            historique = [*historique, [maintenant.isoformat(), round(float(gain), 3)]]
+
+        limite = maintenant - timedelta(minutes=_PLUIE_LAME_FENETRE_MINUTES)
+        retenus: list[list[Any]] = []
+        total = 0.0
+        for entree in historique:
+            if not isinstance(entree, (list, tuple)) or len(entree) != 2:
+                continue
+            instant = self._parse_datetime_value(entree[0])
+            valeur = _to_float_or_none(entree[1])
+            if instant is None or valeur is None or valeur <= 0.0:
+                continue
+            if instant < limite or instant > maintenant:
+                continue  # trop vieux, ou daté du futur (horloge qui a reculé)
+            retenus.append([entree[0], valeur])
+            total += valeur
+
+        suivi["lame_gains"] = retenus[-_PLUIE_LAME_MAX_ENTREES:]
+        return round(total, 2)
+
     def _suivre_pluie_du_jour(self) -> dict[str, Any]:
         """Total de pluie du jour, dérivé d'un compteur CUMULATIF qui ne se réinitialise pas.
 
-        ⚠️ OBSERVATION SEULE POUR L'INSTANT — publiée à côté de `capteur_pluie_24h`, elle
-        n'alimente aucune décision tant qu'on ne l'a pas vue vivre sur une vraie station.
+        ⚠️ ELLE ALIMENTE LE BILAN SOL DEPUIS LA 0.79.0. Ce bloc a porté d'une version à
+        l'autre un avertissement « observation seule, n'alimente aucune décision » devenu
+        FAUX le jour même où la 0.79.0 l'a branchée : `_resolve_precipitation_inputs` la prend désormais en priorité sur
+        `capteur_pluie_24h` (source `capteur_cumul_station`). Un commentaire périmé est pire
+        qu'une absence de commentaire — il autorise à toucher au code en croyant qu'il ne
+        décide de rien. Vérifié le 09/09/2026 sur la vraie station : nuit du 08→09,
+        compteur 2,1 → 2,3, cumul du jour 0,2 mm, réserve 10,8 → 11,0. Le crédit vient d'ici.
 
         ⚠️ ON NE COMPTE QUE LE DÉPASSEMENT DU MAXIMUM DÉJÀ VU. Le compteur du WS90 chute
         parfois à 0 puis revient à sa valeur : un simple `delta` compterait la remontée comme
@@ -2076,10 +2166,21 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "pluie_cumul_jour_mm": None,
             "pluie_cumul_pic_mm": None,
             "pluie_gain_rejete_mm": None,
+            "pluie_cumul_lame_mm": None,
         }
         try:
+            _suivi_lame = self._runtime_state.get("pluie_cumul")
             lecture = self._get_float_state(self._get_conf(CONF_CAPTEUR_PLUIE_CUMUL))
             if lecture is None:
+                # ⚠️ PAS DE LECTURE ≠ PAS DE PLUIE. La station tombe en `unavailable` par
+                # à-coups (16 min autour du basculement du 09/09) ; sa lame doit continuer de
+                # vieillir toute seule, sinon le ressuyage qu'elle a armé s'évanouit avec elle.
+                if isinstance(_suivi_lame, dict):
+                    _lame = self._cumuler_lame_glissante(
+                        _suivi_lame, 0.0, self._current_datetime()
+                    )
+                    self._runtime_state["pluie_cumul"] = _suivi_lame
+                    return {**vide, "pluie_cumul_lame_mm": _lame}
                 return vide
 
             suivi = self._runtime_state.get("pluie_cumul")
@@ -2092,23 +2193,31 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             pic = _to_float_or_none(suivi.get("pic"))
             rejete = _to_float_or_none(suivi.get("gain_rejete")) or 0.0
+            _lame_retenue = 0.0
             if pic is not None:
                 gain = lecture - pic
                 if gain > 0.0:
                     if gain <= _PLUIE_GAIN_MAX_PAR_PAS_MM:
                         suivi["total_jour"] = round(float(suivi.get("total_jour") or 0.0) + gain, 2)
+                        # ⚠️ C'est CETTE station qui est sur la pelouse : quand elle voit une
+                        # averse que le voisin sous-estime, c'est elle qui doit fixer la durée
+                        # du ressuyage. Un gain ABERRANT (branche `else`) n'y entre pas plus
+                        # que dans le total : sinon une trame corrompue armerait le maximum.
+                        _lame_retenue = gain
                     else:
                         # Saut impossible en deux minutes : on ne le compte pas, mais on le
                         # GARDE en trace. Un rejet silencieux serait indiscernable d'une panne.
                         rejete = round(rejete + gain, 2)
             suivi["pic"] = lecture if pic is None else max(pic, lecture)
             suivi["gain_rejete"] = rejete
+            lame = self._cumuler_lame_glissante(suivi, _lame_retenue, self._current_datetime())
             self._runtime_state["pluie_cumul"] = suivi
 
             return {
                 "pluie_cumul_jour_mm": round(float(suivi.get("total_jour") or 0.0), 2),
                 "pluie_cumul_pic_mm": suivi["pic"],
                 "pluie_gain_rejete_mm": rejete,
+                "pluie_cumul_lame_mm": lame,
             }
         except Exception:  # noqa: BLE001 — une observation ne fait jamais tomber le cycle
             _LOGGER.debug("Total de pluie du jour indisponible", exc_info=True)
@@ -2159,16 +2268,23 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "pluie_mesuree_active": None,
             "pluie_mesuree_cumul_mm": None,
             "pluie_mesuree_minutes_depuis_hausse": None,
+            "pluie_mesuree_lame_mm": None,
         }
         try:
-            cumul = _to_float_or_none(cumul_mm)
-            if cumul is None:
-                return vide
-
             maintenant = self._current_datetime()
             suivi = self._runtime_state.get("pluie_mesuree")
             if not isinstance(suivi, dict):
                 suivi = {}
+
+            cumul = _to_float_or_none(cumul_mm)
+            if cumul is None:
+                # ⚠️ PAS DE LECTURE ≠ PAS DE PLUIE, ici comme pour la station. Sans cette
+                # branche la lame du voisin s'évanouissait à la première coupure, et le
+                # maximum des deux retombait sur la seule station — le défaut symétrique de
+                # celui qu'a trouvé la revue. Le vieillissement est une affaire d'horloge.
+                _lame_orpheline = self._cumuler_lame_glissante(suivi, 0.0, maintenant)
+                self._runtime_state["pluie_mesuree"] = suivi
+                return {**vide, "pluie_mesuree_lame_mm": _lame_orpheline}
 
             precedent = _to_float_or_none(suivi.get("pic"))
             derniere_hausse = suivi.get("derniere_hausse")
@@ -2186,6 +2302,14 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # pas être franchi. Le banc de mutation l'a prouvé — la garde `not remise_a_zero`
             # écrite d'abord était morte, aucune mutation ne pouvait la tuer.
             retenue, pic, _ = appliquer_cliquet_pluie(cumul, precedent)
+
+            # ⚠️ LA LAME D'EAU RÉCENTE, à côté du « il pleut ». On additionne TOUTE hausse
+            # positive, sans le seuil de 0,05 mm : celui-ci filtre le bruit flottant pour dire
+            # « il pleut », il n'a rien à faire dans une somme. Le cliquet a déjà écarté les
+            # baisses, donc chaque hausse retenue est de la pluie réelle.
+            gain = (pic - precedent) if precedent is not None else 0.0
+            _lame_mm = self._cumuler_lame_glissante(suivi, gain, maintenant)
+
             if precedent is not None and pic - precedent >= _PLUIE_MESUREE_HAUSSE_MIN_MM:
                 derniere_hausse = maintenant.isoformat()
 
@@ -2194,8 +2318,10 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._runtime_state["pluie_mesuree"] = suivi
 
             if precedent is None:
-                # Première lecture : aucune comparaison possible, donc aucune conclusion.
-                return {**vide, "pluie_mesuree_cumul_mm": retenue}
+                # Première lecture : aucune comparaison possible, donc aucune conclusion —
+                # sauf la lame, qui vit dans la fenêtre glissante et peut venir d'avant le
+                # redémarrage.
+                return {**vide, "pluie_mesuree_cumul_mm": retenue, "pluie_mesuree_lame_mm": _lame_mm}
 
             depuis = None
             horodatage = self._parse_datetime_value(derniere_hausse)
@@ -2208,6 +2334,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "pluie_mesuree_active": depuis is not None and depuis <= _PLUIE_MESUREE_FENETRE_MINUTES,
                 "pluie_mesuree_cumul_mm": retenue,
                 "pluie_mesuree_minutes_depuis_hausse": depuis,
+                "pluie_mesuree_lame_mm": _lame_mm,
             }
         except Exception:  # noqa: BLE001 — un suivi d'observation ne fait jamais tomber le cycle
             _LOGGER.debug("Suivi de la pluie mesurée indisponible", exc_info=True)
@@ -2804,6 +2931,72 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             suivi["vu_inacheve"] = False
             self._runtime_state["mower_job_suivi"] = suivi
 
+    def _travail_termine_du_jour(self) -> float | None:
+        """Lecture SEULE du cumul des travaux terminés du jour. Ne mute rien.
+
+        ⚠️ POURQUOI ELLE EXISTE. La clé n'était renseignée que sur le cycle qui traite une
+        complétion — deux ou trois fois par jour sur ~700 cycles. À l'écran l'attribut valait
+        donc `None` en permanence, et la revue a eu raison de le dire : un nombre qu'on ne peut
+        pas lire au moment où on se pose la question n'est pas publié.
+        """
+        cumul = self._runtime_state.get("mower_travaux_termines")
+        if not isinstance(cumul, dict) or cumul.get("date") != self._current_date().isoformat():
+            # ⚠️ `0.0`, PAS `None` — VÉRIFIÉ SUR L'INSTALLATION LE 10/09/2026, une heure après
+            # la mise en service. L'attribut n'apparaissait NULLE PART sur le capteur de tonte :
+            # `_attrs_from_data` (entity_base.py) filtre les valeurs `None`, et aucun travail ne
+            # s'était encore terminé depuis le redémarrage. La clé était bien dans les trois
+            # listes blanches, les tests de câblage verts — et personne ne voyait rien.
+            #
+            # La règle « une absence n'est pas un zéro » vaut pour une MESURE dont la source
+            # peut se taire. Ce cumul-ci est notre propre comptabilité : quand rien n'est
+            # inscrit pour aujourd'hui, « zéro minute de travail terminé » est un fait connu,
+            # pas une ignorance. Le seul vrai `None` restant est celui d'une trace inerte,
+            # rendue par un coordinateur dégradé.
+            return 0.0
+        valeur = cumul.get("minutes")
+        if isinstance(valeur, (int, float)) and not isinstance(valeur, bool):
+            return float(valeur)
+        return None
+
+    def _cumuler_travail_termine_du_jour(self, minutes_travail: float) -> float:
+        """Minutes des travaux **terminés** aujourd'hui, celui-ci compris.
+
+        ⚠️ POURQUOI PAS `mower_mowing_minutes_today`. Ce compteur-là mesure du temps de lame,
+        toutes tâches confondues, qu'elles aient abouti ou non. Un travail bloqué à 55 % y pèse
+        ses 160 minutes ; une coupe de bordure terminée juste après hériterait donc d'un
+        plancher déjà franchi et inscrirait la tonte du jour. C'est le défaut du 30/08/2026
+        (déclarée à 49 % de progression) qui revenait par la porte de derrière.
+
+        Ici, chaque travail ne verse que ses minutes PROPRES — base du jour déjà retranchée par
+        `_cumuler_minutes_travail` (0.69.0) — et il ne les verse **qu'en atteignant 100 %**. La
+        somme dit donc exactement ce qu'on veut savoir : combien de temps de lame a été mené à
+        son terme aujourd'hui.
+
+        ⚠️ APPELÉ UNE SEULE FOIS PAR COMPLÉTION. Tous les chemins qui suivent la branche
+        `termine` appellent `_consommer_travail_termine()` : la fin de travail s'éteint dès
+        qu'elle est traitée, et la même tâche ne peut donc pas re-verser ses minutes au cycle
+        suivant — le rempart posé en 0.61.0, sans lequel une complétion restait offerte pendant
+        deux à trois jours.
+
+        ⚠️ PERSISTÉ, comme le suivi de travail. Sans cela un redémarrage en milieu de journée
+        oublierait les travaux déjà terminés, et une soirée découpée redeviendrait indéclarable
+        — précisément le défaut qu'on corrige, sur une installation qui redémarre souvent.
+        """
+        cumul = self._runtime_state.get("mower_travaux_termines")
+        if not isinstance(cumul, dict):
+            cumul = {}
+        aujourd_hui = self._current_date().isoformat()
+        if cumul.get("date") != aujourd_hui:
+            cumul = {"date": aujourd_hui, "minutes": 0.0}
+        deja = cumul.get("minutes")
+        deja = float(deja) if isinstance(deja, (int, float)) and not isinstance(deja, bool) else 0.0
+        # `max(0, …)` : un cumul de travail négatif n'a pas de sens et ne doit pas rogner ce
+        # qui a déjà été mené au bout.
+        ajout = float(minutes_travail) if minutes_travail is not None else 0.0
+        cumul["minutes"] = round(deja + max(0.0, ajout), 1)
+        self._runtime_state["mower_travaux_termines"] = cumul
+        return float(cumul["minutes"])
+
     def _declarer_tonte_du_jour(self, mower_context: dict[str, Any]) -> dict[str, Any]:
         """Inscrit la tonte du jour dès que le cumul mesuré franchit le seuil.
 
@@ -2823,11 +3016,18 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         Le seuil n'a pas besoin de la fin de journée : une fois 90 min cumulées, tondre
         davantage ne peut pas les dé-cumuler. La décision est disponible dès le franchissement.
 
+        ⚠️ ET IL SE LIT SUR LA JOURNÉE DE TRAVAUX TERMINÉS, PAS SUR LE SEUL TRAVAIL COURANT
+        (0.82.0). Le plancher qualifiait le travail en cours ; une journée découpée en plusieurs
+        travaux courts passait donc à travers alors que la pelouse avait bien été tondue. Voir
+        le commentaire au point de comparaison — et surtout pourquoi ce n'est PAS le compteur
+        de minutes de la journée qui sert.
+
         ⚠️ UNE DÉCLARATION EST UNE ÉCRITURE. Une fausse tonte déclarée est pire qu'une tonte
         non déclarée — elle remet le compteur de retard à zéro et endort la surveillance. D'où
-        quatre gardes, dans cet ordre : interrupteur explicite, mesure réellement présente
-        (`None` = tondeuse injoignable, ce n'est PAS « zéro minute »), seuil franchi, et
-        journée pas déjà inscrite.
+        CINQ gardes, dans cet ordre : interrupteur explicite ; mesure réellement présente
+        (`None` = tondeuse injoignable, ce n'est PAS « zéro minute ») ; **travail réellement
+        terminé** — la garde née du 30/08/2026, celle qui manquait à cette liste ; plancher
+        franchi par les travaux terminés du jour ; journée pas déjà inscrite.
         """
         # Le seuil se lit DANS le try : la lecture elle-même passe par `self.memory`, donc par
         # le cerveau. Hors du try, un coordinator dégradé faisait remonter l'exception dans le
@@ -2836,10 +3036,17 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "mower_auto_declaration_state": "desactivee",
             "mower_auto_declaration_threshold_minutes": DEFAULT_AUTO_MOWING_DECLARATION_MINUTES,
             "mower_auto_declared_today": False,
+            # ⚠️ La clé est posée DÈS L'INITIALISATION de la trace, pas seulement sur le chemin
+            # qui la calcule : une clé qui n'apparaît que parfois casse les consommateurs en
+            # silence, et le capteur afficherait un attribut intermittent.
+            "mower_travail_termine_minutes_jour": None,
         }
         try:
             seuil = self.auto_mowing_declaration_minutes
             trace["mower_auto_declaration_threshold_minutes"] = seuil
+            # ⚠️ RENSEIGNÉE À CHAQUE CYCLE, pas seulement quand un travail se termine : sinon
+            # l'attribut est `None` 99 % du temps et ne sert à personne.
+            trace["mower_travail_termine_minutes_jour"] = self._travail_termine_du_jour()
             if not self.auto_mowing_declaration_enabled:
                 return trace
 
@@ -2886,7 +3093,50 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             minutes_travail = suivi.get("mower_job_minutes_total")
             if not isinstance(minutes_travail, (int, float)) or isinstance(minutes_travail, bool):
                 minutes_travail = float(minutes)
-            if float(minutes_travail) < float(seuil):
+
+            # ⚠️ LE TRAVAIL SEUL NE SUFFIT PAS — défaut mesuré le 08/09/2026. La tondeuse est
+            # sortie TROIS fois ce soir-là : 15:29→16:27, 19:47→20:07, 20:44→22:11. Fenêtres
+            # d'états 57,8 + 19,4 + 87,2 min ; l'intégration a compté 88,1 min pour la dernière
+            # (elle crédite le temps passé en tonte cycle par cycle, départ compris), soit un
+            # `mower_job_minutes_total` de 88 pour un plancher de 90. Raté de deux minutes.
+            #
+            # Trois `task_id` distincts, donc trois travaux : chacun pris isolément restait sous
+            # le plancher. Chaque complétion a été consommée en `travail_trop_court` et la
+            # journée n'a rien inscrit — pour ~165 minutes de lame réellement passées sur la
+            # pelouse. Le lendemain matin, hauteur estimée montée de 5,1 à 5,3 cm et
+            # `mowing_is_overdue` à `true` avec 3 jours de retard annoncés. Ce n'est pas
+            # cosmétique : `overdue_relaxed_baseline` (decision_mowing.py) ouvre une voie
+            # alternative vers `tonte_ok` ET contourne les blocages agronomiques. Se croire en
+            # retard relâche des gardes qui devaient tenir. Et ce n'était pas un accident :
+            # minutes tondues du 04 au 08/09, 188 · 135 · 149 · 0 · 164.
+            #
+            # ⚠️ MAIS LE COMPTEUR DE LA JOURNÉE N'EST PAS LA RÉPONSE, et le premier jet de ce
+            # correctif s'y est trompé. Qualifier sur `max(travail, mower_mowing_minutes_today)`
+            # rouvrait le défaut du 30/08 par une autre porte, rejoué sur le code :
+            #
+            #     09:00  tâche A naît            → base 0
+            #     11:40  A à 55 %, journée 160   → `travail_en_cours`, puis A se bloque et
+            #                                      rentre : elle n'atteindra JAMAIS 100 %
+            #     18:00  coupe de bordure B      → base 160
+            #     18:12  B à 100 %, journée 172  → max(12, 172) = 172 ≥ 90 → **DÉCLARÉE**
+            #
+            # Une bordure de douze minutes inscrivait la tonte du jour avec les minutes d'un
+            # travail resté inachevé — hauteur ré-ancrée sur la lame, retard remis à zéro,
+            # surveillance endormie sur une pelouse tondue à 55 %. Le compteur de la journée
+            # est un cumul de temps de lame PARTAGÉ par toutes les tâches : il ne prouve rien
+            # sur ce qui a été mené à son terme.
+            #
+            # ⚠️ CE QU'ON CUMULE DONC : les minutes des travaux **TERMINÉS** de la journée.
+            # C'est la seule grandeur qui dit à la fois « il y a eu du travail » et « il a été
+            # mené au bout ». Elle additionne les trois travaux du 08/09 (chacun terminé) sans
+            # jamais compter les 160 minutes d'un travail abandonné. Et elle ne peut rien
+            # emprunter à la veille : elle est indexée sur la date, et chaque travail n'y verse
+            # que ses minutes PROPRES, base du jour déjà retranchée (0.69.0) — le chemin du
+            # défaut du 03/09, où 86 % du cumul appartenait à un travail déjà déclaré, reste
+            # fermé.
+            minutes_qualifiantes = self._cumuler_travail_termine_du_jour(minutes_travail)
+            trace["mower_travail_termine_minutes_jour"] = minutes_qualifiantes
+            if minutes_qualifiantes < float(seuil):
                 trace["mower_auto_declaration_state"] = "travail_trop_court"
                 self._consommer_travail_termine()
                 return trace
@@ -2920,9 +3170,16 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             _LOGGER.info(
                 "Tonte du %s déclarée automatiquement : travail %s terminé à 100 %%, "
-                "%.1f min tondues (plancher %d min)",
+                "%.1f min de travaux terminés aujourd'hui "
+                "(dont %.1f pour celui-ci ; journée mesurée %.1f, plancher %d min)",
                 jour,
-                suivi.get("mower_job_id") or "?",
+                # ⚠️ `suivi` vient de `_suivre_travail_tondeuse`, qui nomme la clé
+                # `mower_job_followed_id`. `mower_job_id` n'y a JAMAIS existé : la ligne
+                # écrivait « travail ? » depuis la 0.61.0 (commit 0d8c4e8, « la tonte se
+                # déclare sur le travail terminé, plus sur une durée »).
+                suivi.get("mower_job_followed_id") or "?",
+                minutes_qualifiantes,
+                float(minutes_travail),
                 float(minutes),
                 seuil,
             )
@@ -3026,6 +3283,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "pluie_actuelle_active": weather_profile.get("pluie_actuelle_active"),
             "pluie_cumul_jour_mm": weather_profile.get("pluie_cumul_jour_mm"),
             "pluie_cumul_pic_mm": weather_profile.get("pluie_cumul_pic_mm"),
+            # ⚠️ Les DEUX lames récentes, côte à côte : c'est leur écart qui a expliqué le
+            # blocage du 09/09 (voisin 0,1 mm, station 0,0). Sans elles à l'écran, « herbe
+            # mouillée » ne dit pas de quelle pluie il parle, ni si la pelouse l'a reçue.
+            "pluie_lame_voisin_mm": weather_profile.get("pluie_mesuree_lame_mm"),
+            "pluie_lame_station_mm": weather_profile.get("pluie_cumul_lame_mm"),
             "pluie_gain_rejete_mm": weather_profile.get("pluie_gain_rejete_mm"),
             "pluie_mesuree_minutes_depuis_hausse": weather_profile.get(
                 "pluie_mesuree_minutes_depuis_hausse"
@@ -3901,6 +4163,14 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "mower_job_suivi": self._serialize_runtime_value(
                 self._runtime_state.get("mower_job_suivi")
             ),
+            # ⚠️ Même piège, quatrième fois sur cette famille de clés. Non persisté, un
+            # redémarrage en milieu de journée oublierait les travaux DÉJÀ terminés : une
+            # soirée découpée en trois sorties redeviendrait indéclarable, c'est-à-dire
+            # exactement le défaut que la 0.82.0 corrige. Et les redémarrages sont fréquents
+            # ici. Sa jumelle vit dans `_restore_runtime_state` : les deux, ou aucune.
+            "mower_travaux_termines": self._serialize_runtime_value(
+                self._runtime_state.get("mower_travaux_termines")
+            ),
             # Non persistée, un redémarrage relancerait le risque sur le niveau brut — et les
             # redémarrages sont fréquents ici.
             "stress_palier_et0": self._runtime_state.get("stress_palier_et0"),
@@ -3972,6 +4242,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "pluie_cumul": runtime.get("pluie_cumul"),
             "mower_recommendation_ignored_since": runtime.get("mower_recommendation_ignored_since"),
             "mower_job_suivi": runtime.get("mower_job_suivi"),
+            "mower_travaux_termines": runtime.get("mower_travaux_termines"),
             "risque_amortissement": runtime.get("risque_amortissement"),
             "stress_palier_et0": runtime.get("stress_palier_et0"),
         }

@@ -5097,12 +5097,319 @@ class AutoDeclarationTonteTests(unittest.TestCase):
             trace["mower_job_minutes_total"], 16.0, places=1,
             msg="le cumul de la bordure compte encore les minutes du vrai travail",
         )
+        # ⚠️ ATTENDU MAINTENU EN 0.82.0, APRÈS L'AVOIR CASSÉ. Le premier jet du correctif
+        # qualifiait sur `max(travail, mower_mowing_minutes_today)` : les 216 minutes de lame
+        # de la journée franchissaient le plancher et la bordure DÉCLARAIT. Une revue
+        # adversariale l'a repris — les 200 minutes appartiennent à une tâche vue à 100 % dès
+        # sa naissance, donc jamais vue s'accomplir. La version retenue ne cumule que les
+        # travaux TERMINÉS : ces 200 minutes ne sont versées nulle part, et la bordure ne peut
+        # plus s'en servir. L'attendu d'origine est donc le bon.
         self.assertEqual(
             trace["mower_auto_declaration_state"], "travail_trop_court",
             "une coupe de bordure de 16 min franchit le plancher de 90",
         )
         self.assertEqual(self._tontes(coord), [],
                          "une coupe de bordure a été inscrite comme une tonte")
+
+    def test_une_bordure_un_jour_SANS_tonte_ne_declare_toujours_rien(self) -> None:
+        """⚠️ LA GARDE QUE LE TEST PRÉCÉDENT PORTAIT, ISOLÉE — sans quoi ouvrir le plancher à
+        la journée reviendrait à supprimer le plancher.
+
+        Même scénario, une seule différence : la journée n'a PAS 216 minutes de lame, elle en
+        a 16. Aucun des deux cumuls n'atteint le plancher, rien n'est inscrit.
+        """
+        coord = self._coord(seuil=90)
+        coord._runtime_state = {}
+        coord._suivre_travail_tondeuse(
+            {"mower_job_progress_pct": 5.0, "mower_job_id": "bordure",
+             "mower_mowing_minutes_today": 0.0}
+        )
+        trace = coord._declarer_tonte_du_jour(
+            {"mower_mowing_minutes_today": 16.0, "mower_job_progress_pct": 100.0,
+             "mower_job_id": "bordure"}
+        )
+        self.assertEqual(trace["mower_auto_declaration_state"], "travail_trop_court")
+        self.assertEqual(self._tontes(coord), [],
+                         "une coupe de bordure a été inscrite comme une tonte")
+
+    # ---- La JOURNÉE qualifie aussi (0.82.0) ----------------------------------------------
+    def test_une_journee_DECOUPEE_en_travaux_courts_est_enfin_declaree(self) -> None:
+        """⚠️ LA SOIRÉE DU 08/09/2026, REJOUÉE MINUTE PAR MINUTE.
+
+        La tondeuse est sortie trois fois : 15:29→16:27, 19:47→20:07, 20:44→22:11. Les
+        fenêtres d'états donnent 57,8 + 19,4 + 87,2 min ; l'intégration, qui crédite le temps
+        de tonte cycle par cycle, a compté 88,1 min pour la dernière — d'où le
+        `mower_job_minutes_total` de 88 relevé le lendemain, raté de DEUX minutes sur le
+        plancher de 90. Trois travaux distincts, chacun sous le plancher : rien n'a été inscrit
+        pour ~165 minutes de lame.
+
+        Le 09/09 au matin : hauteur estimée montée de 5,1 à 5,3 cm, `mowing_is_overdue` à
+        `true` avec 3 jours de retard annoncés, sur une pelouse qui venait de recevoir 2 h 45
+        de lame. Le retard PILOTE des décisions (`overdue_relaxed_baseline` relâche les
+        blocages agronomiques) : se croire en retard ouvre des vannes qui devaient rester
+        fermées.
+        """
+        coord = self._coord(seuil=90)
+        coord._runtime_state = {}
+
+        # 15:29 — premier travail, la journée démarre à zéro.
+        coord._suivre_travail_tondeuse(
+            {"mower_job_progress_pct": 4.0, "mower_job_id": "t-1529",
+             "mower_mowing_minutes_today": 0.0}
+        )
+        premier = coord._declarer_tonte_du_jour(
+            {"mower_mowing_minutes_today": 58.0, "mower_job_progress_pct": 100.0,
+             "mower_job_id": "t-1529"}
+        )
+        self.assertEqual(premier["mower_auto_declaration_state"], "travail_trop_court",
+                         "prémisse : 58 min de travail terminé ne suffisent pas")
+        self.assertAlmostEqual(premier["mower_travail_termine_minutes_jour"], 58.0, places=1)
+
+        # 19:47 — deuxième travail. La journée n'atteint toujours pas le plancher.
+        coord._suivre_travail_tondeuse(
+            {"mower_job_progress_pct": 6.0, "mower_job_id": "t-1947",
+             "mower_mowing_minutes_today": 58.0}
+        )
+        second = coord._declarer_tonte_du_jour(
+            {"mower_mowing_minutes_today": 77.4, "mower_job_progress_pct": 100.0,
+             "mower_job_id": "t-1947"}
+        )
+        self.assertEqual(second["mower_auto_declaration_state"], "travail_trop_court",
+                         "77,4 min de travaux terminés : le plancher n'est pas franchi")
+        self.assertAlmostEqual(
+            second["mower_travail_termine_minutes_jour"], 77.4, places=1,
+            msg="les deux travaux terminés ne s'additionnent pas",
+        )
+        self.assertEqual(self._tontes(coord), [])
+
+        # 20:44 — troisième travail : 87,2 min propres, mais 164,6 dans la journée.
+        coord._suivre_travail_tondeuse(
+            {"mower_job_progress_pct": 2.0, "mower_job_id": "t-2044",
+             "mower_mowing_minutes_today": 77.4}
+        )
+        troisieme = coord._declarer_tonte_du_jour(
+            {"mower_mowing_minutes_today": 164.6, "mower_job_progress_pct": 100.0,
+             "mower_job_id": "t-2044", "tondeuse_hauteur_coupe_mm": 45}
+        )
+        self.assertAlmostEqual(
+            troisieme["mower_job_minutes_total"], 87.2, places=1,
+            msg="le travail propre du soir n'est toujours que de 87,2 min — il ne triche pas",
+        )
+        self.assertAlmostEqual(
+            troisieme["mower_travail_termine_minutes_jour"], 164.6, places=1,
+            msg="les trois travaux terminés du soir ne totalisent pas 164,6 min",
+        )
+        self.assertEqual(
+            troisieme["mower_auto_declaration_state"], "declaree",
+            "164 min de travaux terminés et la tonte n'est toujours pas inscrite",
+        )
+        self.assertEqual(len(self._tontes(coord)), 1)
+        self.assertEqual(self._tontes(coord)[0]["date"], self.JOUR.isoformat())
+
+    def test_les_minutes_dun_travail_JAMAIS_TERMINE_ne_qualifient_RIEN(self) -> None:
+        """⚠️ LE DÉFAUT QU'UNE REVUE ADVERSARIALE A TROUVÉ DANS MON PREMIER CORRECTIF, le
+        09/09/2026 — quatre relecteurs indépendants ont convergé dessus.
+
+        Le premier jet qualifiait sur `max(travail, mower_mowing_minutes_today)`. Or ce
+        compteur-là mesure du temps de lame TOUTES TÂCHES CONFONDUES, abouties ou non :
+
+            09:00  la tâche A naît
+            11:40  A à 55 %, journée 160 min → puis elle se bloque et rentre. Elle
+                   n'atteindra JAMAIS 100 %. 45 % de la pelouse reste haute.
+            18:00  coupe de bordure B
+            18:12  B à 100 %, journée 172 → max(12, 172) = 172 ≥ 90 → **DÉCLARÉE**
+
+        Une bordure de douze minutes inscrivait la tonte du jour avec les minutes d'un travail
+        abandonné : hauteur ré-ancrée sur la lame, retard remis à zéro, surveillance endormie.
+        C'était le défaut du 30/08/2026 revenu par une autre porte.
+        """
+        coord = self._coord(seuil=90)
+        coord._runtime_state = {}
+
+        # 09:00 — le vrai travail démarre.
+        coord._suivre_travail_tondeuse(
+            {"mower_job_progress_pct": 3.0, "mower_job_id": "A",
+             "mower_mowing_minutes_today": 0.0}
+        )
+        # 11:40 — 160 min de lame, mais A n'est qu'à 55 %. Elle rentrera sans finir.
+        en_cours = coord._declarer_tonte_du_jour(
+            {"mower_mowing_minutes_today": 160.0, "mower_job_progress_pct": 55.0,
+             "mower_job_id": "A"}
+        )
+        self.assertEqual(en_cours["mower_auto_declaration_state"], "travail_en_cours",
+                         "prémisse : le vrai travail n'est pas terminé")
+
+        # 18:00 — une coupe de bordure démarre, la journée porte déjà 160 min.
+        coord._suivre_travail_tondeuse(
+            {"mower_job_progress_pct": 4.0, "mower_job_id": "B",
+             "mower_mowing_minutes_today": 160.0}
+        )
+        # 18:12 — elle atteint 100 % : douze minutes de travail propre.
+        trace = coord._declarer_tonte_du_jour(
+            {"mower_mowing_minutes_today": 172.0, "mower_job_progress_pct": 100.0,
+             "mower_job_id": "B", "tondeuse_hauteur_coupe_mm": 45}
+        )
+        self.assertAlmostEqual(trace["mower_job_minutes_total"], 12.0, places=1,
+                               msg="prémisse : la bordure vaut bien 12 min propres")
+        self.assertAlmostEqual(
+            trace["mower_travail_termine_minutes_jour"], 12.0, places=1,
+            msg="les 160 min du travail ABANDONNÉ ont été versées au cumul des travaux terminés",
+        )
+        self.assertEqual(
+            trace["mower_auto_declaration_state"], "travail_trop_court",
+            "une bordure de 12 min a déclaré la tonte d'un travail resté inachevé",
+        )
+        self.assertEqual(self._tontes(coord), [],
+                         "une pelouse tondue à 55 % a été enregistrée comme tondue")
+
+    def test_une_meme_complétion_ne_verse_ses_minutes_qu_UNE_fois(self) -> None:
+        """Le cumul est une addition : une complétion re-offerte le doublerait.
+
+        La progression reste à 100 % pendant deux à trois jours entre deux travaux. Sans
+        l'extinction de la fin de travail (0.61.0), la même tâche re-verserait ses minutes à
+        chaque cycle — et deux cycles suffiraient à franchir n'importe quel plancher.
+        """
+        coord = self._coord(seuil=90)
+        coord._runtime_state = {}
+        coord._suivre_travail_tondeuse(
+            {"mower_job_progress_pct": 10.0, "mower_job_id": "t-1",
+             "mower_mowing_minutes_today": 0.0}
+        )
+        ctx = {"mower_mowing_minutes_today": 60.0, "mower_job_progress_pct": 100.0,
+               "mower_job_id": "t-1"}
+        premier = coord._declarer_tonte_du_jour(dict(ctx))
+        self.assertAlmostEqual(premier["mower_travail_termine_minutes_jour"], 60.0, places=1)
+
+        # Cycle suivant, MÊME tâche toujours à 100 % : ce n'est plus un événement.
+        second = coord._declarer_tonte_du_jour(dict(ctx))
+        self.assertEqual(second["mower_auto_declaration_state"], "travail_au_repos")
+        self.assertAlmostEqual(
+            second["mower_travail_termine_minutes_jour"], 60.0, places=1,
+            msg="la complétion a été recomptée : le cumul a bougé hors de la branche terminée",
+        )
+        self.assertAlmostEqual(
+            float(coord._runtime_state["mower_travaux_termines"]["minutes"]), 60.0, places=1,
+            msg="60 min versées deux fois : deux cycles suffiraient à franchir le plancher",
+        )
+
+    def test_le_cumul_annonce_ZERO_tant_que_rien_n_est_termine(self) -> None:
+        """⚠️ VÉRIFIÉ SUR L'INSTALLATION, une heure après la mise en service de la 0.82.0.
+
+        L'attribut n'apparaissait NULLE PART sur le capteur de tonte. La clé était pourtant dans
+        les trois listes blanches et les tests de câblage étaient verts : `_attrs_from_data`
+        (entity_base.py) **filtre les valeurs `None`**, et aucun travail ne s'était terminé
+        depuis le redémarrage. Publier `None` par défaut, c'est ne rien publier du tout — la
+        variante « entité éteinte » du défaut n°1 du projet.
+        """
+        coord = self._coord()
+        coord._runtime_state = {}
+        self.assertEqual(coord._travail_termine_du_jour(), 0.0,
+                         "sans rien de terminé, l'attribut disparaît du capteur")
+        trace = coord._declarer_tonte_du_jour(self._ctx(10.0, progression=20.0))
+        self.assertEqual(trace["mower_travail_termine_minutes_jour"], 0.0,
+                         "la trace d'un travail en cours n'annonce aucun cumul")
+
+    def test_le_cumul_de_la_VEILLE_ne_deborde_pas_sur_aujourd_hui(self) -> None:
+        coord = self._coord()
+        coord._runtime_state = {
+            "mower_travaux_termines": {"date": (self.JOUR - timedelta(days=1)).isoformat(),
+                                       "minutes": 150.0}
+        }
+        self.assertEqual(coord._travail_termine_du_jour(), 0.0)
+
+    def test_le_cumul_des_travaux_termines_est_persiste_des_DEUX_cotes(self) -> None:
+        """⚠️ LE PIÈGE DU PROJET, quatrième fois sur cette famille de clés.
+
+        Sauvegardé sans être restauré, le cumul serait écrit sur le disque puis ignoré au
+        rechargement — pire qu'absent, car invisible. Non persisté du tout, un redémarrage en
+        milieu de journée oublierait les travaux déjà terminés et une soirée découpée
+        redeviendrait indéclarable : exactement le défaut que la 0.82.0 corrige, sur une
+        installation qui redémarre souvent.
+        """
+        source = (PACKAGE_DIR / "coordinator.py").read_text(encoding="utf-8")
+        sauvegarde = source.split("def _serialized_runtime_state")[1].split("def ")[0]
+        restauration = source.split("def _restore_runtime_state")[1].split("\n    def ")[0]
+        self.assertIn("mower_travaux_termines", sauvegarde, "le cumul n'est pas SAUVEGARDÉ")
+        self.assertIn("mower_travaux_termines", restauration, "le cumul n'est pas RESTAURÉ")
+
+    def test_le_cumul_des_travaux_termines_repart_a_zero_le_lendemain(self) -> None:
+        """Sinon il grossirait sans fin et le plancher serait franchi en permanence — le
+        mécanisme exact du défaut du 03/09/2026, à l'échelle de la semaine."""
+        coord = self._coord(seuil=90)
+        coord._runtime_state = {}
+        veille = self.JOUR - timedelta(days=1)
+        coord._current_date = lambda: veille
+        self.assertAlmostEqual(coord._cumuler_travail_termine_du_jour(80.0), 80.0, places=1)
+        coord._current_date = lambda: self.JOUR
+        self.assertAlmostEqual(
+            coord._cumuler_travail_termine_du_jour(20.0), 20.0, places=1,
+            msg="les 80 min de la veille sont reversées dans la journée du lendemain",
+        )
+
+    def test_des_minutes_SANS_travail_termine_ne_DECLENCHENT_rien(self) -> None:
+        """⚠️ LA GARDE DE LA 0.62.0, QUI DOIT SURVIVRE À L'OUVERTURE.
+
+        Le 30/08/2026 la tonte a été déclarée à 14:32 avec 102,8 min tondues et le travail à
+        **49 %** : hauteur remise à la lame, retard remis à zéro, prochaine tonte repoussée de
+        trois jours — pendant que la moitié de la pelouse restait haute.
+
+        Élargir le plancher à la journée ne doit RIEN changer à cela : sans travail terminé,
+        le compteur peut afficher cinq heures de lame, il ne se passe rien — et rien n'est
+        versé au cumul.
+        """
+        coord = self._coord(seuil=90)
+        trace = self._declarer(coord, self._ctx(300.0, progression=49.0))
+        self.assertEqual(trace["mower_auto_declaration_state"], "travail_en_cours")
+        self.assertEqual(trace["mower_travail_termine_minutes_jour"], 0.0,
+                         "un travail en cours a versé ses minutes au cumul des terminés")
+        self.assertEqual(self._tontes(coord), [],
+                         "300 min dans la journée ont déclaré une tonte sans travail terminé")
+
+    def test_la_journee_ne_peut_RIEN_emprunter_a_la_veille(self) -> None:
+        """⚠️ LE DÉFAUT DU 03/09/2026 NE DOIT PAS RENAÎTRE PAR L'AUTRE PORTE.
+
+        Ce jour-là le cumul du travail annonçait 337 min pour ~48 min de travail réel, dont
+        86 % appartenaient à un travail de la veille DÉJÀ déclaré : la tonte fut inscrite sur
+        une sortie de 8,7 minutes. Le cumul des travaux terminés est structurellement incapable
+        de cela — il est indexé sur la date, et chaque travail n'y verse que ses minutes
+        propres, base du jour retranchée. Ce test le prouve au lieu de l'affirmer.
+        """
+        coord = self._coord(seuil=90)
+        coord._runtime_state = {}
+        veille = self.JOUR - timedelta(days=1)
+
+        # 23:58 la veille : la tâche naît alors que la journée compte déjà 289 min de lame.
+        coord._current_date = lambda: veille
+        coord._suivre_travail_tondeuse(
+            {"mower_job_progress_pct": 3.0, "mower_job_id": "nuit-03-09",
+             "mower_mowing_minutes_today": 289.0}
+        )
+        # Lendemain 19:20 : 48 min de lame dans la journée, le travail atteint 100 %.
+        coord._current_date = lambda: self.JOUR
+        trace = coord._declarer_tonte_du_jour(
+            {"mower_mowing_minutes_today": 48.0, "mower_job_progress_pct": 100.0,
+             "mower_job_id": "nuit-03-09"}
+        )
+        self.assertEqual(
+            trace["mower_auto_declaration_state"], "travail_trop_court",
+            "les 289 min de la veille ont été rejouées dans la journée du lendemain",
+        )
+        self.assertEqual(self._tontes(coord), [])
+
+    def test_le_journal_NOMME_le_travail_declare(self) -> None:
+        """⚠️ « Déclarer n'est pas câbler », version journal. La ligne lisait
+        `suivi.get("mower_job_id")` — une clé que `_suivre_travail_tondeuse` n'a JAMAIS
+        produite ; elle s'appelle `mower_job_followed_id`. Depuis la 0.61.0 — commit 0d8c4e8,
+        « la tonte se déclare sur le travail terminé, plus sur une durée » — le journal écrivait
+        donc « travail ? » à chaque déclaration, exactement au moment où l'identifiant sert.
+        """
+        coord = self._coord(seuil=90)
+        with self.assertLogs("custom_components.gazon_intelligent.coordinator",
+                             level="INFO") as journal:
+            self._declarer(coord, self._ctx(126.6, tache="tache-nommee"))
+        ligne = "\n".join(journal.output)
+        self.assertIn("tache-nommee", ligne, "le journal n'identifie pas le travail déclaré")
+        self.assertNotIn("travail ?", ligne)
 
     def test_le_travail_PROPRE_reste_declarable_apres_une_bordure(self) -> None:
         """L'autre sens, et c'est lui qui coûte : sans ce test, retrancher la base pourrait
@@ -5351,13 +5658,22 @@ class AutoDeclarationTonteTests(unittest.TestCase):
 
     # ---- Robustesse -----------------------------------------------------------------------
     def test_une_declaration_ratee_ne_casse_jamais_un_cycle(self) -> None:
+        """Un coordinator dégradé rend une trace INERTE mais COMPLÈTE.
+
+        ⚠️ Le jeu de clés est vérifié en entier, à l'égalité : une clé publiée seulement sur le
+        chemin nominal ferait un attribut intermittent sur le capteur, et un consommateur qui
+        la lit tomberait un cycle sur deux sans que rien ne le dise.
+        """
         coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
         trace = coord._declarer_tonte_du_jour({"mower_mowing_minutes_today": 120.0})
         self.assertEqual(set(trace), {
             "mower_auto_declaration_state",
             "mower_auto_declaration_threshold_minutes",
             "mower_auto_declared_today",
+            "mower_travail_termine_minutes_jour",
         })
+        self.assertIsNone(trace["mower_travail_termine_minutes_jour"],
+                          "une trace inerte annonce un cumul qu'elle n'a pas calculé")
 
 
 class RecordMowingIdempotentTests(unittest.TestCase):
@@ -5428,6 +5744,10 @@ class AutoDeclarationCablageTests(unittest.TestCase):
         # retirer de `_MOWER_CONTEXT_KEYS` ne faisait tomber AUCUN test — le piège du projet,
         # pour la deuxième fois sur cette même famille de clés.
         "mower_job_minutes_total",
+        # Ajoutée en 0.82.0 : les minutes des travaux TERMINÉS du jour, c'est-à-dire la
+        # grandeur réellement comparée au plancher. Troisième clé de cette famille à traverser
+        # ce banc — les deux précédentes y sont entrées après avoir manqué une liste.
+        "mower_travail_termine_minutes_jour",
     )
 
     def test_les_cles_traversent_la_liste_blanche_du_coordinator(self) -> None:
@@ -6463,6 +6783,90 @@ class PluieMesureeTests(unittest.TestCase):
             )
         )
 
+    # ── la LAME de l'épisode (0.83.0) ─────────────────────────────────────────────────
+    def test_les_hausses_d_un_meme_episode_s_ADDITIONNENT(self) -> None:
+        """« Il pleut » ne dit pas combien. La lame, si — et c'est elle qui dose le ressuyage."""
+        sortie, _ = self._rejouer([(0, 1.0), (5, 1.3), (12, 1.9)])
+        self.assertAlmostEqual(sortie["pluie_mesuree_lame_mm"], 0.9, places=2)
+
+    def test_un_auget_TARDIF_ajoute_a_la_lame_au_lieu_de_l_EFFACER(self) -> None:
+        """⚠️ LE BLOQUANT DU PREMIER JET, TROUVÉ PAR UNE REVUE ADVERSARIALE LE 09/09/2026.
+
+        La lame était alors un « épisode » remis à zéro dès qu'une hausse arrivait après un trou
+        d'une heure. Rejoué sur du code réel : 6,0 mm de 14:00 à 14:50, ressuyage armé jusqu'à
+        17:50 — puis UN auget de traîne à 16:25 ramenait la lame à 0,1 mm, donc sous le minimum
+        de 0,3, donc **ressuyage supprimé**. La tonte redevenait autorisée à 17:00 sur une
+        pelouse ayant reçu 6,1 mm. Plus il pleuvait, moins on bloquait.
+
+        Une hausse ne peut plus qu'AJOUTER. Ce qui sort du calcul en sort par le temps.
+        """
+        sortie, _ = self._rejouer([(0, 0.0), (50, 6.0), (145, 6.1)])
+        self.assertAlmostEqual(
+            sortie["pluie_mesuree_lame_mm"], 6.1, places=2,
+            msg="l'auget de traîne a effacé les 6 mm de l'averse",
+        )
+
+    def test_une_bruine_FRACTIONNEE_s_additionne(self) -> None:
+        """Trois augets séparés de plus d'une heure : aucun n'atteint le minimum, leur somme si.
+        Avec l'ancien « épisode », chaque morceau repartait de zéro et rien n'armait jamais."""
+        sortie, _ = self._rejouer([(0, 0.0), (30, 0.1), (110, 0.2), (190, 0.3)])
+        self.assertAlmostEqual(sortie["pluie_mesuree_lame_mm"], 0.3, places=2)
+
+    def test_la_lame_SORT_de_la_fenetre_glissante(self) -> None:
+        """⚠️ La borne est PINNÉE des deux côtés : sans ça, 8 min comme 64 min passeraient au
+        vert et la fenêtre ne voudrait plus rien dire (relevé par la revue)."""
+        dedans, _ = self._rejouer([(0, 0.0), (5, 3.0), (5 + 239, 3.0)])
+        self.assertAlmostEqual(dedans["pluie_mesuree_lame_mm"], 3.0, places=2,
+                               msg="la lame est sortie AVANT la fin de la fenêtre")
+        dehors, _ = self._rejouer([(0, 0.0), (5, 3.0), (5 + 241, 3.0)])
+        self.assertEqual(dehors["pluie_mesuree_lame_mm"], 0.0,
+                         "la lame est restée APRÈS la fin de la fenêtre")
+
+    def test_la_lame_du_voisin_SURVIT_a_une_coupure(self) -> None:
+        _, coord = self._rejouer([(0, 0.0), (10, 2.0)])
+        coupure, _ = self._rejouer([(20, None)], coord=coord)
+        self.assertAlmostEqual(coupure["pluie_mesuree_lame_mm"], 2.0, places=2)
+        self.assertIsNone(coupure["pluie_mesuree_active"], "prémisse : la lecture manque bien")
+
+    def test_la_lame_SURVIT_jusqu_au_bout_du_ressuyage(self) -> None:
+        """⚠️ Le ressuyage court jusqu'à trois heures APRÈS la dernière goutte : si la lame
+        s'évanouissait avant, elle supprimerait le délai qu'elle a elle-même armé."""
+        sortie, _ = self._rejouer([(0, 1.0), (5, 2.5), (185, 2.5)])
+        self.assertAlmostEqual(sortie["pluie_mesuree_lame_mm"], 1.5, places=2)
+        self.assertFalse(sortie["pluie_mesuree_active"], "prémisse : il ne pleut plus")
+
+    def test_une_baisse_parasite_n_ajoute_RIEN_a_la_lame(self) -> None:
+        """Le cliquet vaut pour la lame comme pour le reste : ce pluviomètre oscille (mesuré
+        quatre fausses averses le 16/08/2026 en comparant à la lecture précédente).
+
+        ⚠️ `0.0` et non `None` : le capteur RÉPOND, et ce qu'il dit c'est « rien dans la
+        fenêtre ». L'absence de mesure, elle, se signale ailleurs — c'est le suivi entier qui
+        est muet. La seconde moitié du test le prouve autrement : après le bruit, seule la
+        vraie hausse entre dans la lame.
+        """
+        bruit, coord = self._rejouer([(0, 3.6), (5, 3.5), (10, 3.6), (15, 3.3), (20, 3.6)])
+        self.assertEqual(bruit["pluie_mesuree_lame_mm"], 0.0)
+        vraie, _ = self._rejouer([(25, 4.0)], coord=coord)
+        self.assertAlmostEqual(
+            vraie["pluie_mesuree_lame_mm"], 0.4, places=2,
+            msg="le bruit des quatre oscillations s'est ajouté à la vraie hausse",
+        )
+
+    def test_les_deux_lames_sont_VISIBLES_et_pas_croisees(self) -> None:
+        """⚠️ Sans elles à l'écran, « herbe mouillée » ne dit pas de quelle pluie il parle : le
+        blocage du 09/09 a coûté une demi-heure de recherche pour cette seule raison. Et un test
+        qui ne vérifie que leur PRÉSENCE laisse passer une inversion des deux sources."""
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord._get_conf = lambda _cle: None
+        sante = coordinator_mod.GazonIntelligentCoordinator._build_sensor_health(
+            coord,
+            temperature_source="capteur", humidite_capteur=None, vent_capteur=None,
+            etp_capteur=None, pluie_24h_sensor=None, eto_hourly={},
+            weather_profile={"pluie_mesuree_lame_mm": 0.1, "pluie_cumul_lame_mm": 4.2},
+        )
+        self.assertEqual(sante["pluie_lame_voisin_mm"], 0.1, "les deux sources sont croisées")
+        self.assertEqual(sante["pluie_lame_station_mm"], 4.2, "les deux sources sont croisées")
+
     # ── le câblage, depuis la SORTIE RÉELLE ───────────────────────────────────────────
     def test_les_cles_publiees_traversent_advanced_context(self) -> None:
         """⚠️ On part des clés que le coordinateur produit VRAIMENT, pas d'une liste écrite ici.
@@ -6998,19 +7402,36 @@ class PluieDuJourDepuisCumulTests(unittest.TestCase):
     remontées comme de la pluie : 250 mm d'un coup.
     """
 
+    T0 = datetime(2026, 9, 1, 8, 0, tzinfo=timezone.utc)
+
     def _coord(self, jour=date(2026, 9, 1), runtime=None):
+        """⚠️ L'HORLOGE EST PILOTÉE, et ce n'était pas le cas au premier jet. Sans elle, toutes
+        les lectures d'un même test tombaient à la même seconde réelle : la branche qui fait
+        VIEILLIR la lame n'était jamais atteinte, et trois tests passaient au vert sans jamais
+        l'exercer. Faux vert relevé par la revue du 09/09/2026."""
         coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
         coord._runtime_state = runtime if runtime is not None else {}
         coord._current_date = lambda: jour
+        coord._instant = self.T0
+        coord._current_datetime = lambda: coord._instant
+        coord._parse_datetime_value = (
+            coordinator_mod.GazonIntelligentCoordinator._parse_datetime_value.__get__(coord)
+        )
         coord._get_conf = lambda cle: "sensor.cumul" if cle == "capteur_pluie_cumul" else None
         coord._lectures = []
         coord._get_float_state = lambda _e: coord._lectures.pop(0) if coord._lectures else None
         return coord
 
     def _rejouer(self, lectures, *, coord=None, jour=date(2026, 9, 1)):
+        """`lectures` : des valeurs, ou des couples (minutes depuis T0, valeur)."""
         coord = coord or self._coord(jour)
         sortie = {}
-        for v in lectures:
+        for item in lectures:
+            if isinstance(item, tuple):
+                minutes, v = item
+                coord._instant = self.T0 + timedelta(minutes=minutes)
+            else:
+                v = item
             coord._lectures = [v]
             sortie = coordinator_mod.GazonIntelligentCoordinator._suivre_pluie_du_jour(coord)
         return sortie, coord
@@ -7018,6 +7439,43 @@ class PluieDuJourDepuisCumulTests(unittest.TestCase):
     def test_une_vraie_pluie_est_comptee(self) -> None:
         sortie, _ = self._rejouer([250.0, 250.4, 251.0])
         self.assertAlmostEqual(sortie["pluie_cumul_jour_mm"], 1.0, places=2)
+
+    def test_la_lame_de_l_episode_est_comptee_pour_la_station(self) -> None:
+        """⚠️ C'est CETTE station qui est sur la pelouse. Le 09/09/2026 elle n'a rien mesuré
+        pendant que celle du voisin armait trois heures de ressuyage ; l'inverse arrivera, et
+        alors c'est elle qui doit commander la durée."""
+        sortie, _ = self._rejouer([250.0, 250.4, 251.0])
+        self.assertAlmostEqual(sortie["pluie_cumul_lame_mm"], 1.0, places=2)
+
+    def test_la_lame_de_la_station_ignore_un_gain_ABERRANT(self) -> None:
+        """Un saut impossible en deux minutes n'entre pas plus dans la lame que dans le total :
+        sinon le ressuyage partirait au maximum sur une trame corrompue."""
+        sortie, _ = self._rejouer([250.0, 400.0])
+        self.assertEqual(
+            sortie["pluie_cumul_lame_mm"], 0.0,
+            "un gain rejeté a quand même nourri la lame",
+        )
+        self.assertGreater(sortie["pluie_gain_rejete_mm"], 0.0, "prémisse : le gain est rejeté")
+
+    def test_la_lame_de_la_station_SURVIT_a_une_coupure(self) -> None:
+        """⚠️ DEUXIÈME BLOQUANT TROUVÉ PAR LA REVUE. La station tombe en `unavailable` par
+        à-coups — 16 minutes autour du basculement du 09/09, justement. Tant que la lame
+        disparaissait avec la lecture, le maximum des deux retombait sur le seul voisin : une
+        averse mesurée ICI s'évanouissait, et le ressuyage qu'elle avait armé avec elle."""
+        _, coord = self._rejouer([(0, 250.0), (10, 252.5)])
+        coupure, _ = self._rejouer([(20, None)], coord=coord)
+        self.assertAlmostEqual(
+            coupure["pluie_cumul_lame_mm"], 2.5, places=2,
+            msg="la coupure du capteur a effacé 2,5 mm réellement mesurés",
+        )
+        self.assertIsNone(coupure["pluie_cumul_jour_mm"], "prémisse : la lecture manque bien")
+
+    def test_la_lame_de_la_station_VIEILLIT_et_sort_de_la_fenetre(self) -> None:
+        sortie, coord = self._rejouer([(0, 250.0), (5, 253.0)])
+        self.assertAlmostEqual(sortie["pluie_cumul_lame_mm"], 3.0, places=2)
+        vieux, _ = self._rejouer([(300, None)], coord=coord)
+        self.assertEqual(vieux["pluie_cumul_lame_mm"], 0.0,
+                         "une pluie de cinq heures pèse encore sur le ressuyage")
 
     def test_la_chute_parasite_a_zero_ne_compte_rien(self) -> None:
         """⚠️ LE PIÈGE DU WS90 : 250 → 0 → 250 ne doit ajouter aucun millimètre."""

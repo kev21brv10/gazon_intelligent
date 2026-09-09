@@ -652,6 +652,90 @@ def _machine_unavailable_detail(
 
 _PLUIE_STATE_KEY = "derniere_pluie_active"
 
+# ── RESSUYAGE PROPORTIONNEL À LA LAME D'EAU ───────────────────────────────────────────────
+# ⚠️ LE DÉFAUT DU 09/09/2026, MESURÉ EN DIRECT. À 20:12 le pluviomètre du voisin passe de 0,0 à
+# **0,1 mm** — un seul basculement d'auget. Le garde arme aussitôt les 180 minutes de ressuyage
+# empruntées au délai d'après-arrosage, calibrées pour un cycle d'irrigation de plusieurs
+# millimètres. Pendant ce temps la station du jardin, elle, n'a rien mesuré : compteur figé à
+# 2,3 mm de 04:14 à minuit. La tonte était bloquée jusqu'à 23:12 pour une pluie que la pelouse
+# n'a pas reçue.
+#
+# Trois corrections tenues ensemble, demandées par Kévin le 09/09 (« il faudrait un peu des 3 ») :
+#
+#   1. UN MINIMUM. En dessous de 0,3 mm sur l'épisode, aucun ressuyage n'est armé — la tonte
+#      reste bloquée tant qu'il PLEUT (c'est un autre garde, intact), mais sans traîne de 3 h.
+#   2. UNE DURÉE PROPORTIONNELLE. Entre le minimum et la saturation du couvert, le délai va du
+#      plancher au délai plein configuré, linéairement.
+#   3. LES DEUX PLUVIOMÈTRES. La lame retenue est la PLUS GRANDE des deux épisodes — celui du
+#      voisin et celui de la station du jardin. Celle-ci est SUR la pelouse : quand elle voit
+#      une averse que le voisin sous-estime, c'est elle qui commande.
+#
+# ⚠️ LES CHIFFRES, ET D'OÙ ILS VIENNENT. Un couvert de gazon retient plusieurs millimètres avant
+# qu'une goutte n'atteigne le sol : 4,4 mm mesurés sur zoysia et agrostide par pluviomètres
+# co-localisés (PLOS ONE, 2022, « Measuring turfgrass canopy interception and throughfall using
+# co-located pluviometers »). C'est la bonne échelle pour « le feuillage est-il mouillé ? », qui
+# est la vraie question de la tonte : ce qui gêne, c'est l'eau SUR la feuille.
+# 4,0 mm est donc pris comme saturation du couvert, et 0,3 mm — moins d'un dixième de cette
+# capacité — comme le film que les premières minutes d'évaporation enlèvent.
+# ⚠️ Ce sont des repères, pas des constantes physiques : la mesure porte sur des gazons plus
+# denses et plus ras que celui-ci. Ils se règlent, et c'est le premier endroit où regarder si
+# le ressuyage se révèle trop court ou trop long à l'usage.
+_PLUIE_RESSUYAGE_MIN_MM: float = 0.3
+_PLUIE_RESSUYAGE_SATURATION_MM: float = 4.0
+_PLUIE_RESSUYAGE_PLANCHER_MINUTES: float = 45.0
+
+
+def _lame_de_pluie_recente(weather_profile: dict[str, Any] | None) -> float | None:
+    """Lame d'eau tombée dans les dernières heures : la PLUS GRANDE des deux mesures, ou `None`.
+
+    ⚠️ LE MAXIMUM, PAS LA MOYENNE NI LA PREMIÈRE TROUVÉE. Les deux pluviomètres ont chacun leur
+    angle mort : celui du voisin n'est pas sur la pelouse, celui de la station tombe parfois en
+    `unavailable` (16 min autour du basculement du 09/09, justement). Prendre le maximum fait
+    qu'aucun angle mort ne peut, à lui seul, ramener la lame à zéro et supprimer un ressuyage
+    justifié. La sous-estimation est le seul risque qui compte ici : elle laisse tondre sur une
+    herbe mouillée.
+
+    ⚠️ Et c'est bien la FENÊTRE GLISSANTE qui rend ce maximum sûr — pas lui tout seul. Tant que
+    la lame était un « épisode » remis à zéro, un auget de traîne la ramenait sous le minimum
+    des DEUX côtés à la fois, et le maximum ne protégeait plus rien.
+
+    ⚠️ `None` quand AUCUN des deux ne parle — et surtout pas `0.0`. Une absence de mesure ne
+    dit pas qu'il n'est rien tombé ; l'appelant garde alors le délai plein.
+    """
+    profil = weather_profile if isinstance(weather_profile, dict) else {}
+    lames = [
+        valeur
+        for valeur in (
+            _to_float_safe(profil.get("pluie_cumul_lame_mm")),
+            _to_float_safe(profil.get("pluie_mesuree_lame_mm")),
+        )
+        if valeur is not None and valeur >= 0.0
+    ]
+    return max(lames) if lames else None
+
+
+def _ressuyage_effectif(plein_minutes: float, lame_mm: float | None) -> float:
+    """Durée de ressuyage réellement due pour cette lame d'eau. Voir le bloc ci-dessus.
+
+    Avec le réglage par défaut (délai plein 180 min) :
+        0,1 mm → **0** (rien n'est armé) · 0,3 → 45 · 1,0 → 71 · 2,0 → 107 · ≥ 4,0 → 180.
+    """
+    if plein_minutes <= 0.0:
+        return 0.0
+    if lame_mm is None:
+        return plein_minutes  # aucune mesure : on ne raccourcit rien
+    if lame_mm < _PLUIE_RESSUYAGE_MIN_MM:
+        return 0.0
+    if lame_mm >= _PLUIE_RESSUYAGE_SATURATION_MM:
+        return plein_minutes
+    # ⚠️ Le plancher est BORNÉ par le délai plein : si Kévin descend le réglage à 30 min, le
+    # ressuyage d'une petite pluie ne doit pas se retrouver plus long que celui d'une grosse.
+    plancher = min(_PLUIE_RESSUYAGE_PLANCHER_MINUTES, plein_minutes)
+    part = (lame_mm - _PLUIE_RESSUYAGE_MIN_MM) / (
+        _PLUIE_RESSUYAGE_SATURATION_MM - _PLUIE_RESSUYAGE_MIN_MM
+    )
+    return plancher + (plein_minutes - plancher) * part
+
 
 def _minutes_depuis_derniere_pluie(context: DecisionContext) -> float | None:
     """Minutes écoulées depuis la dernière pluie CONSTATÉE, ou None si inconnue.
@@ -813,19 +897,31 @@ def _resolve_mowing_block(
     except (TypeError, ValueError):
         _ressuyage = 0.0
     _depuis_pluie = _minutes_depuis_derniere_pluie(context)
+    # ⚠️ LE DÉLAI DÉPEND DE LA LAME D'EAU (0.83.0). Il était fixe : 0,1 mm et 10 mm armaient les
+    # mêmes 180 minutes. Voir `_ressuyage_effectif` pour le pourquoi et les chiffres.
+    _lame_pluie = _lame_de_pluie_recente(context.weather_profile)
+    _ressuyage = _ressuyage_effectif(_ressuyage, _lame_pluie)
     if _depuis_pluie is not None and 0 <= _depuis_pluie < _ressuyage and not is_active_rain_weather(
         context.weather_profile
     ):
-        # RESSUYAGE APRÈS PLUIE — même délai que après un arrosage (symétrie voulue par Kévin :
-        # « c'est l'intégration qui gère le temps de pause de la tondeuse pendant la pluie »).
-        # Il n'existait aucun délai côté pluie, alors que le libellé promettait « ou récente ».
-        return (
-            True,
-            "wet_grass",
-            f"Herbe mouillée: ressuyage après la pluie ({int(_ressuyage - _depuis_pluie)} min restantes).",
-            None,
-            None,
-        )
+        # RESSUYAGE APRÈS PLUIE — né de la symétrie avec l'arrosage (« c'est l'intégration qui
+        # gère le temps de pause de la tondeuse pendant la pluie », Kévin) : il n'existait
+        # AUCUN délai côté pluie, alors que le libellé promettait « ou récente ».
+        # ⚠️ Le délai n'est plus le MÊME que celui de l'arrosage depuis la 0.83.0 : celui-ci
+        # en reste le PLAFOND, atteint seulement quand le couvert est saturé.
+        # ⚠️ Le motif ANNONCE LA LAME quand on la connaît : « 3 h de ressuyage » sans dire pour
+        # quelle pluie, c'est exactement ce qui a fait chercher pendant une demi-heure d'où
+        # venait le blocage du 09/09.
+        _reste = int(_ressuyage - _depuis_pluie)
+        if _lame_pluie is None:
+            _motif = f"Herbe mouillée: ressuyage après la pluie ({_reste} min restantes)."
+        else:
+            _lame_txt = f"{_lame_pluie:.1f}".replace(".", ",")
+            _motif = (
+                f"Herbe mouillée: ressuyage après {_lame_txt} mm de pluie"
+                f" ({_reste} min restantes)."
+            )
+        return True, "wet_grass", _motif, None, None
     if is_active_rain_weather(context.weather_profile):
         # ⚠️ Le libellé disait « pluie en cours ou RÉCENTE ». C'était faux : `is_active_rain_weather`
         # ne regarde que la météo de l'INSTANT (condition pluvieuse, ou probabilité ≥ 80 %). Aucune
