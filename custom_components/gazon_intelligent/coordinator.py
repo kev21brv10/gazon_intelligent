@@ -2125,23 +2125,48 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if gain > 0.0:
             historique = [*historique, [maintenant.isoformat(), round(float(gain), 3)]]
 
-        limite = maintenant - timedelta(minutes=_PLUIE_LAME_FENETRE_MINUTES)
-        retenus: list[list[Any]] = []
-        total = 0.0
+        # On ne garde que des entrées lisibles et non datées du futur (horloge qui recule).
+        propres: list[tuple[Any, Any, float]] = []
         for entree in historique:
             if not isinstance(entree, (list, tuple)) or len(entree) != 2:
                 continue
             instant = self._parse_datetime_value(entree[0])
             valeur = _to_float_or_none(entree[1])
-            if instant is None or valeur is None or valeur <= 0.0:
+            if instant is None or valeur is None or valeur <= 0.0 or instant > maintenant:
                 continue
-            if instant < limite or instant > maintenant:
-                continue  # trop vieux, ou daté du futur (horloge qui a reculé)
-            retenus.append([entree[0], valeur])
-            total += valeur
+            propres.append((instant, entree[0], valeur))
+        propres.sort(key=lambda e: e[0])
 
-        suivi["lame_gains"] = retenus[-_PLUIE_LAME_MAX_ENTREES:]
-        return round(total, 2)
+        if not propres:
+            suivi["lame_gains"] = []
+            return 0.0
+
+        # ⚠️ LA FENÊTRE SE MESURE DEPUIS LA DERNIÈRE GOUTTE, PAS DEPUIS CHAQUE GOUTTE — relevé
+        # par la revue Codex sur la PR #49, et c'est un vrai trou. Le ressuyage court à partir
+        # de la dernière hausse ; une averse qui DURE voyait donc son début sortir de la fenêtre
+        # pendant que le délai tournait encore. Exemple donné : 4 mm entre 12:00 et 14:00 → à
+        # 16:00 la première moitié de l'averse a expiré, la lame retombe à ~2 mm, le délai
+        # calculé passe de 180 à ~107 min — déjà écoulés — et la tonte repart une heure trop tôt.
+        # La lame MAIGRISSAIT pendant le délai qu'elle avait elle-même armé.
+        #
+        # On remonte donc le temps depuis la dernière hausse et on s'arrête au premier TROU plus
+        # long que la fenêtre : c'est l'averse en cours, prise entière, quelle que soit sa durée.
+        # Une averse de six heures reste un seul événement.
+        if (maintenant - propres[-1][0]) > timedelta(minutes=_PLUIE_LAME_FENETRE_MINUTES):
+            # Rien depuis une fenêtre entière : le couvert a séché, l'averse est close.
+            suivi["lame_gains"] = []
+            return 0.0
+
+        fenetre = timedelta(minutes=_PLUIE_LAME_FENETRE_MINUTES)
+        evenement: list[tuple[Any, Any, float]] = [propres[-1]]
+        for precedent in reversed(propres[:-1]):
+            if evenement[-1][0] - precedent[0] > fenetre:
+                break  # un trou plus long que la fenêtre : l'averse d'avant est une autre
+            evenement.append(precedent)
+
+        evenement.reverse()
+        suivi["lame_gains"] = [[e[1], e[2]] for e in evenement][-_PLUIE_LAME_MAX_ENTREES:]
+        return round(sum(e[2] for e in evenement), 2)
 
     def _suivre_pluie_du_jour(self) -> dict[str, Any]:
         """Total de pluie du jour, dérivé d'un compteur CUMULATIF qui ne se réinitialise pas.
@@ -2192,6 +2217,16 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 suivi["total_jour"] = 0.0   # ⚠️ NOTRE minuit, pas celui du capteur.
 
             pic = _to_float_or_none(suivi.get("pic"))
+            # ⚠️ AUCUNE RÉFÉRENCE = AUCUN TOTAL, PAS UN TOTAL DE ZÉRO. Relevé par la revue
+            # Codex sur la PR #49. Au tout premier cycle — installation neuve, ou état
+            # d'exécution persisté perdu — le compteur s'initialise sur la lecture courante et
+            # le total du jour vaut 0. Or `_resolve_precipitation_inputs` lui donne la PRIORITÉ
+            # sur `capteur_pluie_24h` depuis la 0.79.0 : un zéro sans référence écrasait donc
+            # un capteur qui, lui, savait qu'il était tombé 10 mm ce matin. Le bilan du sol
+            # perdait la pluie de la journée entière et pouvait lancer un arrosage inutile.
+            # `None` laisse le capteur 24 h reprendre la main ; dès le cycle suivant la
+            # référence existe et le total dérivé redevient légitime, y compris à zéro.
+            _sans_reference = pic is None
             rejete = _to_float_or_none(suivi.get("gain_rejete")) or 0.0
             _lame_retenue = 0.0
             if pic is not None:
@@ -2214,7 +2249,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._runtime_state["pluie_cumul"] = suivi
 
             return {
-                "pluie_cumul_jour_mm": round(float(suivi.get("total_jour") or 0.0), 2),
+                "pluie_cumul_jour_mm": (
+                    None if _sans_reference else round(float(suivi.get("total_jour") or 0.0), 2)
+                ),
                 "pluie_cumul_pic_mm": suivi["pic"],
                 "pluie_gain_rejete_mm": rejete,
                 "pluie_cumul_lame_mm": lame,

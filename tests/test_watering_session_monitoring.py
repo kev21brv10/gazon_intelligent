@@ -6812,6 +6812,41 @@ class PluieMesureeTests(unittest.TestCase):
         sortie, _ = self._rejouer([(0, 0.0), (30, 0.1), (110, 0.2), (190, 0.3)])
         self.assertAlmostEqual(sortie["pluie_mesuree_lame_mm"], 0.3, places=2)
 
+    def test_la_lame_NE_MAIGRIT_PAS_pendant_le_delai_qu_elle_a_arme(self) -> None:
+        """⚠️ RELEVÉ PAR LA REVUE CODEX SUR LA PR #49 — le trou de ma fenêtre glissante.
+
+        Elle se mesurait depuis CHAQUE goutte, alors que le ressuyage court depuis la DERNIÈRE.
+        Une averse qui dure voyait donc son début expirer pendant que le délai tournait encore :
+        4 mm entre 12:00 et 14:00, puis à 16:00 la première moitié sort de la fenêtre, la lame
+        retombe à ~2 mm, le délai calculé passe de 180 à ~107 min — déjà écoulés — et la tonte
+        repart **une heure trop tôt**. La lame maigrissait pendant le délai qu'elle avait armé.
+
+        On remonte désormais le temps depuis la dernière hausse jusqu'au premier trou plus long
+        que la fenêtre : l'averse est prise entière, quelle que soit sa durée.
+        """
+        # 12:00 → 14:00, 4 mm par paliers réguliers (l'auget tique toutes les 20 min).
+        lectures = [(0, 0.0)] + [(20 * i, round(0.667 * i, 2)) for i in range(1, 7)]
+        pendant, coord = self._rejouer(lectures)
+        self.assertAlmostEqual(pendant["pluie_mesuree_lame_mm"], 4.0, places=1,
+                               msg="prémisse : les 4 mm de l'averse sont bien comptés")
+        # ⚠️ ON LIT À t+330, PAS À t+240 — le premier jet du test ne mordait PAS. À deux heures
+        # d'écart, les hausses de l'averse ont encore moins de 240 min et l'ancienne règle les
+        # gardait aussi : le test passait au vert avec le défaut. Il faut se placer assez loin
+        # pour que le DÉBUT de l'averse soit sorti de la fenêtre comptée depuis maintenant,
+        # alors que la DERNIÈRE goutte (t+120) y est toujours — c'est exactement la situation
+        # où le délai court encore et où la lame se mettait à maigrir.
+        apres, _ = self._rejouer([(330, 4.0)], coord=coord)
+        self.assertAlmostEqual(
+            apres["pluie_mesuree_lame_mm"], 4.0, places=1,
+            msg="la lame a maigri pendant le ressuyage : la tonte repart une heure trop tôt",
+        )
+
+    def test_une_averse_qui_DURE_reste_UN_evenement(self) -> None:
+        """Six heures de pluie continue : un seul événement, pas quatre morceaux de fenêtre."""
+        lectures = [(0, 0.0)] + [(30 * i, round(0.5 * i, 2)) for i in range(1, 13)]
+        sortie, _ = self._rejouer(lectures)
+        self.assertAlmostEqual(sortie["pluie_mesuree_lame_mm"], 6.0, places=1)
+
     def test_la_lame_SORT_de_la_fenetre_glissante(self) -> None:
         """⚠️ La borne est PINNÉE des deux côtés : sans ça, 8 min comme 64 min passeraient au
         vert et la fenêtre ne voudrait plus rien dire (relevé par la revue)."""
@@ -7456,6 +7491,27 @@ class PluieDuJourDepuisCumulTests(unittest.TestCase):
             "un gain rejeté a quand même nourri la lame",
         )
         self.assertGreater(sortie["pluie_gain_rejete_mm"], 0.0, "prémisse : le gain est rejeté")
+
+    def test_le_total_derive_NE_PRIME_PAS_sans_reference(self) -> None:
+        """⚠️ RELEVÉ PAR LA REVUE CODEX SUR LA PR #49, et c'est un vrai trou.
+
+        Au tout premier cycle — installation neuve, ou état d'exécution persisté perdu — le
+        compteur s'initialise sur la lecture courante et le total du jour vaut 0. Or depuis la
+        0.79.0 ce total a la PRIORITÉ sur `capteur_pluie_24h` : un zéro sans référence écrasait
+        donc un capteur qui savait, lui, qu'il était tombé 10 mm le matin. Le bilan du sol
+        perdait la pluie de la journée entière, et pouvait lancer un arrosage inutile.
+        """
+        premier, coord = self._rejouer([(0, 250.0)])
+        self.assertIsNone(
+            premier["pluie_cumul_jour_mm"],
+            "un total de zéro SANS référence écrase le capteur 24 h qui, lui, sait",
+        )
+        # Dès le cycle suivant la référence existe : le total dérivé redevient légitime.
+        suivant, _ = self._rejouer([(2, 250.0)], coord=coord)
+        self.assertEqual(suivant["pluie_cumul_jour_mm"], 0.0,
+                         "avec une référence, un vrai zéro doit être annoncé")
+        pluie, _ = self._rejouer([(10, 251.4)], coord=coord)
+        self.assertAlmostEqual(pluie["pluie_cumul_jour_mm"], 1.4, places=2)
 
     def test_la_lame_de_la_station_SURVIT_a_une_coupure(self) -> None:
         """⚠️ DEUXIÈME BLOQUANT TROUVÉ PAR LA REVUE. La station tombe en `unavailable` par

@@ -2,7 +2,7 @@
 
 ## 0.83.0
 
-1336 tests verts. **Le ressuyage de la tonte dépend enfin de la LAME D'EAU tombée — et la station du jardin y a voix.**
+1339 tests verts. **Le ressuyage de la tonte dépend enfin de la LAME D'EAU tombée — et la station du jardin y a voix.**
 
 ### Un basculement d'auget valait trois heures
 
@@ -55,9 +55,18 @@ Et elle **vieillit à l'horloge, pas à la lecture** : une coupure du capteur ne
 - « même délai que après un arrosage », à trois lignes du correctif : celui-ci n'en est plus que le **plafond**.
 - La citation des 4,4 mm ne nomme plus d'auteurs : le titre et la revue, vérifiables, suffisent.
 
+### Deux trous trouvés par la revue Codex, avant merge
+
+- **Le total dérivé primait sans référence.** Au tout premier cycle — installation neuve, ou état d'exécution persisté perdu — le compteur s'initialise sur la lecture courante et le total du jour vaut 0. Or il a la **priorité** sur `capteur_pluie_24h` depuis la 0.79.0 : un zéro sans référence écrasait un capteur qui savait, lui, qu'il était tombé 10 mm le matin. Le bilan du sol perdait la journée entière et pouvait lancer un arrosage inutile. Il rend désormais `None` tant qu'il n'a aucune référence, et le capteur 24 h garde la main.
+- **La lame maigrissait pendant le délai qu'elle avait armé.** La fenêtre se mesurait depuis *chaque* goutte, alors que le ressuyage court depuis la **dernière**. Une averse qui dure voyait donc son début expirer en cours de délai : 4 mm entre 12:00 et 14:00, puis la lame retombe à ~2 mm, le délai calculé passe de 180 à ~107 min — déjà écoulés — et la tonte repart une heure trop tôt. On remonte désormais le temps depuis la dernière hausse jusqu'au premier trou plus long que la fenêtre : **l'averse est prise entière, quelle que soit sa durée**.
+
+⚠️ Le premier jet du test de non-régression du second **ne mordait pas** : à deux heures d'écart, l'ancienne règle gardait encore toutes les hausses. Il fallait se placer assez loin pour que le *début* de l'averse soit sorti de la fenêtre pendant que la dernière goutte y était encore. La mutation l'a montré.
+
 ### Vérification
 
 Sept mutations, chacune vérifiée pour qu'elle fasse tomber le test visé — dont **le premier jet lui-même** (une hausse qui efface les précédentes), la fenêtre qui ne vieillit plus, les deux survies à une coupure, la station retirée du calcul, et les deux sources croisées à l'affichage.
+
+Et trois de plus sur les correctifs Codex : le total dérivé qui reprime sans référence, la fenêtre remesurée depuis maintenant, et une averse ancienne qui n'expire jamais.
 
 ## 0.82.0
 
