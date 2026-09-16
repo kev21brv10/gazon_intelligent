@@ -403,6 +403,117 @@
       "evening_cooling_enabled": {
         "name": "Rafraîchissement du soir autorisé"
       }
+    },
+    "sensor": {
+      "assistant": {
+        "state": {
+          "aucune_action": "Aucune action",
+          "attente_conditions": "En attente",
+          "arrosage": "Arrosage",
+          "tonte": "Tonte",
+          "traitement": "Traitement"
+        }
+      },
+      "tonte_statut": {
+        "state": {
+          "autorisee": "Autorisée",
+          "autorisee_avec_precaution": "Autorisée avec précaution",
+          "a_surveiller": "À surveiller",
+          "deconseillee": "Déconseillée",
+          "interdite": "Interdite"
+        }
+      },
+      "niveau_action": {
+        "state": {
+          "aucune_action": "Aucune action",
+          "surveiller": "À surveiller",
+          "a_faire": "À faire",
+          "critique": "Critique"
+        }
+      },
+      "fenetre_optimale": {
+        "state": {
+          "maintenant": "Maintenant",
+          "ce_matin": "Ce matin",
+          "demain_matin": "Demain matin",
+          "apres_pluie": "Après la pluie",
+          "soir": "Ce soir",
+          "attendre": "Attendre"
+        }
+      },
+      "risque_gazon": {
+        "state": {
+          "faible": "Faible",
+          "modere": "Modéré",
+          "eleve": "Élevé"
+        }
+      },
+      "etat_hydrique": {
+        "state": {
+          "plein": "Réserve pleine",
+          "confort": "Confort",
+          "depletion": "Réserve entamée",
+          "critique": "Critique"
+        }
+      },
+      "derniere_execution": {
+        "state": {
+          "aucune_action": "Aucune action",
+          "ok": "Réussie",
+          "bloque": "Bloquée",
+          "en_attente": "En attente",
+          "refuse": "Refusée"
+        }
+      },
+      "intervention_statut": {
+        "state": {
+          "recommended": "Recommandé",
+          "preparation": "À préparer",
+          "possible": "À préparer",
+          "blocked": "Bloqué"
+        }
+      },
+      "prochain_blocage": {
+        "state": {
+          "aucun": "Aucun",
+          "pluie_prevue_suffisante": "Pluie prévue suffisante",
+          "temperature_trop_basse": "Température trop basse",
+          "arrosage_recent": "Arrosage récent",
+          "sol_deja_humide": "Sol déjà humide",
+          "sol_non_adapte": "Sol non adapté",
+          "pluie_probabilite_elevee": "Pluie probable élevée",
+          "surface_non_seche": "Surface non sèche",
+          "cooldown_24h": "Déjà arrosé aujourd'hui",
+          "humidite_excessive": "Humidité excessive",
+          "humidite_elevee": "Humidité élevée",
+          "garde_fou_hebdomadaire": "Garde-fou hebdomadaire",
+          "mode_bloque": "Mode bloqué",
+          "pluie_active": "Pluie active",
+          "bloque": "Bloqué",
+          "mower_mowing": "Tondeuse en cours de tonte",
+          "mower_returning": "Tondeuse en retour station",
+          "mower_starting": "Tondeuse en démarrage",
+          "mower_zoning": "Tondeuse en changement de zone",
+          "mower_searching_zone": "Tondeuse en recherche de zone",
+          "mower_rain_delayed": "Pause pluie active",
+          "mower_escaped_digital_fence": "Tondeuse sortie du périmètre",
+          "mower_not_stowed": "Tondeuse non rangée",
+          "mower_unreliable": "Coordination tondeuse indisponible",
+          "post_application_active": "Post-produit actif",
+          "watering_in_progress": "Arrosage en cours",
+          "watering_cooldown": "Cooldown tonte après arrosage",
+          "application_foliaire": "Application foliaire en cours",
+          "temperature_trop_basse_germination": "Température trop basse (germination)",
+          "semis_cycle_daily_target_reached": "Objectif du jour atteint (semis)",
+          "semis_cycle_pending": "Cycle de semis en attente",
+          "machine_unavailable": "Robot indisponible",
+          "mowing_window_blocked": "Hors fenêtre de tonte",
+          "recent_watering": "Arrosage récent",
+          "soil_wet": "Sol humide",
+          "upcoming_watering": "Arrosage imminent",
+          "wet_grass": "Herbe mouillée"
+        }
+      }
     }
   }
 }

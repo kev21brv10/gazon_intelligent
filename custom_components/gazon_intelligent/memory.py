@@ -39,7 +39,7 @@ from .const import (
     PRODUCT_USAGE_MODES,
 )
 from .phases import PHASE_DURATIONS_DAYS, SIGNIFICANT_WATERING_THRESHOLD_MM
-from .water import _watering_item_mm, compute_recent_watering_mm
+from .water import _watering_item_mm, compute_recent_watering_mm, resolve_history_moment
 
 APPLICATION_DEFAULTS: dict[str, dict[str, Any]] = {
     "Traitement": {
@@ -85,12 +85,17 @@ APPLICATION_DEFAULTS: dict[str, dict[str, Any]] = {
 }
 
 
+# États qu'une exécution utilisateur peut garder en mémoire. Chacun a son libellé traduit
+# (`entity.sensor.derniere_execution.state` dans translations/*.json, vérifié par les tests).
+USER_ACTION_STATES: tuple[str, ...] = ("ok", "bloque", "en_attente", "refuse")
+
+
 def _normalize_user_action_summary(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
     summary: dict[str, Any] = {}
     state = str(value.get("state") or "").strip().lower()
-    if state in {"ok", "bloque", "en_attente", "refuse"}:
+    if state in USER_ACTION_STATES:
         summary["state"] = state
     action = value.get("action")
     if action not in (None, ""):
@@ -296,6 +301,24 @@ def _application_type_for_item(item: dict[str, Any]) -> str | None:
     return str(value).strip().lower()
 
 
+_TYPES_SANS_APPLICATION = frozenset({"Sursemis", "Hivernage"})
+
+# Durée d'EFFET d'une application, en jours, jour de l'application compris : c'est pendant elle
+# que l'application « agit encore » (protection foliaire, prudence d'un type inconnu). Les VRAIES
+# applications seulement : la durée de phase d'un Sursemis (45 j) ou d'un Hivernage (999 j) n'a
+# rien à faire ici — elle privait un semis d'eau 45 jours.
+_DUREE_EFFET_APPLICATION_JOURS: dict[str, int] = {
+    "Traitement": 2,
+    "Fertilisation": 2,
+    "Biostimulant": 1,
+    "Agent Mouillant": 1,
+}
+
+
+def duree_effet_application_jours(item_type: Any) -> int:
+    return _DUREE_EFFET_APPLICATION_JOURS.get(str(item_type or "").strip(), 1)
+
+
 def _is_application_relevant_item(item: dict[str, Any]) -> bool:
     # Garde de robustesse : l'historique peut contenir un élément non-dict (ex. `.storage`
     # corrompue). Sans lui, `.get` lèverait une AttributeError. Fonction de référence unique —
@@ -305,6 +328,12 @@ def _is_application_relevant_item(item: dict[str, Any]) -> bool:
     item_type = str(item.get("type") or "")
     if item_type in APPLICATION_INTERVENTIONS:
         return True
+    # ⚠️ Un semis ou un hivernage n'est PAS une application de produit, même s'il porte un
+    # `produit` (la fiche semences déclarée depuis la carte, ou le produit sélectionné que
+    # `declare_intervention` rattache d'office). Compté comme « application de type inconnu »,
+    # il privait le SEMIS d'eau : de J+0 à J+44 en 0.88.0 (revue du 11/09/2026), et à vie avant.
+    if item_type in _TYPES_SANS_APPLICATION:
+        return False
     return any(
         item.get(key) not in (None, "", [], {})
         for key in (
@@ -357,10 +386,15 @@ def _application_runtime_fields(item: dict[str, Any]) -> dict[str, Any]:
     if application_irrigation_mode is None:
         application_irrigation_mode = defaults.get("application_irrigation_mode")
     application_label_notes = item.get("application_label_notes") or defaults.get("application_label_notes")
+    # Le blocage part du MOMENT de l'application, pas de l'instant de saisie : une déclaration
+    # rétroactive (Traitement du 07/03 saisi le 10/03 à 10 h) bloquait 24 h à partir du 10/03 —
+    # l'arrosage de l'aube du 11/03 compris. Même règle que l'historique d'arrosage et de tonte
+    # (`water.resolve_history_moment` : l'heure de déclaration n'est retenue que le jour déclaré).
+    moment_application = resolve_history_moment(item) or declared_dt
     application_block_until = None
-    if declared_dt is not None and application_irrigation_block_hours and application_irrigation_block_hours > 0:
+    if moment_application is not None and application_irrigation_block_hours and application_irrigation_block_hours > 0:
         application_block_until = (
-            declared_dt + timedelta(hours=float(application_irrigation_block_hours))
+            moment_application + timedelta(hours=float(application_irrigation_block_hours))
         ).isoformat()
     return {
         "application_type": application_type,
@@ -403,6 +437,7 @@ def _compute_post_watering_state(
     application_block_active: bool,
     application_date: date | None = None,
     reference_date: date | None = None,
+    report_jusqu_au: date | None = None,
 ) -> dict[str, Any]:
     declared_dt = runtime_fields.get("declared_dt")
     application_type = runtime_fields.get("application_type")
@@ -433,7 +468,11 @@ def _compute_post_watering_state(
     # Référence = le `today` de la décision (et non l'horloge murale) ; à défaut, now.date().
     # Date d'application absente = traitée comme « aujourd'hui » (non-régression sans date).
     reference_date = reference_date if reference_date is not None else now.date()
-    applied_today = application_date is None or application_date == reference_date
+    applied_today = (
+        application_date is None
+        or application_date == reference_date
+        or (report_jusqu_au is not None and application_date <= reference_date <= report_jusqu_au)
+    )
     application_post_watering_pending = bool(
         application_type == APPLICATION_TYPE_SOL
         and application_requires_watering_after
@@ -489,7 +528,113 @@ def _default_application_state() -> dict[str, Any]:
         "application_post_watering_delay_remaining_minutes": 0.0,
         "application_post_watering_ready": False,
         "application_post_watering_remaining_mm": 0.0,
+        "application_en_cours": False,
+        "application_en_cours_jusqu_a": None,
+        "application_foliaire_en_cours": False,
+        "application_foliaire_label": None,
+        "application_inconnue_en_cours": False,
+        "application_inconnue_label": None,
+        "application_block_label": None,
+        "application_tonte_bloquee_jusqu_au": None,
+        "application_tonte_bloquee_label": None,
     }
+
+
+def _application_date(item: dict[str, Any]) -> date | None:
+    try:
+        return date.fromisoformat(str(item.get("date"))[:10])
+    except (TypeError, ValueError):
+        return None
+
+
+def _delai_avant_tonte_jours(item: dict[str, Any]) -> int | None:
+    """Délai avant tonte du produit : sur l'entrée, sinon sur la copie du catalogue qu'elle porte."""
+    for source in (item, item.get("produit_catalogue")):
+        if isinstance(source, dict):
+            valeur = _to_int(source.get("delai_avant_tonte_jours"))
+            if valeur is not None and valeur > 0:
+                return valeur
+    return None
+
+
+def _application_en_cours(
+    item: dict[str, Any],
+    now: datetime,
+    today: date,
+) -> tuple[bool, str | None]:
+    """UNE application agit-elle encore ? Base de la SOURCE UNIQUE (décision, capteurs, coordinateur).
+
+    ⚠️ `derniere_application` est la dernière application de TOUTE LA VIE de l'installation. Les
+    règles « foliaire » et « type inconnu » s'armaient sur sa seule existence, en TROIS copies
+    (décision, capteur « prochain arrosage », arrosage après application) : un Traitement déclaré
+    le 01/09 bloquait encore tonte et arrosage à J+100, et un semis restait sans eau.
+    Fenêtre, la plus longue des deux :
+      · les jours d'effet (`duree_effet_application_jours`), jour de l'application compris ;
+      · depuis le MOMENT de l'application, une protection minimale de 24 h (ou le blocage du
+        produit s'il est plus long) : un Biostimulant pulvérisé à 21 h reste protégé jusqu'au
+        lendemain 21 h. ⚠️ Pas la durée d'effet entière comptée depuis le moment : 48 h pour un
+        Traitement mangeaient l'arrosage de l'aube de J+2 (contre-revue du 11/09/2026).
+    """
+    duree = duree_effet_application_jours(item.get("type"))
+    jour = _application_date(item)
+    calendaire = jour is not None and 0 <= (today - jour).days < duree
+    moment = resolve_history_moment(item)
+    heures = max(24.0, float(_to_float(item.get("application_irrigation_block_hours")) or 0.0))
+    fin = moment + timedelta(hours=heures) if moment is not None else None
+    roulant = fin is not None and moment is not None and moment <= now < fin
+    if calendaire or roulant:
+        return True, fin.isoformat() if roulant and fin is not None else None
+    return False, None
+
+
+def _contraintes_des_applications_recentes(
+    history: list[dict[str, Any]],
+    now: datetime,
+    today: date,
+) -> dict[str, Any]:
+    """Contraintes de TOUTES les applications récentes, chacune évaluée pour elle-même.
+
+    ⚠️ Seule la DERNIÈRE application comptait. Un Floranid déclaré le soir d'un fongicide
+    effaçait les 24 h de protection de ce dernier et lançait 5 mm d'arrosage 9 h après la
+    pulvérisation ; un H2Pro foliaire suivi d'un Humuslight « sol » perdait sa protection
+    foliaire (catalogue réel, contre-revue du 11/09/2026). La contrainte la plus lointaine
+    l'emporte. `delai_avant_tonte_jours` du catalogue n'était lu NULLE PART.
+    Un blocage n'agit qu'à partir du MOMENT de l'application : une application datée dans le
+    futur bloquait l'arrosage dès sa déclaration.
+    """
+    out: dict[str, Any] = {
+        "bloque_jusqu_a": None, "bloque_label": None,
+        "foliaire_en_cours": False, "foliaire_label": None,
+        "inconnue_en_cours": False, "inconnue_label": None,
+        "tonte_jusqu_au": None, "tonte_label": None,
+        "blocages": [],
+    }
+    for item in history:
+        if not _is_application_relevant_item(item):
+            continue
+        libelle = item.get("produit") or item.get("type")
+        champs = _application_runtime_fields(item)
+        brut = champs.get("application_block_until")
+        fin = _parse_datetime(brut) if brut else None
+        moment = resolve_history_moment(item)
+        if fin is not None:
+            out["blocages"].append((item, fin, libelle))
+            actif = fin > now and (moment is None or moment <= now)
+            if actif and (out["bloque_jusqu_a"] is None or fin > out["bloque_jusqu_a"]):
+                out["bloque_jusqu_a"], out["bloque_label"] = fin, libelle
+        en_cours, _ = _application_en_cours(item, now, today)
+        type_application = champs.get("application_type")
+        if en_cours and type_application == APPLICATION_TYPE_FOLIAIRE:
+            out["foliaire_en_cours"], out["foliaire_label"] = True, libelle
+        if en_cours and type_application not in {APPLICATION_TYPE_SOL, APPLICATION_TYPE_FOLIAIRE}:
+            out["inconnue_en_cours"], out["inconnue_label"] = True, libelle
+        delai = _delai_avant_tonte_jours(item)
+        jour = _application_date(item)
+        if delai and jour is not None and jour <= today:
+            limite = jour + timedelta(days=delai)
+            if today < limite and (out["tonte_jusqu_au"] is None or limite > out["tonte_jusqu_au"]):
+                out["tonte_jusqu_au"], out["tonte_label"] = limite, libelle
+    return out
 
 
 def _split_csv_values(value: Any) -> list[str]:
@@ -793,7 +938,31 @@ def compute_application_state(
 
     summary = build_application_summary(latest_item)
     runtime_fields = _application_runtime_fields(latest_item)
-    block_state = _compute_application_block_state(runtime_fields["application_block_until"], now)
+    reference_today = today or now.date()
+    contraintes = _contraintes_des_applications_recentes(history, now, reference_today)
+    # Le blocage ACTIF vient des contraintes (toutes les applications, moment déjà passé) ; à défaut
+    # on publie celui de la dernière application, pour l'affichage, mais il ne bloque pas.
+    if contraintes["bloque_jusqu_a"] is not None:
+        application_block_until = contraintes["bloque_jusqu_a"].isoformat()
+        application_block_label = contraintes["bloque_label"]
+    else:
+        application_block_until = runtime_fields["application_block_until"]
+        application_block_label = None
+    block_state = _compute_application_block_state(
+        application_block_until if contraintes["bloque_jusqu_a"] is not None else None, now
+    )
+    en_cours, en_cours_jusqu_a = _application_en_cours(latest_item, now, reference_today)
+    # Incorporation d'un produit « sol » retardée par le blocage d'une AUTRE application : la
+    # fenêtre du jour même s'étend jusqu'à la fin de ce blocage — sinon, le lendemain,
+    # l'incorporation était présumée faite (« Terminé ») avec 5 mm restants (contre-revue).
+    jour_derniere = _application_date(latest_item)
+    report_jusqu_au: date | None = None
+    for autre, fin, _ in contraintes["blocages"]:
+        if autre is latest_item or jour_derniere is None:
+            continue
+        fin_locale = fin.astimezone(now.tzinfo).date() if now.tzinfo is not None else fin.date()
+        if fin_locale >= jour_derniere and (report_jusqu_au is None or fin_locale > report_jusqu_au):
+            report_jusqu_au = fin_locale
 
     water_after_application = 0.0
     if latest_index is not None:
@@ -810,6 +979,7 @@ def compute_application_state(
         application_block_active=bool(block_state["application_block_active"]),
         application_date=application_date,
         reference_date=today,
+        report_jusqu_au=report_jusqu_au,
     )
 
     return {
@@ -824,8 +994,19 @@ def compute_application_state(
         "application_post_watering_status": post_watering_state["application_post_watering_status"],
         "date_action": latest_item.get("date"),
         "declared_at": runtime_fields["declared_dt"].isoformat() if runtime_fields["declared_dt"] is not None else None,
-        "application_block_until": runtime_fields["application_block_until"],
+        "application_block_until": application_block_until,
         "application_block_active": block_state["application_block_active"],
+        "application_block_label": application_block_label if block_state["application_block_active"] else None,
+        "application_en_cours": bool(en_cours or block_state["application_block_active"]),
+        "application_foliaire_en_cours": bool(contraintes["foliaire_en_cours"]),
+        "application_foliaire_label": contraintes["foliaire_label"],
+        "application_inconnue_en_cours": bool(contraintes["inconnue_en_cours"]),
+        "application_inconnue_label": contraintes["inconnue_label"],
+        "application_en_cours_jusqu_a": en_cours_jusqu_a,
+        "application_tonte_bloquee_jusqu_au": (
+            contraintes["tonte_jusqu_au"].isoformat() if contraintes["tonte_jusqu_au"] else None
+        ),
+        "application_tonte_bloquee_label": contraintes["tonte_label"],
         "application_block_remaining_minutes": block_state["application_block_remaining_minutes"],
         "application_post_watering_pending": post_watering_state["application_post_watering_pending"],
         "application_post_watering_ready_at": post_watering_state["application_post_watering_ready_at"],
@@ -848,7 +1029,10 @@ def compute_next_reapplication_date(
         history,
         lambda item: item.get("reapplication_after_days") is not None
         and item.get("date")
-        and item.get("type") in PHASE_DURATIONS_DAYS,
+        and item.get("type") in PHASE_DURATIONS_DAYS
+        # Un semis ou un hivernage n'est pas une application (0.88.0), même s'il porte un délai
+        # de réapplication hérité d'un produit rattaché d'office.
+        and item.get("type") not in _TYPES_SANS_APPLICATION,
     )
     if latest is None:
         return None

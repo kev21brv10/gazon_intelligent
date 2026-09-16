@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 import unittest
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
@@ -9,6 +10,7 @@ from pathlib import Path
 import sys
 import types
 from unittest.mock import AsyncMock, patch
+from zoneinfo import ZoneInfo
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -123,6 +125,7 @@ _ensure_package("custom_components.gazon_intelligent", PACKAGE_DIR)
 _install_homeassistant_stubs()
 
 coordinator_mod = importlib.import_module("custom_components.gazon_intelligent.coordinator")
+brain_mod = importlib.import_module("custom_components.gazon_intelligent.gazon_brain")
 shared_state_mod = importlib.import_module("custom_components.gazon_intelligent.shared_state")
 watering_plan_mod = importlib.import_module("custom_components.gazon_intelligent.watering_plan")
 mower_adapter_mod = importlib.import_module("custom_components.gazon_intelligent.mower_adapter")
@@ -225,6 +228,154 @@ def _build_coordinator() -> object:
     return coord
 
 
+def _dt_util_avec_fuseau(fonction, *, heures: int):
+    """Donne au `dt_util` lu par `fonction` un vrai parseur de dates et un fuseau fixe.
+
+    Le stub des tests n'a pas `parse_datetime`. On patche les globales du module qui LIT le nom
+    (piège du réimport) ; tout le reste (`now`, `utcnow`…) est délégué au stub d'origine.
+    """
+    reel = fonction.__globals__["dt_util"]
+    fuseau = timezone(timedelta(hours=heures))
+
+    class _DtUtil:
+        def __getattr__(self, nom: str):
+            return getattr(reel, nom)
+
+        @staticmethod
+        def parse_datetime(valeur):
+            try:
+                return datetime.fromisoformat(str(valeur).replace("Z", "+00:00"))
+            except ValueError:
+                return None
+
+        @staticmethod
+        def as_local(valeur):
+            return valeur.astimezone(fuseau)
+
+    return patch.dict(fonction.__globals__, {"dt_util": _DtUtil()})
+
+
+class CoordinatorFacadeExtractionTests(unittest.TestCase):
+    def test_les_lectures_etat_tolerent_un_coordinateur_sans_hass_si_entite_absente(self) -> None:
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+
+        self.assertIsNone(coord._get_float_state(None))
+        self.assertIsNone(coord._get_text_state(None))
+        self.assertIsNone(coord._get_bool_state(None))
+
+    def test_minutes_creditables_garde_le_plafond_unique_de_quinze_minutes(self) -> None:
+        coord = _build_coordinator()
+        maintenant = datetime(2026, 9, 14, 8, 40, tzinfo=timezone.utc)
+
+        self.assertEqual(coord._minutes_creditables("2026-09-14T08:30:00Z", maintenant), 10.0)
+        self.assertEqual(coord._minutes_creditables("2026-09-14T08:00:00Z", maintenant), 0.0)
+        # Frontière exacte (`0 < écart <= plafond`) : 15 min se créditent, une seconde de plus non.
+        self.assertEqual(coord._minutes_creditables("2026-09-14T08:25:00Z", maintenant), 15.0)
+        self.assertEqual(coord._minutes_creditables("2026-09-14T08:24:59Z", maintenant), 0.0)
+
+    def test_feedback_observation_survit_dans_la_charge_debug(self) -> None:
+        coord = _build_coordinator()
+        coord.history = []
+        coord.memory = {"feedback_observation": "vu par l'utilisateur"}
+        coord._current_date = lambda: date(2026, 9, 14)
+
+        payload = coord._build_observability_payload({"phase_active": "Normal"})
+
+        self.assertEqual(payload["feedback_observation"], "vu par l'utilisateur")
+
+    def test_runtime_id_utilise_l_horodatage_utc_pas_local_suffixe_z(self) -> None:
+        coord = _build_coordinator()
+        coord._current_datetime = lambda: datetime(2026, 9, 14, 12, 30, tzinfo=timezone(timedelta(hours=2)))
+        coord._current_utc_datetime = lambda: datetime(2026, 9, 14, 10, 30, tzinfo=timezone.utc)
+
+        identifiant = coord._new_runtime_id("sess")
+
+        self.assertIn("_20260914T103000Z_", identifiant)
+        self.assertNotIn("_20260914T123000Z_", identifiant)
+
+    def test_objectif_courant_lit_self_result_avant_self_data(self) -> None:
+        coord = _build_coordinator()
+        coord.brain.last_result = types.SimpleNamespace(
+            objectif_arrosage="4.2",
+            extra={"objectif_mm": 3.0},
+        )
+        coord.data = {"objectif_mm": 2.0}
+
+        self.assertEqual(coord._current_objective_mm(), 4.2)
+
+    def test_estimation_rosee_passe_par_la_facade_du_coordinateur(self) -> None:
+        coord = _build_coordinator()
+
+        self.assertEqual(coord._estimate_rosee({"weather_dew_point": 18.0}, 20.0, 50.0), 1.0)
+        # Chemin humidité : l'argument doit traverser la façade.
+        self.assertEqual(coord._estimate_rosee({}, 20.0, 92.0), 0.8)
+        self.assertIsNone(coord._estimate_rosee({}, 20.0, 50.0))
+
+    def test_facades_soleil_lisent_lever_et_coucher_en_heure_locale(self) -> None:
+        # Ces minutes fixent la fraction d'ET écoulée, donc le débit du bilan du sol. Les tests de
+        # `_et_elapsed_fraction` remplacent ces deux façades par des lambdas : rien ne les tenait.
+        coord = _build_coordinator()
+        contexte = {
+            "sun_next_rising": "2026-09-15T05:21:00Z",
+            "sun_next_setting": "2026-09-15T17:58:00Z",
+        }
+
+        with _dt_util_avec_fuseau(type(coord)._sun_event_minute_from_context, heures=2):
+            self.assertEqual(coord._sunrise_minute_from_context(contexte), 7 * 60 + 21)
+            self.assertEqual(coord._sunset_minute_from_context(contexte), 19 * 60 + 58)
+
+    def test_cycle_de_donnees_transmet_le_coucher_du_soleil_et_la_rosee_estimee(self) -> None:
+        """Les points d'appel de `_calculer_donnees`, pas seulement les façades.
+
+        Le coucher du soleil nourrit le garde-fou « séchage avant la nuit » de l'arrosage du
+        soir ; la rosée estimée nourrit le risque fongique. Lire la clé du lever à la place, ou
+        perdre l'estimation, laissait toute la suite verte.
+        """
+        coordinator = _build_update_data_coordinator(weather_temperature=20.0)
+        captures: dict[str, object] = {}
+        calcul_original = coordinator.brain.compute_snapshot
+
+        def _capturer(**kwargs):
+            captures.update(kwargs)
+            return calcul_original(**kwargs)
+
+        coordinator.brain.compute_snapshot = _capturer
+        coordinator._get_sun_context = lambda: {
+            "sun_next_rising": "2026-09-15T05:21:00Z",
+            "sun_next_setting": "2026-09-15T17:58:00Z",
+        }
+        appels_rosee: list[tuple[object, object]] = []
+
+        def _rosee(weather_profile, temperature, humidite):  # noqa: ARG001
+            appels_rosee.append((temperature, humidite))
+            return 0.42
+
+        coordinator._estimate_rosee = _rosee
+
+        with _dt_util_avec_fuseau(type(coordinator)._sun_event_minute_from_context, heures=2):
+            asyncio.run(coordinator._async_update_data())
+
+        self.assertEqual(captures["weather_profile"]["sunset_minute"], 19 * 60 + 58)
+        self.assertEqual(captures["rosee"], 0.42)
+        # Sans capteur d'humidité, c'est l'humidité de la météo (55 %) qui doit arriver.
+        self.assertEqual(appels_rosee, [(captures["temperature"], 55.0)])
+
+    def test_evenement_runtime_passe_ses_valeurs_au_serialiseur(self) -> None:
+        coord = _build_coordinator()
+        debut = datetime(2026, 9, 15, 5, 45, tzinfo=timezone(timedelta(hours=2)))
+
+        payload = coord._build_runtime_payload_for_event(
+            {"session_id": "sess_1", "status": "running"},
+            zone="switch.zone_1",
+            started_at=debut,
+        )
+
+        self.assertEqual(payload["session_id"], "sess_1")
+        self.assertEqual(payload["zone"], "switch.zone_1")
+        # Une date part en ISO UTC, comme dans l'état runtime persisté.
+        self.assertEqual(payload["started_at"], "2026-09-15T03:45:00+00:00")
+
+
 def _ready_launch_snapshot(coordinator: object, **overrides: object) -> dict[str, object]:
     """Snapshot qui passe toutes les gardes de `_should_launch_auto_irrigation`."""
     snapshot = {
@@ -285,6 +436,8 @@ def _build_runtime_ready_coordinator(
     }
     coord._async_save_state = AsyncMock()
     coord.async_request_refresh = AsyncMock()
+    # ⚠️ Depuis la 0.84.0 une action de l'utilisateur passe par `async_refresh` (immédiat).
+    coord.async_refresh = AsyncMock()
     coord.async_record_user_action = AsyncMock()
     coord.async_record_watering = AsyncMock()
     coord._auto_irrigation_task = None
@@ -1141,6 +1294,7 @@ class WateringSessionMonitoringTests(unittest.TestCase):
         coordinator.brain.set_normal = lambda: None
         coordinator._async_save_state = AsyncMock()
         coordinator.async_request_refresh = AsyncMock()
+        coordinator.async_refresh = AsyncMock()
 
         asyncio.run(coordinator.async_set_normal())
 
@@ -2031,6 +2185,10 @@ class WateringSessionMonitoringTests(unittest.TestCase):
             refresh_calls.append("refresh")
 
         coordinator.async_request_refresh = _async_request_refresh
+        # ⚠️ ON NE STUBBE PAS `async_refresh` ICI, ET C'EST DÉLIBÉRÉ — relevé par la revue du
+        # 10/09/2026. Ce banc vérifie que le chemin des CAPTEURS reste débouncé : lui donner un
+        # `async_refresh` utilisable le rendrait aveugle au jour où ce chemin basculerait sur
+        # l'immédiat. S'il est appelé, le test doit tomber.
         coordinator._get_conf = lambda key: {
             "entite_meteo": "weather.backyard",
             "capteur_pluie_24h": "sensor.pluie_24h",
@@ -2181,23 +2339,30 @@ class WateringSessionMonitoringTests(unittest.TestCase):
         self.assertTrue(snapshot["arrosage_auto_autorise"])
         self.assertEqual(snapshot["watering_window_start_minute"], 240)
 
+    def _application_inconnue(self, jours_avant: int) -> list[dict[str, object]]:
+        # Datée selon l'horloge de la MÉMOIRE : depuis 0.88.0 le refus ne dure que le temps de
+        # l'intervention (`application_en_cours`), il ne peut plus être testé sur une date figée.
+        maintenant = importlib.import_module("custom_components.gazon_intelligent.memory")._current_datetime()
+        jour = (maintenant - timedelta(days=jours_avant)).date()
+        return [{
+            "type": "Traitement",
+            "date": jour.isoformat(),
+            "declared_at": (maintenant - timedelta(days=jours_avant)).isoformat(),
+            "produit": "Produit inconnu",
+            "application_type": "autre",
+            "application_requires_watering_after": True,
+            "application_post_watering_mm": 1.0,
+            "application_irrigation_block_hours": 0.0,
+            "application_irrigation_delay_minutes": 0.0,
+            "application_irrigation_mode": "auto",
+        }]
+
     def test_application_irrigation_blocks_unknown_application_type(self) -> None:
+        test = self
+
         class _UnknownApplicationCoordinator:
             def __init__(self) -> None:
-                self.history = [
-                    {
-                        "type": "Traitement",
-                        "date": "2026-03-18",
-                        "declared_at": "2026-03-18T08:00:00+00:00",
-                        "produit": "Produit inconnu",
-                        "application_type": "autre",
-                        "application_requires_watering_after": True,
-                        "application_post_watering_mm": 1.0,
-                        "application_irrigation_block_hours": 12.0,
-                        "application_irrigation_delay_minutes": 0.0,
-                        "application_irrigation_mode": "auto",
-                    }
-                ]
+                self.history = test._application_inconnue(0)
                 self._recorded_actions: list[dict[str, object]] = []
 
             def _build_watering_plan_summary_for_user_action(
@@ -2232,6 +2397,29 @@ class WateringSessionMonitoringTests(unittest.TestCase):
 
         self.assertEqual(coordinator._recorded_actions[-1]["state"], "refuse")
         self.assertIn("type d'application est inconnu", coordinator._recorded_actions[-1]["reason"])
+
+    def test_une_application_inconnue_ANCIENNE_ne_bloque_plus_l_arrosage_technique(self) -> None:
+        # Avant 0.88.0, ce refus durait à vie : la troisième copie de la règle non bornée.
+        test = self
+
+        class _Coordinateur:
+            def __init__(self) -> None:
+                self.history = test._application_inconnue(30)
+                self._recorded_actions: list[dict[str, object]] = []
+
+            def _build_watering_plan_summary_for_user_action(self, objectif_mm=None, plan=None):
+                return {"objective_mm": float(objectif_mm or 0.0), "zones": [], "zone_count": 0,
+                        "fractionation": False, "passages": 1, "pause_between_passages_minutes": 0,
+                        "plan_type": "no_plan"}
+
+            async def async_record_user_action(self, **kwargs):
+                self._recorded_actions.append(kwargs)
+                return kwargs
+
+        coordinator = _Coordinateur()
+        with self.assertRaises(coordinator_mod.HomeAssistantError):
+            asyncio.run(coordinator_mod.GazonIntelligentCoordinator.async_start_application_irrigation(coordinator))
+        self.assertNotIn("type d'application est inconnu", coordinator._recorded_actions[-1]["reason"])
 
     def test_plan_execution_persists_recorded_watering(self) -> None:
         plan = watering_plan_mod.build_watering_plan(
@@ -2598,6 +2786,293 @@ class WateringSessionMonitoringTests(unittest.TestCase):
         self.assertTrue(55.0 <= total <= 65.0, f"total={total} sleeps={sleeps}")
         self.assertFalse(85.0 <= total <= 95.0, f"total={total} sleeps={sleeps}")
         coordinator.async_record_watering.assert_awaited()
+        self.assertEqual(coordinator.async_record_watering.await_args.kwargs["total_mm"], 1.5)
+
+    def test_restart_mid_zone_finished_during_downtime_credits_zone(self) -> None:
+        plan = watering_plan_mod.build_watering_plan(
+            1.5, [("switch.zone_1", 60.0)], passages=1, pause_minutes=0
+        )
+        assert plan is not None
+        coordinator = _build_runtime_ready_coordinator(plan_attrs=plan.as_dict())
+        session = coordinator._build_active_irrigation_session(
+            plan=plan, source="auto_irrigation", strategy="plan"
+        )
+        session["status"] = "running"
+        session["current_passage"] = 1
+        session["current_zone_index"] = 0
+        session["current_zone"] = "switch.zone_1"
+        session["current_zone_started_at"] = datetime.now(timezone.utc) - timedelta(seconds=120)
+        coordinator.hass.states.states["switch.zone_1"] = _FakeState("on", datetime.now(timezone.utc), {})
+        coordinator._runtime_state["active_irrigation_session"] = session
+
+        async def _run() -> None:
+            await coordinator._restore_active_irrigation_session()
+            task = coordinator._auto_irrigation_task
+            assert task is not None
+            await task
+
+        asyncio.run(_run())
+
+        coordinator.async_record_watering.assert_awaited_once()
+        kwargs = coordinator.async_record_watering.await_args.kwargs
+        self.assertEqual(kwargs["total_mm"], 1.5)
+        self.assertTrue(kwargs["zones"][0]["recovered_during_downtime"])
+        turn_on_calls = [call for call in coordinator._service_calls if call[1] == "turn_on"]
+        self.assertEqual(turn_on_calls, [])
+
+    def test_restart_with_unavailable_zones_records_done_water_before_failure(self) -> None:
+        plan = watering_plan_mod.build_watering_plan(
+            3.0,
+            [("switch.zone_1", 60.0), ("switch.zone_2", 60.0)],
+            passages=1,
+            pause_minutes=0,
+        )
+        assert plan is not None
+        coordinator = _build_runtime_ready_coordinator(plan_attrs=plan.as_dict())
+        session = coordinator._build_active_irrigation_session(
+            plan=plan, source="auto_irrigation", strategy="plan"
+        )
+        session["status"] = "paused"
+        session["zones_done"] = [
+            {"order": 1, "passage": 1, "zone": "switch.zone_1", "mm": 3.0}
+        ]
+        coordinator.hass.states.states["switch.zone_1"] = _FakeState("unavailable", datetime.now(timezone.utc), {})
+        coordinator._runtime_state["active_irrigation_session"] = session
+        # L'attente réelle dure 60 s (toute la suite passait de 2 s à 62 s). Son verdict est testé
+        # avec un délai court par `ZoneAvailabilityGuardTests` ; ici seul compte ce qui suit un refus.
+        coordinator._wait_for_zones_available = AsyncMock(return_value=False)
+
+        asyncio.run(coordinator._resume_active_irrigation_session(session))
+
+        coordinator.async_record_watering.assert_awaited_once()
+        kwargs = coordinator.async_record_watering.await_args.kwargs
+        self.assertEqual(kwargs["total_mm"], 1.5)
+        self.assertEqual(kwargs["watering_cause"], "hydrique")
+        self.assertIsNone(coordinator._runtime_state["active_irrigation_session"])
+        execution = coordinator._runtime_state["last_irrigation_execution"]
+        self.assertEqual(execution["status"], "failed")
+        self.assertEqual(execution["last_error"], "device_unavailable_on_resume")
+
+    def test_restart_with_safety_lock_records_done_water_before_closing(self) -> None:
+        plan = watering_plan_mod.build_watering_plan(
+            3.0,
+            [("switch.zone_1", 60.0), ("switch.zone_2", 60.0)],
+            passages=1,
+            pause_minutes=0,
+        )
+        assert plan is not None
+        coordinator = _build_runtime_ready_coordinator(plan_attrs=plan.as_dict())
+        coordinator._runtime_state["auto_irrigation_safety_lock"] = True
+        session = coordinator._build_active_irrigation_session(
+            plan=plan, source="auto_irrigation", strategy="plan"
+        )
+        session["status"] = "paused"
+        session["zones_done"] = [
+            {"order": 1, "passage": 1, "zone": "switch.zone_1", "mm": 3.0}
+        ]
+        coordinator._runtime_state["active_irrigation_session"] = session
+
+        asyncio.run(coordinator._restore_active_irrigation_session())
+
+        coordinator.async_record_watering.assert_awaited_once()
+        self.assertEqual(coordinator.async_record_watering.await_args.kwargs["total_mm"], 1.5)
+        self.assertIsNone(coordinator._runtime_state["active_irrigation_session"])
+        execution = coordinator._runtime_state["last_irrigation_execution"]
+        self.assertEqual(execution["status"], "failed")
+        self.assertEqual(execution["last_error"], "safety_lock_active")
+
+    def test_restart_post_application_auto_disabled_is_cancelled_like_auto(self) -> None:
+        plan = watering_plan_mod.build_watering_plan(
+            3.0,
+            [("switch.zone_1", 60.0), ("switch.zone_2", 60.0)],
+            passages=1,
+            pause_minutes=0,
+        )
+        assert plan is not None
+        coordinator = _build_runtime_ready_coordinator(plan_attrs=plan.as_dict())
+        coordinator.memory["auto_irrigation_enabled"] = False
+        session = coordinator._build_active_irrigation_session(
+            plan=plan,
+            source="application_technique_auto",
+            strategy="plan",
+            watering_cause="post_application",
+        )
+        session["status"] = "paused"
+        session["zones_done"] = [
+            {"order": 1, "passage": 1, "zone": "switch.zone_1", "mm": 3.0}
+        ]
+        coordinator._runtime_state["active_irrigation_session"] = session
+
+        asyncio.run(coordinator._restore_active_irrigation_session())
+
+        coordinator.async_record_watering.assert_awaited_once()
+        kwargs = coordinator.async_record_watering.await_args.kwargs
+        self.assertEqual(kwargs["source"], "application_technique_auto")
+        self.assertEqual(kwargs["watering_cause"], "post_application")
+        self.assertEqual(kwargs["total_mm"], 1.5)
+        self.assertIsNone(coordinator._auto_irrigation_task)
+        self.assertIsNone(coordinator._runtime_state["active_irrigation_session"])
+        self.assertEqual(coordinator._runtime_state["last_irrigation_execution"]["status"], "cancelled")
+
+    @staticmethod
+    def _plan_deux_zones():
+        plan = watering_plan_mod.build_watering_plan(
+            3.0,
+            [("switch.zone_1", 60.0), ("switch.zone_2", 60.0)],
+            passages=1,
+            pause_minutes=0,
+        )
+        assert plan is not None
+        return plan
+
+    def test_restart_closes_marked_session_as_completed_despite_recovery_error(self) -> None:
+        """Clôture AU REDÉMARRAGE d'une session dont l'eau est déjà inscrite : « terminée ».
+
+        `restart_recovery` ne doit pas la faire passer pour un échec. Aucun test ne tenait ce
+        statut sur la voie du redémarrage (mutation X4).
+        """
+        plan = self._plan_deux_zones()
+        coordinator = _build_runtime_ready_coordinator(plan_attrs=plan.as_dict())
+        session = coordinator._build_active_irrigation_session(
+            plan=plan, source="auto_irrigation", strategy="plan"
+        )
+        session[coordinator_mod.WATERING_RECORDED_KEY] = True
+        session["status"] = "recovery_required"
+        session["last_error"] = "restart_recovery"
+        session["zones_done"] = [{"order": 1, "passage": 1, "zone": "switch.zone_1", "mm": 3.0}]
+        coordinator._runtime_state["active_irrigation_session"] = session
+
+        asyncio.run(coordinator._restore_active_irrigation_session())
+
+        coordinator.async_record_watering.assert_not_awaited()
+        self.assertIsNone(coordinator._runtime_state["active_irrigation_session"])
+        self.assertEqual(coordinator._runtime_state["last_irrigation_execution"]["status"], "completed")
+
+    def test_zone_finished_during_downtime_leaves_the_pending_queue(self) -> None:
+        """La zone finie pendant la coupure est créditée ET retirée de la file d'attente.
+
+        Avant D3, son segment restait « en attente » : c'est le segment zombie qui, avant C10,
+        gardait active une session dont l'eau était déjà inscrite. C10 règle ce cas dans le
+        prédicat ; ce test tient la file elle-même (mutation Y3).
+        """
+        plan = self._plan_deux_zones()
+        coordinator = _build_runtime_ready_coordinator(plan_attrs=plan.as_dict())
+        session = coordinator._build_active_irrigation_session(
+            plan=plan, source="auto_irrigation", strategy="plan"
+        )
+        session["status"] = "running"
+        session["current_passage"] = 1
+        session["current_zone_index"] = 0
+        session["current_zone"] = "switch.zone_1"
+        session["current_zone_started_at"] = datetime.now(timezone.utc) - timedelta(seconds=1000)
+        coordinator.hass.states.states["switch.zone_1"] = _FakeState("on", datetime.now(timezone.utc), {})
+        coordinator._runtime_state["active_irrigation_session"] = session
+        self.assertEqual(
+            {(seg["passage"], seg["zone_index"]) for seg in session["zones_pending"]},
+            {(1, 0), (1, 1)},
+            "prémisse : les deux segments sont en attente",
+        )
+        repris: dict[str, object] = {}
+
+        async def _executer(**kwargs) -> None:
+            repris.update(kwargs)
+
+        coordinator._execute_canonical_watering_plan = _executer
+
+        asyncio.run(coordinator._resume_active_irrigation_session(session))
+
+        suite = repris["session"]
+        self.assertEqual({(seg["passage"], seg["zone_index"]) for seg in suite["zones_pending"]}, {(1, 1)})
+        self.assertTrue(suite["zones_done"][0]["recovered_during_downtime"])
+
+    def test_degraded_close_marks_the_session_before_writing_its_water(self) -> None:
+        """Même atomicité que la fin de cycle (C1) : la sauvegarde qui écrit l'eau porte déjà le
+        marqueur. Sans lui, un redémarrage entre cette écriture et la sauvegarde qui efface la
+        session relançait la clôture dégradée, qui inscrivait la même eau une deuxième fois (Y7)."""
+        plan = self._plan_deux_zones()
+        coordinator = _build_runtime_ready_coordinator(plan_attrs=plan.as_dict())
+        coordinator._runtime_state["auto_irrigation_safety_lock"] = True
+        session = coordinator._build_active_irrigation_session(
+            plan=plan, source="auto_irrigation", strategy="plan"
+        )
+        session["status"] = "paused"
+        session["zones_done"] = [{"order": 1, "passage": 1, "zone": "switch.zone_1", "mm": 3.0}]
+        coordinator._runtime_state["active_irrigation_session"] = session
+        marqueur_a_l_ecriture: list[bool] = []
+
+        async def _ecrire(*_args, **_kwargs) -> None:
+            courante = coordinator._runtime_state.get("active_irrigation_session")
+            marqueur_a_l_ecriture.append(
+                isinstance(courante, dict) and bool(courante.get(coordinator_mod.WATERING_RECORDED_KEY))
+            )
+
+        coordinator.async_record_watering = AsyncMock(side_effect=_ecrire)
+
+        asyncio.run(coordinator._restore_active_irrigation_session())
+
+        self.assertEqual(marqueur_a_l_ecriture, [True])
+
+    def test_failed_shutdown_during_downtime_records_done_water_and_keeps_lock(self) -> None:
+        """Vanne impossible à fermer pendant la reprise : l'eau des zones faites est inscrite (Y8).
+
+        Avant, un simple `return` : `_safe_turn_off_zone` avait déjà passé la session en
+        « failed », elle se fermait à la lecture suivante SANS inscrire l'eau de la zone 1.
+        """
+        plan = self._plan_deux_zones()
+
+        def _refuser_fermeture(domain, service, data, blocking):
+            if service == "turn_off":
+                raise RuntimeError("relais injoignable")
+
+        coordinator = _build_runtime_ready_coordinator(
+            plan_attrs=plan.as_dict(), service_handler=_refuser_fermeture
+        )
+        session = coordinator._build_active_irrigation_session(
+            plan=plan, source="auto_irrigation", strategy="plan"
+        )
+        session["status"] = "running"
+        session["zones_done"] = [{"order": 1, "passage": 1, "zone": "switch.zone_1", "mm": 3.0}]
+        session["zones_pending"] = [seg for seg in session["zones_pending"] if seg["zone_index"] == 1]
+        session["current_passage"] = 1
+        session["current_zone_index"] = 1
+        session["current_zone"] = "switch.zone_2"
+        session["current_zone_started_at"] = datetime.now(timezone.utc) - timedelta(seconds=1000)
+        coordinator.hass.states.states["switch.zone_2"] = _FakeState("on", datetime.now(timezone.utc), {})
+        coordinator._runtime_state["active_irrigation_session"] = session
+
+        asyncio.run(coordinator._resume_active_irrigation_session(session))
+
+        fermetures = [call for call in coordinator._service_calls if call[1] == "turn_off"]
+        self.assertTrue(fermetures, "prémisse : la fermeture a été tentée")
+        self.assertEqual({call[2]["entity_id"] for call in fermetures}, {"switch.zone_2"})
+        # Seule l'eau des zones terminées et fermées est inscrite.
+        coordinator.async_record_watering.assert_awaited_once()
+        self.assertEqual(coordinator.async_record_watering.await_args.kwargs["total_mm"], 1.5)
+        self.assertIsNone(coordinator._runtime_state["active_irrigation_session"])
+        self.assertTrue(coordinator._runtime_state["auto_irrigation_safety_lock"])
+        self.assertEqual(coordinator._runtime_state["last_irrigation_execution"]["status"], "failed")
+
+    def test_degraded_close_does_not_rewrite_already_recorded_water(self) -> None:
+        """Session dont l'eau est déjà inscrite, close par un chemin dégradé : pas de deuxième
+        écriture (Y9)."""
+        plan = self._plan_deux_zones()
+        coordinator = _build_runtime_ready_coordinator(plan_attrs=plan.as_dict())
+        session = coordinator._build_active_irrigation_session(
+            plan=plan, source="auto_irrigation", strategy="plan"
+        )
+        session[coordinator_mod.WATERING_RECORDED_KEY] = True
+        session["zones_done"] = [{"order": 1, "passage": 1, "zone": "switch.zone_1", "mm": 3.0}]
+        coordinator._runtime_state["active_irrigation_session"] = session
+
+        asyncio.run(
+            coordinator._close_degraded_irrigation_session(
+                session, status="failed", error="safety_lock_active", plan=plan
+            )
+        )
+
+        coordinator.async_record_watering.assert_not_awaited()
+        self.assertIsNone(coordinator._runtime_state["active_irrigation_session"])
+        self.assertEqual(coordinator._runtime_state["last_irrigation_execution"]["status"], "failed")
 
     def test_restart_restore_clears_finished_session_without_active_zone(self) -> None:
         plan = watering_plan_mod.build_watering_plan(
@@ -3916,6 +4391,7 @@ class TestStopIrrigation(unittest.IsolatedAsyncioTestCase):
         coordinator.async_record_watering = AsyncMock()
         coordinator.async_record_user_action = AsyncMock()
         coordinator.async_request_refresh = AsyncMock()
+        coordinator.async_refresh = AsyncMock()
         coordinator._auto_irrigation_task = None
         return coordinator
 
@@ -3933,6 +4409,37 @@ class TestStopIrrigation(unittest.IsolatedAsyncioTestCase):
             ],
             "zones_pending": [
                 {"passage": 1, "zone_index": 1, "zone": "switch.zone_2", "duration_s": 600, "mm": 6.0}
+            ],
+        }
+
+    def _session_zone_zero(self, coordinator, *, passage: int, ecoule_s: float = 300.0) -> dict:
+        zones_done = []
+        if passage == 2:
+            zones_done = [
+                {
+                    "order": 1,
+                    "passage": 1,
+                    "zone": "switch.zone_1",
+                    "mm": 4.0,
+                    "duration_s": 240,
+                }
+            ]
+        return {
+            "source": "auto_irrigation",
+            "current_passage": passage,
+            "current_zone": "switch.zone_1",
+            "current_zone_index": 0,
+            "current_zone_started_at": coordinator._current_utc_datetime()
+            - timedelta(seconds=ecoule_s),
+            "zones_done": zones_done,
+            "zones_pending": [
+                {
+                    "passage": passage,
+                    "zone_index": 0,
+                    "zone": "switch.zone_1",
+                    "duration_s": 600,
+                    "mm": 6.0,
+                }
             ],
         }
 
@@ -3977,6 +4484,118 @@ class TestStopIrrigation(unittest.IsolatedAsyncioTestCase):
         # La source d'origine est conservée : les garde-fous comptent cette eau comme les autres.
         self.assertEqual(kwargs["source"], "auto_irrigation")
 
+    async def test_une_seule_sauvegarde_porte_la_session_effacee_et_l_eau(self) -> None:
+        """D1 : ni session active sur disque avec son eau, ni session effacée sans son eau.
+
+        Premier correctif (Codex) : sauvegarder la session effacée PUIS écrire l'eau. Plus de
+        vannes rouvertes, mais un redémarrage entre les deux sauvegardes perdait l'arrêt. L'eau
+        est désormais écrite par la sauvegarde même qui efface la session.
+        """
+        coordinator = self._coordinateur()
+        coordinator._set_active_irrigation_session(self._session(coordinator))
+        ordre: list[tuple[str, bool]] = []
+
+        async def _persist() -> None:
+            ordre.append(
+                (
+                    "save",
+                    isinstance(coordinator._runtime_state.get("active_irrigation_session"), dict),
+                )
+            )
+
+        async def _record(*_args, **_kwargs) -> None:
+            ordre.append(
+                (
+                    "record",
+                    isinstance(coordinator._runtime_state.get("active_irrigation_session"), dict),
+                )
+            )
+
+        coordinator._persist_runtime_state = _persist
+        coordinator.async_record_watering = AsyncMock(side_effect=_record)
+
+        await coordinator.async_stop_irrigation()
+
+        # Session déjà effacée quand l'eau est écrite, et aucune sauvegarde intermédiaire.
+        self.assertEqual(ordre[0], ("record", False))
+        self.assertNotIn(("save", True), ordre)
+
+    async def test_sans_eau_la_session_effacee_est_sauvegardee_seule(self) -> None:
+        coordinator = self._coordinateur()
+        session = self._session(coordinator)
+        session["zones_done"] = []
+        coordinator._set_active_irrigation_session(session)
+        sauvegardes: list[bool] = []
+
+        async def _persist() -> None:
+            sauvegardes.append(isinstance(coordinator._runtime_state.get("active_irrigation_session"), dict))
+
+        coordinator._persist_runtime_state = _persist
+
+        resultat = await coordinator.async_stop_irrigation()
+
+        self.assertEqual(resultat["applied_mm"], 0.0)
+        coordinator.async_record_watering.assert_not_awaited()
+        self.assertEqual(sauvegardes, [False])
+
+    async def test_ecriture_de_l_eau_en_echec_sauve_quand_meme_l_arret(self) -> None:
+        """Si l'écriture de l'eau lève avant d'atteindre le disque, la session effacée est
+        sauvée à part : le disque ne doit pas garder un cycle que la reprise relancerait."""
+        coordinator = self._coordinateur()
+        coordinator._set_active_irrigation_session(self._session(coordinator))
+        sauvegardes: list[bool] = []
+
+        async def _persist() -> None:
+            sauvegardes.append(isinstance(coordinator._runtime_state.get("active_irrigation_session"), dict))
+
+        coordinator._persist_runtime_state = _persist
+        coordinator.async_record_watering = AsyncMock(side_effect=RuntimeError("historique illisible"))
+
+        with self.assertRaises(RuntimeError):
+            await coordinator.async_stop_irrigation()
+
+        self.assertEqual(sauvegardes, [False])
+
+    async def test_le_disque_ne_voit_jamais_un_arret_a_moitie(self) -> None:
+        """Vrai cerveau et vraie sauvegarde : à chaque écriture, session active OU eau de l'arrêt.
+
+        Les deux ensemble, la reprise rouvrirait les zones restantes ; ni l'une ni l'autre, l'eau
+        de l'arrêt serait perdue.
+        """
+        coordinator = self._coordinateur()
+        coordinator.brain = brain_mod.GazonBrain()
+        for nom in ("async_record_watering", "_async_save_state", "_persist_runtime_state"):
+            methode = getattr(coordinator_mod.GazonIntelligentCoordinator, nom)
+            setattr(coordinator, nom, methode.__get__(coordinator, type(coordinator)))
+        ecrits: list[dict[str, object]] = []
+
+        class _Store:
+            async def async_save(self, payload: dict[str, object]) -> None:
+                ecrits.append(json.loads(json.dumps(payload)))
+
+        coordinator._store = _Store()
+        coordinator._set_active_irrigation_session(self._session(coordinator))
+        await coordinator._async_save_state()  # avant l'arrêt : session active, pas d'eau
+
+        await coordinator.async_stop_irrigation()
+
+        etats = []
+        for payload in ecrits:
+            runtime = payload.get("runtime")
+            session_active = isinstance(runtime, dict) and isinstance(
+                runtime.get("active_irrigation_session"), dict
+            )
+            eau_arret = any(
+                item.get("type") == "arrosage" and item.get("watering_cause") == "arret_manuel"
+                for item in payload.get("history", [])
+                if isinstance(item, dict)
+            )
+            etats.append((session_active, eau_arret))
+        self.assertEqual(etats[0], (True, False), "prémisse : la session active se lit bien sur disque")
+        self.assertNotIn((True, True), etats, "session active ET eau de l'arrêt : zones rouvertes")
+        self.assertNotIn((False, False), etats, "ni session ni eau : l'arrêt est perdu")
+        self.assertEqual(etats[-1], (False, True))
+
     async def test_la_zone_interrompue_est_creditee_au_prorata(self) -> None:
         """Elle n'est PAS dans `zones_done` (l'enregistrement se fait après le try/finally).
         Sans reconstitution, arrêter à mi-zone perdrait cette eau."""
@@ -3992,6 +4611,36 @@ class TestStopIrrigation(unittest.IsolatedAsyncioTestCase):
         zones = coordinator.async_record_watering.await_args.kwargs["zones"]
         self.assertEqual(len(zones), 2)
         self.assertTrue(zones[1]["interrupted"])
+        self.assertEqual(zones[1]["mm"], 3.0)
+
+    async def test_la_premiere_zone_interrompue_est_reconstituee(self) -> None:
+        coordinator = self._coordinateur()
+        coordinator._set_active_irrigation_session(
+            self._session_zone_zero(coordinator, passage=1, ecoule_s=300.0)
+        )
+
+        resultat = await coordinator.async_stop_irrigation()
+
+        self.assertGreater(resultat["applied_mm"], 0.0)
+        zones = coordinator.async_record_watering.await_args.kwargs["zones"]
+        self.assertEqual(len(zones), 1)
+        self.assertTrue(zones[0]["interrupted"])
+        self.assertEqual(zones[0]["passage"], 1)
+        self.assertEqual(zones[0]["mm"], 3.0)
+
+    async def test_la_zone_zero_du_deuxieme_passage_est_reconstituee(self) -> None:
+        coordinator = self._coordinateur()
+        coordinator._set_active_irrigation_session(
+            self._session_zone_zero(coordinator, passage=2, ecoule_s=300.0)
+        )
+
+        resultat = await coordinator.async_stop_irrigation()
+
+        self.assertGreater(resultat["applied_mm"], 0.0)
+        zones = coordinator.async_record_watering.await_args.kwargs["zones"]
+        self.assertEqual(len(zones), 2)
+        self.assertTrue(zones[1]["interrupted"])
+        self.assertEqual(zones[1]["passage"], 2)
         self.assertEqual(zones[1]["mm"], 3.0)
 
     async def test_le_prorata_ne_depasse_jamais_le_segment_prevu(self) -> None:
@@ -4121,6 +4770,599 @@ class TestStopIrrigation(unittest.IsolatedAsyncioTestCase):
         await coordinator.async_stop_irrigation()
 
         self.assertTrue(tache.cancelled())
+
+
+class TestPurgeSegmentsZoneZero(unittest.IsolatedAsyncioTestCase):
+    async def test_fin_normale_de_zone_zero_retire_le_segment_pending(self) -> None:
+        coordinator = _build_runtime_ready_coordinator()
+        plan = watering_plan_mod.build_watering_plan(
+            6.0,
+            [("switch.zone_1", 60.0)],
+            passages=1,
+            pause_minutes=0,
+        )
+        session = coordinator._build_active_irrigation_session(
+            plan=plan,
+            source="auto_irrigation",
+            strategy="normal",
+            watering_cause="hydrique",
+        )
+        self.assertTrue(
+            any(
+                segment.get("passage") == 1 and segment.get("zone_index") == 0
+                for segment in session["zones_pending"]
+            )
+        )
+        coordinator._attendre_zone_ouverte = AsyncMock(return_value=plan.zones[0].duration_s)
+
+        await coordinator._execute_canonical_watering_plan(
+            plan=plan,
+            source="auto_irrigation",
+            strategy="normal",
+            watering_cause="hydrique",
+            session=session,
+        )
+
+        self.assertFalse(
+            any(
+                segment.get("passage") == 1 and segment.get("zone_index") == 0
+                for segment in session["zones_pending"]
+            ),
+            "le segment (passage 1, zone 0) doit être purgé après une fin normale",
+        )
+
+
+class TestFinDeCycleEauEnregistreeUneFois(unittest.IsolatedAsyncioTestCase):
+    """Fin d'un cycle piloté : l'eau doit être enregistrée UNE fois, quoi qu'il arrive.
+
+    Deux fenêtres, sur le vrai exécuteur et le vrai `async_stop_irrigation` :
+    - A, la dernière zone est purgée et sauvegardée, mais l'eau n'est pas encore enregistrée.
+      La session vidée était jugée terminée : un arrêt ou un redémarrage la clôturait sans rien
+      enregistrer (0 mm) ;
+    - B, l'eau est enregistrée mais la session n'est pas encore effacée. Avant la purge de la
+      zone 0, la session restait active et un arrêt réenregistrait le cycle.
+    """
+
+    OBJECTIF_MM = 6.0
+
+    def _plan(self):
+        plan = watering_plan_mod.build_watering_plan(
+            self.OBJECTIF_MM,
+            [("switch.zone_1", 60.0), ("switch.zone_2", 60.0)],
+            passages=2,
+            pause_minutes=0,
+        )
+        assert plan is not None
+        return plan
+
+    def _coordinateur(self, plan):
+        coordinator = _build_runtime_ready_coordinator(plan_attrs=plan.as_dict())
+        coordinator._attendre_zone_ouverte = AsyncMock(
+            side_effect=lambda entity_id, duration_s, session: duration_s
+        )
+        return coordinator
+
+    def _lancer(self, coordinator, plan):
+        task = asyncio.create_task(
+            coordinator._execute_canonical_watering_plan(
+                plan=plan,
+                source="auto_irrigation",
+                strategy="plan",
+                watering_cause="hydrique",
+            )
+        )
+        coordinator._auto_irrigation_task = task
+        return task
+
+    def _bloquer_la_sauvegarde_finale(self, coordinator):
+        """Suspend la sauvegarde qui suit la dernière zone (fenêtre A) et photographie l'état persisté."""
+        atteinte = asyncio.Event()
+        liberation = asyncio.Event()
+        photo: dict[str, object] = {}
+
+        async def _persist() -> None:
+            session = coordinator._runtime_state.get("active_irrigation_session")
+            if (
+                not atteinte.is_set()
+                and isinstance(session, dict)
+                and session.get("zones_pending") == []
+                and session.get("zones_done")
+                and not session.get(coordinator_mod.WATERING_RECORDED_KEY)
+            ):
+                photo["session"] = json.loads(json.dumps(coordinator_mod.serialize_runtime_value(session)))
+                atteinte.set()
+                await liberation.wait()
+
+        coordinator._persist_runtime_state = _persist
+        return atteinte, photo
+
+    async def _redemarrer_depuis(self, plan, session_persistee):
+        coordinator = self._coordinateur(plan)
+        coordinator._runtime_state["active_irrigation_session"] = (
+            coordinator_mod.deserialize_active_irrigation_session(session_persistee)
+        )
+        await coordinator._restore_active_irrigation_session()
+        task = coordinator._auto_irrigation_task
+        if task is not None:
+            await task
+        return coordinator
+
+    async def test_arret_pendant_la_sauvegarde_finale_enregistre_l_eau_une_fois(self) -> None:
+        plan = self._plan()
+        coordinator = self._coordinateur(plan)
+        atteinte, _photo = self._bloquer_la_sauvegarde_finale(coordinator)
+        self._lancer(coordinator, plan)
+        await asyncio.wait_for(atteinte.wait(), timeout=5)
+
+        resultat = await coordinator.async_stop_irrigation()
+
+        self.assertEqual(coordinator.async_record_watering.await_count, 1)
+        kwargs = coordinator.async_record_watering.await_args.kwargs
+        self.assertAlmostEqual(kwargs["total_mm"], self.OBJECTIF_MM, places=1)
+        self.assertAlmostEqual(resultat["applied_mm"], self.OBJECTIF_MM, places=1)
+        self.assertIsNone(coordinator._runtime_state["active_irrigation_session"])
+
+    async def test_redemarrage_depuis_la_sauvegarde_finale_enregistre_l_eau_une_fois(self) -> None:
+        plan = self._plan()
+        coordinator = self._coordinateur(plan)
+        atteinte, photo = self._bloquer_la_sauvegarde_finale(coordinator)
+        tache = self._lancer(coordinator, plan)
+        await asyncio.wait_for(atteinte.wait(), timeout=5)
+        # Coupure de Home Assistant pendant l'écriture : la tâche meurt, le disque garde la photo.
+        tache.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await tache
+        coordinator.async_record_watering.assert_not_awaited()
+
+        redemarre = await self._redemarrer_depuis(plan, photo["session"])
+
+        self.assertEqual(redemarre.async_record_watering.await_count, 1)
+        kwargs = redemarre.async_record_watering.await_args.kwargs
+        self.assertAlmostEqual(kwargs["total_mm"], self.OBJECTIF_MM, places=1)
+        self.assertEqual(kwargs["watering_cause"], "hydrique")
+        self.assertIsNone(redemarre._runtime_state["active_irrigation_session"])
+        # Toutes les zones avaient tourné : la reprise enregistre sans rouvrir la moindre vanne.
+        redemarre._attendre_zone_ouverte.assert_not_awaited()
+        self.assertFalse(
+            [appel for appel in redemarre._service_calls if appel[1] == "turn_on"],
+            "aucune vanne ne doit être rouverte à la reprise",
+        )
+
+    async def test_arret_apres_enregistrement_ne_double_pas_l_eau(self) -> None:
+        plan = self._plan()
+        coordinator = self._coordinateur(plan)
+        atteinte = asyncio.Event()
+        liberation = asyncio.Event()
+        photo: dict[str, object] = {}
+
+        async def _enregistrer(*args, **kwargs) -> None:
+            if not atteinte.is_set():
+                session = coordinator._runtime_state.get("active_irrigation_session")
+                photo["session"] = json.loads(json.dumps(coordinator_mod.serialize_runtime_value(session)))
+                atteinte.set()
+                await liberation.wait()
+
+        coordinator.async_record_watering = AsyncMock(side_effect=_enregistrer)
+        self._lancer(coordinator, plan)
+        await asyncio.wait_for(atteinte.wait(), timeout=5)
+        self.assertTrue(photo["session"].get(coordinator_mod.WATERING_RECORDED_KEY))
+
+        stop_task = asyncio.create_task(coordinator.async_stop_irrigation())
+        await asyncio.sleep(0)
+        self.assertFalse(stop_task.done())
+        liberation.set()
+        resultat = await stop_task
+
+        # Seul l'enregistrement du cycle lui-même : aucun « arret_manuel » par-dessus.
+        self.assertEqual(coordinator.async_record_watering.await_count, 1)
+        self.assertEqual(coordinator.async_record_watering.await_args.kwargs["watering_cause"], "hydrique")
+        self.assertEqual(resultat["applied_mm"], self.OBJECTIF_MM)
+        self.assertIn(
+            "gazon_intelligent_auto_irrigation_completed",
+            [event for event, _payload in coordinator._events],
+        )
+        self.assertIsNotNone(coordinator._runtime_state["last_auto_irrigation_completed_at"])
+
+        # Même fenêtre, redémarrage : la session marquée est clôturée sans réenregistrer.
+        redemarre = await self._redemarrer_depuis(plan, photo["session"])
+        redemarre.async_record_watering.assert_not_awaited()
+        self.assertIsNone(redemarre._runtime_state["active_irrigation_session"])
+        self.assertEqual(redemarre._runtime_state["last_irrigation_execution"]["status"], "completed")
+
+    async def test_session_marquee_est_cloturee_comme_complete_meme_avec_erreur_reprise(self) -> None:
+        plan = self._plan()
+        coordinator = self._coordinateur(plan)
+        session = coordinator._build_active_irrigation_session(
+            plan=plan,
+            source="auto_irrigation",
+            strategy="plan",
+            watering_cause="hydrique",
+        )
+        session[coordinator_mod.WATERING_RECORDED_KEY] = True
+        session["last_error"] = "restart_recovery"
+        session["status"] = "recovery_required"
+        session["zones_done"] = [{"passage": 1, "zone": "switch.zone_1", "mm": 3.0}]
+        session["zones_pending"] = [{"passage": 1, "zone_index": 1, "zone": "switch.zone_2"}]
+        coordinator._set_active_irrigation_session(session)
+
+        self.assertIsNone(coordinator._get_active_irrigation_session())
+        self.assertIsNone(coordinator._runtime_state["active_irrigation_session"])
+        self.assertEqual(coordinator._runtime_state["last_irrigation_execution"]["status"], "completed")
+
+    async def test_marqueur_et_historique_sont_sauvegardes_ensemble(self) -> None:
+        """Vrai cerveau + vraie sauvegarde : le disque ne voit jamais le marqueur sans l'eau."""
+        plan = self._plan()
+        coordinator = self._coordinateur(plan)
+        coordinator.brain = brain_mod.GazonBrain()
+        coordinator.async_record_watering = (
+            coordinator_mod.GazonIntelligentCoordinator.async_record_watering.__get__(
+                coordinator,
+                type(coordinator),
+            )
+        )
+        coordinator._async_save_state = (
+            coordinator_mod.GazonIntelligentCoordinator._async_save_state.__get__(
+                coordinator,
+                type(coordinator),
+            )
+        )
+        coordinator.async_request_refresh = AsyncMock()
+
+        class _Store:
+            def __init__(self) -> None:
+                self.payloads: list[dict[str, object]] = []
+
+            async def async_save(self, payload: dict[str, object]) -> None:
+                self.payloads.append(json.loads(json.dumps(payload)))
+
+        store = _Store()
+        coordinator._store = store
+
+        await coordinator._execute_canonical_watering_plan(
+            plan=plan,
+            source="auto_irrigation",
+            strategy="plan",
+            watering_cause="hydrique",
+        )
+
+        payload_marque = None
+        for payload in store.payloads:
+            runtime = payload.get("runtime")
+            session = runtime.get("active_irrigation_session") if isinstance(runtime, dict) else None
+            historique = [
+                item for item in payload.get("history", []) if item.get("type") == "arrosage"
+            ]
+            if isinstance(session, dict) and session.get(coordinator_mod.WATERING_RECORDED_KEY):
+                self.assertTrue(historique)
+                payload_marque = payload
+            if historique and isinstance(session, dict):
+                self.assertTrue(session.get(coordinator_mod.WATERING_RECORDED_KEY))
+
+        self.assertIsNotNone(payload_marque)
+        relu = self._coordinateur(plan)
+        relu.brain = brain_mod.GazonBrain()
+        assert payload_marque is not None
+        relu.brain.load_state(payload_marque)
+        relu._restore_runtime_state(payload_marque.get("runtime"))
+
+        self.assertTrue(
+            relu._runtime_state["active_irrigation_session"].get(
+                coordinator_mod.WATERING_RECORDED_KEY
+            )
+        )
+        self.assertEqual(
+            len([item for item in relu.brain.history if item.get("type") == "arrosage"]),
+            1,
+        )
+
+    async def test_la_purge_retire_exactement_chaque_segment_joue(self) -> None:
+        """Plan 2 zones × 2 passages : chaque fin de zone retire SON segment, et seulement lui."""
+        plan = self._plan()
+        coordinator = self._coordinateur(plan)
+        etats: list[list[tuple[int, int]]] = []
+
+        async def _persist() -> None:
+            session = coordinator._runtime_state.get("active_irrigation_session")
+            if not isinstance(session, dict):
+                return
+            etat = [(int(s["passage"]), int(s["zone_index"])) for s in session.get("zones_pending") or []]
+            if not etats or etats[-1] != etat:
+                etats.append(etat)
+
+        coordinator._persist_runtime_state = _persist
+        await self._lancer(coordinator, plan)
+
+        self.assertEqual(
+            etats,
+            [
+                [(1, 0), (1, 1), (2, 0), (2, 1)],
+                [(1, 1), (2, 0), (2, 1)],
+                [(2, 0), (2, 1)],
+                [(2, 1)],
+                [],
+            ],
+        )
+        coordinator.async_record_watering.assert_awaited_once()
+
+
+class TestDepartCaleSurLeLeverDuSoleil(unittest.TestCase):
+    """Étape 2, arbitrage de Kévin le 15/09/2026 : l'arrosage du matin finit 15 min avant le lever.
+
+    La nuit l'ET est quasi nulle : partir plus tard qu'à 03:45 ne coûte rien au sol, et l'eau
+    tombe sur la rosée. Aucun plafond lié à la tonte : Kévin a choisi de tondre plus tard, dans
+    des fenêtres élargies (`decision_mowing`), plutôt que d'avancer l'arrosage.
+    """
+
+    LEVER = {"sun_next_rising": "2026-09-15T05:34:00Z"}  # 07:34 à Paris
+    PARIS = timezone(timedelta(hours=2))
+    PLAN = "sensor.gazon_intelligent_plan_arrosage"
+
+    def _coordinateur(self, *, heure: int, minute: int = 0, lever: dict | None = None,
+                      delai_tonte: float | None = None):
+        coordinator = _build_coordinator()
+        coordinator.history = []
+        memoire: dict[str, object] = {"auto_irrigation_enabled": True}
+        if delai_tonte is not None:
+            memoire["mowing_cooldown_after_watering_minutes"] = delai_tonte
+        coordinator.memory = memoire
+        contexte = dict(self.LEVER if lever is None else lever)
+        coordinator._get_sun_context = lambda: dict(contexte)
+        coordinator._current_datetime = lambda: datetime(2026, 9, 15, heure, minute, tzinfo=self.PARIS)
+        return coordinator
+
+    def _snapshot(self, coordinator, **over):
+        # `maintenant` : la VRAIE valeur publiée de 03:45 à 10:00 en phase Normal. La fixture
+        # partagée dit `matin`, qui n'existe pas (revue du 15/09) : un lanceur qui n'attendrait plus
+        # sur `maintenant` passait toute la classe au vert.
+        base = {
+            "watering_window_start_minute": 225,
+            "watering_window_end_minute": 600,
+            "fenetre_optimale": "maintenant",
+        }
+        base.update(over)
+        return _ready_launch_snapshot(coordinator, **base)
+
+    def _decision(self, coordinator, **over):
+        with _dt_util_avec_fuseau(type(coordinator)._sun_event_minute_from_context, heures=2):
+            return coordinator._should_launch_auto_irrigation(self._snapshot(coordinator, **over))
+
+    def _publie(self, coordinator, **over):
+        with _dt_util_avec_fuseau(type(coordinator)._sun_event_minute_from_context, heures=2):
+            return coordinator._build_public_snapshot_data(
+                self._snapshot(coordinator, **over),
+                pluie_demain_source="test",
+                temperature=16.0,
+                temperature_source="test",
+                temperature_reference_hydrique=None,
+                forecast_summary={},
+                et0_source="test",
+            )
+
+    def test_la_fixture_dure_vingt_quatre_minutes(self) -> None:
+        # 8 mm : zone 1 à 60 mm/h (8 min) + zone 2 à 30 mm/h (16 min). Départ attendu 07:19 − 24.
+        coordinator = self._coordinateur(heure=5)
+        plan = coordinator._get_canonical_watering_plan(objectif_mm=8.0, snapshot=self._snapshot(coordinator))
+        self.assertEqual(plan.total_duration_s, 24 * 60)
+
+    def test_avant_l_heure_calee_l_arrosage_attend(self) -> None:
+        self.assertEqual(
+            self._decision(self._coordinateur(heure=5)), (False, "waiting_sunrise_departure")
+        )
+
+    def test_frontiere_exacte_du_depart(self) -> None:
+        # 07:34 − 15 − 24 = 06:55. Elle épingle la marge : sans elle, le départ glisserait à 07:10.
+        self.assertEqual(
+            self._decision(self._coordinateur(heure=6, minute=54)),
+            (False, "waiting_sunrise_departure"),
+        )
+        self.assertEqual(self._decision(self._coordinateur(heure=6, minute=55)), (True, "ready"))
+
+    def test_la_pause_entre_passages_compte_dans_la_duree(self) -> None:
+        # Deux passages et 25 min de pause : 24 min d'eau + 25 min d'attente = 49 min, départ
+        # 06:30. En oubliant la pause, le cycle partirait à 06:55 et finirait à 07:44.
+        fractionne = {"watering_passages": 2, "watering_pause_minutes": 25}
+        coordinator = self._coordinateur(heure=6, minute=29)
+        plan = coordinator._get_canonical_watering_plan(
+            objectif_mm=8.0, snapshot=self._snapshot(coordinator, **fractionne)
+        )
+        self.assertEqual(plan.total_duration_s, 49 * 60)
+        self.assertEqual(self._decision(coordinator, **fractionne), (False, "waiting_sunrise_departure"))
+        self.assertEqual(
+            self._decision(self._coordinateur(heure=6, minute=30), **fractionne), (True, "ready")
+        )
+
+    def test_le_delai_de_reprise_de_tonte_ne_decale_plus_le_depart(self) -> None:
+        # Le premier jet plafonnait la fin à 10:00 − délai (07:00 avec 180 min). Retiré le 15/09 :
+        # quel que soit le délai réglé, le départ reste 06:55.
+        for delai in (0, 120, 180, 240):
+            with self.subTest(delai_tonte=delai):
+                self.assertEqual(
+                    self._decision(self._coordinateur(heure=6, minute=54, delai_tonte=delai)),
+                    (False, "waiting_sunrise_departure"),
+                )
+                self.assertEqual(
+                    self._decision(self._coordinateur(heure=6, minute=55, delai_tonte=delai)),
+                    (True, "ready"),
+                )
+
+    def test_le_plan_publie_par_l_entite_fait_foi(self) -> None:
+        # Même résolution que l'exécuteur : le plan de l'entité d'abord. Ici 60 min au lieu des 24
+        # du plan recalculé depuis l'objectif : départ 06:19, et non 06:55.
+        coordinator = self._coordinateur(heure=6, minute=30)
+        coordinator._plan_arrosage_entity_id = lambda: self.PLAN
+        coordinator.hass = _FakeHass(
+            states=_FakeStates(
+                {
+                    self.PLAN: _FakeState(
+                        state="8.0",
+                        last_changed=datetime(2026, 9, 15, 3, 0, tzinfo=timezone.utc),
+                        attributes={
+                            "objective_mm": 8.0,
+                            "zones": [
+                                {"entity_id": "switch.zone_1", "duration_s": 1800, "rate_mm_h": 16.0},
+                                {"entity_id": "switch.zone_2", "duration_s": 1800, "rate_mm_h": 16.0},
+                            ],
+                        },
+                    )
+                }
+            )
+        )
+        self.assertEqual(self._decision(coordinator), (True, "ready"))
+        self.assertEqual(self._publie(coordinator)["watering_departure_minute"], 6 * 60 + 19)
+
+    def test_sans_lever_connu_on_part_a_l_ouverture_comme_avant(self) -> None:
+        self.assertEqual(self._decision(self._coordinateur(heure=4, lever={})), (True, "ready"))
+
+    def test_le_semis_n_attend_pas_le_lever(self) -> None:
+        coordinator = self._coordinateur(heure=5)
+        coordinator._semis_cycle_progress = lambda snapshot: {"cycles_remaining_today": 3, "state": "ready"}
+        self.assertEqual(self._decision(coordinator), (True, "ready"))
+
+    def test_la_detresse_tondeuse_n_attend_pas_le_lever(self) -> None:
+        coordinator = self._coordinateur(heure=5)
+        coordinator._mower_block_age_minutes = lambda snapshot: 90.0
+        decision = self._decision(
+            coordinator,
+            watering_blocked_by_mower=True,
+            irrigation_blocked_but_critical=True,
+            watering_block_reason_code="mower_not_stowed",
+            block_reason="mower_not_stowed",
+        )
+        self.assertEqual(decision, (True, "ready"))
+
+    def test_le_rafraichissement_du_soir_n_est_pas_concerne(self) -> None:
+        coordinator = self._coordinateur(heure=20, minute=30)
+        decision = self._decision(
+            coordinator, fenetre_optimale="soir", watering_cause="rafraichissement_soir"
+        )
+        self.assertEqual(decision, (True, "ready"))
+
+    def test_l_heure_publiee_est_celle_du_lanceur(self) -> None:
+        payload = self._publie(self._coordinateur(heure=5))
+        self.assertEqual(payload["watering_departure_minute"], 6 * 60 + 55)
+        self.assertEqual(payload["watering_end_minute"], 7 * 60 + 19)
+        # Et le lanceur part bien à cette minute-là, pas une de plus ni de moins.
+        self.assertEqual(self._decision(self._coordinateur(heure=6, minute=55)), (True, "ready"))
+
+    def test_un_cycle_trop_long_est_annonce_a_l_ouverture(self) -> None:
+        # 80 mm : 240 min de cycle, fin visée 07:19 → départ théorique 03:19, avant l'ouverture.
+        # L'heure publiée est l'ouverture (03:45), celle où les vannes s'ouvriront vraiment.
+        payload = self._publie(self._coordinateur(heure=2), objectif_mm=80.0)
+        self.assertEqual(payload["watering_departure_minute"], 225)
+        self.assertEqual(payload["watering_end_minute"], 225 + 240)
+
+    def test_rien_n_est_publie_sans_arrosage_demande(self) -> None:
+        payload = self._publie(self._coordinateur(heure=5), objectif_mm=0.0)
+        self.assertIsNone(payload["watering_departure_minute"])
+        self.assertIsNone(payload["watering_end_minute"])
+
+    def test_aucun_depart_cale_n_est_annonce_quand_le_lanceur_en_est_exempte(self) -> None:
+        # Revue du 15/09 : la publication ignorait les exemptions du lanceur. Un semis prêt à 04:00
+        # se voyait annoncer un départ calé sur le lever, qu'il n'attendrait jamais.
+        cas = {
+            "semis": ({}, lambda c: setattr(
+                c, "_semis_cycle_progress",
+                lambda snapshot: {"cycles_remaining_today": 3, "state": "ready"},
+            )),
+            # Un semis entre deux cycles n'attend pas davantage le lever : ses créneaux sont les siens.
+            "semis_en_attente": ({}, lambda c: setattr(
+                c, "_semis_cycle_progress",
+                lambda snapshot: {"cycles_remaining_today": 2, "state": "waiting"},
+            )),
+            "post_produit": ({
+                "type_arrosage": "application_technique_auto",
+                "application_post_watering_status": "autorise",
+            }, None),
+            "soir": ({"fenetre_optimale": "soir", "watering_cause": "rafraichissement_soir"}, None),
+            "tondeuse": ({"watering_blocked_by_mower": True}, None),
+        }
+        for nom, (surcharge, preparer) in cas.items():
+            with self.subTest(exemption=nom):
+                coordinator = self._coordinateur(heure=4)
+                if preparer is not None:
+                    preparer(coordinator)
+                payload = self._publie(coordinator, **surcharge)
+                self.assertIsNone(payload["watering_departure_minute"])
+                self.assertIsNone(payload["watering_end_minute"])
+        # Contrôle : sans exemption, la même heure est bien publiée.
+        self.assertEqual(self._publie(self._coordinateur(heure=4))["watering_departure_minute"], 6 * 60 + 55)
+        # Et un produit dont l'arrosage n'est pas encore autorisé n'exempte rien : seul le statut
+        # « autorise » fait partir l'incorporation.
+        en_attente = self._publie(
+            self._coordinateur(heure=4),
+            type_arrosage="application_technique_auto",
+            application_post_watering_status="en_attente",
+        )
+        self.assertEqual(en_attente["watering_departure_minute"], 6 * 60 + 55)
+
+    def test_la_veille_au_soir_l_heure_est_publiee_pour_demain(self) -> None:
+        # 21:00 : la décision publie `demain_matin`. L'heure calée doit déjà être annoncée.
+        payload = self._publie(self._coordinateur(heure=21), fenetre_optimale="demain_matin")
+        self.assertEqual(payload["watering_departure_minute"], 6 * 60 + 55)
+        self.assertEqual(payload["watering_end_minute"], 7 * 60 + 19)
+
+    def test_aucune_heure_n_est_annoncee_quand_l_arrosage_auto_ne_partira_pas(self) -> None:
+        # Revue du 15/09 : verrou de sécurité actif, « Prochain arrosage » et la carte annonçaient
+        # « 06:15 → 07:19 » pendant que « Blocage arrosage auto » disait « Bloqué (sécurité) ».
+        def verrou(c):
+            c._runtime_state["auto_irrigation_safety_lock"] = True
+
+        def interrupteur_coupe(c):
+            c.memory["auto_irrigation_enabled"] = False
+
+        cas = {
+            "verrou_de_securite": ({}, verrou),
+            "arrosage_auto_coupe": ({}, interrupteur_coupe),
+            "arrosage_auto_non_autorise": ({"arrosage_auto_autorise": False}, None),
+            "execution_refusee": ({"irrigation_execution_allowed": False}, None),
+            "fenetre_attendre": ({"fenetre_optimale": "attendre"}, None),
+        }
+        for nom, (surcharge, preparer) in cas.items():
+            with self.subTest(cas=nom):
+                coordinator = self._coordinateur(heure=4)
+                if preparer is not None:
+                    preparer(coordinator)
+                payload = self._publie(coordinator, **surcharge)
+                self.assertIsNone(payload["watering_departure_minute"])
+                self.assertIsNone(payload["watering_end_minute"])
+                # Et le lanceur refuse bien, lui aussi : les deux sorties disent la même chose.
+                self.assertFalse(self._decision(coordinator, **surcharge)[0])
+
+    def test_le_coucher_publie_est_celui_du_jour_la_veille_du_passage_a_l_heure_d_ete(self) -> None:
+        # Le coucher nourrit la nuit de la tonte (coucher + 30 min). Le soir du 27/03/2027, lu sur
+        # `next_setting` (le 28/03, déjà en heure d'été), il annonçait 20:13 au lieu de ~19:13.
+        coordinator = self._coordinateur(heure=5)
+        coordinator._current_datetime = lambda: datetime(2027, 3, 27, 19, 50, tzinfo=ZoneInfo("Europe/Paris"))
+        reel = type(coordinator)._sun_event_minute_from_context.__globals__["dt_util"]
+
+        class _DtUtilParis:
+            def __getattr__(self, nom):
+                return getattr(reel, nom)
+
+            @staticmethod
+            def parse_datetime(valeur):
+                return datetime.fromisoformat(str(valeur).replace("Z", "+00:00"))
+
+            @staticmethod
+            def as_local(valeur):
+                return valeur.astimezone(ZoneInfo("Europe/Paris"))
+
+        with patch.dict(type(coordinator)._sun_event_minute_from_context.__globals__, {"dt_util": _DtUtilParis()}):
+            coucher = coordinator._sunset_minute_from_context({"sun_next_setting": "2027-03-28T18:13:00Z"})
+        self.assertEqual(coucher, 19 * 60 + 13)
+
+    def test_attendre_le_depart_n_est_pas_trace_comme_un_refus(self) -> None:
+        # « Derniers refus » : attendre l'heure prévue n'en est pas un. Sans ce filtre, un refus
+        # s'écrirait chaque matin d'arrosage.
+        coordinator = self._coordinateur(heure=5)
+        traces: list[str] = []
+        coordinator.brain.record_skip = lambda **kw: traces.append(kw["reason"])
+        snapshot = self._snapshot(coordinator, fenetre_optimale="maintenant")
+        coordinator._maybe_record_skip(snapshot, "waiting_sunrise_departure")
+        self.assertEqual(traces, [])
+        # Contrôle : un vrai refus, lui, est bien tracé.
+        coordinator._maybe_record_skip(snapshot, "irrigation_blocked")
+        self.assertEqual(traces, ["irrigation_blocked"])
 
 
 class TestVeilleurDeVanne(unittest.IsolatedAsyncioTestCase):
@@ -5823,7 +7065,7 @@ class AutoDeclarationCablageTests(unittest.TestCase):
         import inspect
 
         source = inspect.getsource(
-            coordinator_mod.GazonIntelligentCoordinator._async_update_data
+            coordinator_mod.GazonIntelligentCoordinator._calculer_donnees
         )
         self.assertIn("_declarer_tonte_du_jour(mower_context)", source)
 
@@ -5832,7 +7074,7 @@ class AutoDeclarationCablageTests(unittest.TestCase):
         import inspect
 
         source = inspect.getsource(
-            coordinator_mod.GazonIntelligentCoordinator._async_update_data
+            coordinator_mod.GazonIntelligentCoordinator._calculer_donnees
         )
         self.assertLess(
             source.index("_declarer_tonte_du_jour"),
@@ -6394,7 +7636,7 @@ class CarnetDePassesCablageTests(unittest.TestCase):
         import inspect
 
         source = inspect.getsource(
-            coordinator_mod.GazonIntelligentCoordinator._async_update_data
+            coordinator_mod.GazonIntelligentCoordinator._calculer_donnees
         )
         self.assertIn("_suivre_passes_tondeuse(mower_context)", source)
 
@@ -6580,6 +7822,8 @@ class ResetDuCarnetDePassesTests(unittest.TestCase):
         coord._runtime_state = {"mower_passes": {"en_cours": {"date": "2026-08-13"}, "journal": journal}}
         coord._async_save_state = AsyncMock()
         coord.async_request_refresh = AsyncMock()
+        # ⚠️ Depuis la 0.84.0 une action de l'utilisateur passe par `async_refresh` (immédiat).
+        coord.async_refresh = AsyncMock()
         return coord
 
     def test_le_carnet_repart_vide(self) -> None:
@@ -7649,3 +8893,163 @@ class PluieDuJourDepuisCumulTests(unittest.TestCase):
     def test_l_entree_de_configuration_existe(self) -> None:
         flow = (PACKAGE_DIR / "config_flow.py").read_text(encoding="utf-8")
         self.assertIn("vol.Optional(CONF_CAPTEUR_PLUIE_CUMUL", flow)
+
+
+class RafraichissementApresActionTests(unittest.TestCase):
+    """⚠️ « Quand je clique j'ai quelques secondes avant que ça se mette à jour » — Kévin,
+    10/09/2026.
+
+    Le coordinateur s'initialise sans debouncer personnalisé : il hérite de celui de Home
+    Assistant, `REQUEST_REFRESH_DEFAULT_COOLDOWN = 10 s` avec `immediate=True` (HA 2026.2.3).
+    Le premier appel passe, puis la porte reste fermée dix secondes. Or les capteurs suivis
+    (station météo, tondeuse, vannes) en demandent aussi : le debouncer est presque toujours
+    dans sa fenêtre, et un clic attendait le reste des dix secondes.
+
+    Le clic passait, le service s'exécutait, le cerveau était à jour — seule la REPUBLICATION
+    attendait. Une attente invisible se lit « ça n'a pas marché ».
+    """
+
+    ACTIONS = (
+        "async_set_auto_irrigation_enabled", "async_set_evening_cooling_enabled",
+        "async_set_mower_coordination_enabled",
+        "async_set_mowing_cooldown_after_watering_minutes",
+        "async_set_auto_mowing_declaration_enabled", "async_set_auto_mowing_declaration_minutes",
+        "async_set_selected_product", "async_set_mode", "async_set_date_action",
+        "async_set_normal", "async_declare_intervention", "async_record_mowing",
+        "async_recalibrate_reserve", "async_remove_last_application",
+        "async_reset_mower_passes", "async_stop_irrigation", "async_update_config",
+        # Oubliés au premier jet, trouvés par la revue du 10/09/2026.
+        "async_register_product", "async_remove_product",
+    )
+
+    # ⚠️ CHEMINS MIXTES — ils servent une action de Kévin **et** l'exécuteur d'arrosage.
+    # Les brancher sur l'immédiat ferait tourner un cycle complet, en ligne, à l'intérieur de la
+    # tâche d'arrosage. C'est le point d'entrée utilisateur qui rafraîchit, pas eux.
+    MIXTES = ("async_record_watering", "async_record_user_action")
+
+    def _coord(self):
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord.async_refresh = AsyncMock()
+        coord.async_request_refresh = AsyncMock()
+        return coord
+
+    # ---- LE COMPORTEMENT ----------------------------------------------------------------
+    def test_une_action_utilisateur_rafraichit_TOUT_DE_SUITE(self) -> None:
+        coord = self._coord()
+        coord._dans_le_cycle = False
+        asyncio.run(coord._rafraichir_apres_action_utilisateur())
+        coord.async_refresh.assert_awaited_once()
+        coord.async_request_refresh.assert_not_awaited()
+
+    def test_depuis_le_CYCLE_on_retombe_sur_le_chemin_debounce(self) -> None:
+        """⚠️ RÉENTRANCE. Rafraîchir depuis l'intérieur du cycle se rappellerait lui-même.
+
+        Le piège est connu ici : c'est lui qui a imposé l'écriture synchrone dans le cerveau
+        pour la déclaration automatique de tonte. La promesse tenait par la discipline ; elle
+        tient désormais par une garde, et ce test la verrouille.
+        """
+        coord = self._coord()
+        coord._dans_le_cycle = True
+        asyncio.run(coord._rafraichir_apres_action_utilisateur())
+        coord.async_refresh.assert_not_awaited()
+        coord.async_request_refresh.assert_awaited_once()
+
+    def test_le_drapeau_retombe_MEME_si_le_cycle_leve(self) -> None:
+        """Sans le `finally`, une exception au milieu du cycle laisserait le drapeau levé pour
+        toujours — et TOUTES les actions retomberaient définitivement sur le chemin lent."""
+        coord = self._coord()
+        coord._dans_le_cycle = False
+
+        async def _boum():
+            raise RuntimeError("cycle cassé")
+
+        coord._calculer_donnees = _boum
+        with self.assertRaises(RuntimeError):
+            asyncio.run(
+                coordinator_mod.GazonIntelligentCoordinator._async_update_data(coord)
+            )
+        self.assertFalse(coord._dans_le_cycle, "le drapeau est resté levé après une exception")
+
+    def test_le_cycle_leve_le_drapeau_pendant_son_execution(self) -> None:
+        coord = self._coord()
+        coord._dans_le_cycle = False
+        vu = {}
+
+        async def _corps():
+            vu["pendant"] = coord._dans_le_cycle
+            return {}
+
+        coord._calculer_donnees = _corps
+        asyncio.run(coordinator_mod.GazonIntelligentCoordinator._async_update_data(coord))
+        self.assertTrue(vu["pendant"], "le cycle n'a pas levé le drapeau de réentrance")
+        self.assertFalse(coord._dans_le_cycle)
+
+    # ---- LE CÂBLAGE ---------------------------------------------------------------------
+    def test_TOUTES_les_actions_passent_par_le_chemin_immediat(self) -> None:
+        """⚠️ Le piège du projet : un correctif câblé à moitié.
+
+        ⚠️ PORTÉE EXACTE, et la revue a eu raison de me reprendre : cette liste est ÉCRITE ICI.
+        Elle verrouille les points connus contre une régression ; elle ne peut PAS voir une
+        action ajoutée demain. La revue a d'ailleurs trouvé ainsi deux services oubliés au
+        premier jet (`register_product`, `remove_product`) — que ce test ne voyait pas.
+        """
+        source = (PACKAGE_DIR / "coordinator.py").read_text(encoding="utf-8")
+        for nom in self.ACTIONS:
+            with self.subTest(action=nom):
+                debut = source.index(f"def {nom}(")
+                suite = source.find("\n    async def ", debut + 1)
+                autre = source.find("\n    def ", debut + 1)
+                fin = min(x for x in (suite, autre, len(source)) if x > 0)
+                corps = source[debut:fin]
+                self.assertIn("_rafraichir_apres_action_utilisateur()", corps,
+                              f"{nom} attend encore le debouncer de 10 s")
+                self.assertNotIn("await self.async_request_refresh()", corps,
+                                 f"{nom} garde un appel débouncé")
+
+    def test_les_chemins_MIXTES_restent_debounces(self) -> None:
+        """⚠️ TROUVÉ PAR LA REVUE, et mon premier jet avait tort.
+
+        `async_record_watering` et `async_record_user_action` servent bien un service appelé par
+        Kévin — mais elles sont aussi appelées par l'exécuteur d'arrosage à chaque étape
+        (en_attente, démarrage, fin, arrêt), soit une quinzaine de points internes. Les brancher
+        sur l'immédiat faisait tourner un cycle complet, en ligne, DANS la tâche d'arrosage.
+        """
+        source = (PACKAGE_DIR / "coordinator.py").read_text(encoding="utf-8")
+        for nom in self.MIXTES:
+            with self.subTest(methode=nom):
+                debut = source.index(f"async def {nom}(")
+                suite = source.find("\n    async def ", debut + 1)
+                autre = source.find("\n    def ", debut + 1)
+                fin = min(x for x in (suite, autre, len(source)) if x > 0)
+                corps = source[debut:fin]
+                self.assertIn("await self.async_request_refresh()", corps,
+                              f"{nom} est un chemin mixte : il doit rester débouncé")
+                self.assertNotIn("_rafraichir_apres_action_utilisateur", corps,
+                                 f"{nom} fait tourner un cycle complet dans la tâche d'arrosage")
+
+    def test_le_POINT_D_ENTREE_utilisateur_rafraichit_lui(self) -> None:
+        """La contrepartie : « J'ai arrosé à la main » doit quand même répondre tout de suite.
+        Le rafraîchissement vit dans le gestionnaire de service, pas dans la méthode mixte."""
+        source = (PACKAGE_DIR / "__init__.py").read_text(encoding="utf-8")
+        bloc = source.split("async def _handle_declare_watering")[1].split("\nasync def ")[0]
+        self.assertIn("_rafraichir_apres_action_utilisateur()", bloc,
+                      "le service declare_watering attend encore le debouncer de 10 s")
+
+    def test_le_chemin_des_CAPTEURS_reste_debounce(self) -> None:
+        """⚠️ On ne touche pas à ce chemin-là, et c'est délibéré : un capteur météo qui bouge
+        peut attendre dix secondes, et c'est même ce qui protège cette installation d'un
+        recalcul en boucle. Seules les actions de l'utilisateur passent devant."""
+        source = (PACKAGE_DIR / "coordinator.py").read_text(encoding="utf-8")
+        bloc = source.split("def _handle_source_state_change")[1].split("\n    @callback")[0]
+        self.assertIn("self.async_request_refresh()", bloc)
+        self.assertNotIn("_rafraichir_apres_action_utilisateur", bloc)
+
+    def test_le_cycle_delegue_bien_a_son_corps(self) -> None:
+        """Garde du découpage : si `_async_update_data` cessait d'appeler `_calculer_donnees`,
+        les tests qui inspectent le corps du cycle deviendraient verts sur du vide."""
+        import inspect
+        source = inspect.getsource(
+            coordinator_mod.GazonIntelligentCoordinator._async_update_data
+        )
+        self.assertIn("await self._calculer_donnees()", source)
+        self.assertIn("finally:", source)

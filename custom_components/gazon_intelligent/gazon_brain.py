@@ -7,6 +7,7 @@ from typing import Any
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    APPLICATION_INTERVENTIONS,
     WATERING_CAUSES,
     DEFAULT_AUTO_IRRIGATION_ENABLED,
     DEFAULT_AUTO_MOWING_DECLARATION_ENABLED,
@@ -479,12 +480,17 @@ class GazonBrain:
             raise ValueError(
                 "Produit introuvable ou ambigu. Utilise l'ID exact ou le nom exact d'un produit enregistré."
             )
-        if not product_query and product_record is None:
+        # Rattacher d'office le produit sélectionné (ou l'unique produit) n'a de sens que pour une
+        # vraie APPLICATION. Un Sursemis ou un Hivernage recevait sinon le Floranid sélectionné,
+        # avec ses champs d'application (post-arrosage, réapplication) — et « plusieurs produits »
+        # levait une erreur sur un simple semis (contre-revue du 11/09/2026).
+        rattachement_auto = intervention in APPLICATION_INTERVENTIONS
+        if rattachement_auto and not product_query and product_record is None:
             if selected_product_id:
                 product_record = self._resolve_product_record(selected_product_id)
-        if not product_query and product_record is None:
+        if rattachement_auto and not product_query and product_record is None:
             product_record = self._single_product_record()
-        if not product_query and product_record is None and len(self.products) > 1:
+        if rattachement_auto and not product_query and product_record is None and len(self.products) > 1:
             raise ValueError(
                 "Plusieurs produits sont enregistrés. Sélectionne un produit enregistré par ID ou nom exact."
             )
@@ -1087,6 +1093,12 @@ class GazonBrain:
         _pluie_state = snapshot.get("pluie_state")
         if isinstance(_pluie_state, dict):
             self.memory["derniere_pluie_active"] = dict(_pluie_state)
+        # Cliquet de la température du jour pour la hauteur de tonte (0.87.0) : sans lui, la
+        # prévision « du jour » — maximum des heures RESTANTES — faisait redescendre la hauteur
+        # conseillée chaque soir. `compute_memory` reconstruit la mémoire : on réinjecte ici.
+        _temperature_jour = snapshot.get("hauteur_tonte_temperature_jour")
+        if isinstance(_temperature_jour, dict):
+            self.memory["hauteur_tonte_temperature_jour"] = dict(_temperature_jour)
         snapshot["feedback_observation"] = self.memory.get("feedback_observation")
         if self.last_result is not None:
             self.last_result.extra["feedback_observation"] = self.memory.get("feedback_observation")

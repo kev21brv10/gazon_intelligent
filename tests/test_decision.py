@@ -1206,13 +1206,17 @@ class TestDecisionSnapshotWatering(unittest.TestCase):
         self.assertNotIn("attendre encore", snapshot["conseil_principal"])
 
     def test_build_decision_snapshot_unknown_application_type_blocks_auto_watering(self) -> None:
+        # 0.88.0 : le véhicule était un SURSEMIS porteur d'un produit — exactement le scénario que la
+        # revue a jugé nuisible (un semis privé d'eau). Un semis n'est plus une application ; le
+        # type inconnu se teste sur une vraie application au type d'application invalide.
         snapshot = decision.build_decision_snapshot(
             history=[
                 {
-                    "type": "Sursemis",
+                    "type": "Fertilisation",
                     "date": "2026-03-17",
                     "declared_at": "2026-03-17T08:00:00+00:00",
                     "produit": "Produit inconnu",
+                    "application_type": "granule",
                     "application_requires_watering_after": True,
                     "application_post_watering_mm": 1.0,
                     "application_irrigation_block_hours": 0.0,
@@ -1229,10 +1233,26 @@ class TestDecisionSnapshotWatering(unittest.TestCase):
             etp_capteur=2.0,
         )
 
-        self.assertNotIn("application_type", snapshot)
+        self.assertNotIn(snapshot.get("application_type"), {"sol", "foliaire"})
         self.assertFalse(snapshot["arrosage_recommande"])
         self.assertEqual(snapshot["type_arrosage"], "bloque")
         self.assertIn("type d'application inconnu", snapshot["conseil_principal"].lower())
+
+    def test_un_semis_porteur_de_semences_n_est_pas_une_application(self) -> None:
+        # La fiche semences déclarée depuis la carte (« Déclarer un produit » envoie le type de la
+        # fiche : Sursemis) : comptée comme application de type inconnu, elle privait le semis
+        # d'eau de J+0 à J+44 (revue du 11/09/2026).
+        snapshot = decision.build_decision_snapshot(
+            history=[{
+                "type": "Sursemis", "date": "2026-03-17", "declared_at": "2026-03-17T08:00:00+00:00",
+                "produit": "Mélange regarnissage",
+            }],
+            today=date(2026, 3, 17), hour_of_day=8, temperature=18, pluie_24h=0, pluie_demain=0,
+            humidite=55, type_sol="limoneux", etp_capteur=2.0,
+        )
+        self.assertEqual(snapshot["phase_active"], "Sursemis")
+        self.assertNotIn("type d'application inconnu", snapshot["conseil_principal"].lower())
+        self.assertTrue(snapshot["arrosage_recommande"], "le semis doit recevoir ses micro-cycles")
 
 class TestDecisionSnapshotSursemisAndHeatStress(unittest.TestCase):
     def test_build_decision_snapshot_sursemis_mentions_passage_interval(self) -> None:
@@ -2721,7 +2741,9 @@ class BesoinMmTraverseLaChaineTests(unittest.TestCase):
         ⚠️ Ce test bloquait par le GARDE-FOU HEBDOMADAIRE jusqu'au 02/08/2026. Depuis, celui-ci
         se lève dès que le sol dépasse le seuil MAD (0.38.0) — c'est-à-dire exactement quand un
         besoin existe. Il ne peut donc plus servir à démontrer « blocage ⇒ dose nulle, besoin
-        préservé ». On passe par l'humidité de l'air, qui bloque encore indépendamment du sol.
+        préservé ». Il est passé ensuite par l'humidité de l'air, jusqu'au 15/09/2026 : l'air
+        humide ne bloque plus depuis. Il passe désormais par la garde « un arrosage par jour »,
+        une politique qui retient l'eau sans rien changer à la soif du sol.
 
         ⚠️ Première version de ce test : elle bloquait par la PLUIE. Mauvaise fixture — une
         pluie annoncée ne fait pas que bloquer, elle SUPPRIME le besoin (déficit 1,1 mm).
@@ -2733,19 +2755,82 @@ class BesoinMmTraverseLaChaineTests(unittest.TestCase):
             {"type": "arrosage", "date": "2026-07-28", "total_mm": 12.0, "source": "auto_irrigation"},
             {"type": "arrosage", "date": "2026-07-29", "total_mm": 5.0, "source": "auto_irrigation"},
             {"type": "arrosage", "date": "2026-07-30", "total_mm": 8.1, "source": "auto_irrigation"},
+            # Petit arrosage manuel ce matin : il arme la garde du jour sans remplir le sol.
+            {"type": "arrosage", "date": "2026-08-01", "total_mm": 0.5,
+             "ended_at": "2026-08-01T07:00:00+02:00",
+             "source": "manual_irrigation", "watering_cause": "hydrique"},
         ]
-        snapshot = make_snapshot(
-            history=historique, today=date(2026, 8, 1), hour_of_day=12,
-            temperature=26.1, etp_capteur=5.8, humidite=90.0,
-            soil_balance={"reserve_mm": 4.2, "reserve_max_mm": 24.0},
-        )
+        # Horloge patchée dans le module guidance RÉELLEMENT appelé par la décision (d'autres
+        # fichiers de tests réimportent le paquet : un patch.object viserait un autre objet).
+        guidance_de_la_decision = decision.build_water_bundle.__globals__[
+            "compute_watering_profile"
+        ].__globals__
+        midi = datetime(2026, 8, 1, 12, 0, tzinfo=ZoneInfo("Europe/Paris"))
+        with patch.dict(guidance_de_la_decision, {"_current_datetime": lambda: midi}):
+            snapshot = make_snapshot(
+                history=historique, today=date(2026, 8, 1), hour_of_day=12,
+                temperature=26.1, etp_capteur=5.8, humidite=60.0,
+                soil_balance={"reserve_mm": 4.2, "reserve_max_mm": 24.0},
+            )
         self.assertTrue(snapshot["water_balance"]["reserve_from_soil_ledger"],
                         "la fixture ne passe pas par la branche déplétion")
-        self.assertEqual(snapshot["block_reason"], "humidite_excessive")
+        self.assertEqual(snapshot["block_reason"], "cooldown_24h")
         self.assertEqual(snapshot["objectif_mm"], 0.0, "la dose doit rester à zéro")
         self.assertAlmostEqual(snapshot["besoin_mm"], snapshot["depletion_mm"], places=1,
                                msg="le besoin a disparu avec le blocage")
         self.assertGreater(snapshot["besoin_mm"], 7.0)
+
+
+class LAirHumideDeLAubeNeRetientPlusLArrosageTests(unittest.TestCase):
+    """Le 13/09/2026 rejoué par la chaîne complète : profil, fenêtre, bundle d'arrosage.
+
+    Humidité du jardin entre 88 et 93 % de 03:30 à 08:57, sol entamé : l'arrosage « de l'aube »
+    était parti à 08:58. Depuis l'arbitrage du 15/09, l'air humide ne retient plus rien. Le
+    snapshot d'un matin saturé doit être celui d'un matin sec, pour tout ce qui décide du
+    lancement, sans un seul « attendre ».
+    """
+
+    CLES_DE_LANCEMENT = (
+        "objectif_mm", "fenetre_optimale", "arrosage_recommande", "arrosage_auto_autorise",
+        "type_arrosage", "conseil_principal", "action_recommandee",
+    )
+
+    def _aube(self, humidite: float) -> dict:
+        return make_snapshot(
+            today=date(2026, 9, 13), hour_of_day=4.0, temperature=16.0, etp_capteur=3.3,
+            humidite=humidite, soil_balance={"reserve_mm": 4.2, "reserve_max_mm": 24.0},
+        )
+
+    def test_l_arrosage_de_l_aube_part_par_air_sature(self) -> None:
+        sec = self._aube(60.0)
+        self.assertTrue(sec["water_balance"]["reserve_from_soil_ledger"],
+                        "la fixture ne passe pas par la branche déplétion")
+        self.assertGreater(sec["objectif_mm"], 0.0, "la fixture ne demande pas d'eau")
+        self.assertEqual(sec["fenetre_optimale"], "maintenant")
+        for humidite in (84.0, 85.0, 91.0, 93.0):
+            with self.subTest(humidite=humidite):
+                sature = self._aube(humidite)
+                # Sans blocage, la clé n'est pas publiée : `get` et non l'accès direct.
+                self.assertNotIn(sature.get("block_reason"), {"humidite_excessive", "humidite_elevee"})
+                for cle in self.CLES_DE_LANCEMENT:
+                    self.assertEqual(sature[cle], sec[cle], f"« {cle} » dépend encore de l'air humide")
+                self.assertNotIn("sol trop chargé", str(sature.get("raison_decision") or ""),
+                                 "l'explication accuse encore l'air humide")
+
+    def test_un_matin_humide_sans_besoin_n_est_pas_affiche_bloque(self) -> None:
+        # Réserve pleine : rien à verser. L'air humide ne doit pas transformer « aucune action »
+        # en « bloqué » (`watering_blocked` le comptait comme un blocage).
+        def _plein(humidite: float) -> dict:
+            return make_snapshot(
+                today=date(2026, 9, 13), hour_of_day=4.0, temperature=16.0, etp_capteur=3.3,
+                humidite=humidite, soil_balance={"reserve_mm": 12.0, "reserve_max_mm": 24.0},
+            )
+
+        sec = _plein(60.0)
+        self.assertEqual(sec["objectif_mm"], 0.0, "la fixture demande de l'eau")
+        for humidite in (85.0, 93.0):
+            with self.subTest(humidite=humidite):
+                self.assertEqual(_plein(humidite)["type_arrosage"], sec["type_arrosage"])
 
 
 class DeficitInconnuNeDeclenchePasLaRetenueTests(unittest.TestCase):

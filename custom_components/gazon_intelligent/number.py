@@ -152,10 +152,10 @@ class GazonMowerCuttingHeightNumber(RestoreEntity, GazonEntityBase, NumberEntity
     # Bornes DYNAMIQUES dérivées des réglages configurables « Hauteur min/max tondeuse » (cm → mm).
     # Générique : chacun règle la plage de SA tondeuse (3-6 cm, 0,5-10 cm…) et le slider suit —
     # aucune valeur codée en dur, donc une tondeuse 0-100 mm fonctionne aussi.
-    # ⚠️ Vrai pour CE curseur seulement. La hauteur CONSEILLÉE, elle, passe par les garde-fous
-    # agronomiques de `decision_mowing._recommended_mowing_height` (plancher 4,0 cm, plafond
-    # 6,5 cm), qui peuvent resserrer la plage configurée. Depuis la 0.25.0 ce resserrage est
-    # visible : bornes publiées = bornes appliquées, + `hauteur_tonte_garde_fou_label`.
+    # La hauteur CONSEILLÉE (`decision_mowing._recommended_mowing_height`) est bornée par ces
+    # mêmes réglages : les plancher 4,0 / plafond 6,5 cm fixes qui les resserraient ont été
+    # retirés en 0.27.0. Seule la règle du tiers peut relever la consigne
+    # (`hauteur_tonte_garde_fou_label`).
     def _configured_bound_mm(self, config_key: str, default_cm: float) -> float:
         value = self.coordinator._get_conf(config_key)
         try:

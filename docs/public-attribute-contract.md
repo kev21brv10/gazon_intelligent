@@ -297,8 +297,10 @@ Attributs canoniques:
 
 - `target_date`
 - `target_display`
-- `target_datetime`
+- `target_datetime` *(0.90.0 — l'heure de départ calée sur le lever du soleil quand elle existe, sinon l'ouverture de la fenêtre)*
 - `optimal_target_datetime`
+- `departure_time` *(0.90.0 — « HH:MM », départ calé pour finir 15 min avant le lever ; publié seulement s'il tombe aujourd'hui ou demain, reste à venir et que l'arrosage automatique partira de lui-même, y compris pendant l'attente)*
+- `end_time` *(0.90.0 — « HH:MM », fin prévue de ce départ)*
 - `target_window`
 - `target_window_label`
 - `next_action`

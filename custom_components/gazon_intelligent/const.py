@@ -212,6 +212,8 @@ PLUIE_SOURCE_NON_DISPONIBLE = "non disponible"
 # Libellés lisibles des raisons de blocage (arrosage/tonte). Source UNIQUE partagée par
 # sensor.py et binary_sensor.py — auparavant dupliquée et divergente (binary_sensor en avait
 # une version incomplète → certains motifs s'affichaient en snake_case brut).
+# ⚠️ Recopiée mot pour mot dans `entity.sensor.prochain_blocage.state` (strings.json et les cinq
+# translations/*.json) : ajouter un motif ici impose de le traduire là — un test l'exige.
 BLOCK_REASON_DISPLAY_LABELS: dict[str, str] = {
     "pluie_prevue_suffisante": "Pluie prévue suffisante",
     "temperature_trop_basse": "Température trop basse",
@@ -249,10 +251,33 @@ BLOCK_REASON_DISPLAY_LABELS: dict[str, str] = {
     "machine_unavailable": "Robot indisponible",
     "mowing_window_blocked": "Hors fenêtre de tonte",
     "recent_watering": "Arrosage récent",
-    "soil_wet": "Sol détrempé",
+    # « Sol humide », pas « détrempé » (0.88.0) : le seuil est 70 % d'humidité du sol — ou 90 %
+    # d'humidité de l'AIR juste après un arrosage — et toutes les surfaces disent déjà « Sol humide:
+    # attendre le ressuyage. ». « Détrempé » désigne la saturation, côté arrosage.
+    "soil_wet": "Sol humide",
     "upcoming_watering": "Arrosage imminent",
     "wet_grass": "Herbe mouillée",
 }
+
+
+def block_reason_label(value: object) -> str | None:
+    """Libellé court d'un code de motif, ou None s'il n'en a pas. SOURCE UNIQUE (0.88.0).
+
+    L'assistant gardait sa propre table (`_BLOCK_REASON_LABELS`), copie divergente de celle-ci :
+    deux libellés différents pour le même code, et quatre codes réellement émis
+    (`semis_cycle_pending`, `application_foliaire`…) qu'il affichait en snake_case brut pendant que
+    l'onglet Arrosage de la même carte les libellait. None, et non un repli : chaque appelant garde
+    le sien — l'assistant reçoit surtout des PHRASES, qu'un `replace("_", " ")` abîmerait.
+    """
+    return BLOCK_REASON_DISPLAY_LABELS.get(str(value or "").strip().lower())
+
+
+def block_reason_display_label(value: object) -> str | None:
+    """Libellé court d'un code, repli sur le code aux tirets bas remplacés ; None si vide."""
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return None
+    return BLOCK_REASON_DISPLAY_LABELS.get(normalized, normalized.replace("_", " "))
 
 # ⚠️ SOURCE UNIQUE des causes d'arrosage reconnues. Elle a existé en DEUX exemplaires —
 # `_normalize_watering_cause` (coordinator) et `record_watering` (gazon_brain) — et la

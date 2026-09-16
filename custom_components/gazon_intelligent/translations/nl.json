@@ -403,6 +403,117 @@
       "evening_cooling_enabled": {
         "name": "Avondverkoeling toegestaan"
       }
+    },
+    "sensor": {
+      "assistant": {
+        "state": {
+          "aucune_action": "Geen actie",
+          "attente_conditions": "Wachten",
+          "arrosage": "Beregening",
+          "tonte": "Maaien",
+          "traitement": "Behandeling"
+        }
+      },
+      "tonte_statut": {
+        "state": {
+          "autorisee": "Toegestaan",
+          "autorisee_avec_precaution": "Toegestaan met voorzichtigheid",
+          "a_surveiller": "In de gaten houden",
+          "deconseillee": "Afgeraden",
+          "interdite": "Verboden"
+        }
+      },
+      "niveau_action": {
+        "state": {
+          "aucune_action": "Geen actie",
+          "surveiller": "In de gaten houden",
+          "a_faire": "Te doen",
+          "critique": "Kritiek"
+        }
+      },
+      "fenetre_optimale": {
+        "state": {
+          "maintenant": "Nu",
+          "ce_matin": "Vanochtend",
+          "demain_matin": "Morgenochtend",
+          "apres_pluie": "Na de regen",
+          "soir": "Vanavond",
+          "attendre": "Wachten"
+        }
+      },
+      "risque_gazon": {
+        "state": {
+          "faible": "Laag",
+          "modere": "Matig",
+          "eleve": "Hoog"
+        }
+      },
+      "etat_hydrique": {
+        "state": {
+          "plein": "Reserve vol",
+          "confort": "Comfortabel",
+          "depletion": "Reserve aangesproken",
+          "critique": "Kritiek"
+        }
+      },
+      "derniere_execution": {
+        "state": {
+          "aucune_action": "Geen actie",
+          "ok": "Geslaagd",
+          "bloque": "Geblokkeerd",
+          "en_attente": "In afwachting",
+          "refuse": "Geweigerd"
+        }
+      },
+      "intervention_statut": {
+        "state": {
+          "recommended": "Aanbevolen",
+          "preparation": "Voor te bereiden",
+          "possible": "Voor te bereiden",
+          "blocked": "Geblokkeerd"
+        }
+      },
+      "prochain_blocage": {
+        "state": {
+          "aucun": "Geen",
+          "pluie_prevue_suffisante": "Voldoende regen voorspeld",
+          "temperature_trop_basse": "Temperatuur te laag",
+          "arrosage_recent": "Recent beregend",
+          "sol_deja_humide": "Bodem al vochtig",
+          "sol_non_adapte": "Ongeschikte bodem",
+          "pluie_probabilite_elevee": "Grote kans op regen",
+          "surface_non_seche": "Oppervlak niet droog",
+          "cooldown_24h": "Vandaag al beregend",
+          "humidite_excessive": "Te hoge vochtigheid",
+          "humidite_elevee": "Hoge luchtvochtigheid",
+          "garde_fou_hebdomadaire": "Wekelijkse veiligheidsgrens",
+          "mode_bloque": "Modus geblokkeerd",
+          "pluie_active": "Het regent",
+          "bloque": "Geblokkeerd",
+          "mower_mowing": "Maaier is aan het maaien",
+          "mower_returning": "Maaier keert terug naar station",
+          "mower_starting": "Maaier start",
+          "mower_zoning": "Maaier wisselt van zone",
+          "mower_searching_zone": "Maaier zoekt zone",
+          "mower_rain_delayed": "Regenpauze actief",
+          "mower_escaped_digital_fence": "Maaier buiten de grens",
+          "mower_not_stowed": "Maaier niet gestald",
+          "mower_unreliable": "Maaiercoördinatie niet beschikbaar",
+          "post_application_active": "Nabehandeling actief",
+          "watering_in_progress": "Beregening bezig",
+          "watering_cooldown": "Maaipauze na beregening",
+          "application_foliaire": "Bladbespuiting bezig",
+          "temperature_trop_basse_germination": "Temperatuur te laag (kieming)",
+          "semis_cycle_daily_target_reached": "Dagdoel bereikt (zaaien)",
+          "semis_cycle_pending": "Zaaicyclus in afwachting",
+          "machine_unavailable": "Robot niet beschikbaar",
+          "mowing_window_blocked": "Buiten het maaivenster",
+          "recent_watering": "Recent beregend",
+          "soil_wet": "Vochtige bodem",
+          "upcoming_watering": "Beregening op komst",
+          "wet_grass": "Nat gras"
+        }
+      }
     }
   }
 }

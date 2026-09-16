@@ -413,6 +413,12 @@ def _build_decision_extra(
         ),
         "application_block_until": watering_bundle.get("application_block_until"),
         "application_block_active": watering_bundle.get("application_block_active"),
+        "application_en_cours": watering_bundle.get("application_en_cours"),
+        "application_foliaire_en_cours": watering_bundle.get("application_foliaire_en_cours"),
+        "application_foliaire_label": watering_bundle.get("application_foliaire_label"),
+        "application_inconnue_en_cours": watering_bundle.get("application_inconnue_en_cours"),
+        "application_inconnue_label": watering_bundle.get("application_inconnue_label"),
+        "application_block_label": watering_bundle.get("application_block_label"),
         "application_block_remaining_minutes": watering_bundle.get("application_block_remaining_minutes"),
         "application_post_watering_pending": watering_bundle.get("application_post_watering_pending"),
         "application_post_watering_ready_at": watering_bundle.get("application_post_watering_ready_at"),
@@ -437,6 +443,7 @@ def _build_decision_extra(
         "gazon_hauteur_estimee_cm": mowing_bundle.get("gazon_hauteur_estimee_cm"),
         "gazon_pousse_jour_cm": mowing_bundle.get("gazon_pousse_jour_cm"),
         "gazon_pousse_state": mowing_bundle.get("gazon_pousse_state"),
+        "derniere_tonte_date": mowing_bundle.get("derniere_tonte_date"),
         "pluie_state": mowing_bundle.get("pluie_state"),
         "mowing_cooldown_after_watering_minutes": context.runtime_context.get(
             "mowing_cooldown_after_watering_minutes"
@@ -460,6 +467,10 @@ def _build_decision_extra(
         "hauteur_tonte_garde_fou_label": watering_bundle.get(
             "hauteur_tonte_garde_fou_label", mowing_bundle.get("hauteur_tonte_garde_fou_label")
         ),
+        "hauteur_tonte_motif": mowing_bundle.get("hauteur_tonte_motif"),
+        # Cliquet de la température du jour (maximum prévu ou mesuré depuis minuit) : relu par la
+        # décision suivante via la mémoire, que `gazon_brain.compute_snapshot` alimente.
+        "hauteur_tonte_temperature_jour": mowing_bundle.get("hauteur_tonte_temperature_jour"),
         "hauteur_tonte_max_cm": watering_bundle.get("hauteur_tonte_max_cm", mowing_bundle.get("hauteur_tonte_max_cm")),
         "tonte_statut": watering_bundle.get("tonte_statut", mowing_bundle.get("tonte_statut")),
         "arrosage_auto_autorise": watering_bundle.get("arrosage_auto_autorise"),

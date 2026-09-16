@@ -4,7 +4,6 @@ from homeassistant.components.binary_sensor import BinarySensorEntity
 
 from .const import (
     APPLICATION_INTERVENTIONS,
-    BLOCK_REASON_DISPLAY_LABELS,
     DOMAIN,
     IRRIGATION_ACTION_LABEL_AUTO,
     IRRIGATION_ACTION_LABEL_NONE,
@@ -19,6 +18,9 @@ from .const import (
     IRRIGATION_REASON_KIND_POST_APPLICATION,
     IRRIGATION_REASON_KIND_WAITING,
 )
+# Source UNIQUE des libellés de motifs (0.88.0) : l'alias garde les appels existants intacts.
+from .const import block_reason_display_label as _block_reason_display_label
+from .assistant import blocage_sans_objet
 from .entity_base import GazonEntityBase
 from .entity_ids import public_entity_id
 from .intervention_recommendation import public_intervention_ui
@@ -118,13 +120,6 @@ def _irrigation_block_active(entity: GazonEntityBase) -> bool:
         or entity._decision_value("watering_blocked_by_mower", False)
         or entity._decision_value("irrigation_blocked", False)
     )
-
-
-def _block_reason_display_label(value: object) -> str | None:
-    normalized = str(value or "").strip().lower()
-    if not normalized:
-        return None
-    return BLOCK_REASON_DISPLAY_LABELS.get(normalized, normalized.replace("_", " "))
 
 
 def _fallback_machine_unavailable_label_from_attrs(attrs: dict[str, object]) -> str | None:
@@ -230,7 +225,16 @@ def _irrigation_reason_kind(entity: GazonEntityBase) -> str:
 
     if post_status == "autorise":
         return IRRIGATION_REASON_KIND_POST_APPLICATION
-    if _irrigation_block_active(entity) or type_arrosage == "bloque" or block_reason:
+    # ⚠️ Garde-fou armé sans rien à retenir : ce n'est pas un blocage — cf. `blocage_sans_objet`.
+    _sans_objet = blocage_sans_objet(
+        entity._decision_value("besoin_mm"),
+        application_block_active=bool(entity._decision_value("application_block_active", False)),
+        application_post_watering_status=post_status,
+        application_post_watering_pending=bool(
+            entity._decision_value("application_post_watering_pending", False)
+        ),
+    )
+    if (_irrigation_block_active(entity) or type_arrosage == "bloque" or block_reason) and not _sans_objet:
         if objective_mm <= 0.0 and requested_mm <= 0.0 and _phase_support_phase(entity) is None:
             return IRRIGATION_REASON_KIND_BLOCKED_DUE_TO_CONDITIONS
         if requested_mm > 0.0 or objective_mm > 0.0 or _phase_support_phase(entity) is not None:
@@ -338,6 +342,7 @@ class GazonTonteAutoriseeBinarySensor(GazonEntityBase, BinarySensorEntity):
             "hauteur_tonte_min_cm",
             "hauteur_tonte_max_cm",
             "hauteur_tonte_garde_fou_label",
+            "hauteur_tonte_motif",
             "mowing_frequency_target_per_week",
             "mowing_frequency_label",
             "mowing_window_state",
@@ -347,6 +352,7 @@ class GazonTonteAutoriseeBinarySensor(GazonEntityBase, BinarySensorEntity):
             "mowing_daily_session_policy",
             "next_mowing_date",
             "next_mowing_display",
+            "derniere_tonte_date",
             "raison_blocage_tonte",
             "raison_blocage_code",
             "tondeuse_source_entity",

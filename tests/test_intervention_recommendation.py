@@ -217,3 +217,30 @@ class DelaiReapplicationInvalideTests(unittest.TestCase):
             any("19/08/2026" in str(reason) for reason in (resultat.get("reasons") or [])),
             resultat.get("reasons"),
         )
+
+
+class UnSemisNestPasUneApplicationDeProduitTests(unittest.TestCase):
+    """0.88.0 — la recommandation d'intervention ne compte plus un Sursemis porteur d'un produit.
+
+    Ses deux copies de la règle « est-ce une application ? » comptaient le Floranid rattaché
+    d'office à un semis : « limite annuelle atteinte » sur deux vrais épandages seulement
+    (contre-revue du 11/09/2026). Elles délèguent désormais à `memory._is_application_relevant_item`.
+    """
+
+    HISTORIQUE = [
+        {"type": "Fertilisation", "date": "2026-06-06", "produit": "Floranid", "produit_id": "floranid"},
+        {"type": "Fertilisation", "date": "2026-09-07", "produit": "Floranid", "produit_id": "floranid"},
+        {"type": "Sursemis", "date": "2026-09-11", "produit": "Floranid", "produit_id": "floranid"},
+    ]
+
+    def setUp(self) -> None:
+        self.ir = importlib.import_module("custom_components.gazon_intelligent.intervention_recommendation")
+
+    def test_la_derniere_application_du_produit_n_est_pas_le_semis(self) -> None:
+        derniere = self.ir._latest_application_for_product(self.HISTORIQUE, "floranid", "Floranid")
+        self.assertIsNotNone(derniere)
+        self.assertEqual(derniere["type"], "Fertilisation")
+        self.assertEqual(derniere["date"], "2026-09-07")
+
+    def test_le_compte_annuel_ignore_le_semis(self) -> None:
+        self.assertEqual(self.ir._application_count_for_product_year(self.HISTORIQUE, "floranid", "Floranid", 2026), 2)

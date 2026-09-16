@@ -403,6 +403,117 @@
       "evening_cooling_enabled": {
         "name": "Abendliche Abkühlung erlaubt"
       }
+    },
+    "sensor": {
+      "assistant": {
+        "state": {
+          "aucune_action": "Keine Aktion",
+          "attente_conditions": "Wartet",
+          "arrosage": "Bewässerung",
+          "tonte": "Mähen",
+          "traitement": "Behandlung"
+        }
+      },
+      "tonte_statut": {
+        "state": {
+          "autorisee": "Erlaubt",
+          "autorisee_avec_precaution": "Erlaubt mit Vorsicht",
+          "a_surveiller": "Beobachten",
+          "deconseillee": "Nicht empfohlen",
+          "interdite": "Verboten"
+        }
+      },
+      "niveau_action": {
+        "state": {
+          "aucune_action": "Keine Aktion",
+          "surveiller": "Beobachten",
+          "a_faire": "Zu erledigen",
+          "critique": "Kritisch"
+        }
+      },
+      "fenetre_optimale": {
+        "state": {
+          "maintenant": "Jetzt",
+          "ce_matin": "Heute Morgen",
+          "demain_matin": "Morgen früh",
+          "apres_pluie": "Nach dem Regen",
+          "soir": "Heute Abend",
+          "attendre": "Warten"
+        }
+      },
+      "risque_gazon": {
+        "state": {
+          "faible": "Niedrig",
+          "modere": "Mittel",
+          "eleve": "Hoch"
+        }
+      },
+      "etat_hydrique": {
+        "state": {
+          "plein": "Reserve voll",
+          "confort": "Komfortabel",
+          "depletion": "Reserve angegriffen",
+          "critique": "Kritisch"
+        }
+      },
+      "derniere_execution": {
+        "state": {
+          "aucune_action": "Keine Aktion",
+          "ok": "Erfolgreich",
+          "bloque": "Blockiert",
+          "en_attente": "Ausstehend",
+          "refuse": "Abgelehnt"
+        }
+      },
+      "intervention_statut": {
+        "state": {
+          "recommended": "Empfohlen",
+          "preparation": "Vorzubereiten",
+          "possible": "Vorzubereiten",
+          "blocked": "Blockiert"
+        }
+      },
+      "prochain_blocage": {
+        "state": {
+          "aucun": "Keine",
+          "pluie_prevue_suffisante": "Ausreichend Regen vorhergesagt",
+          "temperature_trop_basse": "Temperatur zu niedrig",
+          "arrosage_recent": "Kürzlich bewässert",
+          "sol_deja_humide": "Boden bereits feucht",
+          "sol_non_adapte": "Ungeeigneter Boden",
+          "pluie_probabilite_elevee": "Hohe Regenwahrscheinlichkeit",
+          "surface_non_seche": "Oberfläche nicht trocken",
+          "cooldown_24h": "Heute bereits bewässert",
+          "humidite_excessive": "Übermäßige Feuchtigkeit",
+          "humidite_elevee": "Hohe Luftfeuchtigkeit",
+          "garde_fou_hebdomadaire": "Wöchentliche Schutzgrenze",
+          "mode_bloque": "Modus blockiert",
+          "pluie_active": "Regen aktiv",
+          "bloque": "Blockiert",
+          "mower_mowing": "Mäher mäht gerade",
+          "mower_returning": "Mäher kehrt zur Station zurück",
+          "mower_starting": "Mäher startet",
+          "mower_zoning": "Mäher wechselt die Zone",
+          "mower_searching_zone": "Mäher sucht Zone",
+          "mower_rain_delayed": "Regenpause aktiv",
+          "mower_escaped_digital_fence": "Mäher außerhalb der Begrenzung",
+          "mower_not_stowed": "Mäher nicht geparkt",
+          "mower_unreliable": "Mäherkoordination nicht verfügbar",
+          "post_application_active": "Nachbehandlung aktiv",
+          "watering_in_progress": "Bewässerung läuft",
+          "watering_cooldown": "Mähpause nach Bewässerung",
+          "application_foliaire": "Blattapplikation läuft",
+          "temperature_trop_basse_germination": "Temperatur zu niedrig (Keimung)",
+          "semis_cycle_daily_target_reached": "Tagesziel erreicht (Aussaat)",
+          "semis_cycle_pending": "Aussaatzyklus ausstehend",
+          "machine_unavailable": "Roboter nicht verfügbar",
+          "mowing_window_blocked": "Außerhalb des Mähfensters",
+          "recent_watering": "Kürzlich bewässert",
+          "soil_wet": "Boden feucht",
+          "upcoming_watering": "Bewässerung steht bevor",
+          "wet_grass": "Nasses Gras"
+        }
+      }
     }
   }
 }

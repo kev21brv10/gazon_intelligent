@@ -40,7 +40,8 @@ _MOWER_STATE_ALIASES: dict[str, str] = {
 }
 
 # États Home Assistant signifiant « pas de mesure » : filtrés par `_clean_text`, donc jamais
-# retenus comme valeur (cf. coordinator._UNAVAILABLE_STATES, même intention en amont).
+# retenus comme valeur (cf. coordinator_constants._UNAVAILABLE_STATES, lu par
+# coordinator_states.get_text_state : même intention en amont).
 _UNAVAILABLE_TEXT_VALUES = frozenset({"unavailable", "unknown"})
 
 _NO_ERROR_VALUES = {
@@ -182,9 +183,23 @@ def _normalize_error_code(raw_error: Any) -> str | None:
     if text is None:
         return None
     lowered = text.lower()
-    if lowered in _NO_ERROR_VALUES:
+    # « Battery low » → « battery_low » : les codes connus (`_ERROR_LABELS`) sont en snake_case.
+    # Sans ça, une intégration qui publie l'erreur en toutes lettres gardait l'anglais brut —
+    # l'assistant avait sa propre entrée « battery low » pour rattraper ce cas (retirée en 0.88.0).
+    code = "_".join(lowered.replace("-", " ").split())
+    # ⚠️ Le filtre « pas d'erreur » porte sur les DEUX formes : testé avant la normalisation
+    # seulement, « No-error » devenait le code `no_error`, traité comme une panne (arrosage et
+    # tonte bloqués) — régression de la première version de ce correctif (revue du 11/09/2026).
+    if lowered in _NO_ERROR_VALUES or code in _NO_ERROR_VALUES:
         return None
-    return lowered
+    # ⚠️ Pas de normalisation VERS une pause pluie : « Rain delay » écrit en toutes lettres
+    # devenait `rain_delay`, une pause pluie tenue pour « rangée » sans passer par le cliquet
+    # `idle` — l'arrosage partait avec une passe encore ouverte (contre-revue du 11/09/2026).
+    # Le texte garde le comportement d'avant (erreur inconnue, prudente) ; le CODE `rain_delay`,
+    # celui que publie la Landroid, n'est pas concerné.
+    if code in _RAIN_ERROR_VALUES and code != lowered:
+        return lowered
+    return code
 
 
 def _human_label(value: str | None) -> str | None:

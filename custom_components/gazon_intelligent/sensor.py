@@ -8,14 +8,15 @@ from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.util import dt as dt_util
 
-from .assistant import build_assistant_decision
+from .assistant import blocage_sans_objet, build_assistant_decision
 from .const import (
     APPLICATION_INTERVENTIONS,
-    BLOCK_REASON_DISPLAY_LABELS,
     DOMAIN,
     PLUIE_SOURCE_INDISPONIBLE,
     PLUIE_SOURCE_NON_DISPONIBLE,
 )
+# Source UNIQUE des libellés de motifs (0.88.0) : l'alias garde les appels existants intacts.
+from .const import block_reason_display_label as _block_reason_display_label
 from .decision_models import TYPE_ARROSAGE_DISPLAY_LABELS
 from .entity_base import GazonEntityBase
 from .entity_ids import public_entity_id, resolve_entry_instance_slug
@@ -364,7 +365,19 @@ def _irrigation_blocked_due_to_conditions_summary(entity: GazonEntityBase) -> st
     type_arrosage = _normalized_public_type_arrosage(entity)
     block_reason = str(entity._decision_value("block_reason") or "").strip()
     post_status = normalize_post_application_status(entity._decision_value("application_post_watering_status"))
-    if type_arrosage == "bloque" or block_reason or post_status == "bloque":
+    # ⚠️ SIXIÈME COPIE DE LA RÈGLE, trouvée sur l'installation le 11/09/2026 APRÈS la 0.85.0.
+    # La première moitié de cette fonction lit l'assistant, corrigé ; mais quand l'assistant
+    # ne dit plus « bloqué », l'exécution retombait ICI et recalculait l'ancienne règle depuis
+    # le motif brut. `action_recommandee` et `conseil_principal` affichaient donc encore
+    # « Arrosage bloqué par conditions: Déjà arrosé aujourd'hui. » sur une réserve pleine.
+    if (type_arrosage == "bloque" or block_reason or post_status == "bloque") and not blocage_sans_objet(
+        entity._decision_value("besoin_mm"),
+        application_block_active=bool(entity._decision_value("application_block_active", False)),
+        application_post_watering_status=post_status,
+        application_post_watering_pending=bool(
+            entity._decision_value("application_post_watering_pending", False)
+        ),
+    ):
         block_label = _block_reason_display_label(block_reason) or block_reason
         if block_label:
             return f"Arrosage bloqué par conditions: {block_label}."
@@ -906,13 +919,6 @@ def _window_display_label(value: object) -> str | None:
     return labels.get(normalized, normalized.replace("_", " "))
 
 
-def _block_reason_display_label(value: object) -> str | None:
-    normalized = str(value or "").strip().lower()
-    if not normalized:
-        return None
-    return BLOCK_REASON_DISPLAY_LABELS.get(normalized, normalized.replace("_", " "))
-
-
 # Libellé d'affichage HONNÊTE du niveau de stress. La clé interne `heat_stress_level` est un score
 # COMPOSITE de stress hydrique (temp + ET0 + humidité + vent + pluie + déficit), pas une mesure de
 # canicule — d'où des libellés « stress hydrique » plutôt que « canicule » pour l'affichage. Clé
@@ -1277,6 +1283,13 @@ _AUTO_IRRIGATION_BLOCK_INFO: dict[str, tuple[str, bool, str, str]] = {
         "On est hors de la fenêtre d'arrosage du matin.",
         "Aucune action : attends la fenêtre du matin.",
     ),
+    "waiting_sunrise_departure": (
+        "Départ calé sur le lever du soleil",
+        False,
+        "L'arrosage part pour finir 15 min avant le lever du soleil, sur la rosée : "
+        "la nuit, attendre ne coûte rien au sol.",
+        "Aucune action : il partira tout seul à l'heure prévue.",
+    ),
     "outside_evening_window": (
         "Hors fenêtre du soir",
         False,
@@ -1348,7 +1361,7 @@ _AUTO_IRRIGATION_BLOCK_INFO: dict[str, tuple[str, bool, str, str]] = {
     "humidite_excessive": (
         "Conditions trop humides",
         False,
-        "L'humidité est élevée (ou la réserve est déjà au-dessus du plein) : l'arrosage est superflu.",
+        "Les apports du jour (pluie, arrosage) dépassent déjà l'évaporation et le sol ne réclame rien : l'arrosage est superflu.",
         "Aucune action.",
     ),
     "garde_fou_hebdomadaire": (
@@ -1372,10 +1385,11 @@ def _motif_de_blocage_effectif(entite) -> str | None:
     """Motif de blocage qui a RÉELLEMENT empêché un arrosage, ou `None`.
 
     ⚠️ UN BLOCAGE N'EXPLIQUE UN OBJECTIF À ZÉRO QUE S'IL A EMPÊCHÉ QUELQUE CHOSE. Le motif est
-    posé par la décision même quand le sol ne demande rien — `humidite_excessive` s'arme sur le
-    seul `humidite >= 85`, sans regarder le besoin, là où ses voisins immédiats se gardent
-    (`pluie_prevue_suffisante` teste `not _sol_reclame_de_l_eau`, `sol_deja_humide` teste
-    `not _ledger_demande_eau`).
+    posé par la décision même quand le sol ne demande rien. Jusqu'au 15/09/2026,
+    `humidite_excessive` s'armait sur le seul `humidite >= 85`, sans regarder le besoin, là où ses
+    voisins immédiats se gardent (`pluie_prevue_suffisante` teste `not _sol_reclame_de_l_eau`,
+    `sol_deja_humide` teste `not _ledger_demande_eau`). L'air humide ne bloque plus depuis, mais
+    le filtre reste juste : le motif n'explique un zéro que s'il a empêché quelque chose.
 
     Mesuré le 03/09/2026 à 04:00:15,217 : l'humidité passe de 77,5 à 88 et l'affichage bascule
     de « Aucun besoin » à « Conditions trop humides », de « Non requis » à un état de retenue —
@@ -1392,8 +1406,16 @@ def _motif_de_blocage_effectif(entite) -> str | None:
     motif = str(entite._decision_value("block_reason") or "").strip() or None
     if motif is None:
         return None
-    besoin = entite._decision_value("besoin_mm")
-    if isinstance(besoin, (int, float)) and not isinstance(besoin, bool) and float(besoin) <= 0.0:
+    # ⚠️ Délègue à la définition unique (0.85.0). Elle ajoute un garde que celle-ci n'avait
+    # pas : un blocage POST-APPLICATION n'est jamais masqué, même sans besoin hydrique.
+    if blocage_sans_objet(
+        entite._decision_value("besoin_mm"),
+        application_block_active=bool(entite._decision_value("application_block_active", False)),
+        application_post_watering_status=entite._decision_value("application_post_watering_status"),
+        application_post_watering_pending=bool(
+            entite._decision_value("application_post_watering_pending", False)
+        ),
+    ):
         return None
     return motif
 
@@ -1482,13 +1504,63 @@ class GazonArrosageAutoBlocageSensor(GazonEntityBase, SensorEntity):
                     "forte chaleur réelle (≥ 32 °C), un arrosage de secours se déclenchera quand "
                     "même si la réserve tombe sous le seuil critique (déplétion réelle ≥ 90 %)."
                 )
-        return {
+        attrs = {
             "bloque": blocked,
             "code": reason,
             "pourquoi": pourquoi,
             "comment_debloquer": comment,
             "safety_lock_actif": safety_lock,
         }
+        if reason == "waiting_sunrise_departure":
+            # L'heure promise vient de la même fonction que le lanceur (`_morning_departure`).
+            depart = _minute_hhmm(data.get("watering_departure_minute"))
+            fin = _minute_hhmm(data.get("watering_end_minute"))
+            if depart:
+                attrs["depart_prevu"] = depart
+                attrs["comment_debloquer"] = f"Aucune action : départ prévu à {depart}."
+            if fin:
+                attrs["fin_prevue"] = fin
+        return attrs
+
+
+# Fenêtres où l'arrosage du matin peut attendre son départ calé sur le lever du soleil.
+# ⚠️ `maintenant` EN FAIT PARTIE : en phase Normal, la décision la publie dès l'ouverture de la
+# fenêtre (03:45), donc pendant toute l'attente. Sans elle, l'heure de départ disparaissait au
+# moment précis où l'arrosage l'attendait (revue du 15/09/2026).
+_FENETRES_DU_DEPART_CALE = frozenset({"ce_matin", "demain_matin", "maintenant"})
+
+
+def _depart_cale_a_venir(date_value: Any, minute_value: Any) -> str | None:
+    """Départ calé (ISO local) s'il tombe aujourd'hui ou demain et reste à venir, sinon None.
+
+    ⚠️ Le soir, la décision repasse sur `ce_matin` avec parfois la date DU JOUR (relevé le 10/09 à
+    18:12) : sans ce filtre, le capteur annonçait un départ pour une matinée déjà passée. Et l'heure
+    est calculée sur le PROCHAIN lever du soleil : au-delà de demain, elle ne vaut plus rien.
+    """
+    iso = _datetime_from_date_and_minute(date_value, minute_value)
+    if iso is None:
+        return None
+    try:
+        instant = datetime.fromisoformat(iso)
+    except ValueError:
+        return None
+    maintenant = dt_util.now()
+    if instant.tzinfo is None or maintenant.tzinfo is None:
+        instant, maintenant = instant.replace(tzinfo=None), maintenant.replace(tzinfo=None)
+    if instant <= maintenant or (instant.date() - maintenant.date()).days > 1:
+        return None
+    return iso
+
+
+def _minute_hhmm(minute_value: Any) -> str | None:
+    """Minute locale depuis minuit → « HH:MM », ou None si absente ou hors journée."""
+    try:
+        minute = int(minute_value)
+    except (TypeError, ValueError):
+        return None
+    if not 0 <= minute < 24 * 60:
+        return None
+    return f"{minute // 60:02d}:{minute % 60:02d}"
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -1635,6 +1707,7 @@ class GazonHauteurTonteSensor(GazonEntityBase, SensorEntity):
             "hauteur_tonte_min_cm",
             "hauteur_tonte_max_cm",
             "hauteur_tonte_garde_fou_label",
+            "hauteur_tonte_motif",
             "tonte_statut",
             "phase_active",
             "mowing_frequency_target_per_week",
@@ -2175,6 +2248,7 @@ class GazonDepletionRatioSensor(GazonEntityBase, SensorEntity):
 
 class GazonEtatHydriqueSensor(GazonEntityBase, SensorEntity):
     _attr_name = "État hydrique"
+    _attr_translation_key = "etat_hydrique"
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_entity_registry_enabled_default = False
@@ -2687,6 +2761,7 @@ class GazonDerniereApplicationSensor(GazonEntityBase, SensorEntity):
 
 class GazonDerniereActionUtilisateurSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Dernière exécution"
+    _attr_translation_key = "derniere_execution"
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:gesture-tap-button"
@@ -2835,6 +2910,7 @@ class GazonCatalogueProduitsSensor(GazonEntityBase, SensorEntity):
 
 class GazonInterventionRecommendationSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Prochaine intervention"
+    _attr_translation_key = "intervention_statut"
     _attr_has_entity_name = True
     _attr_icon = "mdi:spray-bottle"
 
@@ -2956,6 +3032,7 @@ class GazonInterventionRecommendationSensor(GazonEntityBase, SensorEntity):
 
 class GazonDebugInterventionSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Debug intervention"
+    _attr_translation_key = "intervention_statut"
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:bug-outline"
@@ -3120,6 +3197,7 @@ class GazonScoreNiveauSensor(GazonEntityBase, SensorEntity):
 
 class GazonProchaineFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Prochaine fenêtre optimale"
+    _attr_translation_key = "fenetre_optimale"
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:clock-outline"
@@ -3175,6 +3253,7 @@ class GazonProchaineFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
 
 class GazonProchainBlocageAttenduSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Prochain blocage attendu"
+    _attr_translation_key = "prochain_blocage"
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:alert-circle-outline"
@@ -3711,6 +3790,7 @@ class GazonArrosageEnCoursSensor(GazonEntityBase, SensorEntity):
 
 class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):
     _attr_name = "État de tonte"
+    _attr_translation_key = "tonte_statut"
     _attr_has_entity_name = True
     _attr_icon = "mdi:content-cut"
 
@@ -3732,6 +3812,7 @@ class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):
             "hauteur_tonte_min_cm",
             "hauteur_tonte_max_cm",
             "hauteur_tonte_garde_fou_label",
+            "hauteur_tonte_motif",
         )
 
     def _mowing_height_attributes(self) -> dict[str, Any] | None:
@@ -3830,6 +3911,7 @@ class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):
 
 class GazonAssistantSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Assistant"
+    _attr_translation_key = "assistant"
     _attr_has_entity_name = True
     _attr_icon = "mdi:account-tie-hat-outline"
 
@@ -4060,6 +4142,7 @@ class GazonActionAEviterSensor(GazonEntityBase, SensorEntity):
 
 class GazonNiveauActionSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Niveau d'action"
+    _attr_translation_key = "niveau_action"
     _attr_has_entity_name = True
     _attr_icon = "mdi:signal"
 
@@ -4080,6 +4163,7 @@ class GazonNiveauActionSensor(GazonEntityBase, SensorEntity):
 
 class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Fenêtre optimale"
+    _attr_translation_key = "fenetre_optimale"
     _attr_has_entity_name = True
     _attr_icon = "mdi:clock-outline"
 
@@ -4119,8 +4203,9 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
         application_requires = bool(extra.get("application_requires_watering_after", False))
         application_pending = bool(extra.get("application_post_watering_pending", False))
         auto_irrigation_enabled = bool(extra.get("auto_irrigation_enabled", True))
-        application_type = str(extra.get("application_type") or "").strip().lower()
-        application_type_known = application_type in {"sol", "foliaire"}
+        # Même borne que la décision (`application_inconnue_en_cours`) : sans elle, ce capteur affichait
+        # « Bloqué : type d'application inconnu » À VIE pendant que la décision arrosait.
+        application_inconnue_en_cours = bool(extra.get("application_inconnue_en_cours", False))
         post_status = normalize_post_application_status(extra.get("application_post_watering_status"))
         application_label = "Arrosage"
         display_window = watering_window.replace("_", " ").strip()
@@ -4149,7 +4234,7 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
             )
 
         today = dt_util.now().date().isoformat()
-        if application_summary and not application_type_known:
+        if application_inconnue_en_cours:
             return {
                 "status": "bloque",
                 "next_action": "Vérifier le type d'application",
@@ -4157,7 +4242,15 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
                 "watering_cause": "post_application",
             }
 
-        if post_status == "bloque" or application_block_active or type_arrosage == "bloque":
+        # ⚠️ Un garde-fou armé n'est un BLOCAGE que s'il a retenu de l'eau — cf.
+        # `blocage_sans_objet` (assistant.py). Sinon on laisse passer vers « rien à faire ».
+        _sans_objet = blocage_sans_objet(
+            self._decision_value("besoin_mm"),
+            application_block_active=application_block_active,
+            application_post_watering_status=post_status,
+            application_post_watering_pending=application_pending,
+        )
+        if (post_status == "bloque" or application_block_active or type_arrosage == "bloque") and not _sans_objet:
             summary = "Arrosage post-produit bloqué" if watering_cause == "post_application" else "Arrosage bloqué"
             show_application_label = watering_cause == "post_application" and bool(application_summary) and (
                 application_block_active or post_status == "bloque"
@@ -4600,8 +4693,21 @@ class GazonProchainArrosageSensor(GazonFenetreOptimaleSensor):
             if target_date
             else None
         )
+        # Étape 2 (15/09/2026) : l'arrosage du matin ne part plus à l'ouverture de la fenêtre mais à
+        # l'heure calée pour finir avant le lever du soleil. L'heure CIBLE annoncée est donc celle-là,
+        # calculée par la même fonction que le lanceur ; l'ouverture reste en repli.
+        data = getattr(self.coordinator, "data", None)
+        data = data if isinstance(data, dict) else {}
+        departure_minute = data.get("watering_departure_minute")
+        end_minute = data.get("watering_end_minute")
+        departure_datetime = (
+            _depart_cale_a_venir(target_date, departure_minute)
+            if target_date and window_value in _FENETRES_DU_DEPART_CALE
+            else None
+        )
         target_datetime = (
-            optimal_target_datetime
+            departure_datetime
+            or optimal_target_datetime
             or _datetime_from_date_and_minute(
                 target_date,
                 base_attrs.get("watering_window_start_minute"),
@@ -4627,19 +4733,37 @@ class GazonProchainArrosageSensor(GazonFenetreOptimaleSensor):
         elif status == "termine" and objective_mm <= 0.0:
             # Même règle que pour l'état : ne pas annoncer « rien à faire » quand un garde-fou
             # retient l'eau. Le motif existe déjà dans les attributs, il doit se lire ici aussi.
-            if block_reason_label:
+            # ⚠️ ET LA MÊME SOURCE QUE L'ÉTAT — relevé sur l'installation le 11/09/2026, juste
+            # après la 0.85.0. L'état lisait le motif EFFECTIF (« Non requis »), ce résumé lisait
+            # le motif BRUT : « Arrosage retenu: Déjà arrosé aujourd'hui » sous un état « Non
+            # requis », sur une réserve pleine. Deux phrases qui se contredisent dans la même
+            # entité. « Retenu » veut dire qu'on refuse une eau NÉCESSAIRE : il ne s'écrit que si
+            # le garde-fou a réellement retenu quelque chose.
+            motif_effectif = self._motif_de_blocage()
+            if motif_effectif and block_reason_label:
                 summary = f"Arrosage retenu: {block_reason_label}"
-            elif block_reason:
+            elif motif_effectif:
                 summary = "Arrosage retenu par un garde-fou"
             else:
                 summary = "Aucun arrosage nécessaire pour le moment"
         elif expose_target and target_display:
             if window_value == "apres_pluie":
                 summary = f"Arrosage à reconsidérer après pluie, cible {target_display}"
-            elif window_value == "demain_matin":
-                summary = f"Arrosage prévu demain matin ({target_display})"
-            elif window_value == "ce_matin":
-                summary = f"Arrosage prévu ce matin ({target_display})"
+            elif departure_datetime and _minute_hhmm(end_minute):
+                # Le JOUR se lit sur la date du départ, pas sur le nom de la fenêtre : `ce_matin`
+                # se publie aussi la veille au soir, pour le lendemain.
+                quand = (
+                    "ce matin"
+                    if departure_datetime[:10] == dt_util.now().date().isoformat()
+                    else "demain matin"
+                )
+                summary = (
+                    f"Arrosage prévu {quand} à {_minute_hhmm(departure_minute)}, "
+                    f"fin vers {_minute_hhmm(end_minute)} ({target_display})"
+                )
+            elif window_value in {"demain_matin", "ce_matin"}:
+                quand = "demain matin" if window_value == "demain_matin" else "ce matin"
+                summary = f"Arrosage prévu {quand} ({target_display})"
             elif window_value == "maintenant":
                 summary = "Arrosage possible maintenant"
         attrs = {
@@ -4649,6 +4773,9 @@ class GazonProchainArrosageSensor(GazonFenetreOptimaleSensor):
             "target_display": target_display,
             "target_datetime": target_datetime,
             "optimal_target_datetime": optimal_target_datetime,
+            # Étape 2 : départ calé pour finir avant le lever du soleil, et fin prévue (« HH:MM »).
+            "departure_time": _minute_hhmm(departure_minute) if departure_datetime else None,
+            "end_time": _minute_hhmm(end_minute) if departure_datetime else None,
             "target_window": window_value or None,
             "target_window_label": window_label,
             "next_action": next_action,
@@ -4681,6 +4808,7 @@ class GazonProchainArrosageSensor(GazonFenetreOptimaleSensor):
 
 class GazonRisqueGazonSensor(GazonEntityBase, SensorEntity):
     _attr_name = "Risque gazon"
+    _attr_translation_key = "risque_gazon"
     _attr_has_entity_name = True
     _attr_icon = "mdi:shield-alert-outline"
 

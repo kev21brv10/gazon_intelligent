@@ -1731,6 +1731,73 @@ class MemoryCatalogTests(unittest.TestCase):
         self.assertEqual(profile["mm_final_recommande"], 0.0)
         self.assertFalse(profile["arrosage_recommande"])
 
+    def _profil_scarification(self, *, humidite: float, bilan_hydrique_mm: float) -> dict:
+        return guidance.compute_watering_profile(
+            phase_dominante="Scarification",
+            sous_phase="Réponse",
+            water_balance={
+                "bilan_hydrique_mm": bilan_hydrique_mm,
+                "bilan_hydrique_journalier_mm": -1.0,
+                "deficit_jour": 0.0,
+                "deficit_3j": 0.0,
+                "deficit_7j": 0.0,
+                "arrosage_recent_7j": 0.0,
+                "arrosage_recent": 0.0,
+            },
+            today=date(2026, 4, 8),
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            pluie_j2=0.0,
+            pluie_3j=0.0,
+            pluie_probabilite_max_3j=0.0,
+            humidite=humidite,
+            temperature=18.3,
+            etp=1.1,
+            type_sol="limoneux",
+            weather_profile={},
+            history=[],
+        )
+
+    def test_scarification_l_air_humide_ne_bloque_plus_l_arrosage(self) -> None:
+        """Cinquième verrou « air ≥ 85 % », oublié par la 0.89.0.
+
+        L'arbitrage de Kévin (sources agronomiques) vaut pour toutes les phases : l'humidité de
+        l'AIR ne dit rien de l'eau du sol. En Scarification elle passait encore par la politique
+        (`soil_humidity_state` exigé `legerement_humide`), et sortait en « sol_non_adapte ».
+        """
+        profile = self._profil_scarification(humidite=88.0, bilan_hydrique_mm=1.0)
+
+        self.assertIsNone(profile.get("block_reason"))
+        self.assertTrue(profile["arrosage_recommande"])
+        self.assertEqual(profile["mm_final_recommande"], 5.0)
+
+    def test_scarification_un_sol_sature_bloque_toujours(self) -> None:
+        """La saturation RÉELLE du sol, elle, reste un blocage : c'est elle que le verrou visait."""
+        profile = self._profil_scarification(humidite=60.0, bilan_hydrique_mm=6.0)
+
+        self.assertIn(profile.get("block_reason"), {"sol_non_adapte", "sol_deja_humide"})
+        self.assertFalse(profile["arrosage_recommande"])
+
+    def test_scarification_la_politique_ne_regarde_que_la_saturation_du_sol(self) -> None:
+        """Contrat du garde de politique lui-même.
+
+        Le profil bloque DÉJÀ un sol saturé par sa propre branche (« sol_deja_humide ») : le test
+        ci-dessus reste donc vert même si le garde de politique ne bloque plus rien. Celui-ci tient
+        le garde : sol saturé ⇒ « trop_humide » refusé, sol non saturé ⇒ rien à redire, quelle que
+        soit l'humidité de l'air (qui n'entre plus dans ce calcul).
+        """
+        # Température fournie : sans elle, le garde sort d'abord sur `temperature_unknown`.
+        sature = guidance._resolve_phase_policy(
+            phase_dominante="Scarification", sous_phase="Réponse", temperature=18.3, saturation_block=True
+        )
+        ressuye = guidance._resolve_phase_policy(
+            phase_dominante="Scarification", sous_phase="Réponse", temperature=18.3, saturation_block=False
+        )
+
+        self.assertTrue(sature.blocking.is_blocked)
+        self.assertEqual(sature.blocking.reason, "soil_humidity_state_mismatch")
+        self.assertFalse(ressuye.blocking.is_blocked)
+
 
 class PersistedSettingsSurviveComputeMemoryTests(unittest.TestCase):
     """`compute_memory` RECONSTRUIT la mémoire à chaque cycle du coordinateur (2 min) : tout

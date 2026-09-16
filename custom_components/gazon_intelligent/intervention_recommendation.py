@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from .const import APPLICATION_INTERVENTIONS
 from .memory import (
+    _is_application_relevant_item,
     _normalize_text,
     _normalize_usage_mode,
     _to_float,
@@ -79,22 +79,9 @@ def _latest_application_for_product(
     for item in reversed(history):
         if not isinstance(item, dict):
             continue
-        item_type = item.get("type")
-        if item_type not in APPLICATION_INTERVENTIONS and not any(
-            item.get(key) not in (None, "", [], {})
-            for key in (
-                "application_type",
-                "application_requires_watering_after",
-                "application_post_watering_mm",
-                "application_irrigation_block_hours",
-                "application_irrigation_delay_minutes",
-                "application_irrigation_mode",
-                "application_label_notes",
-                "produit",
-                "dose",
-                "reapplication_after_days",
-            )
-        ):
+        # Délègue à la définition de référence (memory) : ces deux copies comptaient encore un
+        # Sursemis porteur d'un produit comme application (0.88.0 : un semis n'en est pas une).
+        if not _is_application_relevant_item(item):
             continue
 
         candidate_ids = {
@@ -132,22 +119,9 @@ def _application_count_for_product_year(
     for item in history:
         if not isinstance(item, dict):
             continue
-        item_type = item.get("type")
-        if item_type not in APPLICATION_INTERVENTIONS and not any(
-            item.get(key) not in (None, "", [], {})
-            for key in (
-                "application_type",
-                "application_requires_watering_after",
-                "application_post_watering_mm",
-                "application_irrigation_block_hours",
-                "application_irrigation_delay_minutes",
-                "application_irrigation_mode",
-                "application_label_notes",
-                "produit",
-                "dose",
-                "reapplication_after_days",
-            )
-        ):
+        # Délègue à la définition de référence (memory) : ces deux copies comptaient encore un
+        # Sursemis porteur d'un produit comme application (0.88.0 : un semis n'en est pas une).
+        if not _is_application_relevant_item(item):
             continue
 
         item_date = _parse_date(item.get("date") or item.get("date_action"))

@@ -201,3 +201,60 @@ class MowerAdapterTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LErreurEnToutesLettresEstNormaliseeTests(unittest.TestCase):
+    """0.88.0 — une erreur publiée en toutes lettres est ramenée au code snake_case connu.
+
+    Et le filtre « pas d'erreur » porte sur la forme normalisée aussi : la première version de ce
+    correctif transformait « No-error » en `no_error`, lu comme une panne (revue du 11/09/2026).
+    """
+
+    def _contexte(self, erreur: str) -> dict:
+        return build_mower_context(entity_id="lawn_mower.robot", entity_name="Robot", raw_state="docked",
+                                   available=True, error_raw=erreur)
+
+    def test_pas_d_erreur_sous_toutes_ses_formes(self) -> None:
+        for erreur in ("No-error", "no  error", "NO_ERROR", "Aucune-erreur", "aucune erreur"):
+            with self.subTest(erreur=erreur):
+                contexte = self._contexte(erreur)
+                self.assertIsNone(contexte.get("tondeuse_erreur"))
+                self.assertTrue(contexte["tondeuse_prete"])
+
+    def test_batterie_faible_en_toutes_lettres(self) -> None:
+        for erreur in ("Battery low", "BATTERY-LOW", "battery_low"):
+            with self.subTest(erreur=erreur):
+                contexte = self._contexte(erreur)
+                self.assertEqual(contexte["tondeuse_erreur"], "battery_low")
+                self.assertEqual(contexte["tondeuse_raison"], "Batterie faible")
+
+    def test_rain_delay_en_toutes_lettres_reste_prudent(self) -> None:
+        # Pas de normalisation VERS une pause pluie : le texte « Rain delay » deviendrait
+        # `rain_delay`, tenu pour « rangé » sans le cliquet `idle` (contre-revue du 11/09/2026).
+        for erreur in ("Rain delay", "Rain-Delay"):
+            with self.subTest(erreur=erreur):
+                contexte = self._contexte(erreur)
+                self.assertNotEqual(contexte.get("tondeuse_erreur"), "rain_delay")
+                self.assertNotEqual(contexte.get("tondeuse_statut"), "pluie")
+
+    def test_le_code_rain_delay_de_la_landroid_est_une_pause_pluie(self) -> None:
+        contexte = self._contexte("rain_delay")
+        self.assertEqual(contexte["tondeuse_erreur"], "rain_delay")
+        self.assertEqual(contexte["tondeuse_statut"], "pluie")
+
+    def test_une_pause_pluie_ne_s_affiche_pas_comme_une_panne(self) -> None:
+        # Chaîne réelle : adaptateur → coordination → libellé « machine indisponible » de la tonte.
+        # La Landroid publie `rain_delay` dans l'enum de son capteur d'ERREUR : chaque délai
+        # pluie s'affichait « Robot en erreur: Pause pluie active. », jusque dans le hero.
+        import importlib as _il
+        coordination = _il.import_module("custom_components.gazon_intelligent.mower_coordination")
+        mowing = _il.import_module("custom_components.gazon_intelligent.decision_mowing")
+        brut = self._contexte("rain_delay")
+        # Fusion identique à celle du coordinateur (`{**raw_context, **build_mower_coordination_context(...)}`) :
+        # la coordination seule ne porte pas le code d'erreur, et le test passait alors à vide.
+        contexte = {**brut, **coordination.build_mower_coordination_context(brut, enabled=True)}
+        self.assertEqual(contexte.get("tondeuse_erreur"), "rain_delay", "prémisse : le code d'erreur arrive à la décision")
+        detail = mowing._machine_unavailable_detail(contexte)
+        self.assertIsNotNone(detail)
+        self.assertEqual(detail[0], "rain_delayed")
+        self.assertNotIn("erreur", detail[1].lower())
