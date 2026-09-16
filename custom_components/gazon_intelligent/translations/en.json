@@ -403,6 +403,117 @@
       "evening_cooling_enabled": {
         "name": "Evening cooling allowed"
       }
+    },
+    "sensor": {
+      "assistant": {
+        "state": {
+          "aucune_action": "No action",
+          "attente_conditions": "Waiting",
+          "arrosage": "Watering",
+          "tonte": "Mowing",
+          "traitement": "Treatment"
+        }
+      },
+      "tonte_statut": {
+        "state": {
+          "autorisee": "Allowed",
+          "autorisee_avec_precaution": "Allowed with caution",
+          "a_surveiller": "Monitor",
+          "deconseillee": "Not recommended",
+          "interdite": "Forbidden"
+        }
+      },
+      "niveau_action": {
+        "state": {
+          "aucune_action": "No action",
+          "surveiller": "Monitor",
+          "a_faire": "To do",
+          "critique": "Critical"
+        }
+      },
+      "fenetre_optimale": {
+        "state": {
+          "maintenant": "Now",
+          "ce_matin": "This morning",
+          "demain_matin": "Tomorrow morning",
+          "apres_pluie": "After rain",
+          "soir": "This evening",
+          "attendre": "Wait"
+        }
+      },
+      "risque_gazon": {
+        "state": {
+          "faible": "Low",
+          "modere": "Moderate",
+          "eleve": "High"
+        }
+      },
+      "etat_hydrique": {
+        "state": {
+          "plein": "Reserve full",
+          "confort": "Comfortable",
+          "depletion": "Reserve drawn down",
+          "critique": "Critical"
+        }
+      },
+      "derniere_execution": {
+        "state": {
+          "aucune_action": "No action",
+          "ok": "Succeeded",
+          "bloque": "Blocked",
+          "en_attente": "Pending",
+          "refuse": "Refused"
+        }
+      },
+      "intervention_statut": {
+        "state": {
+          "recommended": "Recommended",
+          "preparation": "To prepare",
+          "possible": "To prepare",
+          "blocked": "Blocked"
+        }
+      },
+      "prochain_blocage": {
+        "state": {
+          "aucun": "None",
+          "pluie_prevue_suffisante": "Enough rain forecast",
+          "temperature_trop_basse": "Temperature too low",
+          "arrosage_recent": "Recent watering",
+          "sol_deja_humide": "Soil already moist",
+          "sol_non_adapte": "Unsuitable soil",
+          "pluie_probabilite_elevee": "High chance of rain",
+          "surface_non_seche": "Surface not dry",
+          "cooldown_24h": "Already watered today",
+          "humidite_excessive": "Excessive humidity",
+          "humidite_elevee": "High humidity",
+          "garde_fou_hebdomadaire": "Weekly safeguard",
+          "mode_bloque": "Mode blocked",
+          "pluie_active": "Raining",
+          "bloque": "Blocked",
+          "mower_mowing": "Mower is mowing",
+          "mower_returning": "Mower returning to base",
+          "mower_starting": "Mower starting",
+          "mower_zoning": "Mower changing zone",
+          "mower_searching_zone": "Mower searching for zone",
+          "mower_rain_delayed": "Rain delay active",
+          "mower_escaped_digital_fence": "Mower outside boundary",
+          "mower_not_stowed": "Mower not docked",
+          "mower_unreliable": "Mower coordination unavailable",
+          "post_application_active": "Post-product active",
+          "watering_in_progress": "Watering in progress",
+          "watering_cooldown": "Mowing cooldown after watering",
+          "application_foliaire": "Foliar application in progress",
+          "temperature_trop_basse_germination": "Temperature too low (germination)",
+          "semis_cycle_daily_target_reached": "Daily target reached (seeding)",
+          "semis_cycle_pending": "Seeding cycle pending",
+          "machine_unavailable": "Robot unavailable",
+          "mowing_window_blocked": "Outside mowing window",
+          "recent_watering": "Recent watering",
+          "soil_wet": "Wet soil",
+          "upcoming_watering": "Watering imminent",
+          "wet_grass": "Wet grass"
+        }
+      }
     }
   }
 }

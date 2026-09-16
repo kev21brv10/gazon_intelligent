@@ -403,6 +403,117 @@
       "evening_cooling_enabled": {
         "name": "Refresco vespertino permitido"
       }
+    },
+    "sensor": {
+      "assistant": {
+        "state": {
+          "aucune_action": "Ninguna acción",
+          "attente_conditions": "En espera",
+          "arrosage": "Riego",
+          "tonte": "Siega",
+          "traitement": "Tratamiento"
+        }
+      },
+      "tonte_statut": {
+        "state": {
+          "autorisee": "Permitida",
+          "autorisee_avec_precaution": "Permitida con precaución",
+          "a_surveiller": "A vigilar",
+          "deconseillee": "Desaconsejada",
+          "interdite": "Prohibida"
+        }
+      },
+      "niveau_action": {
+        "state": {
+          "aucune_action": "Ninguna acción",
+          "surveiller": "A vigilar",
+          "a_faire": "Por hacer",
+          "critique": "Crítico"
+        }
+      },
+      "fenetre_optimale": {
+        "state": {
+          "maintenant": "Ahora",
+          "ce_matin": "Esta mañana",
+          "demain_matin": "Mañana por la mañana",
+          "apres_pluie": "Después de la lluvia",
+          "soir": "Esta tarde",
+          "attendre": "Esperar"
+        }
+      },
+      "risque_gazon": {
+        "state": {
+          "faible": "Bajo",
+          "modere": "Moderado",
+          "eleve": "Alto"
+        }
+      },
+      "etat_hydrique": {
+        "state": {
+          "plein": "Reserva llena",
+          "confort": "Confort",
+          "depletion": "Reserva mermada",
+          "critique": "Crítico"
+        }
+      },
+      "derniere_execution": {
+        "state": {
+          "aucune_action": "Ninguna acción",
+          "ok": "Correcta",
+          "bloque": "Bloqueada",
+          "en_attente": "Pendiente",
+          "refuse": "Rechazada"
+        }
+      },
+      "intervention_statut": {
+        "state": {
+          "recommended": "Recomendada",
+          "preparation": "Por preparar",
+          "possible": "Por preparar",
+          "blocked": "Bloqueada"
+        }
+      },
+      "prochain_blocage": {
+        "state": {
+          "aucun": "Ninguno",
+          "pluie_prevue_suffisante": "Lluvia prevista suficiente",
+          "temperature_trop_basse": "Temperatura demasiado baja",
+          "arrosage_recent": "Riego reciente",
+          "sol_deja_humide": "Suelo ya húmedo",
+          "sol_non_adapte": "Suelo no adecuado",
+          "pluie_probabilite_elevee": "Alta probabilidad de lluvia",
+          "surface_non_seche": "Superficie no seca",
+          "cooldown_24h": "Ya regado hoy",
+          "humidite_excessive": "Humedad excesiva",
+          "humidite_elevee": "Humedad elevada",
+          "garde_fou_hebdomadaire": "Límite semanal de seguridad",
+          "mode_bloque": "Modo bloqueado",
+          "pluie_active": "Lluvia activa",
+          "bloque": "Bloqueado",
+          "mower_mowing": "Cortacésped segando",
+          "mower_returning": "Cortacésped volviendo a la base",
+          "mower_starting": "Cortacésped arrancando",
+          "mower_zoning": "Cortacésped cambiando de zona",
+          "mower_searching_zone": "Cortacésped buscando zona",
+          "mower_rain_delayed": "Pausa por lluvia activa",
+          "mower_escaped_digital_fence": "Cortacésped fuera del perímetro",
+          "mower_not_stowed": "Cortacésped no guardado",
+          "mower_unreliable": "Coordinación del cortacésped no disponible",
+          "post_application_active": "Posproducto activo",
+          "watering_in_progress": "Riego en curso",
+          "watering_cooldown": "Espera de siega tras riego",
+          "application_foliaire": "Aplicación foliar en curso",
+          "temperature_trop_basse_germination": "Temperatura demasiado baja (germinación)",
+          "semis_cycle_daily_target_reached": "Objetivo diario alcanzado (siembra)",
+          "semis_cycle_pending": "Ciclo de siembra pendiente",
+          "machine_unavailable": "Robot no disponible",
+          "mowing_window_blocked": "Fuera de la ventana de siega",
+          "recent_watering": "Riego reciente",
+          "soil_wet": "Suelo húmedo",
+          "upcoming_watering": "Riego inminente",
+          "wet_grass": "Césped mojado"
+        }
+      }
     }
   }
 }

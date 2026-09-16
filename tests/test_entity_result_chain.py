@@ -7,7 +7,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 import sys
 import types
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
 
@@ -2093,6 +2093,7 @@ class DecisionResultChainTests(unittest.TestCase):
         result.extra["application_type"] = "autre"
         result.extra["application_requires_watering_after"] = True
         result.extra["application_block_active"] = False
+        result.extra["application_inconnue_en_cours"] = True  # l'application agit encore (0.88.0)
         result.extra["application_post_watering_pending"] = False
         result.extra["arrosage_recommande"] = False
         result.extra["objectif_mm"] = 0.0
@@ -2109,6 +2110,20 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(window_sensor.extra_state_attributes["status"], "bloque")
         self.assertIn("type d'application inconnu", window_sensor.extra_state_attributes["summary"])
         self.assertEqual(window_sensor.extra_state_attributes["next_action"], "Vérifier le type d'application")
+
+    def test_une_application_inconnue_TERMINEE_n_affiche_plus_bloque(self) -> None:
+        # Même application, fenêtre écoulée : la décision arrose de nouveau, le capteur ne doit
+        # plus afficher « Bloqué : type d'application inconnu » (il le faisait à vie).
+        result = _make_result()
+        result.extra["derniere_application"] = {"libelle": "Produit inconnu", "type": "Traitement",
+                                                "application_type": "autre"}
+        result.extra["application_type"] = "autre"
+        result.extra["application_block_active"] = False
+        result.extra["application_inconnue_en_cours"] = False
+        result.extra["application_post_watering_pending"] = False
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=result, history=[], memory={})
+        attrs = sensor.GazonFenetreOptimaleSensor(coordinator).extra_state_attributes
+        self.assertNotIn("type d'application inconnu", str(attrs.get("summary")))
 
     def test_watering_window_sensor_exposes_block_reason_label(self) -> None:
         result = _make_result()
@@ -3224,9 +3239,133 @@ class ProchainArrosageSensorTests(unittest.TestCase):
         attrs = self._sensor(status="bloque", block_reason="pluie_prevue_suffisante").extra_state_attributes
         self.assertEqual(attrs.get("summary"), "Aucun arrosage nécessaire, la pluie prévue suffit")
 
+    DEPART = 6 * 60 + 15  # lever 07:34, fin 07:19, cycle de 64 min
+    FIN = 7 * 60 + 19
+
+    def _attrs_matin(self, *, fenetre: str, maintenant: datetime, depart: int | None = DEPART,
+                     fin: int | None = FIN, cible: str = "2026-09-16"):
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={
+                "block_reason": "",
+                "objectif_mm": 5.3,
+                "fenetre_optimale": fenetre,
+                "watering_target_date": cible,
+                # Toujours publiés en production. Sans eux, une heure cible retombée sur l'ouverture
+                # (03:45) passait inaperçue : il n'y avait rien d'autre à afficher.
+                "watering_window_start_minute": 225,
+                "watering_window_optimal_start_minute": 225,
+                "watering_departure_minute": depart,
+                "watering_end_minute": fin,
+            },
+            result=None,
+            history=[],
+            memory={},
+        )
+        capteur = sensor.GazonProchainArrosageSensor(coordinator)
+        capteur._contextual_watering_state = lambda: {"status": "autorise"}
+        with patch.object(sensor.dt_util, "now", lambda: maintenant):
+            return capteur.extra_state_attributes
+
+    def test_la_veille_au_soir_l_heure_annoncee_est_le_depart_cale(self) -> None:
+        # Étape 2 (15/09/2026) : l'heure cible est le départ calé, plus l'ouverture à 03:45. Le jour
+        # se lit sur la date : `ce_matin` se publie aussi la veille au soir, pour le lendemain.
+        veille = datetime(2026, 9, 15, 22, 0, tzinfo=TEST_TZ)
+        for fenetre in ("ce_matin", "demain_matin"):
+            with self.subTest(fenetre=fenetre):
+                attrs = self._attrs_matin(fenetre=fenetre, maintenant=veille)
+                self.assertEqual(attrs.get("departure_time"), "06:15")
+                self.assertEqual(attrs.get("end_time"), "07:19")
+                self.assertTrue(str(attrs.get("target_datetime") or "").startswith("2026-09-16T06:15"))
+                self.assertTrue(str(attrs.get("optimal_target_datetime") or "").startswith("2026-09-16T03:45"))
+                self.assertIn("Arrosage prévu demain matin à 06:15, fin vers 07:19", str(attrs.get("summary")))
+
+    def test_pendant_l_attente_l_heure_de_depart_reste_affichee(self) -> None:
+        # Revue du 15/09 : la décision publie `maintenant` dès 03:45. Le capteur n'annonçait l'heure
+        # que pour `ce_matin`, donc elle disparaissait pendant toute l'attente, pendant que
+        # « Blocage arrosage auto » disait « départ prévu à 06:15 ».
+        for fenetre in ("maintenant", "ce_matin"):
+            with self.subTest(fenetre=fenetre):
+                attrs = self._attrs_matin(
+                    fenetre=fenetre, maintenant=datetime(2026, 9, 16, 4, 0, tzinfo=TEST_TZ)
+                )
+                self.assertEqual(attrs.get("departure_time"), "06:15")
+                self.assertTrue(str(attrs.get("target_datetime") or "").startswith("2026-09-16T06:15"))
+                self.assertIn("Arrosage prévu ce matin à 06:15, fin vers 07:19", str(attrs.get("summary")))
+
+    def test_un_depart_deja_passe_n_est_plus_annonce(self) -> None:
+        # Le soir, `ce_matin` revient parfois avec la date DU JOUR (relevé le 10/09 à 18:12) :
+        # annoncer 06:15 viserait une matinée déjà passée.
+        attrs = self._attrs_matin(
+            fenetre="ce_matin", cible="2026-09-16", maintenant=datetime(2026, 9, 16, 18, 12, tzinfo=TEST_TZ)
+        )
+        self.assertIsNone(attrs.get("departure_time"))
+        self.assertIsNone(attrs.get("end_time"))
+        self.assertNotIn(" à ", str(attrs.get("summary")))
+        # Et une fois l'heure passée le matin même, l'arrosage part : plus rien à promettre.
+        attrs = self._attrs_matin(
+            fenetre="maintenant", maintenant=datetime(2026, 9, 16, 6, 16, tzinfo=TEST_TZ)
+        )
+        self.assertIsNone(attrs.get("departure_time"))
+        self.assertEqual(attrs.get("summary"), "Arrosage possible maintenant")
+
+    def test_juste_apres_minuit_demain_reste_demain(self) -> None:
+        # 01:00 à Paris = 23:00 UTC la veille. L'écart de jours se compte en jours LOCAUX : compté
+        # en UTC, il valait 2 et l'heure disparaissait entre minuit et 2 h.
+        attrs = self._attrs_matin(
+            fenetre="demain_matin", cible="2026-09-17", maintenant=datetime(2026, 9, 16, 1, 0, tzinfo=TEST_TZ)
+        )
+        self.assertEqual(attrs.get("departure_time"), "06:15")
+
+    def test_aucune_heure_sur_une_fenetre_ou_l_arrosage_du_matin_ne_part_pas(self) -> None:
+        # `attendre` : le lanceur refuse ; `soir` : le rafraîchissement a sa propre fenêtre.
+        for fenetre in ("attendre", "soir"):
+            with self.subTest(fenetre=fenetre):
+                attrs = self._attrs_matin(fenetre=fenetre, maintenant=datetime(2026, 9, 16, 4, 0, tzinfo=TEST_TZ))
+                self.assertIsNone(attrs.get("departure_time"))
+
+    def test_un_depart_au_dela_de_demain_n_est_pas_annonce(self) -> None:
+        # L'heure est calculée sur le PROCHAIN lever du soleil : elle ne vaut rien pour après-demain.
+        attrs = self._attrs_matin(
+            fenetre="demain_matin", cible="2026-09-17", maintenant=datetime(2026, 9, 15, 12, 0, tzinfo=TEST_TZ)
+        )
+        self.assertIsNone(attrs.get("departure_time"))
+
+    def test_sans_depart_cale_le_capteur_garde_l_ancien_affichage(self) -> None:
+        attrs = self._attrs_matin(
+            fenetre="ce_matin", depart=None, fin=None, maintenant=datetime(2026, 9, 16, 1, 0, tzinfo=TEST_TZ)
+        )
+        self.assertIsNone(attrs.get("departure_time"))
+        self.assertNotIn(" à ", str(attrs.get("summary")))
+        self.assertTrue(str(attrs.get("target_datetime") or "").startswith("2026-09-16T03:45"))
+
     def test_resume_dedie_pour_le_ressuyage(self) -> None:
         attrs = self._sensor(status="bloque", block_reason="soil_wet").extra_state_attributes
         self.assertEqual(attrs.get("summary"), "Arrosage à reprendre après ressuyage du sol")
+
+
+class DepartCaleSurLeLeverBlocageTests(unittest.TestCase):
+    """Le capteur « Blocage arrosage auto » explique l'attente et donne l'heure promise."""
+
+    def test_l_attente_est_expliquee_avec_l_heure_de_depart(self) -> None:
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={
+                "auto_irrigation_block_reason": "waiting_sunrise_departure",
+                "watering_departure_minute": 375,
+                "watering_end_minute": 439,
+            },
+        )
+        capteur = sensor.GazonArrosageAutoBlocageSensor(coordinator)
+        self.assertEqual(capteur.native_value, "Départ calé sur le lever du soleil")
+        attrs = capteur.extra_state_attributes
+        self.assertFalse(attrs["bloque"])
+        self.assertEqual(attrs["depart_prevu"], "06:15")
+        self.assertEqual(attrs["fin_prevue"], "07:19")
+        self.assertIn("06:15", attrs["comment_debloquer"])
+        # Le premier jet disait « sans décaler la tonte de 10:00 » : c'était faux (revue du 15/09).
+        self.assertNotIn("tonte", attrs["pourquoi"])
+
 
 class NiveauHydriqueAtteignableTests(unittest.TestCase):
     """Les 5 niveaux doivent rester atteignables en pleine saison.
@@ -3454,3 +3593,521 @@ class NonRequisNeCouvrePasUnBlocageTests(unittest.TestCase):
             "« Non requis » affiché alors qu'un garde-fou retient l'eau",
         )
         self.assertEqual(etat, "Retenu")
+
+
+class UnGardeFouSansObjetNEstPasUnBlocageTests(unittest.TestCase):
+    """⚠️ LE MATIN DU 11/09/2026, et le défaut qu'il a montré sur QUATRE surfaces.
+
+    L'arrosage de l'aube vient de remplir la réserve à 12/12. La garde « un arrosage par
+    jour » (`cooldown_24h`) reste armée — c'est voulu. Et pourtant, avec `besoin_mm: 0`
+    publié à côté :
+
+        prochain_arrosage   « Bloqué » · « Attendre des conditions favorables »
+        fenetre_optimale    « Arrosage bloqué: Déjà arrosé aujourd'hui »
+        assistant           « attente_conditions » — le hero de la carte
+        signal_irrigation   « Arrosage bloqué par conditions : Déjà arrosé aujourd'hui »
+
+    Rien n'était demandé, donc rien n'était retenu. Annoncer un blocage laissait croire qu'on
+    refusait de l'eau au gazon, juste après l'avoir arrosé.
+
+    ⚠️ ET CE N'EST PAS LE CAS DU 31/07 (voir `NonRequisNeCouvrePasUnBlocageTests`). Ce jour-là
+    la garde HEBDOMADAIRE retenait une eau dont le gazon avait BESOIN : « Retenu » y est la
+    vérité, et elle doit le rester. Les deux défauts ne diffèrent que par un nombre,
+    `besoin_mm`, et ces tests épinglent les deux côtés pour qu'on ne les confonde plus.
+
+    ⚠️ Ici on NE stubbe PAS `_contextual_watering_state` : c'est lui qu'on corrige. Les tests
+    voisins le court-circuitent pour tester la présentation, ils ne pouvaient donc pas voir ça.
+    """
+
+    def _donnees(self, *, besoin_mm, post_status="non_requis", application_block=False):
+        donnees = {
+            "type_arrosage": "bloque",
+            "block_reason": "cooldown_24h",
+            "objectif_mm": 0.0,
+            "objective_mm": 0.0,
+            "fenetre_optimale": "attendre",
+            "watering_cause": "hydrique",
+            "application_post_watering_status": post_status,
+            "application_block_active": application_block,
+        }
+        if besoin_mm is not None:
+            donnees["besoin_mm"] = besoin_mm
+        return donnees
+
+    def _capteur(self, classe, **kw):
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(), data=self._donnees(**kw), result=None, history=[], memory={},
+        )
+        return classe(coordinator)
+
+    # ---- PRÉMISSE : le montage atteint bien le chemin du blocage -------------------------
+    def test_premisse_avec_un_vrai_besoin_c_est_bien_bloque(self) -> None:
+        """Sans ce test, les suivants pourraient passer au vert sur un montage qui n'atteint
+        jamais la branche `bloque` — le faux vert commis deux fois sur ce projet."""
+        capteur = self._capteur(sensor.GazonProchainArrosageSensor, besoin_mm=3.0)
+        self.assertEqual(capteur.native_value, "Bloqué")
+
+    # ---- LE MATIN DU 11/09 ---------------------------------------------------------------
+    def test_prochain_arrosage_dit_NON_REQUIS_quand_rien_n_est_demande(self) -> None:
+        capteur = self._capteur(sensor.GazonProchainArrosageSensor, besoin_mm=0.0)
+        self.assertEqual(capteur.native_value, "Non requis",
+                         "la garde journalière s'affiche « Bloqué » sur une réserve pleine")
+        resume = str(capteur.extra_state_attributes.get("summary") or "")
+        # ⚠️ Le premier jet ne cherchait que « bloqué » — et le résumé disait « Arrosage retenu:
+        # Déjà arrosé aujourd'hui » sous un état « Non requis ». Relevé sur l'installation après
+        # déploiement. On exige désormais la phrase exacte, pas l'absence d'un mot.
+        self.assertEqual(resume, "Aucun arrosage nécessaire pour le moment",
+                         f"le résumé contredit l'état « Non requis » : {resume!r}")
+
+    def test_l_etat_et_le_resume_ne_se_contredisent_JAMAIS(self) -> None:
+        """Un état et son résumé racontent la même chose, dans les deux sens."""
+        for besoin, etat_attendu, mot_attendu in ((0.0, "Non requis", "aucun arrosage"),
+                                                   (4.0, "Bloqué", "bloqué")):
+            with self.subTest(besoin=besoin):
+                capteur = self._capteur(sensor.GazonProchainArrosageSensor, besoin_mm=besoin)
+                self.assertEqual(capteur.native_value, etat_attendu)
+                resume = str(capteur.extra_state_attributes.get("summary") or "").lower()
+                self.assertIn(mot_attendu, resume, f"état {etat_attendu!r}, résumé {resume!r}")
+
+    def test_la_fenetre_optimale_ne_raconte_plus_un_blocage(self) -> None:
+        capteur = self._capteur(sensor.GazonFenetreOptimaleSensor, besoin_mm=0.0)
+        etat = capteur._contextual_watering_state() or {}
+        self.assertNotEqual(etat.get("status"), "bloque")
+        self.assertNotIn("bloqué", str(etat.get("summary") or "").lower())
+
+    def test_le_signal_d_irrigation_ne_dit_plus_bloque(self) -> None:
+        capteur = self._capteur(binary_sensor.GazonSignalIrrigationBinarySensor, besoin_mm=0.0)
+        self.assertNotEqual(
+            binary_sensor._irrigation_reason_kind(capteur),
+            binary_sensor.IRRIGATION_REASON_KIND_BLOCKED_DUE_TO_CONDITIONS,
+            "signal_irrigation annonce « bloqué par conditions » sans rien retenir",
+        )
+
+    # ---- CE QUI DOIT RESTER BLOQUÉ -------------------------------------------------------
+    def test_la_meme_garde_avec_un_VRAI_besoin_reste_bloquee(self) -> None:
+        """Arrosé ce matin, et le sol a de nouveau soif cet après-midi : la garde retient
+        bien de l'eau, et elle doit le dire."""
+        for classe in (sensor.GazonProchainArrosageSensor,):
+            with self.subTest(classe=classe.__name__):
+                self.assertEqual(self._capteur(classe, besoin_mm=4.0).native_value, "Bloqué")
+        signal = self._capteur(binary_sensor.GazonSignalIrrigationBinarySensor, besoin_mm=4.0)
+        self.assertNotEqual(binary_sensor._irrigation_reason_kind(signal),
+                            binary_sensor.IRRIGATION_REASON_KIND_NO_NEED)
+
+    def test_le_31_07_reste_RETENU_etat_et_resume(self) -> None:
+        """Garde hebdomadaire qui retient une eau NÉCESSAIRE : « Retenu » est la vérité, et
+        doit le rester partout — c'est le défaut inverse, corrigé le 31/07/2026."""
+        donnees = {
+            "watering_context_state": {"status": "termine"},
+            "objectif_mm": 0.0, "objective_mm": 0.0, "fenetre_optimale": "attendre",
+            "block_reason": "garde_fou_hebdomadaire", "besoin_mm": 5.0,
+        }
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data=donnees, result=None,
+                                       history=[], memory={})
+        capteur = sensor.GazonProchainArrosageSensor(coordinator)
+        capteur._contextual_watering_state = lambda: {"status": "termine"}
+        self.assertEqual(capteur.native_value, "Retenu")
+        self.assertIn("retenu", str(capteur.extra_state_attributes.get("summary") or "").lower())
+
+    def test_un_besoin_INCONNU_ne_desarme_rien(self) -> None:
+        """⚠️ ABSENCE ≠ ZÉRO. Ne pas savoir n'autorise pas à conclure que tout va bien."""
+        capteur = self._capteur(sensor.GazonProchainArrosageSensor, besoin_mm=None)
+        self.assertEqual(capteur.native_value, "Bloqué")
+
+    def test_un_blocage_POST_APPLICATION_n_est_jamais_masque(self) -> None:
+        """⚠️ Un produit épandu attend son eau : c'est une ACTIVATION, pas un déficit hydrique,
+        et `besoin_mm` peut valoir 0 pendant qu'un engrais attend sur le feuillage."""
+        for kw in ({"post_status": "bloque"}, {"application_block": True}):
+            with self.subTest(**kw):
+                capteur = self._capteur(sensor.GazonProchainArrosageSensor, besoin_mm=0.0, **kw)
+                self.assertEqual(capteur.native_value, "Bloqué",
+                                 "un blocage post-application a été masqué")
+
+
+class LesCapteursTexteNeDisentPlusBloqueTests(unittest.TestCase):
+    """⚠️ SIXIÈME COPIE, trouvée sur l'installation APRÈS le déploiement de la 0.85.0.
+
+    `action_recommandee` et `conseil_principal` affichaient encore « Arrosage bloqué par
+    conditions: Déjà arrosé aujourd'hui. » — alors que les quatre états étaient corrigés. Ils
+    passent par `_irrigation_blocked_due_to_conditions_summary`, dont la seconde moitié
+    recalculait l'ancienne règle depuis le motif brut dès que l'assistant ne disait plus
+    « bloqué ». Le premier relevé n'avait vérifié en direct que cinq entités sur sept.
+    """
+
+    def _entite(self, besoin_mm, post_status="non_requis"):
+        donnees = {
+            "type_arrosage": "bloque", "block_reason": "cooldown_24h",
+            "objectif_mm": 0.0, "objective_mm": 0.0, "fenetre_optimale": "attendre",
+            "watering_cause": "hydrique", "application_post_watering_status": post_status,
+            "arrosage_recommande": False,
+        }
+        if besoin_mm is not None:
+            donnees["besoin_mm"] = besoin_mm
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data=donnees, result=None,
+                                       history=[], memory={})
+        return sensor.GazonProchainArrosageSensor(coordinator)
+
+    def test_sans_besoin_aucun_texte_bloque(self) -> None:
+        self.assertIsNone(
+            sensor._irrigation_blocked_due_to_conditions_summary(self._entite(0.0)),
+            "le texte « bloqué par conditions » survit à une réserve pleine",
+        )
+
+    def test_avec_un_vrai_besoin_le_texte_reste(self) -> None:
+        texte = sensor._irrigation_blocked_due_to_conditions_summary(self._entite(4.0))
+        self.assertIn("bloqué", str(texte or "").lower())
+
+    def test_post_application_jamais_masque(self) -> None:
+        texte = sensor._irrigation_blocked_due_to_conditions_summary(
+            self._entite(0.0, post_status="bloque")
+        )
+        self.assertIn("bloqué", str(texte or "").lower())
+
+
+class BlocageSansObjetDefinitionTests(unittest.TestCase):
+    """La définition unique, prise seule."""
+
+    def setUp(self) -> None:
+        self.f = sensor.blocage_sans_objet
+
+    def test_besoin_nul_et_rien_en_attente(self) -> None:
+        self.assertTrue(self.f(0.0))
+        self.assertTrue(self.f(0))
+
+    def test_un_vrai_besoin(self) -> None:
+        self.assertFalse(self.f(0.1))
+
+    def test_absence_de_mesure(self) -> None:
+        for vide in (None, "", "0", True):
+            with self.subTest(valeur=vide):
+                self.assertFalse(self.f(vide), f"{vide!r} a été lu comme un besoin nul")
+
+    def test_tout_etat_post_application_actif_protege_le_blocage(self) -> None:
+        for statut in ("bloque", "en_attente", "autorise", "BLOQUE "):
+            with self.subTest(statut=statut):
+                self.assertFalse(self.f(0.0, application_post_watering_status=statut))
+        self.assertFalse(self.f(0.0, application_block_active=True))
+        self.assertFalse(self.f(0.0, application_post_watering_pending=True))
+
+    def test_les_statuts_post_application_TERMINES_ne_protegent_rien(self) -> None:
+        for statut in ("termine", "non_requis", "indisponible", "", None):
+            with self.subTest(statut=statut):
+                self.assertTrue(self.f(0.0, application_post_watering_status=statut))
+
+
+# ─── Traduction des états codés (0.86.0) ────────────────────────────────────────────────
+# Onze capteurs publiaient des codes (`aucune_action`, `a_surveiller`, `modere`) que Home
+# Assistant affichait tels quels, tirets bas compris (question de Kévin le 11/09/2026).
+# L'état publié NE CHANGE PAS — les automatisations et la carte lisent toujours le code ;
+# c'est le frontend qui le traduit, en cherchant
+#     component.<intégration>.entity.sensor.<translation_key>.state.<état>
+# et en retombant sur le code brut s'il ne trouve rien. Pas de `SensorDeviceClass.ENUM` :
+# avec lui, un état absent de la liste lève `ValueError` et l'entité cesse de se mettre à
+# jour — une valeur oubliée coûterait le capteur au lieu d'un libellé.
+#
+# Ces tests suivent la VALEUR : vrai capteur, vraie valeur publiée, résolue dans le fichier
+# de traduction exactement comme le fait le frontend. Un test sur le seul texte des fichiers
+# prouverait qu'une clé existe, pas qu'un capteur la publie (cf. « déclarer n'est pas câbler »).
+
+import ast as _ast
+import dataclasses as _dataclasses
+import json as _json
+
+_TRADUCTIONS_DIR = PACKAGE_DIR / "translations"
+_LANGUES = ("fr", "en", "de", "es", "nl")
+
+
+def _etats_traduits(cle: str, langue: str = "fr") -> dict[str, str]:
+    data = _json.loads((_TRADUCTIONS_DIR / f"{langue}.json").read_text(encoding="utf-8"))
+    return data["entity"]["sensor"][cle]["state"]
+
+
+def _coordinateur(data=None, result=None, memory=None):
+    return _FakeCoordinator(
+        entry=_FakeEntry(), data=data or {}, result=result, history=[], memory=memory or {}
+    )
+
+
+def _litteraux_affectes(chemin: Path, nom: str) -> set[str]:
+    """Toute chaîne littérale donnée à `nom` : `nom="x"`, `nom = "x"`, `"nom": "x"`."""
+    arbre = _ast.parse(chemin.read_text(encoding="utf-8"))
+    trouves: set[str] = set()
+
+    def chaines(noeud) -> set[str]:
+        # `x = "a" if cond else "b"` : les deux branches comptent.
+        if isinstance(noeud, _ast.Constant) and isinstance(noeud.value, str):
+            return {noeud.value}
+        if isinstance(noeud, _ast.IfExp):
+            return chaines(noeud.body) | chaines(noeud.orelse)
+        return set()
+
+    for noeud in _ast.walk(arbre):
+        if isinstance(noeud, _ast.keyword) and noeud.arg == nom:
+            trouves |= chaines(noeud.value)
+        elif isinstance(noeud, _ast.Assign):
+            if any(isinstance(c, _ast.Name) and c.id == nom for c in noeud.targets):
+                trouves |= chaines(noeud.value)
+        elif isinstance(noeud, _ast.Dict):
+            for k, v in zip(noeud.keys, noeud.values):
+                if isinstance(k, _ast.Constant) and k.value == nom:
+                    trouves |= chaines(v)
+    return trouves
+
+
+class LesEtatsCodesSontTraduitsTests(unittest.TestCase):
+    def publie(self, entite, contexte: str = "") -> str:
+        """Valeur publiée par le vrai capteur, après avoir vérifié qu'elle se traduit partout."""
+        cle = type(entite)._attr_translation_key
+        etat = entite.native_value
+        self.assertIsInstance(etat, str, f"{type(entite).__name__} {contexte}")
+        for langue in _LANGUES:
+            libelle = _etats_traduits(cle, langue).get(etat)
+            self.assertTrue(
+                libelle,
+                f"{type(entite).__name__} publie « {etat} » ({contexte}) : aucun libellé en {langue}",
+            )
+        return etat
+
+    def test_la_traduction_ne_renomme_aucune_entite(self) -> None:
+        # Avec `has_entity_name`, une clé de traduction SANS `_attr_name` ferait prendre à HA
+        # le nom du fichier de traduction — or ces blocs n'ont pas de `name`.
+        traduits = [
+            c for c in vars(sensor).values()
+            if isinstance(c, type) and c.__module__ == sensor.__name__
+            and "_attr_translation_key" in vars(c)
+        ]
+        self.assertEqual(len(traduits), 11)
+        for classe in traduits:
+            with self.subTest(classe=classe.__name__):
+                self.assertIn("_attr_name", vars(classe))
+
+    def test_aucun_libelle_orphelin(self) -> None:
+        # Chaque bloc traduit est porté par au moins un capteur (sinon : clé morte).
+        utilisees = {
+            vars(c)["_attr_translation_key"] for c in vars(sensor).values()
+            if isinstance(c, type) and "_attr_translation_key" in vars(c)
+        }
+        for langue in _LANGUES:
+            blocs = _json.loads((_TRADUCTIONS_DIR / f"{langue}.json").read_text(encoding="utf-8"))
+            with self.subTest(langue=langue):
+                self.assertEqual(set(blocs["entity"]["sensor"]), utilisees)
+
+    def test_etat_de_tonte(self) -> None:
+        vus = set()
+        for valeur in (*decision_models.POSSIBLE_TONTE_STATUT_VALUES, "valeur_inconnue"):
+            with self.subTest(tonte_statut=valeur):
+                result = _dataclasses.replace(_make_result(), tonte_statut=valeur)
+                vus.add(self.publie(sensor.GazonTonteEtatSensor(_coordinateur(result.to_snapshot(), result)), valeur))
+        self.assertEqual(vus, set(decision_models.POSSIBLE_TONTE_STATUT_VALUES))
+
+    def test_les_deux_fenetres_optimales(self) -> None:
+        for classe in (sensor.GazonFenetreOptimaleSensor, sensor.GazonProchaineFenetreOptimaleSensor):
+            vus = set()
+            for valeur in (*decision_models.POSSIBLE_FENETRE_OPTIMALE_VALUES, "valeur_inconnue"):
+                with self.subTest(fenetre=valeur, classe=classe.__name__):
+                    result = _dataclasses.replace(_make_result(), fenetre_optimale=valeur)
+                    vus.add(self.publie(classe(_coordinateur(result.to_snapshot(), result)), valeur))
+            self.assertEqual(vus, set(decision_models.POSSIBLE_FENETRE_OPTIMALE_VALUES), classe.__name__)
+
+    def test_niveau_d_action(self) -> None:
+        vus = set()
+        for valeur in (*decision_models.POSSIBLE_NIVEAU_ACTION_VALUES, "valeur_inconnue"):
+            for action, statut in (("none", "no_need"), ("tonte", "action_required"), ("tonte", "blocked")):
+                with self.subTest(niveau=valeur, action=action, statut=statut):
+                    result = _dataclasses.replace(_make_result(), niveau_action=valeur)
+                    data = result.to_snapshot()
+                    data["assistant"] = {"action": action, "status": statut}
+                    vus.add(self.publie(sensor.GazonNiveauActionSensor(_coordinateur(data, result)), valeur))
+        self.assertEqual(vus, set(decision_models.POSSIBLE_NIVEAU_ACTION_VALUES))
+
+    def test_risque_gazon_tous_les_niveaux_que_le_moteur_ecrit(self) -> None:
+        niveaux = _litteraux_affectes(PACKAGE_DIR / "guidance.py", "risque_gazon")
+        self.assertEqual(niveaux, {"faible", "modere", "eleve"}, "nouveau niveau de risque : le traduire")
+        for niveau in niveaux:
+            with self.subTest(risque=niveau):
+                result = _dataclasses.replace(_make_result(), risque_gazon=niveau)
+                entite = sensor.GazonRisqueGazonSensor(_coordinateur(result.to_snapshot(), result))
+                self.assertEqual(self.publie(entite, niveau), niveau)
+
+    def test_etat_hydrique_sur_toute_la_plage(self) -> None:
+        vus = set()
+        for pourmille in range(0, 1501, 5):
+            ratio = pourmille / 1000
+            with self.subTest(depletion_ratio=ratio):
+                entite = sensor.GazonEtatHydriqueSensor(_coordinateur({"depletion_ratio": ratio}))
+                vus.add(self.publie(entite, f"ratio {ratio}"))
+        # Le capteur lui-même doit parcourir les quatre états : un chemin annexe qui les
+        # fournirait ne prouverait rien sur ce que l'entité publie.
+        self.assertEqual(vus, set(_etats_traduits("etat_hydrique")))
+        # Le second chemin (réserve / réserve utile) ne produit pas d'autre état.
+        cles = set(_etats_traduits("etat_hydrique"))
+        for actuelle in range(0, 13):
+            self.assertIn(sensor._hydric_state_from_reserve_ratio(actuelle, 12.0), cles)
+
+    def test_assistant_toutes_les_actions_du_moteur(self) -> None:
+        actions = _litteraux_affectes(PACKAGE_DIR / "assistant.py", "action")
+        self.assertEqual(actions, {"none", "arrosage", "tonte", "traitement"}, "nouvelle action : la traduire")
+        vus = set()
+        for action in actions:
+            for statut in ("no_need", "action_required", "blocked", "blocked_due_to_conditions"):
+                with self.subTest(action=action, statut=statut):
+                    entite = sensor.GazonAssistantSensor(
+                        _coordinateur({"assistant": {"action": action, "status": statut}})
+                    )
+                    vus.add(self.publie(entite, f"{action}/{statut}"))
+        self.assertEqual(vus, set(_etats_traduits("assistant")))
+
+    def test_derniere_execution_par_le_normaliseur_de_la_memoire(self) -> None:
+        # `record_user_action` passe TOUT enregistrement par ce normaliseur : ce qu'il laisse
+        # passer est exactement ce que le capteur peut publier.
+        memory_mod = __import__("custom_components.gazon_intelligent.memory", fromlist=["USER_ACTION_STATES"])
+        vus = set()
+        for etat in (*memory_mod.USER_ACTION_STATES, "OK ", "erreur", "none", "", None):
+            with self.subTest(etat=etat):
+                resume = memory_mod._normalize_user_action_summary({"state": etat, "action": "Arroser maintenant"})
+                entite = sensor.GazonDerniereActionUtilisateurSensor(
+                    _coordinateur(memory={"derniere_action_utilisateur": resume})
+                )
+                vus.add(self.publie(entite, repr(etat)))
+        vus.add(self.publie(sensor.GazonDerniereActionUtilisateurSensor(_coordinateur()), "mémoire vide"))
+        self.assertEqual(vus, set(_etats_traduits("derniere_execution")))
+
+    def test_les_deux_capteurs_d_intervention_reprennent_les_titres_du_moteur(self) -> None:
+        ir = __import__("custom_components.gazon_intelligent.intervention_recommendation",
+                        fromlist=["_state_metadata"])
+        traduits = _etats_traduits("intervention_statut")
+        for statut in ("recommended", "preparation", "blocked"):
+            with self.subTest(statut=statut):
+                # Même mot à l'écran que dans le badge de la carte : une seule formulation.
+                self.assertEqual(traduits[statut], ir._state_metadata(statut)["title"])
+        # `unavailable` n'est pas traduisible : HA le lit comme « entité indisponible ».
+        for classe in (sensor.GazonInterventionRecommendationSensor, sensor.GazonDebugInterventionSensor):
+            vus = set()
+            for statut in ("recommended", "preparation", "possible", "blocked"):
+                with self.subTest(statut=statut, classe=classe.__name__):
+                    data = {"intervention_recommendation": {"status": statut, "ui": {}}}
+                    vus.add(self.publie(classe(_coordinateur(data)), statut))
+            self.assertEqual(vus, {"recommended", "preparation", "blocked"}, classe.__name__)
+
+    def test_prochain_blocage_suit_la_table_unique_des_motifs(self) -> None:
+        const = __import__("custom_components.gazon_intelligent.const", fromlist=["BLOCK_REASON_DISPLAY_LABELS"])
+        traduits = _etats_traduits("prochain_blocage")
+        # Le français N'EST PAS une deuxième table : c'est BLOCK_REASON_DISPLAY_LABELS, mot pour mot.
+        self.assertEqual(
+            {k: v for k, v in traduits.items() if k != "aucun"}, const.BLOCK_REASON_DISPLAY_LABELS
+        )
+        for motif in (*const.BLOCK_REASON_DISPLAY_LABELS, None):
+            with self.subTest(motif=motif):
+                result = _dataclasses.replace(
+                    _make_result(), objectif_arrosage=1.5, arrosage_recommande=True
+                )
+                data = result.to_snapshot()
+                data["block_reason"] = motif
+                entite = sensor.GazonProchainBlocageAttenduSensor(_coordinateur(data))
+                self.assertEqual(self.publie(entite, str(motif)), motif or "aucun")
+
+
+class LeMotifDeHauteurAtteintLeCapteurTests(unittest.TestCase):
+    """0.87.0 — `hauteur_tonte_motif` suivi du moteur jusqu'à l'attribut du capteur.
+
+    Quatre points de passage : clés du bundle de tonte, recopie dans `decision.py`, liste
+    blanche du coordinateur, liste d'attributs du capteur. Oublier l'un d'eux publie `None`
+    en silence — le défaut n°1 du projet (« déclarer n'est pas câbler »).
+    """
+
+    def test_la_valeur_traverse_toute_la_chaine(self) -> None:
+        decision_mod = __import__("custom_components.gazon_intelligent.decision", fromlist=["build_decision_snapshot"])
+        snapshot = decision_mod.build_decision_snapshot(
+            history=[], today=date(2026, 9, 11), hour_of_day=10, temperature=21.8,
+            forecast_temperature_today=23.7, pluie_24h=0, pluie_demain=0, humidite=54,
+            type_sol="limoneux", etp_capteur=5.7,
+            soil_balance={"reserve_mm": 11.5, "reserve_max_mm": 24.0},
+        )
+        motif = snapshot.get("hauteur_tonte_motif")
+        self.assertEqual(motif, "Septembre : base 4,0 cm (hauteur de pousse).")
+
+        # La recopie RÉELLE du coordinateur : le contenu du tuple, lu tel qu'il est dans le code
+        # (le module ne s'importe pas sous ces stubs), puis la boucle qu'il exécute.
+        import ast as _ast_local
+        arbre = _ast_local.parse((PACKAGE_DIR / "coordinator.py").read_text(encoding="utf-8"))
+        cles = next(
+            _ast_local.literal_eval(n.value) for n in _ast_local.walk(arbre)
+            if isinstance(n, _ast_local.AnnAssign) and getattr(n.target, "id", "") == "_COORDINATOR_SNAPSHOT_KEYS"
+        )
+        recopie = {cle: snapshot.get(cle) for cle in cles}
+
+        coord = _FakeCoordinator(entry=_FakeEntry(), data=recopie, history=[], memory={})
+        entite = sensor.GazonHauteurTonteSensor(coord)
+        self.assertEqual(entite.native_value, 4.0)
+        self.assertEqual((entite.extra_state_attributes or {}).get("hauteur_tonte_motif"), motif)
+        # Les deux autres entités qui publient la hauteur conseillée ET son libellé de garde-fou
+        # doivent publier aussi son motif (revue de la 0.87.0 : la valeur sans son pourquoi).
+        for autre in (sensor.GazonTonteEtatSensor(coord), binary_sensor.GazonTonteAutoriseeBinarySensor(coord)):
+            with self.subTest(entite=type(autre).__name__):
+                attrs = autre.extra_state_attributes or {}
+                self.assertEqual(attrs.get("hauteur_tonte_recommandee_cm"), 4.0)
+                self.assertEqual(attrs.get("hauteur_tonte_motif"), motif)
+
+
+class LaBorneDApplicationAtteintLeCapteurTests(unittest.TestCase):
+    """0.88.0 — `application_en_cours` suivi du moteur jusqu'au capteur « Fenêtre optimale ».
+
+    Borner la décision seule laissait le capteur afficher « Bloqué : type d'application inconnu »
+    À VIE pendant que la décision arrosait (revue du 11/09/2026) : correctif à moitié.
+    """
+
+    def _capteur(self, jour: date):
+        import ast as _ast_local
+        decision_mod = __import__("custom_components.gazon_intelligent.decision", fromlist=["build_decision_snapshot"])
+        snapshot = decision_mod.build_decision_snapshot(
+            history=[{"type": "Fertilisation", "date": "2026-03-10", "produit": "Engrais X", "application_type": "granule"}],
+            today=jour, hour_of_day=10, temperature=20.0, forecast_temperature_today=21.0, pluie_24h=0,
+            pluie_demain=0, humidite=55, type_sol="limoneux", etp_capteur=4.0,
+            soil_balance={"reserve_mm": 4.0, "reserve_max_mm": 24.0},
+        )
+        arbre = _ast_local.parse((PACKAGE_DIR / "coordinator.py").read_text(encoding="utf-8"))
+        cles = next(
+            _ast_local.literal_eval(n.value) for n in _ast_local.walk(arbre)
+            if isinstance(n, _ast_local.AnnAssign) and getattr(n.target, "id", "") == "_COORDINATOR_SNAPSHOT_KEYS"
+        )
+        recopie = {cle: snapshot.get(cle) for cle in cles}
+        coord = _FakeCoordinator(entry=_FakeEntry(), data=recopie, history=[], memory={})
+        return snapshot, sensor.GazonFenetreOptimaleSensor(coord).extra_state_attributes or {}
+
+    def test_pendant_l_intervention_le_capteur_dit_bloque(self) -> None:
+        snapshot, attrs = self._capteur(date(2026, 3, 10))
+        self.assertTrue(snapshot["application_en_cours"])
+        self.assertIn("type d'application inconnu", str(attrs.get("summary")))
+
+    def test_apres_l_intervention_le_capteur_et_la_decision_disent_la_meme_chose(self) -> None:
+        snapshot, attrs = self._capteur(date(2026, 3, 12))
+        self.assertFalse(snapshot["application_en_cours"])
+        self.assertTrue(snapshot["arrosage_recommande"], "prémisse : la décision arrose de nouveau")
+        self.assertNotIn("type d'application inconnu", str(attrs.get("summary")))
+
+
+class LaDateDeDerniereTonteAtteintLaCarteTests(unittest.TestCase):
+    """0.88.0 — `derniere_tonte_date` suivi jusqu'à l'attribut que lit la carte.
+
+    La carte l'attend depuis sa 0.21.2 pour ne pas reproposer « J'ai tondu » le jour même ; rien
+    ne la publiait, et le bouton restait proposé en permanence (contre-revue du 11/09/2026).
+    """
+
+    def test_la_valeur_traverse_toute_la_chaine(self) -> None:
+        import ast as _ast_local
+        decision_mod = __import__("custom_components.gazon_intelligent.decision", fromlist=["build_decision_snapshot"])
+        snapshot = decision_mod.build_decision_snapshot(
+            history=[{"type": "tonte", "date": "2026-09-11", "hauteur_coupe_mm": 40}],
+            today=date(2026, 9, 11), hour_of_day=15, temperature=20.0, forecast_temperature_today=21.0,
+            pluie_24h=0, pluie_demain=0, humidite=55, type_sol="limoneux", etp_capteur=3.0,
+        )
+        self.assertEqual(snapshot.get("derniere_tonte_date"), "2026-09-11")
+        arbre = _ast_local.parse((PACKAGE_DIR / "coordinator.py").read_text(encoding="utf-8"))
+        cles = next(
+            _ast_local.literal_eval(n.value) for n in _ast_local.walk(arbre)
+            if isinstance(n, _ast_local.AnnAssign) and getattr(n.target, "id", "") == "_COORDINATOR_SNAPSHOT_KEYS"
+        )
+        recopie = {cle: snapshot.get(cle) for cle in cles}
+        coord = _FakeCoordinator(entry=_FakeEntry(), data=recopie, history=[], memory={})
+        attrs = binary_sensor.GazonTonteAutoriseeBinarySensor(coord).extra_state_attributes or {}
+        self.assertEqual(attrs.get("derniere_tonte_date"), "2026-09-11")

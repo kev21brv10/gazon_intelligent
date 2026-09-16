@@ -18,10 +18,12 @@ except Exception:  # pragma: no cover - repli hors Home Assistant (tests, enviro
 from .decision_models import DecisionContext
 from .guidance import active_rain_source, compute_tonte_statut, is_active_rain_weather
 from .memory import compute_application_state
+from .mower_adapter import _RAIN_ERROR_VALUES  # source unique des codes « pause pluie »
 from .water import (
     HISTORY_DATE_ONLY_FALLBACK_HOUR,
     resolve_history_moment,
 )
+from .phases import SUBPHASE_RULES
 from .scores import classify_stress_level
 
 _MOWER_STEP_CM = 0.5
@@ -66,17 +68,28 @@ _MOWING_WINDOW_LABELS = {
     "blocked": "Bloqué",
 }
 _MOWING_WINDOW_IDEAL_START = 10
-_MOWING_WINDOW_IDEAL_END = 12
+# Élargie de 12:00 à 14:00 le 15/09/2026 (choix de Kévin). L'arrosage du matin finit désormais
+# 15 min avant le lever du soleil, et le ressuyage qui suit retient la tonte 4 à 6 h : fermée à
+# 12:00, la fenêtre idéale se réduisait à peu de chose, parfois à rien.
+_MOWING_WINDOW_IDEAL_END = 14
 # FENÊTRE DU SOIR — ANCRÉE SUR LE COUCHER DU SOLEIL, pas sur une heure figée.
 # Demandé par Kévin le 30/07/2026 : « il peut tondre plus tard, comme le soleil se couche plus
 # tard ». Le créneau valait 17-19 h toute l'année. En juillet (coucher ~21 h 45) il s'arrêtait
 # 2 h 45 trop tôt ; en décembre (coucher ~17 h) il tombait ENTIÈREMENT après la nuit — le gazon
 # se serait fait tondre dans le noir si les autres gardes ne l'avaient pas rattrapé.
-# On termine 90 min avant le coucher, la même marge de ressuyage que l'arrosage du soir
-# (`guidance.EVENING_DRYING_MARGIN_MIN`) : une herbe coupée puis laissée humide toute la nuit
-# est une porte ouverte aux maladies. Et on ouvre 3 h avant cette fin.
-_MOWING_EVENING_END_BEFORE_SUNSET_MIN = 90
-_MOWING_EVENING_WINDOW_MIN = 180
+# Élargie le 15/09/2026 (choix de Kévin) : de 5 h avant le coucher jusqu'au coucher + 30 min.
+# Coucher à 20:12 : 15:12 → 20:42 ; en juillet : ~16:45 → 22:15. Elle finissait 90 min AVANT le coucher,
+# la marge de séchage de l'arrosage du soir (`guidance.EVENING_DRYING_MARGIN_MIN`) : une herbe
+# coupée tard reste humide plus longtemps, c'est le prix assumé de la tonte plus tardive.
+# ⚠️ La fin est la dernière minute où la tonte est AUTORISÉE, pas une heure de départ qui laisserait
+# le robot finir son travail : ensuite c'est la nuit (`_est_la_nuit`), `tonte_autorisee` retombe,
+# et une automatisation qui rappelle le robot à ce signal le fait rentrer.
+_MOWING_EVENING_START_BEFORE_SUNSET_MIN = 300
+# Même valeur pour la fin de la fenêtre et pour le début de la nuit : les deux ne doivent jamais
+# se séparer, sinon la fenêtre dirait « acceptable » en pleine nuit, ou la nuit tomberait avant la
+# fin de la fenêtre. 30 min après le coucher, c'est la fin du crépuscule civil, qui dure en France
+# métropolitaine de 28 min (sud, équinoxes) à 47 min (nord, juin).
+_MOWING_EVENING_END_AFTER_SUNSET_MIN = 30
 # Repli quand le coucher est inconnu (sun.sun absent au démarrage) : les anciennes bornes fixes.
 # Volontairement conservateur — cf. la falaise de minuit, où un repli optimiste a coûté cher.
 _MOWING_WINDOW_ACCEPTABLE_START = 17
@@ -100,6 +113,8 @@ _MOWING_BUNDLE_CORE_KEYS = (
     "hauteur_tonte_min_cm",
     "hauteur_tonte_max_cm",
     "hauteur_tonte_garde_fou_label",
+    "hauteur_tonte_motif",
+    "hauteur_tonte_temperature_jour",
     "mowing_blocked_by_watering",
     "mowing_blocked",
     "mowing_block_reason_code",
@@ -146,19 +161,31 @@ def _round_to_step(value: float) -> float:
     return round(round(value / _MOWER_STEP_CM) * _MOWER_STEP_CM, 2)
 
 
+# Hauteur de BASE par mois, en cm — celle qu'on conseille quand rien ne demande de monter.
+# ⚠️ Refaite le 11/09/2026 (0.87.0). L'ancienne table (5,0 / 5,8 / 5,0 / 6,2 / 5,0, arrivée en
+# 0.7.0 sans justification écrite) ne descendait jamais sous 5 cm, et ses corrections toujours
+# positives, arrondies VERS LE HAUT, la collaient au maximum machine : 6,0 cm affichés de juillet
+# à septembre, alors que Kévin tond volontairement à 4 cm (lame à 40 mm).
+# Celle-ci suit une recherche croisée (RHS, DLF/Johnsons, société allemande du gazon DRG, Oregon
+# State EM 9321, Barenbrug, constructeurs de robots) : hauteur de pousse ~4 cm, reprise un peu
+# plus haute en mars, relèvement STRUCTUREL de l'été (ombrer le collet) de +1 cm. Aucune source
+# ne donne de table mois par mois : les sources fixent la direction et les bornes, la base de
+# 4 cm est le choix du propriétaire (corpus européen ; les fiches américaines tondent plus haut).
+# L'hiver reste à 4 parce que `_hauteur_theorique_detaillee` ajoute déjà +0,5 aux mois 1, 2, 11, 12.
+_HAUTEUR_BASE_PAR_MOIS: dict[int, float] = {
+    1: 4.0, 2: 4.0, 3: 4.5, 4: 4.0, 5: 4.0, 6: 4.5,
+    7: 5.0, 8: 5.0, 9: 4.0, 10: 4.0, 11: 4.0, 12: 4.0,
+}
+
+_NOMS_DES_MOIS = (
+    "janvier", "février", "mars", "avril", "mai", "juin",
+    "juillet", "août", "septembre", "octobre", "novembre", "décembre",
+)
+
+
 def _seasonal_base_height(month: int) -> float:
-    """Retourne une hauteur de coupe prudente selon la saison."""
-    if month in {1, 2, 11, 12}:
-        return 5.0
-    if month in {3, 4}:
-        return 5.8
-    if month in {5, 6}:
-        return 5.0
-    if month in {7, 8}:
-        return 6.2
-    if month in {9, 10}:
-        return 5.0
-    return 5.5
+    """Hauteur de coupe de base du mois (voir `_HAUTEUR_BASE_PAR_MOIS`)."""
+    return _HAUTEUR_BASE_PAR_MOIS.get(month, 4.0)
 
 
 def _seasonal_mowing_frequency(month: int) -> tuple[float, str]:
@@ -199,6 +226,24 @@ def _round_up_to_step(value: float, minimum: float, step: float) -> float:
     return round(minimum + (steps * step), 2)
 
 
+def _round_nearest_to_step(value: float, minimum: float, step: float) -> float:
+    """Arrondit au pas le plus PROCHE (demi vers le haut), sur la même grille que `_round_up_to_step`.
+
+    Pour la part saisonnière de la recommandation : arrondir vers le haut faisait sauter d'un
+    cran au moindre +0,1 (4,1 → 4,5), et les corrections, toutes positives, s'additionnaient en
+    marches montantes. ⚠️ JAMAIS pour un plancher (règle du tiers, sursemis) : un plancher
+    arrondi au plus proche peut tomber SOUS lui-même — ceux-là restent sur `_round_up_to_step`.
+    """
+    if step <= 0:
+        return round(value, 2)
+    if value <= minimum:
+        return round(minimum, 2)
+    # floor(x + 0,5) et non `round()` : Python arrondit « au pair » (8,5 → 8), ce qui ferait
+    # tomber 4,25 sur 4,0 mais 4,75 sur 5,0.
+    steps = math.floor((value - minimum) / step + 0.5 + 1e-9)
+    return round(minimum + (steps * step), 2)
+
+
 def _round_down_to_step(value: float, minimum: float, step: float) -> float:
     """Arrondit vers le bas en respectant un pas donné."""
     if step <= 0:
@@ -219,21 +264,6 @@ def _previous_recommended_height(context: DecisionContext) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
-
-
-def _last_sursemis_age_days(context: DecisionContext) -> int | None:
-    """Estime l'âge du dernier sursemis pour piloter la reprise progressive."""
-    for item in reversed(context.history):
-        if item.get("type") != "Sursemis":
-            continue
-        raw_date = item.get("date")
-        if not raw_date:
-            continue
-        try:
-            return max((context.today - date.fromisoformat(str(raw_date))).days, 0)
-        except ValueError:
-            continue
-    return None
 
 
 def _parse_history_timestamp(item: dict[str, Any], today: date) -> datetime:
@@ -420,7 +450,7 @@ def _watering_related_mowing_block(
     return False, None, None
 
 
-def _est_la_nuit(context: DecisionContext) -> bool:
+def _est_la_nuit(context: DecisionContext, weather_profile: dict[str, Any] | None) -> bool:
     """Fait-il nuit ? SOURCE UNIQUE — le soleil d'abord, l'horloge seulement en repli.
 
     ⚠️ IL Y EN AVAIT DEUX, et elles se contredisaient à l'écran. Le motif de blocage lisait le
@@ -439,15 +469,50 @@ def _est_la_nuit(context: DecisionContext) -> bool:
     ⚠️ Le repli horaire garde ses bornes 22 h → 7 h, celles de la NUIT. Elles ne doivent pas être
     confondues avec le « matin trop tôt » de la fenêtre (avant 10 h), qui parle de ROSÉE et de
     ressuyage, pas d'obscurité — deux notions différentes qui se recouvrent partiellement.
+
+    Depuis le 15/09/2026 (choix de Kévin), la nuit de la tonte commence au coucher + 30 min, pas au
+    coucher : c'est aussi la fin de la fenêtre du soir. Il faut donc l'heure du coucher
+    (`weather_profile`) ; sans elle, le soleil sous l'horizon reste la nuit, comme avant.
     """
     sun_context = context.sun_context if isinstance(context.sun_context, dict) else {}
     sun_state = str(sun_context.get("sun_state") or "").strip().lower()
     if sun_context.get("sun_below_horizon") is True or sun_state == "below_horizon":
-        return True
+        return not _encore_le_jour_apres_le_coucher(context, weather_profile)
     if sun_context.get("sun_above_horizon") is not None or sun_state == "above_horizon":
         return False
     hour = context.hour_of_day
     return hour is not None and (hour < 7 or hour >= _MOWING_WINDOW_NIGHT_END)
+
+
+def _minute_du_coucher(weather_profile: dict[str, Any] | None) -> float | None:
+    """Coucher du soleil en minutes locales depuis minuit, ou None s'il est inconnu ou aberrant."""
+    sunset_minute = weather_profile.get("sunset_minute") if isinstance(weather_profile, dict) else None
+    try:
+        sunset = float(sunset_minute) if sunset_minute is not None else None
+    except (TypeError, ValueError):
+        return None
+    if sunset is None or not 0 <= sunset <= 24 * 60:
+        return None
+    return sunset
+
+
+def _encore_le_jour_apres_le_coucher(
+    context: DecisionContext, weather_profile: dict[str, Any] | None
+) -> bool:
+    """Soleil couché depuis moins de 30 min : il fait encore jour pour tondre.
+
+    L'après-midi seulement : le matin, un soleil sous l'horizon est la fin de la nuit.
+    `sunset_minute` est le coucher DU JOUR, même une fois le soleil couché
+    (`coordinator_weather.sunset_today_minute_from_context`). Lu sur `next_setting`, le coucher
+    du lendemain, la nuit tombait une heure trop tard la veille du passage à l'heure d'été.
+    """
+    hour = context.hour_of_day
+    sunset = _minute_du_coucher(weather_profile)
+    if hour is None or sunset is None:
+        return False
+    # Minutes entières, comme la fenêtre du soir : les deux frontières doivent tomber ensemble.
+    minute = round(float(hour) * 60.0)
+    return 12 * 60 <= minute < sunset + _MOWING_EVENING_END_AFTER_SUNSET_MIN
 
 
 def _resolve_mowing_window(
@@ -481,20 +546,18 @@ def _resolve_mowing_window(
     rosee = context.rosee
     month = context.today.month
 
-    # Bornes du soir, recalculées chaque jour depuis le coucher réel.
-    soir_debut: float = float(_MOWING_WINDOW_ACCEPTABLE_START)
-    soir_fin: float = float(_MOWING_WINDOW_ACCEPTABLE_END)
-    sunset_minute = weather_profile.get("sunset_minute") if isinstance(weather_profile, dict) else None
-    try:
-        sunset = float(sunset_minute) if sunset_minute is not None else None
-    except (TypeError, ValueError):
-        sunset = None
-    if sunset is not None and 0 <= sunset <= 24 * 60:
-        fin_min = sunset - _MOWING_EVENING_END_BEFORE_SUNSET_MIN
-        deb_min = fin_min - _MOWING_EVENING_WINDOW_MIN
-        # La fenêtre du soir ne doit jamais mordre sur celle du matin ni descendre sous elle.
-        if deb_min / 60.0 > _MOWING_WINDOW_IDEAL_END:
-            soir_debut, soir_fin = deb_min / 60.0, fin_min / 60.0
+    # Bornes du soir, recalculées chaque jour depuis le coucher réel, en MINUTES ENTIÈRES. L'heure
+    # décimale remultipliée par 60 n'est pas exacte : `(16 + 35 / 60) * 60` vaut 994,999…, et la
+    # frontière glissait d'une minute pour certains couchers. D'où l'arrondi.
+    minute_courante = round(float(hour) * 60.0)
+    soir_debut: float = _MOWING_WINDOW_ACCEPTABLE_START * 60.0
+    soir_fin: float = _MOWING_WINDOW_ACCEPTABLE_END * 60.0
+    sunset = _minute_du_coucher(weather_profile)
+    if sunset is not None:
+        # Quand le coucher est tôt (décembre, ~16:55), l'ouverture calculée (11:55) tombe dans
+        # l'idéale : sans effet, l'idéale est testée AVANT, et le soir prend le relais à 14:00.
+        soir_debut = sunset - _MOWING_EVENING_START_BEFORE_SUNSET_MIN
+        soir_fin = sunset + _MOWING_EVENING_END_AFTER_SUNSET_MIN
 
     if is_active_rain_weather(weather_profile):
         return "blocked", "Pluie en cours ou imminente."
@@ -519,7 +582,7 @@ def _resolve_mowing_window(
     # ⚠️ LA NUIT AVANT LE MATIN, et jugée sur le SOLEIL — pas sur l'horloge. Testé dans
     # l'autre ordre, « Matin trop tôt : attendre le ressuyage » tombait à 3 h du matin et
     # contredisait le motif de blocage, qui disait « Nuit » au même instant.
-    if _est_la_nuit(context):
+    if _est_la_nuit(context, weather_profile):
         return "blocked", "Nuit: attendre le lever du soleil."
     if hour < _MOWING_WINDOW_IDEAL_START:
         return "blocked", "Matin trop tôt: attendre le ressuyage."
@@ -532,15 +595,15 @@ def _resolve_mowing_window(
         return "discouraged", "Température élevée: à éviter."
     if _MOWING_WINDOW_IDEAL_START <= hour < _MOWING_WINDOW_IDEAL_END:
         return "ideal", "Fenêtre idéale du matin."
-    if soir_debut <= hour < soir_fin:
+    if soir_debut <= minute_courante < soir_fin:
         if month in {7, 8} and temperature is not None and float(temperature) >= 28:
             return "discouraged", "Fin de journée chaude: à éviter."
         return "acceptable", "Fenêtre acceptable de fin de journée."
-    if _MOWING_WINDOW_IDEAL_END <= hour < soir_debut:
+    if _MOWING_WINDOW_IDEAL_END * 60 <= minute_courante < soir_debut:
         if month in {7, 8} and temperature is not None and float(temperature) >= 28:
             return "discouraged", "Plein après-midi en été: à éviter."
         return "discouraged", "Créneau intermédiaire: à éviter."
-    if soir_fin <= hour < _MOWING_WINDOW_NIGHT_END:
+    if soir_fin <= minute_courante < _MOWING_WINDOW_NIGHT_END * 60:
         return "discouraged", "Fin de journée tardive: à éviter."
     return "blocked", "Nuit: attendre le lever du soleil."
 
@@ -560,9 +623,25 @@ def _soil_is_wet(advanced_context: dict[str, Any], context: DecisionContext) -> 
 def _post_application_mowing_block(context: DecisionContext) -> tuple[bool, str | None, str | None]:
     application_state = compute_application_state(context.history, today=context.today)
     status = str(application_state.get("application_post_watering_status") or "").strip().lower()
-    if status not in {"bloque", "en_attente", "autorise"}:
-        return False, None, None
-    return True, "post_application_active", "Post-produit actif: attends la fin du post-arrosage."
+    if status in {"bloque", "en_attente", "autorise"}:
+        return True, "post_application_active", "Post-produit actif: attends la fin du post-arrosage."
+    # ⚠️ `delai_avant_tonte_jours` (fiche produit) n'était lu NULLE PART. Le blocage foliaire à vie
+    # le couvrait par accident ; borné en 0.88.0, il laissait tondre un herbicide à J+2 malgré un
+    # délai de 5 jours sur l'étiquette (revue du 11/09/2026). Le plus lointain des délais en cours.
+    jusqu_au = application_state.get("application_tonte_bloquee_jusqu_au")
+    if jusqu_au:
+        try:
+            reprise = date.fromisoformat(str(jusqu_au))
+        except ValueError:
+            reprise = None
+        if reprise is not None and context.today < reprise:
+            produit = application_state.get("application_tonte_bloquee_label") or "produit appliqué"
+            return (
+                True,
+                "post_application_active",
+                f"Délai avant tonte ({produit}): pas de tonte avant le {reprise.strftime('%d/%m/%Y')}.",
+            )
+    return False, None, None
 
 
 # Sentinelles « pas d'erreur » : valeurs de capteur à NE PAS interpréter comme une panne
@@ -596,6 +675,14 @@ def _machine_unavailable_detail(
         or mower_context.get("tondeuse_erreur_code")
         or ""
     ).strip().lower()
+    # ⚠️ UNE PAUSE PLUIE N'EST PAS UNE PANNE. La Landroid publie `rain_delay` dans l'enum de son
+    # capteur d'ERREUR : ce code passait par la branche ci-dessous et chaque délai pluie
+    # s'affichait « Robot en erreur: Pause pluie active. », jusque dans le hero (contre-revue
+    # du 11/09/2026). La coordination, elle, la classait déjà en pause pluie. Le blocage de tonte
+    # reste (elle ne peut pas tondre) : seul le libellé change, et c'est le même que la branche
+    # « pause pluie » plus bas.
+    if mower_error_code in _RAIN_ERROR_VALUES or mower_operation_state == "rain_delayed":
+        return "rain_delayed", "Robot en pause pluie: attendre qu'elle soit prête."
     mower_in_error = (
         mower_operation_state in {"error", "erreur"}
         or mower_status == "erreur"
@@ -1309,8 +1396,11 @@ def _hauteur_coupe_reelle_cm(context: DecisionContext) -> float | None:
     l'herbe repart après une tonte, donc c'est elle qui doit servir de référence partout où
     l'on compare une hauteur d'herbe à une hauteur de coupe.
 
-    ⚠️ `None` = réglage inconnu (tondeuse injoignable, non configurée). L'appelant retombe
-    alors sur la recommandation : une absence ne doit pas désarmer le garde-fou.
+    ⚠️ `None` = réglage inconnu : ni l'entité de hauteur de coupe ni l'option manuelle
+    `hauteur_coupe_tondeuse_mm` ne donnent de valeur. Une tondeuse INJOIGNABLE ne suffit pas
+    quand l'option est posée (`_resolve_mower_cutting_height_mm` y retombe, cf. coordinator.py)
+    — c'est le cas de l'installation de Kévin (40 mm). L'appelant retombe alors sur la
+    recommandation : une absence ne doit pas désarmer le garde-fou.
     """
     mower_context = context.mower_context if isinstance(context.mower_context, dict) else {}
     brut = mower_context.get("tondeuse_hauteur_coupe_mm")
@@ -1588,7 +1678,10 @@ def _project_next_mowing_date(
                     anchor = None
     elif reason_code == "mowing_night":
         projected_date = context.today
-        if context.hour_of_day is not None and context.hour_of_day >= 22:
+        # Nuit du SOIR = plus de tonte aujourd'hui. Le seuil valait 22 h, alors que la nuit suit le
+        # soleil : entre le coucher + 30 min (20:42 pour un coucher à 20:12) et 22 h, la carte annonçait la
+        # prochaine tonte pour le jour même. Midi sépare la nuit du soir de celle du petit matin.
+        if context.hour_of_day is not None and context.hour_of_day >= 12:
             projected_date = context.today + timedelta(days=1)
         return projected_date.isoformat(), projected_date.strftime("%d/%m/%Y"), "nuit"
     elif reason_code == "mowing_spacing":
@@ -1670,27 +1763,233 @@ def _project_next_mowing_date(
     return projected_date.isoformat(), projected_date.strftime("%d/%m/%Y"), None
 
 
-def _post_sursemis_bonus(age_days: int | None) -> float:
-    """Donne un léger bonus de hauteur pendant la reprise post-sursemis."""
-    if age_days is None:
-        return 0.0
-    if age_days <= 7:
-        return 1.0
-    if age_days <= 14:
-        return 0.8
-    if age_days <= 21:
-        return 0.5
-    if age_days <= 28:
-        return 0.3
-    if age_days <= 35:
-        return 0.1
-    if age_days <= 45:
-        return 0.3
-    if age_days <= 52:
-        return 0.2
-    if age_days <= 59:
-        return 0.1
-    return 0.0
+def _cm(valeur: float) -> str:
+    return f"{valeur:.1f}".replace(".", ",")
+
+
+# Planchers d'un semis en cours, par sous-phase (bornes : SUBPHASE_RULES["Sursemis"]).
+# Germination et Enracinement : la tonte est interdite de toute façon. Reprise (J+25 à J+34) :
+# premières coupes HAUTES. Stabilisation (J+35 à J+44) : deuxième palier, puis la base du mois.
+# Sur la grille de 0,5 cm : 7,6 et 6,6 étaient publiés 8,0 et 7,0 (arrondi vers le haut d'un
+# plancher), si bien que Reprise se confondait avec Enracinement (contre-revue du 11/09/2026).
+_SEMIS_PLANCHERS_CM: dict[str, float] = {
+    "Germination": 7.5,
+    "Enracinement": 7.0,
+    "Reprise": 6.5,
+    "Stabilisation": 5.0,
+}
+_SEMIS_DUREE_JOURS = 45  # PHASE_DURATIONS_DAYS["Sursemis"] : âges 0 à 44
+
+
+def _age_du_dernier_semis(context: DecisionContext) -> int | None:
+    """Âge en jours du semis le plus RÉCENT par date (jamais dans le futur), ou None.
+
+    Par DATE et non par position dans l'historique : une déclaration rétroactive ajoutée après
+    un semis plus récent ne doit pas faire lire un âge plus vieux que celui de la phase.
+    """
+    dates = []
+    for item in context.history:
+        if not isinstance(item, dict) or item.get("type") != "Sursemis":
+            continue
+        try:
+            jour = date.fromisoformat(str(item.get("date"))[:10])
+        except (TypeError, ValueError):
+            continue
+        if jour <= context.today:
+            dates.append(jour)
+    if not dates:
+        return None
+    return (context.today - max(dates)).days
+
+
+def _plancher_semis(context: DecisionContext) -> tuple[float, str] | None:
+    """Plancher de hauteur dû à un semis récent, et son libellé — ou None.
+
+    Il suit l'ÂGE DU SEMIS, pas la phase dominante. Défauts corrigés en 0.88.0 :
+      · à J+45 la phase repassait en Normal et la recommandation tombait en quelques cycles de
+        6-7 cm vers 4 cm. Le barème de reprise prévu (`_post_sursemis_bonus`, 36-59 j) était MORT
+        depuis la 0.7.2 : sa garde exigeait un âge ≤ 35 j quand la phase avait été portée à 45 j ;
+      · un Traitement (priorité 100) ou un Hivernage (95) déclaré pendant un semis (90) prenait la
+        phase dominante, et le plancher sautait : 5,0 cm conseillés sur des plantules de 10 jours.
+    Paliers Reprise 6,5 puis Stabilisation 5,0, puis la base du mois : un ARBITRAGE PRUDENT, pas une
+    valeur sourcée. Les sources, relues deux fois le 11/09/2026, divergent :
+      · Barenbrug — premier passage en position haute (6-7 cm), deuxième en position moyenne
+        (4-5 cm) : la seule qui soutienne « haute puis moyenne », et le modèle de ces paliers ;
+      · Ohio State — première tonte à la hauteur NORMALE, sans période relevée ;
+      · RHS — couper des plantules de 5-7,5 cm d'un tiers ; semis de printemps : baisser la lame
+        progressivement jusqu'au niveau normal ; semis d'automne : plus de tonte avant le printemps.
+    Chaque marche reste sous le tiers. Une descente de 0,5 cm par semaine (première version) était
+    défendable pour un semis de printemps (RHS) : le choix du rythme reste à arbitrer.
+    ⚠️ Une fin MANUELLE de la phase avant J+45 (« Retour au mode normal ») retire l'entrée Sursemis
+    de l'historique : le plancher disparaît avec elle.
+    """
+    age = _age_du_dernier_semis(context)
+    if age is None or age >= _SEMIS_DUREE_JOURS:
+        return None
+    sous_phase = "Stabilisation"
+    for borne, libelle in sorted(SUBPHASE_RULES["Sursemis"], key=lambda regle: regle[0]):
+        if age <= borne:
+            sous_phase = libelle
+            break
+    return _SEMIS_PLANCHERS_CM.get(sous_phase, _SEMIS_PLANCHERS_CM["Stabilisation"]), f"semis en {sous_phase.lower()} (J+{age})"
+
+
+_TEMPERATURE_JOUR_KEY = "hauteur_tonte_temperature_jour"
+
+
+def _temperature_plausible(valeur: Any) -> float | None:
+    """Une température exploitable, ou None. La prévision n'est PAS validée en amont (le
+    coordinateur ne filtre que sa copie locale) : un 80 °C de fournisseur passait tel quel."""
+    try:
+        v = float(valeur)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(v) or not -30.0 <= v <= 50.0:
+        return None
+    return v
+
+
+def _temperature_de_reference_hauteur(context: DecisionContext) -> tuple[float | None, dict[str, Any] | None]:
+    """Température qui règle la HAUTEUR, et l'état à mémoriser : le maximum du jour, prévu ou
+    mesuré, retenu depuis minuit — un cliquet qui ne redescend qu'au changement de date.
+
+    ⚠️ Pas la mesure instantanée : une hauteur de lame se règle pour la journée. Lue sur le
+    thermomètre, elle montait l'après-midi et prenait « froid » (+0,5) chaque aube fraîche.
+    ⚠️ Pas non plus la prévision « du jour » seule : chez le fournisseur de Kévin, c'est le maximum
+    des heures RESTANTES. Relevé le 10/09/2026 : 22,5 °C prévus à 14 h, 21,9 à 19 h (mesure 23,5),
+    15,8 à 23 h 40. Sans cliquet, « journée froide » revenait le soir en demi-saison, et la chaleur
+    retombait avant la nuit (revue adversariale de la 0.87.0).
+    Rien de plausible (premier cycle d'un redémarrage, capteurs pas encore relus) → None : aucune
+    correction de température, et non 0 °C, qui déclenchait « froid ».
+    """
+    jour = context.today.isoformat()
+    memoire = (context.memory or {}).get(_TEMPERATURE_JOUR_KEY)
+    retenue = None
+    if isinstance(memoire, dict) and memoire.get("date") == jour:
+        retenue = _temperature_plausible(memoire.get("max"))
+    candidats = [
+        v for v in (
+            retenue,
+            _temperature_plausible(context.forecast_temperature_today),
+            _temperature_plausible(context.temperature),
+        )
+        if v is not None
+    ]
+    if not candidats:
+        return None, None
+    reference = max(candidats)
+    return reference, {"date": jour, "max": round(reference, 1)}
+
+
+def _stress_hydrique_pour_la_hauteur(
+    context: DecisionContext,
+    water_bundle: dict[str, Any],
+    risk_bundle: dict[str, Any],
+) -> tuple[str, str]:
+    """Stress hydrique qui justifie de MONTER la lame : (niveau, source).
+
+    Source `reserve_sol` : la réserve réelle tenue par le registre du sol, comparée au seuil MAD
+    de la phase (`mad_ratio`, 0,5 en phase Normal — une valeur de table, pas le p FAO ajusté).
+    Pas de stress sous le seuil ; « modéré » dès qu'il est atteint (`>=`, la convention de
+    l'arrosage, qui conclut au même instant que « le sol réclame de l'eau ») ; « fort » à
+    mi-chemin entre le seuil et la réserve vide.
+
+    ⚠️ Avant (jusqu'à 0.86.0), la hauteur lisait `classify_stress_level`, dont le palier « fort »
+    s'arme dès `deficit_7j ≥ 7` — un déficit PROJETÉ (7 × ETP du jour − pluie − arrosage), pas un
+    état du sol. Sur un gazon arrosé il était armé en permanence : réserve « pleine », risque
+    « faible », et +1,0 cm sur la lame de juillet à septembre. Ce déficit projeté suivait en plus
+    le scintillement de l'ET0 à l'aube (1,7 ↔ 2,2 toutes les 10 s) : 160 bascules 5,5 ↔ 6,0 de
+    la recommandation le 11/09 entre 04:51 et 07:12.
+    Source `modele_deficit` : repli quand le registre ne fournit pas de réserve (premier cycle,
+    registre vide) — l'absence de mesure ne vaut pas « aucun stress ». Ce repli garde les défauts
+    d'avant (déficit projeté, température instantanée) : il ne sert que le temps que le registre
+    se remplisse.
+    """
+    water_balance = water_bundle.get("water_balance") or {}
+    if water_balance.get("reserve_from_soil_ledger"):
+        depletion = _to_float_safe(water_balance.get("depletion_ratio"))
+        mad = _to_float_safe(water_balance.get("mad_ratio"))
+        if depletion is not None and mad is not None and 0.0 < mad < 1.0:
+            if depletion >= (1.0 + mad) / 2.0:
+                return "fort", "reserve_sol"
+            if depletion >= mad:
+                return "modere", "reserve_sol"
+            return "leger", "reserve_sol"
+    niveau = classify_stress_level(
+        score_hydrique=int(risk_bundle["scores"]["score_hydrique"]),
+        score_stress=int(risk_bundle["scores"]["score_stress"]),
+        water_balance=water_balance,
+        temperature=context.temperature or 0.0,
+        etp=water_bundle["etp"] or 0.0,
+    )
+    return niveau, "modele_deficit"
+
+
+def _hauteur_theorique_detaillee(
+    context: DecisionContext,
+    phase_bundle: dict[str, Any],
+    water_bundle: dict[str, Any],
+    risk_bundle: dict[str, Any],
+) -> tuple[float, list[str]]:
+    """Hauteur de coupe théorique ET les termes qui l'ont faite, en clair (pour le motif publié).
+
+    Ce qui la règle : le mois, la phase, le froid et la chaleur DU JOUR, un vrai manque d'eau.
+    Ce qui ne la règle plus (0.87.0) :
+      · la rosée et la pluie (+0,4 et jusqu'à +0,7 cumulés) : elles disent QUAND tondre, pas à
+        quelle hauteur — et elles ont chacune leur blocage (« rosée présente », pluie). La rosée
+        est ESTIMÉE faute de capteur : l'humidité ≥ 88 % suffisait à l'armer, soit 22 % des
+        heures du 05 au 11/09/2026, surtout de minuit à 9 h ;
+      · la correction « bonnes conditions » (−0,5 en avril, mai, juin, septembre) : avec une base
+        à 4,0, elle conseillait 3,5 cm, sous la hauteur voulue — la base EST déjà la hauteur de
+        pousse ;
+      · l'air sec (≤ 40 % → +0,3) quand le registre du sol mesure la réserve : l'ETc qu'il débite
+        intègre déjà la sécheresse de l'air (FAO-56). Gardé en repli, avec le stress d'avant.
+    """
+    month = context.today.month
+    base = _seasonal_base_height(month)
+    target = base
+    termes: list[str] = []
+    temperature, _ = _temperature_de_reference_hauteur(context)
+    stress_level, stress_source = _stress_hydrique_pour_la_hauteur(context, water_bundle, risk_bundle)
+
+    # (L'ancien « +0,2 en mars froid » est retiré : la base de mars, 4,5, porte déjà la reprise
+    # haute, et arrondi au plus proche ce terme ne changeait JAMAIS la valeur publiée — le motif
+    # annonçait une correction sans effet.)
+    if phase_bundle["phase_dominante"] != "Normal":
+        target += 0.3
+        termes.append(f"phase {phase_bundle['phase_dominante']} +0,3")
+
+    if month in {1, 2, 11, 12}:
+        target += 0.5
+        termes.append("hiver +0,5")
+    elif temperature is not None and temperature <= 8:
+        target += 0.5
+        termes.append(f"journée froide ({_cm(temperature)} °C) +0,5")
+
+    stress_libelle = "réserve du sol" if stress_source == "reserve_sol" else "déficit estimé"
+    if temperature is not None and temperature >= 32:
+        target += 1.0
+        termes.append(f"forte chaleur ({_cm(temperature)} °C) +1,0")
+    elif stress_level == "fort":
+        target += 1.0
+        termes.append(f"manque d'eau fort ({stress_libelle}) +1,0")
+    elif temperature is not None and temperature >= 28:
+        target += 0.5
+        termes.append(f"chaleur ({_cm(temperature)} °C) +0,5")
+    elif stress_level == "modere":
+        target += 0.5
+        termes.append(f"manque d'eau modéré ({stress_libelle}) +0,5")
+    elif temperature is not None and temperature >= 24:
+        target += 0.2
+        termes.append(f"temps chaud ({_cm(temperature)} °C) +0,2")
+
+    if stress_source == "modele_deficit" and context.humidite is not None and context.humidite <= 40:
+        target += 0.3
+        termes.append("air sec +0,3")
+
+    # Les planchers (semis, règle du tiers) ne sont PAS ici : ils s'arrondissent vers le haut et
+    # s'appliquent dans `_recommended_mowing_height`, après l'arrondi au plus proche de ce qui précède.
+    return target, termes
 
 
 def _theoretical_mowing_height(
@@ -1699,76 +1998,8 @@ def _theoretical_mowing_height(
     water_bundle: dict[str, Any],
     risk_bundle: dict[str, Any],
 ) -> float:
-    """Estime une hauteur de coupe prudente selon la saison et le stress."""
-    temperature = context.temperature or 0.0
-    humidite = context.humidite or 0.0
-    pluie_24h = context.pluie_24h or 0.0
-    pluie_demain = context.pluie_demain or 0.0
-    pluie_j2 = context.pluie_j2 or 0.0
-    pluie_3j = context.pluie_3j or 0.0
-    pluie_probabilite_max_3j = context.pluie_probabilite_max_3j or 0.0
-    rosee = water_bundle["advanced_context"].get("rosee")
-    etp = water_bundle["etp"] or 0.0
-    water_balance = water_bundle["water_balance"]
-    score_hydrique = int(risk_bundle["scores"]["score_hydrique"])
-    score_stress = int(risk_bundle["scores"]["score_stress"])
-    stress_level = classify_stress_level(
-        score_hydrique=score_hydrique,
-        score_stress=score_stress,
-        water_balance=water_balance,
-        temperature=temperature,
-        etp=etp,
-    )
-
-    month = context.today.month
-    target = _seasonal_base_height(month)
-
-    if phase_bundle["phase_dominante"] == "Normal":
-        if month in {4, 5, 6, 9} and stress_level == "leger":
-            if 15 <= temperature <= 24 and humidite >= 50 and pluie_24h < 1 and pluie_demain < 1 and not rosee:
-                target -= 0.5
-        elif month == 3 and temperature <= 16 and stress_level == "leger":
-            target += 0.2
-    else:
-        target += 0.3
-
-    if month in {1, 2, 11, 12} or temperature <= 8:
-        target += 0.5
-    if temperature >= 32 or stress_level == "fort":
-        target += 1.0
-    elif temperature >= 28 or stress_level == "modere":
-        target += 0.5
-    elif temperature >= 24:
-        target += 0.2
-
-    if humidite <= 40:
-        target += 0.3
-    if rosee is not None and rosee > 0:
-        target += 0.4
-    if pluie_24h >= 2:
-        target += 0.2
-    if pluie_demain >= 2:
-        target += 0.2
-    if pluie_j2 >= 2:
-        target += 0.1
-    if pluie_3j >= 4:
-        target += 0.1
-    if pluie_probabilite_max_3j >= 80:
-        target += 0.1
-
-    if phase_bundle["phase_dominante"] == "Sursemis":
-        if phase_bundle["sous_phase"] == "Germination":
-            target = max(target, 7.6)
-        elif phase_bundle["sous_phase"] == "Enracinement":
-            target = max(target, 7.0)
-        else:
-            target = max(target, 6.6)
-    else:
-        post_sursemis_age = _last_sursemis_age_days(context)
-        if post_sursemis_age is not None and post_sursemis_age <= 35:
-            target += _post_sursemis_bonus(post_sursemis_age)
-
-    return target
+    """Hauteur de coupe théorique (cm), avant règle du tiers, arrondi et bornes machine."""
+    return _hauteur_theorique_detaillee(context, phase_bundle, water_bundle, risk_bundle)[0]
 
 
 def _select_mowing_block_reason(
@@ -1785,6 +2016,7 @@ def _select_mowing_block_reason(
     current_height: float | None,
     target_height: float,
     effective_max: float,
+    lame_connue: bool = True,
 ) -> tuple[str | None, str | None, bool]:
     """Résout une cause de blocage unique selon une priorité métier explicite."""
     phase_dominante = str(phase_bundle["phase_dominante"])
@@ -1804,7 +2036,7 @@ def _select_mowing_block_reason(
 
     candidates: list[tuple[int, str, str, bool]] = []
 
-    if _est_la_nuit(context):
+    if _est_la_nuit(context, weather_profile):
         candidates.append(
             (
                 _MOWING_BLOCK_PRIORITIES["mowing_night"],
@@ -1862,8 +2094,17 @@ def _select_mowing_block_reason(
                 (
                     _MOWING_BLOCK_PRIORITIES["hauteur_trop_faible"],
                     "hauteur_trop_faible",
-                    f"Hauteur actuelle trop faible: la lame coupe à {target_height:.1f} cm, "
-                    f"attends que le gazon la dépasse.",
+                    (
+                        f"Hauteur actuelle trop faible: la lame coupe à {target_height:.1f} cm, "
+                        f"attends que le gazon la dépasse."
+                    )
+                    if lame_connue
+                    # Lame inconnue : le seuil est la hauteur CONSEILLÉE, pas un réglage mesuré —
+                    # « la lame coupe à 6,5 cm » contredisait l'historique des tontes.
+                    else (
+                        f"Hauteur actuelle trop faible: la hauteur conseillée est {target_height:.1f} cm "
+                        f"(réglage de lame inconnu), attends que le gazon la dépasse."
+                    ),
                     True,
                 )
             )
@@ -2022,15 +2263,16 @@ def _recommended_mowing_height(
     phase_bundle: dict[str, Any],
     water_bundle: dict[str, Any],
     risk_bundle: dict[str, Any],
-) -> dict[str, float | str | None]:
+) -> dict[str, Any]:
     """Calcule une hauteur de coupe prudente et compatible avec la machine.
 
-    Les bornes retournées (`hauteur_tonte_min_cm` / `_max_cm`) sont celles RÉELLEMENT appliquées,
-    garde-fous agronomiques compris — pas la config brute. `hauteur_tonte_garde_fou_label` dit en
-    clair quand un garde-fou a resserré la config, et vaut None sinon.
+    Les bornes retournées (`hauteur_tonte_min_cm` / `_max_cm`) sont celles de la machine (config,
+    ramenée sur la grille de 0,5). `hauteur_tonte_garde_fou_label` dit en clair quand la règle du
+    tiers relève la consigne, et vaut None sinon ; `hauteur_tonte_motif` dit ce qui a fait la
+    valeur (mois, corrections, tiers, plafond machine).
     """
     min_height, max_height, step = _mowing_height_settings(context)
-    theoretical_height = _theoretical_mowing_height(context, phase_bundle, water_bundle, risk_bundle)
+    theoretical_height, termes = _hauteur_theorique_detaillee(context, phase_bundle, water_bundle, risk_bundle)
     current_height = water_bundle["advanced_context"].get("hauteur_gazon")
     if current_height is None:
         current_height = _estimated_grass_height_cm(context, phase_bundle, water_bundle)
@@ -2048,9 +2290,9 @@ def _recommended_mowing_height(
     #
     # La config décrit la MACHINE : c'est elle qui borne désormais, sans rognage caché. Le
     # commentaire de `number.py` (« aucune valeur codée en dur ») redevient vrai de bout en bout.
-    # ⚠️ Seul trou connu : si `hauteur_gazon` est absente, `third_floor` vaut None et il ne reste
-    # que la hauteur théorique (phase + saison) pour tenir le plancher. En saison chaude elle
-    # pousse déjà vers le haut, donc le risque est hors saison de végétation.
+    # ⚠️ Seul trou connu : si ni le capteur `hauteur_gazon` ni l'estimation ne donnent de hauteur
+    # d'herbe, `third_floor` vaut None et seule la hauteur théorique (phase + saison) tient le
+    # plancher — 4,0 cm au plus bas depuis la 0.87.0.
 
     theoretical_before_third = theoretical_height
     if current_height is not None:
@@ -2063,10 +2305,39 @@ def _recommended_mowing_height(
             third_floor = None
 
     effective_max = _round_down_to_step(max_height, min_height, step)
-    recommended_height = _round_up_to_step(theoretical_height, min_height, step)
     allowed_min = min_height
     allowed_max = effective_max
-    recommended_height = max(allowed_min, min(recommended_height, allowed_max))
+    # La part saisonnière s'arrondit au plus PROCHE ; les PLANCHERS (règle du tiers, sursemis)
+    # vers le haut, puis on garde le plus haut. Tout arrondir au plus proche ferait conseiller
+    # 4,5 cm sur un gazon à 7 cm dont le tiers interdit de descendre sous 4,67 — et, lame
+    # inconnue, le moteur se bloquerait sur sa propre recommandation (`target_height`).
+    saison_arrondie = _round_nearest_to_step(theoretical_before_third, min_height, step)
+    semis = _plancher_semis(context)
+    plancher_semis = semis[0] if semis is not None else None
+    planchers = [
+        _round_up_to_step(p, min_height, step) for p in (third_floor, plancher_semis) if p is not None
+    ]
+    cible = max([saison_arrondie, *planchers])
+    # « Le tiers mord » se décide sur les valeurs ARRONDIES, celles qui font la valeur publiée :
+    # comparées brutes (tiers 4,13 < théorique 4,2), elles taisaient un relèvement réel à 4,5
+    # (tiers arrondi vers le haut) quand la saison, arrondie au plus proche, disait 4,0.
+    tiers_arrondi = _round_up_to_step(third_floor, min_height, step) if third_floor is not None else None
+    semis_arrondi = _round_up_to_step(plancher_semis, min_height, step) if plancher_semis is not None else None
+    # Un plancher « mord » s'il dépasse la saison ET qu'il est le plus haut des planchers : sinon
+    # le motif (et le ⚑ de la carte) attribuaient au tiers une hauteur que faisait le semis
+    # (revue du 11/09/2026 : J+40, gazon à 7 cm, 7,0 venait du semis, « relevée par le tiers »).
+    tiers_mord = (
+        tiers_arrondi is not None
+        and tiers_arrondi > saison_arrondie + 1e-9
+        and tiers_arrondi >= cible - 1e-9
+    )
+    semis_mord = (
+        semis_arrondi is not None
+        and semis_arrondi > saison_arrondie + 1e-9
+        and semis_arrondi >= cible - 1e-9
+    )
+    cible_bornee = max(allowed_min, min(cible, allowed_max))
+    recommended_height = cible_bornee
 
     previous_height = _previous_recommended_height(context)
     if previous_height is not None:
@@ -2079,31 +2350,56 @@ def _recommended_mowing_height(
             direction = step if diff > 0 else -step
             recommended_height = _round_to_step(previous_height + direction)
             recommended_height = max(allowed_min, min(recommended_height, allowed_max))
+    # ⚠️ Les planchers passent APRÈS le lissage. Le lissage (un pas par cycle) s'appliquait après
+    # eux et pouvait republier une valeur SOUS le tiers qu'on venait de calculer — lame inconnue,
+    # le moteur se bloquait alors en « règle du tiers » à cause de sa propre recommandation.
+    # Descendre peut attendre un cycle ; relever pour protéger le brin, non.
+    for plancher_arrondi in planchers:
+        recommended_height = max(recommended_height, min(plancher_arrondi, allowed_max))
 
-    # Les bornes PUBLIÉES sont désormais celles réellement appliquées (`allowed_*`), pas la config
-    # brute. Avant, l'attribut annonçait le min configuré — 3,0 cm chez Kévin — alors que le
-    # plancher agronomique de 4,0 cm interdit d'y descendre : l'attribut mentait sans le dire.
-    # Le garde-fou n'est PAS retiré (voir sa note plus haut) ; il devient simplement visible.
-    # Les valeurs configurées restent exposées sous des clés privées pour le diagnostic.
-    # Le libellé n'annonce plus un rognage de la config — il n'y en a plus. Il explique la seule
-    # contrainte qui peut encore relever la consigne au-dessus de ce que la saison demanderait :
-    # la RÈGLE DU TIERS. Sans ce mot, une consigne à 4 cm sur une tondeuse réglable à 3 reste
-    # incompréhensible. Vaut None quand c'est la saison qui pilote — cas courant.
-    if (
-        third_floor is not None
-        and third_floor > theoretical_before_third + 1e-9
-        and recommended_height > min_height + 1e-9
-    ):
+    # Les bornes PUBLIÉES sont celles réellement appliquées (`allowed_*`). Le plancher fixe de
+    # 4,0 cm qui rognait la config a été retiré le 29/07/2026 (note plus haut) : depuis, les bornes
+    # appliquées SONT celles de la machine. Les valeurs configurées brutes restent exposées sous
+    # des clés privées pour le diagnostic.
+    # Le libellé explique la seule contrainte qui peut relever la consigne au-dessus de ce que la
+    # saison demanderait : la RÈGLE DU TIERS. Vaut None quand c'est la saison qui pilote.
+    if tiers_mord and third_floor is not None and recommended_height > min_height + 1e-9:
         garde_fou_label = (
             f"Règle du tiers : on n'ôte pas plus d'un tiers du limbe. Gazon à "
             f"{float(current_height):g} cm → ne pas descendre sous {third_floor:.1f} cm "
-            f"(la saison seule aurait proposé {theoretical_before_third:.1f} cm)."
+            f"(la saison seule aurait proposé {saison_arrondie:.1f} cm)."
         )
     else:
         garde_fou_label = None
 
+    # Le POURQUOI de la valeur, en clair. Sans lui, « 6,0 cm toute l'année » (question de Kévin
+    # le 11/09/2026) ne se comprenait qu'en relisant ce fichier : le stress qui la montait
+    # n'était publié nulle part. Il décrit la valeur PUBLIÉE : bornes machine et lissage compris.
+    mois = _NOMS_DES_MOIS[context.today.month - 1]
+    motif = f"{mois.capitalize()} : base {_cm(_seasonal_base_height(context.today.month))} cm"
+    motif += f", {', '.join(termes)}" if termes else " (hauteur de pousse)"
+    # L'arrondi, quand il change la somme : « +0,2 » sous « 4,0 cm » se lisait comme une erreur.
+    if termes and abs(theoretical_before_third - saison_arrondie) > 1e-9:
+        motif += f" → arrondi à {_cm(saison_arrondie)} cm"
+    if semis_mord and semis is not None:
+        motif += f" ; {semis[1]} : plancher {_cm(semis_arrondi or 0.0)} cm"
+    if tiers_mord:
+        motif += " ; relevée par la règle du tiers"
+    if cible > allowed_max + 1e-9:
+        motif += f" ; plafonnée au maximum de la tondeuse ({_cm(allowed_max)} cm)"
+    elif theoretical_before_third < allowed_min - 1e-9 and cible_bornee <= allowed_min + 1e-9:
+        # Les arrondis ramènent déjà tout sous le minimum SUR le minimum : on compare la brute.
+        motif += f" ; relevée au minimum de la tondeuse ({_cm(allowed_min)} cm)"
+    if abs(recommended_height - cible_bornee) > 1e-9:
+        motif += f" ; en route vers {_cm(cible_bornee)} cm, un pas de 0,5 par cycle"
+    motif += "."
+
+    _, temperature_jour = _temperature_de_reference_hauteur(context)
+
     return {
         "hauteur_tonte_recommandee_cm": round(recommended_height, 2),
+        "hauteur_tonte_motif": motif,
+        "hauteur_tonte_temperature_jour": temperature_jour,
         "hauteur_tonte_min_cm": round(allowed_min, 2),
         "hauteur_tonte_max_cm": round(allowed_max, 2),
         "hauteur_tonte_garde_fou_label": garde_fou_label,
@@ -2227,6 +2523,7 @@ def build_mowing_bundle(
         current_height=current_height_float,
         target_height=target_height,
         effective_max=effective_max,
+        lame_connue=_hauteur_coupe_reelle_cm(context) is not None,
     )
     selected_reason = reason
     selected_reason_code = reason_code
@@ -2467,6 +2764,11 @@ def build_mowing_bundle(
     bundle["gazon_hauteur_estimee_cm"] = _pousse["hauteur_cm"] if _pousse else None
     bundle["gazon_pousse_jour_cm"] = _pousse["pousse_jour_cm"] if _pousse else None
     bundle["gazon_pousse_state"] = _pousse["etat"] if _pousse else None
+    # Date (locale) de la dernière tonte enregistrée. La carte la lit depuis sa 0.21.2 pour ne
+    # pas reproposer « J'ai tondu » le jour même — mais rien ne la publiait : le bouton restait
+    # proposé en permanence (contre-revue du 11/09/2026).
+    _derniere_tonte = _last_mowing_date(context)
+    bundle["derniere_tonte_date"] = _derniere_tonte.isoformat() if _derniere_tonte else None
     bundle["pluie_state"] = _etat_pluie(context, is_active_rain_weather(context.weather_profile))
     bundle["mowing_watering_coordination"] = watering_coord_level
     bundle["mowing_watering_coordination_msg"] = watering_coord_msg

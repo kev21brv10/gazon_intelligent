@@ -549,6 +549,16 @@ def _application_payload(application_state: dict[str, Any]) -> dict[str, Any]:
         "application_post_watering_status": application_state.get("application_post_watering_status"),
         "application_block_until": application_state.get("application_block_until"),
         "application_block_active": bool(application_state.get("application_block_active", False)),
+        # SOURCE UNIQUE de « l'application agit encore » (memory.compute_application_state) :
+        # la décision, le capteur « Prochain arrosage » et l'arrosage après application la lisent.
+        "application_en_cours": bool(application_state.get("application_en_cours", False)),
+        # Par TYPE, sur toutes les applications récentes (la plus contraignante l'emporte) : une
+        # application « sol » déclarée après un produit foliaire n'efface plus sa protection.
+        "application_foliaire_en_cours": bool(application_state.get("application_foliaire_en_cours", False)),
+        "application_foliaire_label": application_state.get("application_foliaire_label"),
+        "application_inconnue_en_cours": bool(application_state.get("application_inconnue_en_cours", False)),
+        "application_inconnue_label": application_state.get("application_inconnue_label"),
+        "application_block_label": application_state.get("application_block_label"),
         "application_block_remaining_minutes": float(
             application_state.get("application_block_remaining_minutes") or 0.0
         ),
@@ -916,8 +926,19 @@ def _resolve_hivernage_override(state: dict[str, Any]) -> dict[str, Any] | None:
     )
 
 
+def _application_encore_en_cours(application_state: dict[str, Any]) -> bool:
+    """La dernière application agit-elle encore ? Lue dans la SOURCE UNIQUE
+    (`memory.compute_application_state` → `application_en_cours`), jamais recalculée ici.
+
+    ⚠️ Les règles « foliaire » et « type inconnu » s'armaient sur la seule existence de
+    `derniere_application`, en trois copies (ici, le capteur « Prochain arrosage », l'arrosage
+    après application du coordinateur) : un Traitement bloquait tonte et arrosage à J+100.
+    """
+    return bool(application_state.get("application_en_cours") or application_state.get("application_block_active"))
+
+
 def _resolve_unknown_application_override(state: dict[str, Any]) -> dict[str, Any] | None:
-    if not state["application_summary"] or state["application_type_known"]:
+    if not state["application_inconnue_en_cours"]:
         return None
     return _bundle_with(
         state["base_bundle"],
@@ -930,7 +951,7 @@ def _resolve_unknown_application_override(state: dict[str, Any]) -> dict[str, An
         type_arrosage="bloque",
         arrosage_conseille="personnalise",
         conseil_principal=(
-            f"{state['application_label']}: type d'application inconnu, aucun arrosage automatique ne doit être lancé."
+            f"{state['application_inconnue_label']}: type d'application inconnu, aucun arrosage automatique ne doit être lancé."
         ),
         action_recommandee="Vérifie l'étiquette ou renseigne le type d'application avant d'arroser.",
         action_a_eviter="Lancer un arrosage sans type d'application confirmé.",
@@ -965,7 +986,8 @@ def _resolve_application_block_override(state: dict[str, Any]) -> dict[str, Any]
         arrosage_recommande=False,
         type_arrosage="bloque",
         arrosage_conseille="personnalise",
-        conseil_principal=f"{state['application_label']}: l'arrosage est bloqué jusqu'à la fin de la fenêtre de protection.",
+        # Le produit dont le blocage court (le plus lointain), pas forcément le dernier déclaré.
+        conseil_principal=f"{state['application_block_label']}: l'arrosage est bloqué jusqu'à la fin de la fenêtre de protection.",
         action_recommandee="Attends la fin du bloc applicatif avant d'arroser.",
         action_a_eviter="Arroser pendant la fenêtre de protection.",
         raison_decision=(
@@ -988,7 +1010,7 @@ def _resolve_application_block_override(state: dict[str, Any]) -> dict[str, Any]
 
 
 def _resolve_foliar_application_override(state: dict[str, Any]) -> dict[str, Any] | None:
-    if not state["application_summary"] or state["application_type"] != APPLICATION_TYPE_FOLIAIRE:
+    if not state["application_foliaire_en_cours"]:
         return None
     return _bundle_with(
         state["base_bundle"],
@@ -1000,7 +1022,7 @@ def _resolve_foliar_application_override(state: dict[str, Any]) -> dict[str, Any
         type_arrosage="bloque",
         arrosage_conseille="personnalise",
         conseil_principal=(
-            f"{state['application_label']}: traitement foliaire sans arrosage automatique pendant la fenêtre de protection."
+            f"{state['application_foliaire_label']}: traitement foliaire sans arrosage automatique pendant la fenêtre de protection."
         ),
         action_recommandee="Attends la fin de la protection avant toute irrigation.",
         action_a_eviter="Arroser une application foliaire trop tôt.",
@@ -1780,6 +1802,12 @@ def build_watering_bundle(
         "heat_stress_level": heat_stress_level,
         "heat_stress_phase": heat_stress_phase,
         "application_summary": application_summary,
+        "application_en_cours": _application_encore_en_cours(application_state),
+        "application_foliaire_en_cours": bool(application_state.get("application_foliaire_en_cours")),
+        "application_inconnue_en_cours": bool(application_state.get("application_inconnue_en_cours")),
+        "application_foliaire_label": application_state.get("application_foliaire_label") or application_label,
+        "application_inconnue_label": application_state.get("application_inconnue_label") or application_label,
+        "application_block_label": application_state.get("application_block_label") or application_label,
         "application_type_known": application_type_known,
         "application_label": application_label,
         "application_type": application_type,
@@ -1809,10 +1837,11 @@ def build_watering_bundle(
             return resolved
 
     if not recommande:
+        # L'humidité de l'air n'est plus un blocage (15/09/2026, cf. `_profile_for_normal`) : un
+        # matin humide sans besoin d'eau affiche « aucune action », pas « bloqué ».
         watering_blocked = (
             pluie_compensatrice
             or pluie_proche
-            or humidite_haute
             or pluie_significative
             or block_reason_value in {"cooldown_24h", "sol_deja_humide"}
         )
@@ -2025,10 +2054,8 @@ def build_watering_bundle(
                 conseil_principal = f"Arrose {fenetre_texte} en privilégiant la recharge de la réserve."
                 action_recommandee = f"Applique {objectif_mm:.1f} mm {style_text}."
                 action_a_eviter = "Arroser entre 11h et 18h."
-            elif humidite_haute:
-                conseil_principal = "Attends un léger ressuyage avant d'arroser."
-                action_recommandee = "Reporte l'arrosage au prochain créneau sec."
-                action_a_eviter = "Arroser immédiatement sur pelouse saturée."
+            # Plus de conseil « attends un ressuyage » sur l'air humide (15/09/2026) : l'arrosage
+            # part quand même, et ce texte contredisait le lancement. À l'aube, c'est le bon moment.
             else:
                 passages = _soil_fractionation_passages(
                     phase_dominante,
@@ -2135,8 +2162,6 @@ def build_watering_bundle(
         )
     if pluie_compensatrice or pluie_proche:
         raison_parts.append("pluie prévue suffisante: arrosage reporté ou bloqué.")
-    if humidite_haute:
-        raison_parts.append("humidité élevée: sol trop chargé pour un arrosage immédiat.")
     if pluie_significative:
         raison_parts.append("risque d'humidité élevé")
     if stress_thermique:

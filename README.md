@@ -51,7 +51,7 @@ Gazon Intelligent ne se contente pas d'allumer des zones d'arrosage ou de remont
 - **Comptage fiable** de l'eau réellement appliquée (anti double-comptage des cycles fractionnés) et **suivi en temps réel** pendant un cycle.
 
 **✂️ Tonte coordonnée**
-- **Autorisation métier** selon la phase, le risque, la météo et l'heure (fenêtre **10 h–22 h**, nuit bloquée).
+- **Autorisation métier** selon la phase, le risque, la météo et l'heure (de **10 h au coucher du soleil + 30 min**, nuit bloquée).
 - **Fréquence cible** (~5/semaine) et **quota journalier** adaptés à la phase.
 - **Coordination robot tondeuse** (optionnelle, par pelouse) : pas de tonte sous la pluie ni pendant l'arrosage, hauteur de coupe synchronisable, et séparation nette entre « gazon autorisé » et « machine disponible ».
 
@@ -130,15 +130,21 @@ Côté tonte, les attributs `gazon_permet_tonte`, `machine_permet_tonte`, `actio
 
 `sensor.gazon_intelligent_prochain_arrosage` est la lecture la plus directe. Il affiche soit une **fenêtre utile avec objectif** (ex. *« demain matin, 8 mm »*), soit un **blocage avec son motif** (cooldown, pluie prévue, sol humide, garde-fou hebdo plafonné…), soit **« Non requis »** (réserve suffisante). Le motif n'est **jamais muet**.
 
+L'arrosage du matin part pour **finir 15 min avant le lever du soleil**, jamais avant l'ouverture de sa fenêtre : la nuit, attendre ne coûte rien au sol, et l'eau tombe sur la rosée. Les heures de départ et de fin sont publiées (`departure_time`, `end_time`), y compris pendant l'attente, dès lors que l'arrosage automatique partira de lui-même (ni verrou de sécurité, ni interrupteur coupé, ni mode manuel).
+
 ### Tonte
 
 `binary_sensor.gazon_intelligent_tonte_autorisee` exprime l'autorisation **métier** ; l'action finale dépend aussi de la **machine** (prête ou non) et de la **coordination**.
 
-**Fenêtre horaire** (créneaux où une nouvelle tonte peut partir, si la météo le permet) :
+**Fenêtre horaire** (créneaux où la tonte est permise, si la météo le permet) :
 
-- **idéale : 10 h – 12 h** · **acceptable : 17 h – 19 h**
-- permise mais déconseillée : 12 h – 17 h et 19 h – 22 h
-- **bloquée la nuit : 22 h → 10 h**
+- **idéale : 10 h – 14 h**
+- **acceptable le soir : de 5 h avant le coucher du soleil jusqu'au coucher + 30 min** (coucher à 20 h 12 : 15 h 12 – 20 h 42 ; en juillet, environ 16 h 45 – 22 h 15)
+- permise mais déconseillée : entre 14 h et l'ouverture du soir
+- **bloquée la nuit**, du coucher + 30 min au lever du soleil, puis « matin trop tôt » (rosée) jusqu'à 10 h
+- sans heure de coucher connue (juste après un redémarrage), repli fixe : acceptable 17 h – 19 h, nuit à 22 h
+
+La fin du soir est la dernière minute **autorisée**, pas une heure de départ : ensuite `tonte_autorisee` retombe, et un robot rappelé sur ce signal rentre.
 
 La météo bloque à **toute heure** : pluie en cours/imminente, rosée présente, température < 8 °C ou trop élevée, vent fort.
 

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .const import block_reason_label
+
 
 ASSISTANT_ACTION_VALUES = ("none", "arrosage", "traitement", "tonte")
 ASSISTANT_MOMENT_VALUES = (
@@ -23,43 +25,21 @@ DEFAULT_ASSISTANT_DECISION: dict[str, Any] = {
     "reason": "conditions optimales",
 }
 
-_BLOCK_REASON_LABELS = {
-    "pluie_prevue_suffisante": "Pluie prévue suffisante",
-    "temperature_trop_basse": "Température trop basse",
-    "arrosage_recent": "Arrosage récent",
-    "sol_deja_humide": "Sol déjà humide",
-    "sol_non_adapte": "Sol non adapté",
-    "pluie_probabilite_elevee": "Pluie probable élevée",
-    "surface_non_seche": "Surface non sèche",
-    "cooldown_24h": "Déjà arrosé aujourd'hui",
-    "humidite_excessive": "Humidité excessive",
-    "humidite_elevee": "Humidité élevée",
-    "garde_fou_hebdomadaire": "Garde-fou hebdomadaire",
-    "mode_bloque": "Mode bloqué",
-    "pluie_active": "Pluie active",
-    "bloque": "Bloqué",
-    "mower_mowing": "Tondeuse en cours de tonte",
-    "mower_returning": "Tondeuse en retour station",
-    "mower_starting": "Tondeuse en démarrage",
-    "mower_zoning": "Tondeuse en changement de zone",
-    "mower_searching_zone": "Tondeuse en recherche de zone",
-    "mower_rain_delayed": "Pause pluie active",
-    "mower_escaped_digital_fence": "Tondeuse sortie du périmètre",
-    "mower_not_stowed": "Tondeuse non rangée",
-    "mower_unreliable": "Coordination tondeuse indisponible",
-    "mowing_night": "Nuit: attendre le lever du soleil.",
-    "mowing_window_blocked": "Fenêtre de tonte fermée",
-    "recent_watering": "Arrosage récent",
-    "soil_wet": "Sol humide",
-    "wet_grass": "Herbe mouillée",
-    "temp_extreme": "Température extrême",
-    "machine_unavailable": "Robot indisponible",
-    "battery low": "Batterie faible",
-    "battery_low": "Batterie faible",
-    "post_application_active": "Post-produit actif",
-    "watering_in_progress": "Arrosage en cours",
-    "watering_cooldown": "Cooldown tonte après arrosage",
-}
+# ⚠️ PAS DE TABLE DE LIBELLÉS ICI (0.88.0). L'assistant avait sa propre `_BLOCK_REASON_LABELS`,
+# copie divergente de `const.BLOCK_REASON_DISPLAY_LABELS` : « Sol humide » contre « Sol détrempé »,
+# « Fenêtre de tonte fermée » contre « Hors fenêtre de tonte », et quatre codes réellement émis
+# (`semis_cycle_pending`, `semis_cycle_daily_target_reached`, `application_foliaire`,
+# `temperature_trop_basse_germination`) affichés en snake_case brut dans le hero de la carte.
+# Les libellés courts vivent dans `const` ; une garde AST (tests) interdit d'en recréer une copie.
+# « Nuit » n'y est pas : c'est une phrase-consigne rédigée par la décision de tonte, pas un libellé.
+_NUIT = "Nuit: attendre le lever du soleil."
+
+
+def _libelle_motif(valeur: str) -> str:
+    """Libellé court d'un CODE connu ; sinon le texte tel quel (l'assistant reçoit surtout des phrases)."""
+    if str(valeur or "").strip().lower() == "mowing_night":
+        return _NUIT
+    return block_reason_label(valeur) or valeur
 
 _STRONG_MOWING_BLOCK_CODES = {
     "phase_sursemis",
@@ -167,7 +147,7 @@ def _resolve_irrigation(snapshot: dict[str, Any]) -> dict[str, Any] | None:
             moment="attendre",
             quantity_mm=0.0,
             status="blocked",
-            reason=_BLOCK_REASON_LABELS.get(block_reason.lower(), block_reason),
+            reason=_libelle_motif(block_reason),
         )
 
     reason = _irrigation_reason(snapshot)
@@ -314,7 +294,10 @@ def _resolve_mowing(snapshot: dict[str, Any]) -> dict[str, Any] | None:
                 moment="attendre",
                 quantity_mm=0.0,
                 status="blocked",
-                reason=_BLOCK_REASON_LABELS.get(mowing_block_reason_code, mowing_block_reason) or "Nuit: attendre le lever du soleil.",
+                # La PHRASE qui a déclenché cette branche (« Nuit: attendre le lever du soleil. »),
+                # pas le libellé du code : à 22 h, soleil encore levé, le code est
+                # `mowing_window_blocked` et son libellé « Hors fenêtre de tonte » taisait la nuit.
+                reason=_libelle_motif(mowing_block_reason) or _NUIT,
             )
         if soft_mowing_block or not strong_mowing_block:
             return None
@@ -325,16 +308,16 @@ def _resolve_mowing(snapshot: dict[str, Any]) -> dict[str, Any] | None:
             moment="attendre",
             quantity_mm=0.0,
             status="blocked",
-            reason=_BLOCK_REASON_LABELS.get(mowing_block_reason.lower(), mowing_block_reason),
+            reason=_libelle_motif(mowing_block_reason),
         )
 
     mower_ready = snapshot.get("tondeuse_prete")
     mower_reason = _clean_text(snapshot.get("tondeuse_raison"))
     mower_status_label = _clean_text(snapshot.get("tondeuse_statut_libelle"))
     if snapshot.get("mower_coordination_enabled") is not False and mower_ready is False:
-        reason_label = _BLOCK_REASON_LABELS.get(mower_reason.casefold(), mower_reason)
+        reason_label = _libelle_motif(mower_reason)
         if not reason_label:
-            reason_label = _BLOCK_REASON_LABELS.get(mower_status_label.casefold(), mower_status_label)
+            reason_label = _libelle_motif(mower_status_label)
         return _result(
             action="tonte",
             moment="attendre",
@@ -371,6 +354,60 @@ def _resolve_mowing(snapshot: dict[str, Any]) -> dict[str, Any] | None:
     )
 
 
+_STATUTS_POST_APPLICATION_ACTIFS = frozenset({"bloque", "en_attente", "autorise"})
+
+
+def blocage_sans_objet(
+    besoin_mm: Any,
+    *,
+    application_block_active: bool = False,
+    application_post_watering_status: Any = "",
+    application_post_watering_pending: bool = False,
+) -> bool:
+    """Un garde-fou armé qui n'a RIEN retenu : le sol ne demandait pas d'eau.
+
+    ⚠️ LE DÉFAUT DU 11/09/2026. L'arrosage de l'aube venait de remplir la réserve à 12/12 ;
+    la garde « un arrosage par jour » (`cooldown_24h`) est restée armée, comme prévu. Et
+    QUATRE surfaces l'ont affiché comme un blocage :
+
+        prochain_arrosage     « Bloqué » · « Attendre des conditions favorables »
+        fenetre_optimale      « Arrosage bloqué: Déjà arrosé aujourd'hui »
+        assistant             « attente_conditions » — le hero de la carte
+        signal_irrigation     « Arrosage bloqué par conditions : Déjà arrosé aujourd'hui »
+
+    avec `besoin_mm: 0` publié à côté. Rien n'était demandé, donc rien n'était retenu :
+    annoncer un blocage laissait croire qu'on refusait de l'eau au gazon, juste après l'avoir
+    arrosé.
+
+    ⚠️ UNE SEULE DÉFINITION, ET C'EST TOUT LE CORRECTIF. La bonne règle existait déjà depuis la
+    0.72.0 dans `_motif_de_blocage_effectif` (sensor.py), avec ce commentaire : « Deux copies
+    finiraient par diverger, et l'une des deux mentirait sans qu'on sache laquelle. » Elles
+    avaient divergé : quatre autres endroits recalculaient « un motif existe, donc bloqué ».
+    Tous passent désormais par ici.
+
+    ⚠️ ABSENCE ≠ ZÉRO : un besoin non publié ne désarme rien. Ne pas savoir n'autorise pas à
+    conclure que tout va bien — c'est le côté sûr.
+
+    ⚠️ JAMAIS POUR UN BLOCAGE POST-APPLICATION. Un produit épandu attend son eau pour être
+    dissous : ce besoin-là est une ACTIVATION, pas un déficit hydrique, et `besoin_mm` peut
+    très bien valoir 0 pendant qu'un engrais attend sur le feuillage. Ce blocage doit rester
+    visible quoi qu'il arrive.
+
+    ⚠️ AFFICHAGE SEULEMENT. Rien ici ne touche à `type_arrosage` ni à l'exécution : la garde
+    continue de retenir exactement ce qu'elle retenait. Seul le récit change.
+    """
+    if not isinstance(besoin_mm, (int, float)) or isinstance(besoin_mm, bool):
+        return False
+    if float(besoin_mm) > 0.0:
+        return False
+    if application_block_active or application_post_watering_pending:
+        return False
+    statut = str(application_post_watering_status or "").strip().lower()
+    if statut in _STATUTS_POST_APPLICATION_ACTIFS:
+        return False
+    return True
+
+
 def _resolve_passive_state(snapshot: dict[str, Any]) -> dict[str, Any] | None:
     # Les états passifs doivent retomber en no_need quand aucun exécutable n'est réellement attendu.
     block_reason = _clean_text(
@@ -385,7 +422,7 @@ def _resolve_passive_state(snapshot: dict[str, Any]) -> dict[str, Any] | None:
 
     reason = conseil
     if not reason and block_reason:
-        reason = _BLOCK_REASON_LABELS.get(block_reason.lower(), block_reason)
+        reason = _libelle_motif(block_reason)
     if not reason:
         reason = DEFAULT_ASSISTANT_DECISION["reason"]
 
@@ -398,7 +435,12 @@ def _resolve_passive_state(snapshot: dict[str, Any]) -> dict[str, Any] | None:
     application_block_active = bool(snapshot.get("application_block_active", False))
     application_requires = bool(snapshot.get("application_requires_watering_after", False))
     application_pending = bool(snapshot.get("application_post_watering_pending", False))
-    blocked_due_to_conditions = bool(block_reason or type_arrosage == "bloque")
+    blocked_due_to_conditions = bool(block_reason or type_arrosage == "bloque") and not blocage_sans_objet(
+        snapshot.get("besoin_mm"),
+        application_block_active=application_block_active,
+        application_post_watering_status=post_status,
+        application_post_watering_pending=application_pending,
+    )
     passive_no_need = (
         objective_mm <= 0.0
         and requested_mm <= 0.0
@@ -417,7 +459,7 @@ def _resolve_passive_state(snapshot: dict[str, Any]) -> dict[str, Any] | None:
             or snapshot.get("action_recommandee")
         )
         if block_reason:
-            reason = _BLOCK_REASON_LABELS.get(block_reason.lower(), block_reason)
+            reason = _libelle_motif(block_reason)
         if not reason:
             reason = "Arrosage bloqué par conditions."
     else:

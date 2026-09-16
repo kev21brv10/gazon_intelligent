@@ -1,5 +1,485 @@
 # Changelog
 
+## 0.90.0
+
+1603 tests verts. **L'arrosage du matin finit 15 min avant le lever du soleil, la tonte se décale plus tard dans des fenêtres élargies, et l'heure du prochain lancement s'affiche.**
+
+### Partir pour finir avant le lever, plus partir à 03:45
+
+- **Étape 2 de la recommandation sur l'humidité.** Arbitrage de Kévin, 15/09/2026. Les sources agronomiques recommandent d'arroser juste avant le lever du soleil : l'eau tombe sur la rosée, et le feuillage sèche dans la journée.
+- **Le problème.** L'arrosage partait dès l'ouverture de la fenêtre (03:45) et finissait vers 04:50, bien avant l'aube. La nuit, l'évapotranspiration est quasi nulle : partir plus tard ne coûte rien au sol.
+- **La règle** (`coordinator_irrigation.plan_morning_departure`) :
+  - la fin visée est **15 min avant le lever du soleil** ;
+  - le départ ne précède **jamais l'ouverture de la fenêtre** : un cycle trop long pour tenir part à 03:45 et finit plus tard ;
+  - la durée compte les **pauses entre passages** et la **minute entamée** (66,5 min comptent pour 67).
+- **Exemple.** Lever 07:34, cycle de 63,5 min : départ 06:15, fin 07:19.
+- **Pas de plafond lié à la tonte.** Un premier jet, jamais déployé, finissait au plus tard à 07:00 pour que le délai de reprise de 180 min tombe à 10:00. La prémisse était fausse : après ce délai, le ressuyage estimé retient encore la tonte, 4 à 6 h après la fin de l'arrosage en sol limoneux (5 h le 11/09, près de 4 h le 13/09 : fin 09:59, tonte autorisée à 13:45, relevés sur l'installation). Kévin a choisi de **tondre plus tard** et d'élargir les fenêtres de tonte.
+- **Sans lever du soleil connu** (`sun.sun` absent), l'arrosage part à l'ouverture, comme avant.
+- **Exemptés, au lancement comme à l'affichage** : le semis (cycles espacés), l'incorporation post-produit, le rafraîchissement du soir et la détresse tondeuse. Ils vivent dans une seule condition (`_morning_departure_exempt`). Avant, la publication les ignorait : un semis qui part à l'ouverture se voyait annoncer un départ calé.
+- **Latence mesurée.** La marge de 15 min couvre surtout le retard au lancement (jusqu'à 2 min) et un objectif qui monte pendant l'attente. Les vannes, elles, ne rallongent un cycle que de 0,3 s.
+
+### Tonte : des fenêtres plus larges
+
+- **Fenêtre idéale : 10:00 → 14:00** (au lieu de 12:00).
+- **Fenêtre du soir : de 5 h avant le coucher jusqu'au coucher + 30 min** (au lieu de coucher − 4 h 30 → coucher − 1 h 30). Coucher à 20:12 : 15:12 → 20:42 ; en juillet : environ 16:45 → 22:15.
+- **La nuit de la tonte commence au coucher + 30 min**, pas au coucher. C'est la fin du crépuscule civil, qui dure en France métropolitaine de 28 min (sud, équinoxes) à 47 min (nord, juin). La fenêtre et le motif de blocage lisent la même nuit (`_est_la_nuit`), sinon la fenêtre dirait « acceptable » pendant que `tonte_autorisee` retomberait.
+- **La fin du soir est la dernière minute autorisée**, pas une heure de départ. Ensuite `tonte_autorisee` retombe, et une automatisation qui rappelle le robot à ce signal le fait rentrer.
+- **Le prix assumé.** L'ancienne fin gardait 90 min de séchage avant la nuit ; une herbe coupée tard reste humide plus longtemps.
+- **Frontières à la minute.** Les bornes calculées depuis le coucher se comparent en minutes entières, arrondies : remultipliée par 60, l'heure décimale n'est pas exacte (`(16 + 35 / 60) * 60` vaut 994,999…), et la frontière glissait d'une minute pour certains couchers.
+- **Prochaine tonte après la nuit du soir.** Le seuil « demain » valait 22 h : entre la tombée de la nuit et 22 h, la prochaine tonte était annoncée pour le jour même. Il vaut désormais midi.
+- **Inchangé** : le repli 17:00 → 19:00 quand le coucher est inconnu, et la garde « matin trop tôt » avant 10:00.
+
+### Ce qui s'affiche
+
+- **« Blocage arrosage auto »** : pendant l'attente, « Départ calé sur le lever du soleil », avec `depart_prevu` et `fin_prevue`. Ce n'est pas un refus : rien n'est consigné dans les refus du jour.
+- **« Prochain arrosage »** : `target_datetime` devient l'heure de départ calée, et le résumé devient « Arrosage prévu demain matin à 06:15, fin vers 07:19 ». Nouveaux attributs `departure_time` et `end_time`, calculés par la même fonction que le lanceur.
+  - **Pendant l'attente aussi.** La décision publie `maintenant` dès 03:45 : l'heure disparaissait au moment précis où l'arrosage l'attendait.
+  - **Jamais pour une matinée passée.** Le soir, la fenêtre repasse parfois sur `ce_matin` avec la date du jour (relevé le 10/09 à 18:12) : seul un départ à venir, aujourd'hui ou demain, est annoncé.
+  - **Le jour se lit sur la date**, plus sur le nom de la fenêtre : la veille au soir, « demain matin ».
+- **Carte 0.30.0** : la tuile « Prochain arrosage » affiche « 06:15 → 07:19 », et l'onglet Arrosage « Demain · départ 06:15 · fin vers 07:19 ».
+
+### Tests
+
+- **Fonction pure** : lever − 15, plus de plafond, été, ouverture jamais précédée, minute entamée sur le cycle réel de 3990 s (un arrondi au plus proche donne 66), marge négative, lever inconnu.
+- **Lanceur**, sur le vrai `_should_launch_auto_irrigation` avec le lever lu par la vraie façade soleil : frontière exacte 06:54/06:55, pause comptée, délai de tonte sans effet, plan de l'entité prioritaire, cycle trop long annoncé à l'ouverture, exemptions au lancement et à la publication, attente non tracée comme un refus.
+- **Capteurs** : la veille au soir, pendant l'attente, départ passé, au-delà de demain, repli sans départ.
+- **Tonte** : idéale 10:00/14:00, ouverture du soir, fermeture au coucher + 30 min, juillet après 22 h, décembre, petit matin, soleil couché sans coucher connu, état du soleil absent, coucher aberrant, `tonte_autorisee` jusqu'à la fin de la fenêtre, prochaine tonte après la nuit du soir, frontières à la minute.
+- **Preuve.** Sur le code d'avant (premier jet plafonné à 07:00), 42 de ces tests échouent. 50 mutations, toutes détectées, dont les 5 qui survivaient à la revue indépendante.
+
+### Revue indépendante : corrigé avant tout déploiement
+
+- **La veille du passage à l'heure d'été, la tonte restait autorisée environ une heure dans le noir.** Une fois le soleil couché, `next_setting` désigne le coucher du LENDEMAIN, lu à l'heure du lendemain : la veille d'un changement d'heure, il saute d'une heure. La nuit de la tonte (coucher + 30 min) tombait donc une heure trop tard avant l'heure d'été, une minute après le coucher avant l'heure d'hiver. Le coucher publié est désormais celui DU JOUR : `next_setting` reculé de 24 h en UTC, à une ou deux minutes près (`coordinator_weather.sunset_today_minute_from_context`). Il sert aussi au rafraîchissement du soir, au risque et à la fraction d'ET écoulée, qui y gagnent la même justesse.
+- **Une heure de départ était annoncée alors que l'arrosage automatique ne partirait pas** : verrou de sécurité actif, interrupteur coupé, arrosage auto non autorisé (post-produit en mode manuel), exécution refusée, fenêtre « attendre ». « Prochain arrosage » et la carte disaient « 06:15 → 07:19 » pendant que « Blocage arrosage auto » disait « Bloqué (sécurité) ». La publication passe par les mêmes refus durables que le lanceur (`_auto_irrigation_can_start`).
+- **Le soir, la cible changeait de date d'une lecture à l'autre, et avec elle l'heure affichée.** `_profile_for_normal` publiait `ce_matin`, avec la date du jour, tout l'après-midi et le soir ; le risk bundle disait `demain_matin`, sauf quand il proposait « soir », où l'arbitrage reprenait le profil. Relevé le 07/09 : « ce matin (07/09) » à 18:01, « demain matin (08/09) » à 18:02:39, retour à 18:02:50. Passé la fenêtre du matin, le profil Normal et le profil agronomique publient désormais `demain_matin`, comme le faisait déjà `compute_action_guidance`.
+- **Les tests du départ calé tournaient sur une fenêtre qui n'existe pas** (`matin`). Ils utilisent la vraie valeur, `maintenant` : un lanceur qui n'attendrait plus sur `maintenant` passait tous les tests.
+- **Carte** : le soir d'un changement d'heure, « Demain » s'affichait comme une date (voir carte 0.30.0).
+- **Deux affirmations fausses corrigées** dans les commentaires : la cause de l'arrondi à la minute (voir plus haut) et la durée du crépuscule civil.
+
+### Fin de cycle et arrêt manuel (Codex, points D1, C10, C11 de la revue du 15/09)
+
+- **Une session dont l'eau est déjà enregistrée est close, même s'il reste un segment en attente** (`coordinator_runtime.is_finished_irrigation_session`). Un segment « zombie » (zone jugée finie pendant une coupure, segment de durée nulle) gardait la session active, et un arrêt ou une reprise réenregistrait l'eau. La garde « zone active » reste prioritaire : le marqueur ne clôt jamais une session dont une vanne tourne.
+- **Clôturée « terminée », pas « échouée »**, quand l'eau est enregistrée, même si la reprise a laissé `last_error = restart_recovery`.
+- **Arrêt manuel : une seule sauvegarde efface la session ET inscrit l'eau déjà versée.**
+  - **Ordre d'origine** : l'eau d'abord, puis la session effacée. Un redémarrage entre les deux reprenait la session et rouvrait les vannes restantes.
+  - **Premier correctif (Codex)** : la session effacée d'abord, puis l'eau. Plus de vanne rouverte, mais un redémarrage entre les deux sauvegardes perdait l'eau de l'arrêt.
+  - **Désormais** : la session est effacée en mémoire, puis `async_record_watering` écrit l'historique et le runtime dans la même sauvegarde. Sans eau, la session effacée est sauvée seule. Si l'écriture de l'eau lève une exception, l'arrêt est sauvé quand même avant de remonter l'erreur : le disque ne garde jamais un cycle que la reprise relancerait.
+- **Preuves disque** : des tests avec le vrai cerveau, le vrai enregistrement et la vraie sauvegarde vérifient chaque écriture. Pour le marqueur : jamais le marqueur sans l'eau, ni l'eau d'une session active sans le marqueur. Pour l'arrêt : jamais une session active avec l'eau de l'arrêt, ni une session effacée sans cette eau.
+- Mutations : 6 sur 7 à la passe de Codex. La survivante, la clôture « terminée » au redémarrage (`_restore_active_irrigation_session`), est épinglée depuis. Les quatre mutations de la sauvegarde unique sont détectées : les deux anciens ordres, l'arrêt sans eau et l'écriture en échec.
+
+### Reprises après redémarrage (Codex, points D2, D3, D4, C12 de la revue du 15/09)
+
+- **Une reprise qui échoue n'efface plus l'eau déjà versée.** Plan illisible, vannes indisponibles, verrou de sécurité, arrosage automatique coupé, vanne impossible à fermer : l'eau des zones déjà jouées est inscrite avant de clore la session (`_close_degraded_irrigation_session`). Quand une vanne ne ferme pas, le verrou de sécurité reste posé.
+- **Affirmation fausse de la revue, corrigée.** La vanne impossible à fermer ne laissait pas de « session fantôme qui refusait tout lancement ». `_safe_turn_off_zone` passe la session en « échouée », et la lecture suivante la ferme. Tant que la vanne coule, un arrosage est bien vu en cours, et c'est voulu. Le vrai défaut était l'eau des zones déjà jouées, jamais inscrite : vérifié en exécutant l'ancien code.
+- **L'eau versée pendant la coupure est comptée.** Une zone qui a fini pendant que Home Assistant était arrêté passe dans les zones jouées, et son segment quitte la file d'attente. Une zone reprise est créditée pour tout son temps d'ouverture, avant et après le redémarrage, sans dépasser la dose prévue.
+- **Un post-produit automatique ne repart plus au redémarrage quand l'arrosage automatique est coupé**, comme le lanceur le refusait déjà.
+- **Arrêt pendant l'enregistrement de fin de cycle** : l'arrêt laisse la fin de cycle se terminer et annonce la vraie lame, au lieu de « 0,0 mm » ; l'événement de fin et le délai de relance restent armés.
+- Mutations : 9 sur 9 détectées. Au départ 5 sur 9 : quatre tests ajoutés épinglent le segment retiré de la file d'attente, le marqueur posé avant l'écriture, la garde « eau déjà enregistrée » de la reprise dégradée et l'eau inscrite après un échec de fermeture.
+- **La suite repasse de 62 s à 3 s** : le test des vannes indisponibles attendait le vrai délai de 60 s de `_wait_for_zones_available`. Le verdict de cette attente reste testé, avec un délai court.
+
+### Le cinquième verrou de l'humidité de l'air
+
+- **Un matin humide bloquait encore l'arrosage en phase Scarification.** La 0.89.0 annonce « quatre verrous, pas un » et cite les phases agronomiques, scarification comprise. Il en restait un cinquième, propre à cette phase : `guidance._scarification_soil_humidity_state` renvoyait « trop_humide » dès **85 % d'humidité de l'AIR**, la politique Scarification exige un sol `legerement_humide`, et le garde de condition refusait l'arrosage en « sol non adapté ».
+- **Ce que ça coûtait** : pendant les 7 jours de la phase, un matin d'automne à 88 % — le cas normal à l'aube — refusait l'eau d'un sol qui la demandait, juste après le geste le plus abîmant de l'année. C'est exactement le blocage que l'arbitrage de Kévin, appuyé sur les sources agronomiques, avait retiré partout ailleurs.
+- **La correction** : seul `saturation_block` (bilan du jour au-dessus du seuil de saturation) rend désormais l'état « trop humide ». Le paramètre `humidite` de `_resolve_phase_policy`, devenu mort, est retiré.
+- **Ce qui ne change pas** : un sol réellement détrempé bloque toujours, par deux chemins indépendants (le garde de politique et la branche `sol_deja_humide` du profil).
+- **Tests** : l'air à 88 % ne bloque plus, le sol saturé bloque toujours, et le contrat du garde lui-même est épinglé — sans ce dernier, retirer la saturation du garde ne cassait rien, le profil bloquant déjà par ailleurs. 4 mutations, toutes détectées, dont le retour du verrou.
+- **Reste ouvert** : `humidite_penalty` (`guidance.py`) retranche encore 10 à 20 % du déficit legacy quand l'air est humide. Ce n'est pas un blocage mais une dose, et c'est un arbitrage à part.
+
+### Laissé ouvert
+
+- **Redémarrage pendant l'attente.** Si `sun.sun` n'est pas encore publié au premier cycle après un redémarrage, le lever est inconnu et l'arrosage part à l'ouverture, comme en 0.89.0. Sur les redémarrages observés, `sun.sun` était là avant. Mieux vaut éviter de redémarrer entre 03:45 et l'heure de départ.
+- **`apres_pluie`** : le lanceur attend l'heure calée, mais le capteur ne l'affiche pas. Cas non reproduit avec un objectif positif dans une décision complète.
+- **« Tonte possible au lever du jour »** (prochaine tonte, nuit) : la tonte reste bloquée jusqu'à 10 h après le lever. Déjà présent avant.
+- **Fraction d'ET écoulée** : le lever reste lu sur `next_rising` ; après le lever, la veille d'un changement d'heure, il saute aussi d'une heure. Déjà présent avant, effet limité à la journée.
+- **Étape 3** : risque fongique cumulé, qui conseille sans bloquer.
+- **`humidite_penalty`** (déficit legacy) : à arbitrer.
+
+## 0.89.0
+
+1530 tests verts. **L'air humide de l'aube ne retient plus l'arrosage : arroser sur la rosée est justement le bon moment.**
+
+### L'arrosage « de l'aube » partait à 08:58
+
+- **Le défaut.** Dès que l'humidité de l'air atteignait 85 %, l'arrosage était bloqué (« Conditions trop humides »), sans regarder la soif du sol. Or, à l'aube, l'air est naturellement proche de la saturation.
+  - **13/09/2026.** L'humidité du jardin est restée entre 88 et 93 % de 03:30 à 08:57 : l'arrosage « de l'aube » est parti à 08:58, trois secondes après son passage à 84 %.
+  - **15/09/2026.** Autour du seuil, l'objectif basculait entre 5,3 et 0 mm à chaque lecture (84 ↔ 85 %), un écart qui se situe dans la précision du capteur (±5 %). L'arrosage a dû être lancé à la main.
+- **Arbitrage de Kévin (15/09), sur recherche documentaire.** Aucune source agronomique ne justifie ce blocage.
+  - **NC State** recommande d'arroser juste avant le lever du soleil : l'eau fait tomber la rosée et accélère le séchage.
+  - **L'université de Géorgie** rappelle qu'arroser sur la rosée n'aggrave pas les maladies. C'est en arrosant *après* le séchage du matin qu'on prolonge l'humectation.
+  - **Purdue** situe l'idéal entre 4 h et 8 h.
+  - **Aucun contrôleur connecté étudié** (Rachio, Rain Bird, Hydrawise, B-hyve, OpenSprinkler, Smart Irrigation) ne saute un arrosage pour humidité : elle sert seulement au calcul de l'ET, donc de la dose, ce que l'intégration fait déjà.
+
+### Quatre verrous, pas un
+
+⚠️ **Il en restait un cinquième**, propre à la phase Scarification et trouvé le 16/09/2026 : voir « Le cinquième verrou de l'humidité de l'air » en 0.90.0. La liste ci-dessous était donc incomplète au moment où elle a été écrite.
+
+Retirer le seul blocage visible aurait laissé la même porte fermée ailleurs.
+- **Phase Normal** : `ctx.humidite >= 85` est retiré de `humidite_excessive`. La seconde moitié reste, et elle ne regarde pas l'air : un bilan du jour déjà positif (apports > évaporation) sur un sol qui ne réclame rien.
+- **Autres phases** : le blocage `humidite_elevee` est retiré des phases agronomiques (fertilisation, biostimulant, agent mouillant, scarification) et du profil générique.
+- **Fenêtre** : `compute_action_guidance` renvoyait « attendre » dès 85 %, quand le bilan du jour était ≥ −0,5 mm. On n'y arrivait qu'avec un objectif > 0, donc un arrosage demandé, et le lanceur refuse « attendre ». Le 15/09, `fenetre_optimale` basculait entre « ce_matin » et « attendre » au rythme de l'humidité.
+- **Textes** :
+  - un matin humide sans besoin affiche « aucune action », plus « bloqué » ;
+  - le conseil « Attends un léger ressuyage avant d'arroser » disparaît, car il contredisait le lancement ;
+  - l'explication « humidité élevée : sol trop chargé » aussi ;
+  - celle du motif `humidite_excessive` décrit la condition qui reste.
+
+**Inchangé** : la garde du soir (air > 60 %), l'ajustement des micro-apports de semis, le risque fongique, les codes publiés, la dose et le seuil MAD.
+
+### Tests
+
+- **Le 13/09 rejoué par la chaîne complète.** À 84, 85, 91 et 93 % d'humidité, le snapshot d'un matin humide est identique à celui d'un matin sec : objectif, fenêtre, autorisation, type, conseil, action. Aucun « attendre », aucune explication « sol trop chargé », et un matin humide sans besoin n'est pas « bloqué ».
+- **Au niveau du profil et de la fenêtre** : dose identique de 84 à 100 %, phases agronomiques et profil générique, pluie prévue et « un arrosage par jour » qui tiennent toujours, bilan positif qui bloque encore, fenêtre « ce_matin » puis « maintenant » à 60, 85 et 93 %.
+- **Deux tests épinglaient l'ancien comportement.** « Le besoin survit à un blocage » se servait de l'humidité de l'air comme blocage indépendant du sol. Il passe désormais par la garde « un arrosage par jour », avec l'horloge patchée dans le module réellement appelé.
+- **Preuve.** Sur l'ancien code, les nouveaux tests échouent dès 85 % et passent à 84 %. 8 mutations, toutes détectées : chacun des quatre verrous remis, chacun des trois textes remis, et la condition conservée retirée.
+
+### Laissé ouvert
+
+- **Étape 2** : caler la fin de l'arrosage sur le lever du soleil au lieu de partir à 03:45.
+- **Étape 3** : remplacer le risque fongique instantané par un indicateur cumulé (heures de feuillage mouillé), qui conseille sans bloquer.
+- **`humidite_penalty`** (`_build_watering_ctx`) retranche encore 10 à 20 % du déficit *legacy* au-dessus de 75 ou 85 %. C'est un double compte de l'humidité, déjà dans l'ET0. Il n'est actif que sans réserve du ledger et dans la retenue hebdomadaire. Ce n'est pas un veto mais une dose : à arbitrer à part.
+
+## 0.88.0
+
+1523 tests verts. **Une application ne coupe plus l'eau pour toujours, un semis redescend par paliers, et une seule table dit les motifs de blocage.**
+
+### Une application foliaire bloquait tonte et arrosage indéfiniment
+
+Trouvé par la cartographie de ce chantier, et reproduit par simulation. Les règles « application foliaire » et « type d'application inconnu » s'armaient sur la seule **existence** de `derniere_application`, qui est la dernière application de toute la vie de l'installation. Aucune fin, et **trois copies** :
+
+- la décision : un Traitement déclaré en phase Normal gardait tonte et arrosage bloqués à J+2, J+20, J+100 ; un Traitement pendant un sursemis privait **le semis d'eau** ;
+- le capteur « Fenêtre optimale / Prochain arrosage » : « Bloqué : type d'application inconnu » à vie ;
+- l'arrosage après application du coordinateur : refusé à vie.
+
+Ce n'était pas actif chez Kévin (dernière application : Floranid, type « sol »), mais cela se serait armé au premier Traitement déclaré.
+
+**Source unique** : `memory.compute_application_state` évalue **chaque application récente pour elle-même** et publie `application_foliaire_en_cours`, `application_inconnue_en_cours` et `application_block_label`. Les trois consommateurs les lisent. Une application agit encore :
+- tant que son blocage explicite court ;
+- pendant ses **jours d'effet**, jour de l'application compris : Traitement et Fertilisation 2 jours, Biostimulant et Agent Mouillant 1 jour ;
+- ou 24 h au moins depuis son **moment** réel, ou la durée de son blocage si elle est plus longue. Un Biostimulant pulvérisé à 21 h reste protégé jusqu'au lendemain 21 h.
+
+Vérifié à horloge réelle : un Traitement déclaré à 10 h bloque J0 et J+1, et l'arrosage de l'aube revient à J+2.
+
+### Deux revues adversariales ont renforcé ce correctif
+
+- **Un semis n'est pas une application.** Une fiche semences, ou le produit sélectionné que `declare_intervention` rattachait d'office à un Sursemis, comptait comme « application de type inconnu » : le semis était privé d'eau de J+0 à J+44, et à vie avant. `Sursemis` et `Hivernage` sont exclus partout : la mémoire, les deux copies de la recommandation d'intervention qui délèguent maintenant à la définition de référence, et la prochaine réapplication. Le produit n'est plus rattaché d'office qu'aux vraies applications, et un semis sans produit ne lève plus « plusieurs produits sont enregistrés ».
+- **La contrainte la plus lointaine l'emporte**, et plus seulement celle de la dernière application déclarée. Un Floranid déclaré le soir d'un fongicide effaçait les 24 h de protection de ce dernier. Un Humuslight déclaré après un H2Pro foliaire (catalogue réel) effaçait sa protection foliaire. Le message nomme le produit qui bloque.
+- **L'incorporation d'un produit « sol » retardée par le blocage d'une autre application n'est plus abandonnée.** Sa fenêtre s'étend jusqu'à la fin de ce blocage ; avant, elle était affichée « Terminé » avec 5 mm restants.
+- **`delai_avant_tonte_jours` est enfin appliqué.** Ce champ du catalogue n'était lu nulle part. Motif : « Délai avant tonte (Herbicide X): pas de tonte avant le 15/03/2026. ».
+- **Le moment d'une application** est celui de `water.resolve_history_moment`. Une déclaration rétroactive compte depuis sa date, et non depuis sa saisie. Une déclaration faite entre 0 h et 2 h est reconnue comme du jour même : la date saisie est locale, `declared_at` est en UTC. Une application datée dans le futur n'agit pas avant son moment.
+
+⚠️ **Chez Kévin**, deux comportements dormants s'activent avec le catalogue réel :
+- les délais avant tonte de Floranid (2 jours), H2Pro (1 jour) et Kick Pro (1 jour) s'appliquent désormais ;
+- H2Pro TriSmart est typé `foliaire` avec 5 mm de post-arrosage, alors que ses entrées passées étaient « sol ». En foliaire, il n'aura pas d'arrosage d'incorporation, et bloquera l'arrosage 24 h. C'est un réglage à confirmer.
+
+### La sortie de sursemis, par paliers
+
+- **Avant** : à J+45, la recommandation tombait de 6-7 cm vers 4 cm en quelques cycles. Le barème de reprise (`_post_sursemis_bonus`, de 36 à 59 jours) était **mort depuis la 0.7.2** : sa garde exigeait un âge ≤ 35 jours, alors que la phase avait été portée à 45 jours. Et un Traitement ou un Hivernage déclaré pendant un semis prenait la phase dominante : le plancher sautait, et on conseillait 5 cm sur des plantules de 10 jours.
+- **Maintenant** : un plancher qui suit l'**âge du semis le plus récent par date**, quelle que soit la phase dominante. Valeurs publiées, sur la grille de 0,5 cm : Germination 7,5 · Enracinement 7,0 · Reprise 6,5 · Stabilisation 5,0 · puis la base du mois à J+45. Chaque marche reste sous le tiers. Chez Kévin (tondeuse 3-6 cm) : 6,0 cm jusqu'à J+34, 5,0 cm de J+35 à J+44, puis la base.
+- **C'est un arbitrage prudent, pas une valeur sourcée.** Les sources, relues deux fois, divergent :
+  - Barenbrug : premier passage en position haute (6-7 cm), deuxième en position moyenne (4-5 cm). C'est la seule qui soutienne « haute puis moyenne », et le modèle de ces paliers.
+  - Ohio State : première tonte à la hauteur normale.
+  - RHS : semis de printemps, baisser la lame progressivement ; semis d'automne, plus de tonte avant le printemps.
+  Une descente de 0,5 cm par semaine restait défendable pour un semis de printemps : **le rythme reste à arbitrer**.
+- **Le plancher est un conseil** : il n'interdit pas une lame réglée plus bas. La lame réelle reste le seuil de décision (arbitrage du 30/08).
+- **Limite** : une fin manuelle avant J+45 (« Retour au mode normal ») retire l'entrée Sursemis, et le plancher avec elle.
+- **Le motif cite le plancher qui fait réellement la valeur** : c'est le plus haut, et il doit dépasser la saison. Il dit aussi l'arrondi quand celui-ci change la somme (« … +0,2 → arrondi à 4,0 cm »).
+- **Lame inconnue** : « hauteur trop faible » dit « la hauteur conseillée est X cm (réglage de lame inconnu) », et non plus « la lame coupe à X cm ».
+
+### Une seule table pour les libellés des motifs
+
+L'assistant gardait sa propre table (`_BLOCK_REASON_LABELS`), copie divergente de `const.BLOCK_REASON_DISPLAY_LABELS`.
+
+- Elle est supprimée. L'assistant consulte `const.block_reason_label()` et garde son repli, le texte tel quel. Les deux copies de `_block_reason_display_label` des capteurs deviennent un alias de `const.block_reason_display_label`.
+- **Effet réel**, mesuré par la revue sur 4 541 instantanés via `GazonBrain` : le hero affichait `temperature_trop_basse_germination` en brut, en Sursemis combiné à une application « sol » par temps froid. Trois autres codes étaient bruts dans la table de l'assistant, sans chemin réel trouvé jusqu'au hero.
+- **Libellés tranchés** : `soil_wet` devient « Sol humide » et non plus « Sol détrempé ». Le seuil est 70 % d'humidité du sol, ou 90 % d'humidité de l'air juste après un arrosage. Les 6 fichiers de traduction ont été mis à jour. `mowing_window_blocked` reste « Hors fenêtre de tonte ».
+- **Nuit** : quand le créneau publie « Nuit: attendre le lever du soleil. » (22 h, soleil encore levé), l'assistant garde cette phrase.
+- **Adaptateur tondeuse** : une erreur en toutes lettres est ramenée au code connu (« Battery low » → `battery_low` → « Batterie faible »), et le filtre « pas d'erreur » porte aussi sur la forme normalisée. La première version lisait « No-error » comme une panne. **Pas de normalisation vers une pause pluie** : « Rain delay » en toutes lettres garde son comportement prudent, car le convertir aurait contourné le cliquet `idle`.
+- **Pause pluie** : le code `rain_delay`, que la Landroid publie dans l'enum de son capteur d'**erreur**, s'affichait « Robot en erreur: Pause pluie active. », jusque dans le hero. C'est maintenant « Robot en pause pluie: attendre qu'elle soit prête. ».
+- **Garde AST** (`test_aucune_autre_table_code_vers_libelle`) : aucun dictionnaire hors de `const`, ni aucun `dict(...)`, n'associe au moins deux codes de la table à un libellé (chaîne, f-string, tuple, liste ou dictionnaire imbriqué). Deux exceptions, nommées dans le test : `_MOWER_WATERING_BLOCK_LABELS` (des phrases) et `_AUTO_IRRIGATION_BLOCK_INFO`, une dette visible car ses titres divergent encore pour 5 codes.
+
+### `derniere_tonte_date`, enfin publiée
+
+La carte lit cet attribut depuis sa 0.21.2 pour ne pas reproposer « J'ai tondu » le jour même. Rien ne le publiait. Il arrive désormais sur « Tonte autorisée ».
+
+### Tests
+
+45 nouveaux tests, dont 8 à **horloge réelle**. Le harnais fige `dt_util.now` au 04/04/2026, et avec des dates antérieures la partie « depuis le moment » de la fenêtre n'était jamais exercée. Ces 8 tests couvrent :
+- l'aube de J+2 ;
+- un semis avec un Traitement ;
+- un produit foliaire suivi d'un produit « sol » ;
+- l'incorporation retardée et le nom du produit qui bloque ;
+- une application datée dans le futur ;
+- une déclaration à 00 h 30 ;
+- le produit sélectionné non rattaché à un semis.
+
+Les autres tests couvrent :
+- les paliers de semis (`==`) et l'attribution du plancher ;
+- la recommandation d'intervention qui ignore un semis porteur de produit ;
+- la parité des libellés ;
+- trois chaînes suivies jusqu'aux entités par la recopie réelle du coordinateur : `application_inconnue_en_cours`, `derniere_tonte_date`, et la pause pluie de l'adaptateur jusqu'au libellé.
+
+⚠️ Piège de harnais trouvé en route : d'autres fichiers de tests réimportent le paquet. `patch.object(importlib.import_module("…memory"))` visait alors un **autre** objet module que celui de la décision. Ces tests passaient seuls et échouaient en suite complète. On patche désormais les globales du module réellement appelé.
+
+### Coordinateur découpé en modules (refactor Codex, sans changement de comportement)
+
+`coordinator.py` délègue désormais ses calculs purs à sept modules. Les méthodes du coordinateur restent en place comme **façades** : aucun appelant, aucun test existant n'a changé.
+
+- `coordinator_constants.py` : les constantes du coordinateur ;
+- `coordinator_helpers.py` : conversions et médiane ;
+- `coordinator_states.py` : lecture et validation des états HA ;
+- `coordinator_runtime.py` : sessions d'arrosage runtime, minutes créditables, cause d'arrosage ;
+- `coordinator_weather.py` : lever/coucher du soleil, fraction d'ET écoulée, rosée ;
+- `coordinator_observability.py` : motif de blocage, ETP écoulée du jour, charge d'observabilité ;
+- `coordinator_irrigation.py` : débit par zone, segments en attente, trace d'exécution d'une zone.
+
+52 tests dédiés (`test_coordinator_extracted_helpers.py`), et les sept modules entrent dans le périmètre mypy (46 fichiers). Une revue adversariale a comparé l'ancien et le nouveau code sur 77 851 cas : aucun écart en production. Restent en place, volontairement : `_COORDINATOR_SNAPSHOT_KEYS`, la sérialisation/restauration de l'état runtime, la pluie et la tondeuse.
+
+Deux défauts corrigés dans la foulée :
+
+- **Arrêter l'arrosage pendant la première zone d'un passage n'enregistrait pas l'eau déjà versée.** Au passage 1, rien n'était crédité pour cette zone ; et après une fin de zone normale, son segment restait en attente. Défaut antérieur au refactor, trouvé par sa revue : `int(x.get("zone_index") or -1) == zone_index` ne reconnaissait jamais l'index 0, puisque `0 or -1` vaut `-1`. `coordinator_irrigation.is_matching_zone_segment` compare désormais `(passage, zone_index)` aux deux endroits, robuste à `None` et aux valeurs non entières. Remettre l'ancien `or -1` fait échouer les trois tests zone 0.
+- **Un arrêt ou un redémarrage pendant la sauvegarde de fin de cycle faisait perdre l'eau du cycle.**
+  - **Le problème.** Effet de bord de la correction précédente, trouvé par la contre-vérification. La purge vide enfin `zones_pending` après la dernière zone, et `is_finished_irrigation_session` concluait alors « terminée » pendant la sauvegarde, *avant* l'enregistrement de l'eau. Un `stop_irrigation` ou un redémarrage à cet instant clôturait la session sans rien enregistrer : 0 mm au lieu de 6 sur un banc 3 zones × 2 passages.
+  - **La correction.** Le marqueur `watering_recorded` (`coordinator_runtime.WATERING_RECORDED_KEY`) est posé juste avant `async_record_watering`. Tant que des zones ont tourné sans ce marqueur, la session reste active : l'arrêt ou la reprise enregistrent l'eau, une seule fois. Posé avant l'appel, il ne peut pas être sauvegardé sans l'eau, car `brain.record_watering` s'exécute avant le premier `await` et l'historique part dans la même sauvegarde que la session.
+  - **Ce qu'on garde.** La fenêtre inverse existait avant la zone 0 : l'eau déjà enregistrée, un arrêt réenregistrait le cycle en `arret_manuel`. Elle reste fermée.
+  - **Tests.** Six tests : quatre sur le vrai exécuteur, deux sur le prédicat.
+    - arrêt pendant la sauvegarde finale ;
+    - redémarrage depuis cette sauvegarde, avec aller-retour JSON ;
+    - arrêt puis redémarrage après l'enregistrement ;
+    - purge exacte sur 2 zones × 2 passages.
+
+    Sept mutations, toutes détectées : marqueur jamais posé, posé après l'appel, garde retirée, marqueur exigé sans zone jouée, ancien `or -1`, purge qui vide tout, purge qui ignore le passage.
+
+**Tests des deux revues.** Les câblages que les revues avaient trouvés sans filet sont épinglés. Pour chacun, une mutation temporaire fait tomber au moins un test :
+
+- les lectures d'état sans `hass` ;
+- le plafond de 15 min, à la seconde près : 15 min se créditent, 15 min 01 s non ;
+- `feedback_observation` dans la charge de debug ;
+- l'identifiant runtime horodaté en UTC ;
+- l'objectif lu dans `self.result` ;
+- les façades lever/coucher du soleil (bonne clé, heure locale) et leur point d'appel dans `_calculer_donnees`, qui transmet le coucher au garde-fou de l'arrosage du soir ;
+- la façade rosée sur ses deux chemins (point de rosée, humidité), et le point d'appel qui transmet l'estimation et l'humidité ;
+- le sérialiseur des événements runtime ;
+- les bornes exactes de `validate_sensor_value` pour la température, la pluie, l'ETP et l'humidité. Ces deux dernières tournent bien en production : les dire « code mort » était faux ;
+- `estimate_rosee` : seuil de 2,0 °C, humidité à 88 %, chacune des conditions `fog`, `rainy` et `pouring`, priorités, valeurs non numériques ;
+- `sun_event_minute_from_context` : conversion UTC → heure locale, valeurs absentes ou non reconnues.
+
+### Laissé ouvert
+
+- **L'humidité de l'air à 85 % ou plus bloque l'arrosage de l'aube, même quand le sol a soif** (corrigé en 0.89.0). Le 13/09, l'humidité est restée entre 88 et 93 % de 03:30 à 08:57 : l'arrosage « de l'aube » est parti à 08:58. Sans hystérésis, l'objectif bascule à chaque lecture entre 84 et 85 %. À arbitrer : reprendre l'échappatoire des règles voisines ne suffirait pas, car elle se base sur la déplétion actuelle, pas sur la soif projetée qui déclenche l'arrosage.
+- **Un redémarrage de HA pendant l'enregistrement d'un arrêt manuel peut rouvrir les vannes** (corrigé en 0.90.0). L'arrêt enregistre l'eau avant d'effacer la session : si HA s'arrête entre les deux, la reprise relance les zones restantes et réenregistre l'eau. Défaut antérieur, rare.
+- **Le marqueur `watering_recorded` est ignoré tant qu'un segment reste en attente.** Cela arrive après une zone jugée finie pendant une coupure, ou avec un segment de durée 0. Un arrêt ou un redémarrage pendant l'enregistrement de fin de cycle réenregistre alors l'eau, comme avant C1. Rare.
+- **Une reprise qui échoue au redémarrage n'enregistre pas l'eau déjà versée.**
+  - Vannes indisponibles plus de 60 s, verrou de sécurité actif, ou arrosage automatique coupé entre-temps : la session est close sans enregistrer `zones_done`.
+  - Une zone jugée finie pendant la coupure n'est jamais créditée, et une zone reprise ne l'est que pour son temps restant.
+  - Un échec de fermeture de vanne pendant la reprise perd aussi cette eau. (Il était écrit ici qu'il laissait une session zombie refusant tout lancement : c'est faux, voir 0.90.0.)
+  - Un arrosage post-produit automatique est repris au redémarrage même si l'arrosage automatique a été coupé : seule la source `auto_irrigation` est testée.
+  - Défauts antérieurs.
+- Sans effet en production, non épinglés : les gardes de `is_matching_zone_segment` (segment qui n'est pas un dict, booléen) et le cas où le parseur de dates lève une exception dans `sun_event_minute_from_context`.
+- **Quatre codes émis n'ont de libellé dans aucune table** : `temp_extreme`, `temperature_unknown`, `application_type_required`, `unsupported_application_type`. Le test d'invariant `test_aucun_code_publie_ne_reste_sans_libelle` est un faux vert : il ne lit que trois fichiers, et seulement sur une ligne.
+- **Le bouton « Retour au mode normal » lève aussi le verrou de sécurité des vannes.** Débloquer une vanne pendant un semis efface donc le semis. Ce couplage est volontaire depuis juin, pour ne jamais rester sans recours.
+- La pastille « Tonte » réagit aussi à l'état de la machine (`tonte_statut` calculé sur `tonte_ok`).
+- La projection « prochaine tonte » suit la phase dominante, pas le semis.
+- Le rythme de sortie de semis est à arbitrer.
+
+## 0.87.0
+
+1410 tests verts. **La hauteur conseillée suit les mois : 4 cm aujourd'hui, et non plus 6.**
+
+### « Elle a toujours été à 6 cm »
+
+Kévin tond volontairement à 4 cm (lame à 40 mm). La recommandation affichait 6,0 cm de juillet à septembre, soit le maximum de la tondeuse. Trois causes s'empilaient :
+
+| cause | effet |
+|---|---|
+| une table qui ne descendait jamais sous 5 cm (5,0 · 5,8 · 5,0 · **6,2** · 5,0, arrivée en 0.7.0 sans justification écrite) | 6,2 en été, écrêté à 6,0 |
+| un stress « fort » lu dans un déficit **projeté** (`deficit_7j ≥ 7`, soit 7 × l'ETP du jour moins pluie et arrosage), armé en permanence sur un gazon arrosé | **+1,0 cm** avec une réserve « pleine » et un risque « faible » |
+| des corrections presque toutes positives (rosée +0,4, pluie jusqu'à +0,7 ; une seule négative, −0,5), arrondies **vers le haut** | la moindre rosée montait d'un cran |
+
+Le même déficit projeté suivait le scintillement de l'ET0 à l'aube : **160 changements d'état** le 11/09 entre 04:51 et 07:12, dont 156 entre 5,5 et 6,0.
+
+### Ce qui règle la hauteur désormais
+
+- **Une nouvelle table** : 4 cm de pousse, 4,5 à la reprise de mars et en juin, 5 cm en juillet-août, 4 cm de septembre à février, plus le +0,5 d'hiver que le calcul ajoutait déjà. La base de 4 cm est le choix de Kévin, dans la fourchette des sources européennes (DRG 3,5-4,5 cm, DLF/Johnsons 3-4 cm, RHS environ 4 cm au printemps et à l'automne). Le relèvement d'été (+1 cm) suit DLF/Johnsons, la DRG et les universités américaines (Iowa et NC State, +1,3 cm). Le RHS, lui, conseille plus court en été, pour un été britannique arrosé par la pluie. Aucune source ne donne de table mois par mois : les sources fixent la direction et les bornes, pas les chiffres.
+- **Le stress lu dans la réserve réelle** du registre du sol, comparée au seuil MAD de la phase (0,5 en phase Normal, 0,6 en Hivernage). Pas de relèvement sous le seuil. +0,5 dès qu'il est atteint (`>=`, la convention de l'arrosage). +1,0 à mi-chemin de la réserve vide. Sans registre (premier cycle), repli sur l'ancien indicateur : ne pas savoir ne vaut pas « aucun stress ».
+- **La température de la journée**, et non celle du thermomètre : c'est le maximum prévu ou mesuré depuis minuit, retenu par un cliquet mémorisé (`hauteur_tonte_temperature_jour`) qui ne redescend qu'au changement de date. Une lame se règle pour la journée. Lue sur la mesure instantanée, la hauteur montait l'après-midi et prenait « froid » (+0,5) à chaque aube fraîche. Une prévision hors de −30..50 °C est ignorée.
+- **Arrondi au plus proche** (demi vers le haut, jamais « au pair ») pour la part saisonnière. Les **planchers** (règle du tiers, sursemis) restent arrondis vers le haut et passent **après** le lissage. Sinon un gazon à 7 cm, dont le tiers interdit de descendre sous 4,67, se verrait conseiller 4,5.
+
+### Ce qui ne règle plus la hauteur
+
+- **La rosée et la pluie** : elles disent *quand* tondre, pas à quelle hauteur, et elles ont déjà leurs blocages. La rosée est estimée faute de capteur : une humidité ≥ 88 % suffisait à l'armer, soit 22 % des heures du 05 au 11/09.
+- **La « légère réduction » par bonnes conditions** (−0,5 en avril, mai, juin, septembre) : sur une base de 4,0, elle aurait conseillé 3,5 cm, sous la hauteur voulue.
+- **Le « +0,2 de reprise en mars »** : la base de mars (4,5) porte déjà la reprise, et arrondi au plus proche ce terme ne changeait jamais la valeur.
+- **L'air sec** (≤ 40 % → +0,3) quand le registre mesure la réserve : l'ETc qu'il débite intègre déjà la sécheresse de l'air. Il reste dans le repli.
+- **Une absence n'est plus un zéro** : une température inconnue (premier cycle d'un redémarrage) déclenchait « froid », une humidité inconnue « air sec ».
+
+### Le pourquoi, publié
+
+Nouvel attribut **`hauteur_tonte_motif`**, sur « Hauteur de tonte conseillée », « État de tonte » et « Tonte autorisée » (les trois entités qui publient la hauteur). Exemples : « Septembre : base 4,0 cm (hauteur de pousse). », « Juillet : base 5,0 cm, forte chaleur (34,0 °C) +1,0. ». Il décrit la valeur **publiée** : règle du tiers, plafond ou minimum de la tondeuse, lissage en cours (« en route vers 4,0 cm »). Le stress qui montait la lame n'était publié nulle part : « pourquoi 6 cm » ne se comprenait qu'en relisant le code.
+
+### Revue adversariale
+
+Six angles de relecture, 26 agents, aucun bloquant. Les constats retenus ont été corrigés avant déploiement :
+
+- **La prévision « du jour » s'érode le soir.** Chez ce fournisseur, c'est le maximum des heures **restantes** : 22,5 °C à 14 h, 15,8 à 23 h 40 le 10/09. Sans le cliquet, « journée froide » revenait le soir en demi-saison, et la chaleur d'été retombait avant la nuit.
+- **La règle du tiers était attribuée sur des valeurs brutes** : un relèvement réel (tiers 4,13 → 4,5) était tu quand la saison brute valait 4,2. Elle se juge désormais sur les valeurs arrondies, pour le motif comme pour le libellé de garde-fou.
+- **Le lissage pouvait republier une valeur sous le plancher du tiers.** Les planchers passent maintenant après lui.
+- **Des seuils sans test** : `> MAD + 0,1`, fort à 0,85, 33 °C au lieu de 32, le +0,5 à 28 °C, le +0,3 de phase, un MAD figé à 0,5, et la lecture de `temperature_reference_hydrique` à la place de la prévision (la mutation la plus plausible : le coordinateur la transmet toujours). Toutes passaient. Chacune a maintenant son test.
+
+### Ce qui ne change pas
+
+**Aucune décision de tonte chez Kévin.** La lame réelle (40 mm, via l'option de hauteur de coupe, lue même tondeuse injoignable) sert de seuil. Pour une installation **sans lame connue**, la recommandation sert de repli : plus basse, elle refuse moins souvent une herbe courte (« hauteur trop faible ») et déclenche la règle du tiers plus tôt, dans les deux cas comme le ferait une lame réelle à 4 cm. Le lissage d'un pas par cycle reste en place : la descente de 6,0 à 4,0 prend quelques cycles.
+
+### Limites connues, non traitées ici
+
+- **Sortie de sursemis** : à J+45 la phase repasse en Normal et la recommandation descend en quelques cycles vers 4 cm. Le barème de reprise `_post_sursemis_bonus` (36-59 jours) est mort depuis toujours : sa garde exige un âge ≤ 35 jours, alors que la phase dure 45 jours.
+- **Pas d'hystérésis au seuil MAD** : le registre ne fait que baisser par l'ETc et monter par pluie ou arrosage, donc il n'oscille pas autour du seuil. Rien ne l'interdit pour autant.
+- **La carte n'affiche pas encore le motif.**
+
+### Tests
+
+31 nouveaux tests (`RecommandationDeHauteurTests`, `LeMotifDeHauteurAtteintLeCapteurTests`, `LeCliquetDeTemperatureSurvitAuDisqueTests`) :
+- table mois par mois ;
+- aucun terme mouillé, même absorbé par l'arrondi, testé sur la hauteur théorique **avant** arrondi par les vrais bundles ;
+- jamais sous 4 cm ;
+- seuils de réserve et de chaleur de part et d'autre ;
+- MAD de la phase ;
+- cliquet du soir, remise à zéro à minuit, filtre des prévisions aberrantes ;
+- cliquet suivi jusqu'au **disque** (`dump_state` → `load_state` → soir) ;
+- planchers du tiers et du sursemis hors grille (les tests voisins utilisaient des gazons de 12 et 15 cm, dont les 2/3 tombent pile sur la grille) ;
+- motif suivi jusqu'aux attributs des trois entités par la recopie réelle du coordinateur.
+
+Trois anciens tests réécrits avec leur raison, dont un attendu posé en 0.27.0 sur la foi des fiches américaines (7,5 à 10 cm en été). Aucun des onze termes retirés ou modifiés n'était épinglé par un test. Banc de 34 mutations, toutes détectées. Une 35e est équivalente : retirer le motif de `_MOWING_BUNDLE_CORE_KEYS`. Cette liste n'est lue que par deux tests d'inclusion : elle ressemble à une liste blanche mais ne filtre rien.
+
+## 0.86.0
+
+1379 tests verts. **Home Assistant affiche « Aucune action », plus `aucune_action`.**
+
+### Des codes à l'écran
+
+Onze capteurs publiaient un code interne que Home Assistant montrait tel quel, tirets bas compris : `aucune_action`, `a_surveiller`, `modere`, `preparation`, `attendre`… (question de Kévin le 11/09 : « Pourquoi il y a ce tiret ? »).
+
+| capteur | avant | maintenant |
+|---|---|---|
+| Assistant · Niveau d'action | `aucune_action` | Aucune action |
+| État de tonte | `a_surveiller` | À surveiller |
+| Risque gazon | `modere` | Modéré |
+| État hydrique | `depletion` | Réserve entamée |
+| Fenêtre optimale · Prochaine fenêtre optimale | `demain_matin` | Demain matin |
+| Prochaine intervention · Debug intervention | `preparation` | À préparer |
+| Dernière exécution | `ok` | Réussie |
+| Prochain blocage attendu | `pluie_prevue_suffisante` | Pluie prévue suffisante |
+
+### L'état publié ne change pas
+
+**Aucune automatisation ne casse** : l'état reste `aucune_action`, et c'est lui que lisent les automatisations, Node-RED et la carte. Seul l'affichage change. Chaque capteur porte une clé de traduction (`_attr_translation_key`), et le frontend cherche le libellé dans `translations/<langue>.json`. S'il n'en trouve pas, il affiche le code, comme avant. Les noms et `entity_id` sont intacts (le nom explicite prime sur la traduction).
+
+**Pas d'énumération stricte** (`SensorDeviceClass.ENUM`), et c'est voulu. Avec elle, un état absent de la liste lève `ValueError` et l'entité cesse de se mettre à jour. Une valeur oubliée coûterait alors le capteur, et non plus seulement un libellé.
+
+### Une seule formulation
+
+- **Prochain blocage attendu** : le français *est* `BLOCK_REASON_DISPLAY_LABELS` (`const.py`), mot pour mot. Un test impose l'égalité, pour éviter une deuxième table qui dériverait.
+- **Intervention** : « Recommandé », « À préparer », « Bloqué » reprennent les titres du moteur (`_state_metadata`), les mêmes que le badge de la carte.
+- **Hydrique, risque, tonte** : mêmes mots que la carte (« Réserve entamée », « Modéré », « À surveiller »).
+- `USER_ACTION_STATES` (`memory.py`) nomme les quatre états qu'une exécution peut garder en mémoire. Le normaliseur s'en sert, et le test aussi.
+
+### Ce qui n'est pas traduit
+
+- **Niveau de pertinence** (`faible`, `moyen`, `élevé`) : ce sont déjà des mots français, et une clé de traduction ne peut pas contenir d'accent (règle hassfest), donc `élevé` n'aurait pas eu de libellé.
+- **`unavailable`** (intervention sans produit) : Home Assistant le lit comme « entité indisponible » avant toute traduction.
+
+### Tests
+
+`LesEtatsCodesSontTraduitsTests` (11 tests, 428 sous-cas) suivent la **valeur** : vrai capteur, vraie valeur publiée, résolue dans les cinq langues comme le fait le frontend. Chaque balayage doit en outre **couvrir** tous les états : un capteur figé sur une constante échoue. Les actions de l'assistant et les niveaux de risque sont récoltés dans le code du moteur (AST), si bien qu'une nouvelle valeur non traduite fait échouer la CI. Banc de 14 mutations, toutes mordent. La première version en laissait passer une : « hydrique figé sur *plein* » était masqué par le second chemin de calcul, qui fournissait l'état manquant.
+
+## 0.85.0
+
+1368 tests verts. **« Bloqué » ne s'affiche plus quand rien n'est retenu.**
+
+### Le matin du 11/09
+
+L'arrosage de l'aube vient de remplir la réserve à **12/12**. La garde « un arrosage par jour » (`cooldown_24h`) reste armée — c'est voulu. Et pourtant, avec `besoin_mm: 0` publié à côté, **quatre surfaces** l'ont raconté comme un blocage :
+
+| entité | affichait |
+|---|---|
+| `prochain_arrosage` | **« Bloqué »** · « Attendre des conditions favorables » |
+| `fenetre_optimale` | « Arrosage bloqué: Déjà arrosé aujourd'hui » |
+| `assistant` | **« attente_conditions »** — le hero de la carte |
+| `signal_irrigation` | « Arrosage bloqué par conditions : Déjà arrosé aujourd'hui » |
+
+Rien n'était demandé, donc rien n'était retenu. Annoncer un blocage laissait croire qu'on refusait de l'eau au gazon, juste après l'avoir arrosé.
+
+### Une règle juste, recopiée fausse
+
+La bonne règle existait depuis la 0.72.0 dans `_motif_de_blocage_effectif`, avec ce commentaire : *« Deux copies finiraient par diverger, et l'une des deux mentirait sans qu'on sache laquelle. »* Elles avaient divergé : quatre autres endroits recalculaient « un motif existe, donc bloqué ». Deux surfaces disaient juste (`arrosage_auto_blocage` : « Aucun besoin »), quatre mentaient.
+
+`blocage_sans_objet()` est désormais **la** définition, et les cinq endroits passent par elle — y compris l'ancienne, qui lui délègue.
+
+### Ce qui reste bloqué, et doit l'être
+
+- **Le même garde avec un vrai besoin** : arrosé ce matin, et le sol a de nouveau soif cet après-midi. La garde retient bien de l'eau, elle le dit.
+- **Le cas du 31/07** : la garde hebdomadaire retenait une eau dont le gazon avait besoin. « Retenu » y reste la vérité. Les deux défauts ne diffèrent que par un nombre, `besoin_mm`, et les tests épinglent les deux côtés.
+- **Un besoin inconnu** : absence ≠ zéro. Ne pas savoir n'autorise pas à conclure que tout va bien.
+- **Tout blocage post-application** : un produit épandu attend son eau pour être dissous. C'est une activation, pas un déficit hydrique, et `besoin_mm` peut valoir 0 pendant qu'un engrais attend sur le feuillage. Garde nouvelle — l'ancienne définition ne l'avait pas.
+
+### Une cinquième copie, trouvée en vérifiant le déploiement
+
+Après redémarrage, les quatre états étaient justes — mais le **résumé** de `prochain_arrosage` affichait encore « Arrosage retenu: Déjà arrosé aujourd'hui » sous un état « Non requis ». L'état lisait le motif *effectif*, le résumé relisait le motif *brut* : deux phrases contradictoires dans la même entité. Le premier test ne cherchait que le mot « bloqué » ; il exige maintenant la phrase exacte, et un second vérifie que l'état et le résumé racontent la même chose dans les deux sens.
+
+### Et une sixième, toujours sur l'installation
+
+`action_recommandee` et `conseil_principal` affichaient encore « Arrosage bloqué par conditions: Déjà arrosé aujourd'hui. ». Ils passent par `_irrigation_blocked_due_to_conditions_summary`, dont la première moitié lit l'assistant — corrigé — mais qui retombait, dès que l'assistant ne disait plus « bloqué », sur une seconde moitié recalculant l'ancienne règle depuis le motif brut. Le premier relevé n'avait vérifié en direct que cinq entités sur sept. Une chasse systématique aux conditions `type_arrosage == "bloque"` produisant du texte sans passer par la définition n'en trouve plus : la seule restante est gardée par `objectif_mm > 0`, où l'eau est bien retenue.
+
+### Affichage seulement
+
+Rien ne touche à `type_arrosage` ni à l'exécution : la garde retient exactement ce qu'elle retenait. Seul le récit change.
+
+### Vérification
+
+Les nouveaux tests passent par le **vrai** `_contextual_watering_state` — les tests voisins le court-circuitaient pour tester la présentation, ils ne pouvaient donc pas voir le défaut. Six mutations, chacune vérifiée : la définition qui ne désarme plus rien, chacun des trois points d'appel débranché, l'exclusion post-application retirée, et une absence lue comme un zéro.
+
+## 0.84.0
+
+1348 tests verts. **Quand tu cliques, l'écran suit tout de suite.**
+
+### Dix secondes d'attente, invisibles
+
+Kévin, 10/09/2026 : « quand je clique j'ai quelques secondes avant que ça se mette à jour ».
+
+Le coordinateur s'initialise **sans debouncer personnalisé** : il hérite de celui de Home Assistant. Valeurs lues dans la version installée (HA 2026.2.3), pas citées de mémoire :
+
+```
+REQUEST_REFRESH_DEFAULT_COOLDOWN  = 10 s
+REQUEST_REFRESH_DEFAULT_IMMEDIATE = True
+```
+
+`immediate=True` laisse passer le **premier** appel, puis ferme la porte dix secondes. Or `async_request_refresh` n'est pas sollicité que par les actions : chaque changement d'un capteur suivi en demande un aussi. **Mesuré sur l'installation** — le fichier d'état est réécrit toutes les **10,04 s**, quatorze fois d'affilée : le debouncer est en permanence dans sa fenêtre. Un clic attendait donc le reste des dix secondes.
+
+Le clic passait, le service s'exécutait, le cerveau était à jour : **seule la republication attendait**. Une attente invisible se lit « ça n'a pas marché ».
+
+### Les actions passent devant, les capteurs attendent
+
+`_rafraichir_apres_action_utilisateur()` appelle `async_refresh()` (immédiat) ; les 20 points d'appel nés d'une action de Kévin y passent. Les capteurs gardent leur debouncer de 10 s — c'est lui qui protège l'installation d'un recalcul en boucle, et **on n'y touche pas**.
+
+### La réentrance tient désormais par le code
+
+Rafraîchir depuis l'intérieur du cycle se rappellerait lui-même. Le piège est connu ici : c'est lui qui a imposé l'écriture synchrone dans le cerveau pour la déclaration automatique de tonte. La promesse tenait par la discipline ; un drapeau `_dans_le_cycle`, levé par le cycle et rabaissé dans un `finally`, la tient maintenant par une garde. Depuis le cycle, on retombe sur le chemin débouncé.
+
+### Trois défauts de câblage, trouvés par la revue avant livraison
+
+- **Deux services oubliés** : `register_product` et `remove_product` — des actions comme les autres — restaient sur le chemin lent. « Câblé à moitié », le défaut n°1 du projet, dans le correctif censé le corriger.
+- **Deux chemins MIXTES branchés à tort** : `async_record_watering` et `async_record_user_action` servent bien un service, mais elles sont aussi appelées par l'exécuteur d'arrosage à chaque étape — une quinzaine de points internes. Les brancher sur l'immédiat faisait tourner **un cycle complet, en ligne, dans la tâche d'arrosage**. Elles sont revenues au débouncé, et c'est le point d'entrée utilisateur (`_handle_declare_watering`) qui rafraîchit.
+- **Un test rendu aveugle par mon propre montage** : en ajoutant un `async_refresh` stubbé partout, j'avais aveuglé le seul test comportemental qui vérifie que le chemin des **capteurs** reste débouncé. Il est de nouveau voyant.
+
+La revue a aussi écarté ses propres constats les plus alarmants — « arrêter l'arrosage le relance », « le lancement manuel se fait refuser » — après rejeu du code réel.
+
+### Ce qui reste assumé
+
+`async_refresh()` **ne groupe pas** : un arrêt d'arrosage enchaîne jusqu'à trois cycles là où le debouncer en groupait. Mesuré sur l'installation, un cycle coûte **~40 ms** et il en tourne déjà ~8 640 par jour : quelques gestes quotidiens ajoutent moins de 1 %. Le compromis est retenu en connaissance de cause.
+
+### Vérification
+
+Huit mutations, chacune vérifiée pour qu'elle fasse tomber le test visé — dont le retour au chemin débouncé, la disparition de la garde de réentrance, le drapeau qui ne retombe plus après une exception, les deux services produits, et le rebranchement d'un chemin mixte.
+
 ## 0.83.0
 
 1339 tests verts. **Le ressuyage de la tonte dépend enfin de la LAME D'EAU tombée — et la station du jardin y a voix.**

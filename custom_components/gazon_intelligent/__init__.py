@@ -666,6 +666,9 @@ async def _handle_declare_watering(call: ServiceCall) -> None:
             parse_optional_date(call.data.get("date_action")),
             call.data.get("objectif_mm"),
         )
+        # ⚠️ ICI et pas dans `async_record_watering` : celle-ci sert aussi l'exécuteur
+        # d'arrosage. Le rafraîchissement immédiat appartient au point d'entrée UTILISATEUR.
+        await coordinator._rafraichir_apres_action_utilisateur()
     except ValueError as err:
         raise HomeAssistantError(_ERR_INVALID_DATE) from err
 

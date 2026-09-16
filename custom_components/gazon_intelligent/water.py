@@ -82,6 +82,19 @@ def _history_declared_date(item: dict[str, Any]) -> date | None:
     return None
 
 
+def _date_locale(moment: datetime) -> date:
+    """Date locale Home Assistant d'un instant ; hors Home Assistant, sa date telle quelle."""
+    as_local = getattr(dt_util, "as_local", None) if dt_util is not None else None
+    if callable(as_local):
+        try:
+            local = as_local(moment)
+            if isinstance(local, datetime):
+                return local.date()
+        except (TypeError, ValueError, AttributeError):
+            pass
+    return moment.date()
+
+
 def resolve_history_moment(
     item: dict[str, Any],
     *,
@@ -105,7 +118,11 @@ def resolve_history_moment(
 
     if declared_at is not None:
         # Déclaration du jour même → son heure est la meilleure approximation disponible.
-        if declared_date is None or declared_at.date() == declared_date:
+        # ⚠️ Jour même en date UTC OU LOCALE : `declared_at` est en UTC, la date saisie est locale.
+        # Comparée en UTC seule, une déclaration faite entre 0 h et 2 h (heure d'été à Paris)
+        # passait pour rétroactive et son moment retombait à 06:00 UTC, 7 h 30 plus tard
+        # (contre-revue du 11/09/2026) — plus souvent depuis que la carte envoie la date locale.
+        if declared_date is None or declared_at.date() == declared_date or _date_locale(declared_at) == declared_date:
             return declared_at
         # Déclaration rétroactive → on garde la DATE déclarée, pas l'instant de saisie.
 

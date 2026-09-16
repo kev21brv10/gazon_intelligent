@@ -494,12 +494,17 @@ def _apply_watering_floor_constraints(candidate_mm: float, deficit_mm_brut: floa
     return round(max(0.0, value), 1)
 
 
-def _scarification_soil_humidity_state(
-    *,
-    saturation_block: bool,
-    humidite: float,
-) -> str:
-    if saturation_block or humidite >= 85:
+def _scarification_soil_humidity_state(*, saturation_block: bool) -> str:
+    """Traduit l'état du SOL pour la politique Scarification, qui exige `legerement_humide`.
+
+    ⚠️ L'humidité de l'AIR n'entre plus ici (retirée le 16/09/2026). `humidite >= 85` renvoyait
+    « trop_humide », donc `soil_humidity_state_mismatch`, donc un arrosage bloqué en « sol non
+    adapté » un matin humide — exactement le verrou que la 0.89.0 a retiré partout ailleurs, et
+    qu'elle annonçait à tort avoir retiré ici aussi. L'air ne dit rien de l'eau du sol.
+    Ne pas le réintroduire : c'est `saturation_block` (bilan du jour au-dessus du seuil de
+    saturation) qui mesure un sol réellement détrempé.
+    """
+    if saturation_block:
         return "trop_humide"
     return "legerement_humide"
 
@@ -657,17 +662,13 @@ def _resolve_phase_policy(
     pluie_proche: bool = False,
     pluie_compensatrice: bool = False,
     temperature: float | None = None,
-    humidite: float | None = None,
     saturation_block: bool = False,
     application_type: str | None = None,
     prolonged_drought: bool = False,
 ) -> Any:
     soil_humidity_state = None
     if phase_dominante == "Scarification":
-        soil_humidity_state = _scarification_soil_humidity_state(
-            saturation_block=saturation_block,
-            humidite=humidite or 0.0,
-        )
+        soil_humidity_state = _scarification_soil_humidity_state(saturation_block=saturation_block)
     return resolve_watering_policy(
         phase_dominante=phase_dominante,
         sous_phase=sous_phase,
@@ -2326,7 +2327,19 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
         block_reason = "cooldown_24h"
     elif ctx.saturation_block and not _ledger_demande_eau:
         block_reason = "sol_deja_humide"
-    elif ctx.humidite >= 85 or (ctx.bilan_hydrique_mm > 0.5 and not _ledger_demande_eau):
+    # ⚠️ L'HUMIDITÉ DE L'AIR NE BLOQUE PLUS L'ARROSAGE (arbitrage de Kévin, 15/09/2026).
+    # `ctx.humidite >= 85` bloquait ici sans regarder la soif du sol, et à l'aube l'air est
+    # naturellement proche de la saturation. Le 13/09, l'humidité du jardin est restée entre 88
+    # et 93 % de 03:30 à 08:57 : l'arrosage « de l'aube » est parti à 08:58, trois secondes après
+    # le passage à 84 %. Le 15/09, le seuil franchi à chaque lecture entre 84 et 85 % faisait
+    # basculer l'objectif de 5,3 à 0 mm (précision du capteur : ±5 %).
+    # Les sources agronomiques recommandent justement d'arroser juste avant le lever du soleil :
+    # le feuillage est déjà mouillé par la rosée, l'arrosage n'allonge pas son humectation, et
+    # c'est en arrosant APRÈS le séchage du matin qu'on la prolonge (NC State, université de
+    # Géorgie, Purdue). L'humidité compte déjà une fois, dans l'ET0 qui fixe la dose.
+    # Ce qui reste : un bilan du jour déjà positif (apports > évaporation) sur un sol qui ne
+    # réclame rien. Le soir garde sa propre garde d'air sec (`_evening_window_allowed`, > 60 %).
+    elif ctx.bilan_hydrique_mm > 0.5 and not _ledger_demande_eau:
         block_reason = "humidite_excessive"
     elif (
         ctx.recent_watering_count >= 3
@@ -2529,8 +2542,8 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
         # veille) et le gazon passerait la nuit trempé pour rien. Les seuls blocages que le
         # rafraîchissement court-circuite légitimement sont ceux de BUDGET d'eau (cooldown 24 h,
         # garde-fou hebdo, réserve saine) : ils protègent la recharge, or 3 mm de cooling ne
-        # rechargent rien. La variante « air humide » de humidite_excessive est déjà écartée en
-        # amont — _evening_window_allowed refuse la fenêtre du soir dès humidité > 60 %.
+        # rechargent rien. L'air humide, lui, ne bloque plus l'arrosage (15/09/2026) mais reste
+        # écarté du soir en amont : _evening_window_allowed refuse la fenêtre dès humidité > 60 %.
         and not ctx.saturation_block
     )
     if cooling_active:
@@ -2652,6 +2665,13 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
             else "maintenant"
             if ctx.morning_start_minute <= ctx.now_minutes < ctx.acceptable_end_minute
             else "ce_matin"
+            if ctx.now_minutes < ctx.morning_start_minute
+            # PASSÉ LA FENÊTRE DU MATIN, C'EST CELUI DE DEMAIN. `ce_matin` portait la date du JOUR
+            # tout l'après-midi et le soir, face au risk bundle qui disait `demain_matin` : dès que
+            # celui-ci proposait « soir », l'arbitrage reprenait `ce_matin`, et la cible publiée
+            # changeait de date d'une lecture à l'autre (07/09/2026 à 18:02:39 puis 18:02:50).
+            # `compute_action_guidance` distinguait déjà `demain_matin`.
+            else "demain_matin"
         ),
         niveau_action="a_faire" if mm_final > 0 else "surveiller",
         risque_gazon=_risque_n,
@@ -2710,7 +2730,6 @@ def _profile_for_agro_phases(ctx: _WateringCtx) -> dict[str, Any]:
         pluie_proche=ctx.pluie_proche,
         pluie_compensatrice=ctx.pluie_compensatrice,
         temperature=ctx.temperature,
-        humidite=ctx.humidite,
         saturation_block=ctx.saturation_block,
     )
     # ⚠️ LE PLANCHER AGIT ICI EN PREMIER, ET C'EST LE VRAI. `_clamp(besoin, minimum, maximum)`
@@ -2742,8 +2761,7 @@ def _profile_for_agro_phases(ctx: _WateringCtx) -> dict[str, Any]:
         block_reason = "pluie_prevue_suffisante"
     elif ctx.saturation_block:
         block_reason = "sol_deja_humide"
-    elif ctx.humidite >= 85:
-        block_reason = "humidite_elevee"
+    # L'humidité de l'air ne bloque plus (15/09/2026) : même raison que dans `_profile_for_normal`.
     if block_reason is None:
         if resolved_policy.target_range is not None:
             mm_cible = _apply_watering_floor_constraints(
@@ -2792,6 +2810,9 @@ def _profile_for_agro_phases(ctx: _WateringCtx) -> dict[str, Any]:
         and ctx.temperature >= 24
         and EVENING_START_HOUR <= ctx.now_hour < EVENING_END_HOUR
         else "ce_matin"
+        if ctx.now_minutes < ctx.acceptable_end_minute
+        # Même défaut que `_profile_for_normal` : passé la fenêtre du matin, c'est celui de demain.
+        else "demain_matin"
     )
     confidence_score, confidence_level, confidence_reasons = _confidence(ctx, block_reason, mm_final)
     return _build_profile_payload(
@@ -2839,8 +2860,7 @@ def _profile_for_generic(ctx: _WateringCtx) -> dict[str, Any]:
         block_reason = "pluie_prevue_suffisante"
     elif ctx.saturation_block:
         block_reason = "sol_deja_humide"
-    elif ctx.humidite >= 85:
-        block_reason = "humidite_elevee"
+    # L'humidité de l'air ne bloque plus (15/09/2026) : cf. `_profile_for_normal`.
     if block_reason is None:
         mm_cible = _apply_mode_watering_constraints(
             mm_cible, ctx.deficit_mm_brut, ctx.phase_dominante, ctx.incorporation_terminee
@@ -3305,20 +3325,10 @@ def compute_action_guidance(
             evening_allowed=evening_allowed,
         )
 
-    if humidite >= 85 and bilan_hydrique_mm >= -0.5:
-        return _build_guidance_window_payload(
-            risque_gazon="faible",
-            niveau_action="surveiller",
-            fenetre_optimale="attendre",
-            heat_stress_level=heat_stress_level,
-            heat_stress_phase=heat_stress_phase,
-            optimal_start_minute=optimal_start_minute,
-            acceptable_end_minute=acceptable_end_minute,
-            optimal_end_minute=optimal_end_minute,
-            temperature_band=temperature_band,
-            evening_allowed=evening_allowed,
-        )
-
+    # ⚠️ Plus de fenêtre « attendre » sur l'humidité de l'air (15/09/2026). On n'arrive ici qu'avec
+    # un objectif > 0 : ce retour renvoyait donc un arrosage DEMANDÉ à plus tard, et le lanceur
+    # refuse une fenêtre « attendre ». Retirer seulement le blocage de `_profile_for_normal`
+    # aurait laissé ce second verrou fermer la même porte les matins de pluie ou de faible ET.
     if bilan_hydrique_mm <= -4.0:
         # ⚠️ Ce `return` ANTICIPÉ est LE chemin qui annonçait « risque élevé » chaque nuit.
         # `bilan_hydrique_mm` est le bilan de la JOURNÉE (pluie + arrosage − ETc du jour) :

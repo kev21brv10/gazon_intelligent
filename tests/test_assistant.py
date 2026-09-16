@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import unittest
 from dataclasses import dataclass
 from datetime import datetime
@@ -239,20 +240,24 @@ class AssistantDecisionTests(unittest.TestCase):
         self.assertEqual(decision["reason"], "Tondeuse en cours de tonte.")
 
     def test_build_assistant_decision_blocks_mowing_with_battery_low_reason(self) -> None:
-        decision = assistant.build_assistant_decision(
-            {
-                "tonte_autorisee": True,
-                "tonte_statut": "autorisee",
-                "tondeuse_prete": False,
-                "tondeuse_statut_libelle": "Erreur",
-                "tondeuse_raison": "Battery low",
-            }
-        )
-
-        self.assertEqual(decision["action"], "tonte")
-        self.assertEqual(decision["moment"], "attendre")
-        self.assertEqual(decision["status"], "blocked")
-        self.assertEqual(decision["reason"], "Batterie faible")
+        # 0.88.0 : on suit la VRAIE chaîne (erreur de la tondeuse → adaptateur → assistant) au lieu
+        # d'injecter « Battery low » dans `tondeuse_raison` : c'est l'adaptateur qui traduit l'erreur,
+        # et l'assistant n'a plus de table à lui pour rattraper un code brut.
+        mower_adapter = importlib.import_module("custom_components.gazon_intelligent.mower_adapter")
+        for erreur in ("battery_low", "Battery low", "BATTERY-LOW"):
+            with self.subTest(erreur=erreur):
+                contexte = mower_adapter.build_mower_context(
+                    entity_id="lawn_mower.robot", entity_name="Robot", raw_state="error",
+                    available=True, error_raw=erreur,
+                )
+                self.assertEqual(contexte["tondeuse_erreur"], "battery_low")
+                decision = assistant.build_assistant_decision(
+                    {"tonte_autorisee": True, "tonte_statut": "autorisee", **contexte}
+                )
+                self.assertEqual(decision["action"], "tonte")
+                self.assertEqual(decision["moment"], "attendre")
+                self.assertEqual(decision["status"], "blocked")
+                self.assertEqual(decision["reason"], "Batterie faible")
 
     def test_build_assistant_decision_blocks_mowing_when_sun_is_below_horizon(self) -> None:
         decision = assistant.build_assistant_decision(
@@ -749,3 +754,133 @@ class AssistantDecisionTests(unittest.TestCase):
         self.assertEqual(niveau_entity.extra_state_attributes["niveau_action_hydrique"], "aucune_action")
         self.assertEqual(conseil_entity.extra_state_attributes["niveau_action"], "a_faire")
         self.assertEqual(conseil_entity.extra_state_attributes["niveau_action_hydrique"], "aucune_action")
+
+
+class AssistantNAnnoncePlusUnBlocageSansObjetTests(unittest.TestCase):
+    """⚠️ Le hero de la carte, le matin du 11/09/2026 : « attente_conditions » après un
+    arrosage réussi, réserve 12/12, `besoin_mm: 0`. Voir `blocage_sans_objet`."""
+
+    def _snapshot(self, besoin_mm):
+        snap = {
+            "type_arrosage": "bloque",
+            "block_reason": "cooldown_24h",
+            "objectif_mm": 0.0,
+            "mm_requested": 0.0,
+            "fenetre_optimale": "attendre",
+            "application_post_watering_status": "non_requis",
+        }
+        if besoin_mm is not None:
+            snap["besoin_mm"] = besoin_mm
+        return snap
+
+    def test_sans_besoin_l_assistant_ne_dit_plus_bloque(self) -> None:
+        etat = assistant._resolve_passive_state(self._snapshot(0.0)) or {}
+        self.assertNotEqual(etat.get("status"), "blocked_due_to_conditions",
+                            "l'assistant annonce une attente de conditions sur une réserve pleine")
+
+    def test_avec_un_vrai_besoin_il_le_dit_toujours(self) -> None:
+        etat = assistant._resolve_passive_state(self._snapshot(4.0)) or {}
+        self.assertEqual(etat.get("status"), "blocked_due_to_conditions")
+
+    def test_un_besoin_inconnu_ne_desarme_rien(self) -> None:
+        etat = assistant._resolve_passive_state(self._snapshot(None)) or {}
+        self.assertEqual(etat.get("status"), "blocked_due_to_conditions")
+
+
+class UneSeuleTableDeLibellesDeMotifsTests(unittest.TestCase):
+    """0.88.0 — les libellés courts des motifs de blocage ne vivent QUE dans `const`.
+
+    L'assistant avait sa propre table, copie divergente : deux libellés différents pour un même
+    code, et cinq codes réellement émis affichés en snake_case brut dans le hero de la carte
+    (« semis_cycle_pending ») pendant que l'onglet Arrosage les libellait. Photo avant/après sur
+    210 sorties de l'assistant : seules ces sorties-là ont changé.
+    """
+
+    def setUp(self) -> None:
+        self.const = importlib.import_module("custom_components.gazon_intelligent.const")
+
+    def test_l_assistant_dit_le_libelle_de_const_pour_chaque_code(self) -> None:
+        for code, libelle in self.const.BLOCK_REASON_DISPLAY_LABELS.items():
+            for chemin, snap in (
+                ("arrosage", {"arrosage_recommande": True, "objectif_mm": 3.0, "type_arrosage": "auto", "block_reason": code}),
+                ("attente", {"type_arrosage": "bloque", "block_reason": code, "besoin_mm": 2.0, "objectif_mm": 0.0}),
+            ):
+                with self.subTest(code=code, chemin=chemin):
+                    self.assertEqual(assistant.build_assistant_decision(snap)["reason"], libelle)
+
+    def test_les_codes_de_semis_ne_sortent_plus_en_brut(self) -> None:
+        for code in ("semis_cycle_pending", "semis_cycle_daily_target_reached",
+                     "application_foliaire", "temperature_trop_basse_germination", "upcoming_watering"):
+            with self.subTest(code=code):
+                raison = assistant.build_assistant_decision(
+                    {"type_arrosage": "bloque", "sursemis_block_reason": code, "besoin_mm": 2.0}
+                )["reason"]
+                self.assertNotIn("_", raison)
+
+    def test_la_nuit_annoncee_par_le_creneau_reste_la_nuit(self) -> None:
+        # 22 h, soleil encore levé : la décision publie `mowing_window_blocked` avec la phrase « Nuit ».
+        decision = assistant.build_assistant_decision({
+            "tonte_autorisee": False, "tonte_statut": "interdite",
+            "mowing_block_reason_code": "mowing_window_blocked",
+            "mowing_block_reason_label": "Nuit: attendre le lever du soleil.",
+        })
+        self.assertEqual(decision["reason"], "Nuit: attendre le lever du soleil.")
+
+    def test_la_nuit_sans_libelle_garde_sa_consigne(self) -> None:
+        decision = assistant.build_assistant_decision(
+            {"tonte_autorisee": False, "tonte_statut": "interdite", "mowing_block_reason_code": "mowing_night"}
+        )
+        self.assertEqual(decision["reason"], "Nuit: attendre le lever du soleil.")
+
+    def test_aucune_autre_table_code_vers_libelle(self) -> None:
+        # Garde AST : aucun dict littéral hors de const n'associe au moins DEUX codes de la table
+        # unique à des chaînes. Une seule exception, justifiée : des PHRASES complètes (« Arrosage
+        # bloqué: tondeuse… »), pas des libellés courts.
+        import ast as _ast
+        codes = set(self.const.BLOCK_REASON_DISPLAY_LABELS)
+        autorisees = {
+            ("decision_watering.py", "_MOWER_WATERING_BLOCK_LABELS"),
+            # DETTE VISIBLE (0.88.0) : titres de `sensor.arrosage_auto_blocage`, en tuples, qui
+            # divergent encore de const pour 5 codes (« Repos après arrosage » / « Déjà arrosé
+            # aujourd'hui »…). Exception nommée pour qu'elle ne passe pas inaperçue.
+            ("sensor.py", "_AUTO_IRRIGATION_BLOCK_INFO"),
+        }
+
+        def libelle(valeur) -> bool:
+            # Une chaîne (f-string comprise), ou une séquence / un dict dont un élément en est une.
+            if isinstance(valeur, _ast.Constant) and isinstance(valeur.value, str):
+                return True
+            if isinstance(valeur, _ast.JoinedStr):
+                return True
+            if isinstance(valeur, (_ast.Tuple, _ast.List)) and valeur.elts:
+                return libelle(valeur.elts[0])
+            if isinstance(valeur, _ast.Dict):
+                return any(v is not None and libelle(v) for v in valeur.values)
+            return False
+        trouvees = []
+        for fichier in sorted(PACKAGE_DIR.glob("*.py")):
+            if fichier.name == "const.py":
+                continue
+            arbre = _ast.parse(fichier.read_text(encoding="utf-8"))
+            nommes: dict[int, str | None] = {}
+            for noeud in _ast.walk(arbre):
+                if isinstance(noeud, (_ast.Assign, _ast.AnnAssign)) and isinstance(noeud.value, _ast.Dict):
+                    cibles = noeud.targets if isinstance(noeud, _ast.Assign) else [noeud.target]
+                    nommes[id(noeud.value)] = next((c.id for c in cibles if isinstance(c, _ast.Name)), None)
+            for noeud in _ast.walk(arbre):
+                # `dict(soil_wet="…", wet_grass="…")` : mêmes règles que le littéral.
+                if isinstance(noeud, _ast.Call) and getattr(noeud.func, "id", None) == "dict" and noeud.keywords:
+                    communs = [k.arg for k in noeud.keywords if k.arg in codes and libelle(k.value)]
+                    if len(communs) >= 2:
+                        trouvees.append(f"{fichier.name}:{noeud.lineno} dict(...) ({len(communs)} codes)")
+                    continue
+                if not isinstance(noeud, _ast.Dict):
+                    continue
+                dico, cible = noeud, nommes.get(id(noeud))
+                communs = [
+                    k.value for k, v in zip(dico.keys, dico.values)
+                    if isinstance(k, _ast.Constant) and k.value in codes and libelle(v)
+                ]
+                if len(communs) >= 2 and (fichier.name, cible) not in autorisees:
+                    trouvees.append(f"{fichier.name}:{noeud.lineno} {cible or '<dict>'} ({len(communs)} codes)")
+        self.assertEqual(sorted(set(trouvees)), [], "une seconde table de libellés de motifs est réapparue")

@@ -1822,7 +1822,7 @@ class TestDecisionSnapshotMowing(unittest.TestCase):
         self.assertEqual(snapshot["hauteur_tonte_max_cm"], 8.0, "la config est de nouveau rognée")
         self.assertIn("tiers", str(snapshot["hauteur_tonte_garde_fou_label"]).lower())
 
-    def test_build_decision_snapshot_prefers_slightly_lower_height_in_active_spring(self) -> None:
+    def test_build_decision_snapshot_active_spring_recommends_growth_height(self) -> None:
         snapshot = decision.build_decision_snapshot(
             history=[],
             today=date(2026, 4, 15),
@@ -1837,8 +1837,10 @@ class TestDecisionSnapshotMowing(unittest.TestCase):
             hauteur_max_tondeuse_cm=8.0,
         )
 
-        self.assertGreaterEqual(snapshot["hauteur_tonte_recommandee_cm"], 5.5)
-        self.assertLessEqual(snapshot["hauteur_tonte_recommandee_cm"], 6.5)
+        # 4,0 depuis la 0.87.0 (5,5-6,5 avant). Avril en pleine pousse = la hauteur de pousse,
+        # que Kévin a choisie à 4 cm et que les sources européennes placent à 3,5-4,5 cm.
+        # Les 5 mm de pluie de la veille ne la montent plus : ils disent QUAND tondre.
+        self.assertEqual(snapshot["hauteur_tonte_recommandee_cm"], 4.0)
 
     def test_build_decision_snapshot_raises_height_in_heat(self) -> None:
         snapshot = decision.build_decision_snapshot(
@@ -1855,12 +1857,16 @@ class TestDecisionSnapshotMowing(unittest.TestCase):
             hauteur_max_tondeuse_cm=9.0,
         )
 
-        # 7,5 et non 6,5 depuis la 0.27.0 (plafond fixe retiré, cf. le test voisin) : par
-        # 34 °C, monter la coupe ombrage le sol et limite l'évaporation — c'est justement
-        # l'effet recherché, que l'ancien plafond bridait.
-        self.assertEqual(snapshot["hauteur_tonte_recommandee_cm"], 7.5)
+        # Par 34 °C, monter la coupe ombrage le sol et limite l'évaporation : c'est l'effet
+        # recherché, et il reste (+1,0). Mais 6,5 et non plus 7,5 depuis la 0.87.0 : la base de
+        # juillet passe de 6,2 à 5,0 (choix de Kévin, 4 cm de pousse + 1 cm de relèvement d'été),
+        # et l'arrondi ne monte plus d'un cran au moindre dixième. Le « 7,5 à 10 cm » invoqué
+        # en 0.27.0 vient des fiches américaines ; le corpus européen place l'été à 4,5-5,5 cm.
+        # 5,0 + 1,0 (chaleur) + 0,3 (air sec à 30 %, sans registre du sol) = 6,3 → 6,5.
+        self.assertEqual(snapshot["hauteur_tonte_recommandee_cm"], 6.5)
+        self.assertIn("forte chaleur", snapshot["hauteur_tonte_motif"])
 
-    def test_build_decision_snapshot_allows_light_reduction_in_favorable_autumn(self) -> None:
+    def test_build_decision_snapshot_favorable_autumn_recommends_growth_height(self) -> None:
         snapshot = decision.build_decision_snapshot(
             history=[],
             today=date(2026, 9, 20),
@@ -1875,8 +1881,10 @@ class TestDecisionSnapshotMowing(unittest.TestCase):
             hauteur_max_tondeuse_cm=8.0,
         )
 
-        self.assertGreaterEqual(snapshot["hauteur_tonte_recommandee_cm"], 5.0)
-        self.assertLessEqual(snapshot["hauteur_tonte_recommandee_cm"], 5.5)
+        # 4,0 depuis la 0.87.0 (5,0-5,5 avant). Septembre doux : hauteur de pousse. L'ancienne
+        # « légère réduction » (−0,5) n'existe plus — sur une base à 4,0 elle aurait conseillé
+        # 3,5 cm, sous la hauteur voulue.
+        self.assertEqual(snapshot["hauteur_tonte_recommandee_cm"], 4.0)
 
     def test_build_decision_snapshot_rounds_all_mowing_heights_to_half_cm(self) -> None:
         snapshot = decision.build_decision_snapshot(
@@ -2487,8 +2495,11 @@ class TestEstimatedGrassHeight(unittest.TestCase):
 
         # Coucher à 21 h 30 (fin juillet) : 19 h devient tondable, ce qu'il n'était pas.
         self.assertEqual(fenetre(21 * 60 + 30, 19), "acceptable", "19 h refusé alors que le soleil se couche à 21 h 30")
-        # …mais pas 21 h : trop près du coucher, l'herbe coupée resterait humide la nuit.
-        self.assertNotEqual(fenetre(21 * 60 + 30, 21), "acceptable", "21 h accepté à 90 min du coucher")
+        # ⚠️ ATTENDU CHANGÉ le 15/09/2026, PAR DÉCISION DE KÉVIN : ce test refusait 21 h, à 30 min du
+        # coucher, au nom de la marge de séchage de 90 min. Kévin a choisi d'étendre la fenêtre
+        # jusqu'au coucher + 30 min (cf. `TestFenetresDeTonteElargies`). Ce n'est pas un incident
+        # corrigé qu'on efface, c'est une règle métier qui change.
+        self.assertEqual(fenetre(21 * 60 + 30, 21), "acceptable", "21 h refusé avant le coucher + 30 min")
         # Coucher à 17 h (décembre) : 18 h est la nuit, jamais acceptable.
         self.assertNotEqual(fenetre(17 * 60, 18), "acceptable", "18 h accepté alors que le soleil est couché")
 
@@ -4728,12 +4739,17 @@ class TestBesoinSepareDeLaDose(unittest.TestCase):
         return guidance.compute_watering_profile(**kw)
 
     def test_un_blocage_annule_la_dose_mais_pas_le_besoin(self) -> None:
-        # ⚠️ Cette fixture bloquait par la PLUIE jusqu'au 02/08/2026. Depuis, une prévision ne
-        # bloque plus un sol au-delà du seuil MAD (0.37.0) — donc elle ne bloquait plus rien et
-        # le test ne prouvait plus ce qu'il annonce. On passe par l'humidité de l'air, qui
-        # bloque encore indépendamment de l'état du sol et ne réduit pas le besoin.
-        bloque = self._profil(humidite=90.0)
-        self.assertIsNotNone(bloque["block_reason"])
+        # ⚠️ Cette fixture a bloqué par la PLUIE jusqu'au 02/08/2026 : une prévision ne bloque plus
+        # un sol au-delà du seuil MAD depuis la 0.37.0. Elle a ensuite bloqué par l'HUMIDITÉ DE
+        # L'AIR jusqu'au 15/09/2026, date à laquelle l'air humide a cessé de bloquer. On passe
+        # désormais par la garde « un arrosage par jour » : une POLITIQUE qui retient l'eau sans
+        # rien changer à la soif du sol.
+        maintenant = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
+        deja_arrose = [{"type": "arrosage", "date": "2026-08-01", "total_mm": 2.0,
+                        "source": "manual_irrigation", "watering_cause": "hydrique"}]
+        with patch.object(guidance, "_current_datetime", return_value=maintenant):
+            bloque = self._profil(history=deja_arrose)
+        self.assertEqual(bloque["block_reason"], "cooldown_24h")
         self.assertEqual(bloque["mm_final_recommande"], 0.0, "la dose doit rester à zéro")
         self.assertAlmostEqual(bloque["besoin_mm"], 7.8, places=1,
                                msg="le besoin a disparu avec le blocage")
@@ -4764,6 +4780,99 @@ class TestBesoinSepareDeLaDose(unittest.TestCase):
             p["mm_final_recommande"], p["besoin_mm"],
             "le plafond ne rogne pas la dose : la fixture ne l'épuise pas",
         )
+
+
+class TestLHumiditeDeLAirNeBloquePlusLArrosage(unittest.TestCase):
+    """Arbitrage de Kévin, 15/09/2026 : l'air humide ne bloque plus un arrosage demandé.
+
+    `humidite >= 85` bloquait sans regarder la soif du sol. Or, à l'aube, l'air est
+    naturellement proche de la saturation. Le 13/09, l'humidité est restée entre 88 et 93 % de
+    03:30 à 08:57, et l'arrosage « de l'aube » est parti à 08:58. Le 15/09, l'objectif basculait
+    entre 5,3 et 0 mm à chaque lecture entre 84 et 85 %. Les sources agronomiques recommandent
+    d'arroser juste avant le lever du soleil, sur la rosée (NC State, université de Géorgie,
+    Purdue).
+    """
+
+    WB = TestBesoinSepareDeLaDose.WB
+    MATIN = datetime(2026, 9, 13, 4, 0, tzinfo=timezone.utc)
+
+    def _profil(self, **over):
+        kw = dict(phase_dominante="Normal", sous_phase="Normal", water_balance=self.WB,
+                  today=date(2026, 9, 13), pluie_24h=0.0, pluie_demain=0.0,
+                  humidite=60.0, temperature=16.0, etp=3.3, type_sol="limoneux")
+        kw.update(over)
+        with patch.object(guidance, "_current_datetime", return_value=self.MATIN):
+            return guidance.compute_watering_profile(**kw)
+
+    def test_un_sol_qui_a_soif_est_arrose_meme_par_air_sature(self) -> None:
+        reference = self._profil(humidite=60.0)
+        self.assertIsNone(reference["block_reason"])
+        self.assertGreater(reference["mm_final_recommande"], 0.0)
+        for humidite in (84.0, 85.0, 88.0, 93.0, 100.0):
+            with self.subTest(humidite=humidite):
+                p = self._profil(humidite=humidite)
+                self.assertIsNone(p["block_reason"], "l'air humide bloque encore l'arrosage")
+                self.assertEqual(p["mm_final_recommande"], reference["mm_final_recommande"])
+
+    def test_les_phases_agronomiques_et_le_profil_generique_ne_bloquent_plus_sur_l_air(self) -> None:
+        # « Fertilisation » passe par `_profile_for_agro_phases`, une phase inconnue par
+        # `_profile_for_generic` : les deux portaient la même règle (`humidite_elevee`).
+        for phase in ("Fertilisation", "Phase inconnue"):
+            with self.subTest(phase=phase):
+                p = self._profil(phase_dominante=phase, sous_phase=phase, humidite=93.0)
+                self.assertNotEqual(p["block_reason"], "humidite_elevee")
+                self.assertIsNone(p["block_reason"])
+                self.assertGreater(p["mm_final_recommande"], 0.0)
+
+    def test_les_autres_gardes_tiennent_par_air_sature(self) -> None:
+        # Arrosage fini à 04:55 (heure de Paris), décision à 06:00 : même journée locale. Sans
+        # `ended_at`, le repli à 06:00 tombe pile sur la décision et l'écart peut devenir négatif.
+        deja_arrose = [{"type": "arrosage", "date": "2026-09-13", "total_mm": 2.0,
+                        "ended_at": "2026-09-13T04:55:00+02:00",
+                        "source": "manual_irrigation", "watering_cause": "hydrique"}]
+        self.assertEqual(
+            self._profil(humidite=93.0, history=deja_arrose)["block_reason"], "cooldown_24h"
+        )
+        confort = {**self.WB, "depletion_mm": 1.0, "depletion_ratio": 0.08,
+                   "reserve_actuelle_mm": 11.0, "reserve_stock_mm": 11.0,
+                   "reserve_hydrique_sol_mm": 11.0, "bilan_hydrique_mm": -1.0}
+        self.assertEqual(
+            self._profil(humidite=93.0, water_balance=confort, pluie_demain=12.0)["block_reason"],
+            "pluie_prevue_suffisante",
+        )
+
+    def test_un_bilan_du_jour_deja_positif_bloque_encore_sans_regarder_l_air(self) -> None:
+        # La seconde moitié de l'ancienne condition reste : apports du jour > évaporation sur un
+        # sol qui ne réclame rien. Elle ne dépend pas de l'humidité de l'air.
+        sature_d_apports = {**self.WB, "depletion_mm": 1.0, "depletion_ratio": 0.08,
+                            "reserve_actuelle_mm": 11.0, "reserve_stock_mm": 11.0,
+                            "reserve_hydrique_sol_mm": 11.0, "bilan_hydrique_mm": 1.0}
+        for humidite in (40.0, 93.0):
+            with self.subTest(humidite=humidite):
+                p = self._profil(humidite=humidite, water_balance=sature_d_apports)
+                self.assertEqual(p["block_reason"], "humidite_excessive")
+
+    def test_la_fenetre_n_attend_plus_sur_l_air_humide(self) -> None:
+        # `compute_action_guidance` renvoyait « attendre » dès 85 % avec un bilan ≥ −0,5 mm, et le
+        # lanceur refuse « attendre ». On n'y arrive qu'avec un objectif > 0 : un arrosage demandé.
+        base = dict(
+            phase_dominante="Normal",
+            sous_phase="Normal",
+            water_balance={"bilan_hydrique_mm": -0.2, "deficit_3j": 0.5, "deficit_7j": 1.0},
+            advanced_context={"vent": 5.0, "rosee": 1.0, "hauteur_gazon": 4.0},
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            temperature=16.0,
+            etp=3.3,
+            objectif_mm=5.3,
+        )
+        for heure, attendu in ((3.0, "ce_matin"), (5.0, "maintenant")):
+            for humidite in (60.0, 85.0, 93.0):
+                with self.subTest(heure=heure, humidite=humidite):
+                    fenetre = decision.compute_action_guidance(
+                        hour_of_day=heure, humidite=humidite, **base
+                    )["fenetre_optimale"]
+                    self.assertEqual(fenetre, attendu)
 
 
 class LesDeuxTermesDuGardeFouMesurentLaMemeChoseTests(unittest.TestCase):
@@ -4986,3 +5095,886 @@ class LePlancherDemainCouvreLaFenetreEcouleeTests(unittest.TestCase):
             "total_mm": 6.0, "source": "auto_irrigation",
         }])
         self.assertGreaterEqual(b["jours_avant_arrosage_estime"], 1)
+
+
+class RecommandationDeHauteurTests(unittest.TestCase):
+    """0.87.0 — la recommandation de hauteur suit les mois, pas les matins humides.
+
+    Question de Kévin le 11/09/2026 : « elle a toujours été à 6 cm ». Trois causes empilées :
+    une table qui ne descendait jamais sous 5 cm, un stress « fort » lu dans un déficit PROJETÉ
+    (armé en permanence sur un gazon arrosé, +1,0), et un arrondi vers le haut qui montait d'un
+    cran au moindre +0,1 de rosée ou de pluie. Chaque mécanisme a ici son test : les six termes
+    retirés n'étaient épinglés par AUCUN test (banc de mutations de la cartographie).
+    """
+
+    REGISTRE_PLEIN = {"reserve_mm": 11.5, "reserve_max_mm": 24.0}
+
+    def _reco(self, jour: date, **kw) -> dict:
+        params = dict(
+            history=[], today=jour, hour_of_day=10, temperature=18.0,
+            forecast_temperature_today=18.0, pluie_24h=0, pluie_demain=0, humidite=60,
+            type_sol="limoneux", etp_capteur=2.5, hauteur_min_tondeuse_cm=3.0,
+            hauteur_max_tondeuse_cm=8.0, soil_balance=self.REGISTRE_PLEIN,
+        )
+        params.update(kw)
+        return decision.build_decision_snapshot(**params)
+
+    def test_la_table_mois_par_mois(self) -> None:
+        # Journée douce (18 °C prévus), réserve pleine : il ne reste que la base du mois, plus
+        # le +0,5 d'hiver (mois 1, 2, 11, 12) que la table suppose.
+        attendu = {1: 4.5, 2: 4.5, 3: 4.5, 4: 4.0, 5: 4.0, 6: 4.5,
+                   7: 5.0, 8: 5.0, 9: 4.0, 10: 4.0, 11: 4.5, 12: 4.5}
+        for mois, hauteur in attendu.items():
+            with self.subTest(mois=mois):
+                self.assertEqual(self._reco(date(2026, mois, 15))["hauteur_tonte_recommandee_cm"], hauteur)
+
+    def test_rosee_et_pluie_ne_reglent_plus_la_hauteur(self) -> None:
+        for mois in (4, 9, 10, 11):
+            sec = self._reco(date(2026, mois, 15))
+            mouille = self._reco(
+                date(2026, mois, 15), rosee=1.0, pluie_24h=8.0, pluie_demain=6.0, pluie_j2=4.0,
+                pluie_3j=12.0, pluie_probabilite_max_3j=95, humidite=92,
+            )
+            with self.subTest(mois=mois):
+                self.assertEqual(
+                    mouille["hauteur_tonte_recommandee_cm"], sec["hauteur_tonte_recommandee_cm"],
+                    "la rosée ou la pluie remontent encore la lame",
+                )
+                self.assertNotIn("rosée", mouille["hauteur_tonte_motif"])
+                self.assertNotIn("pluie", mouille["hauteur_tonte_motif"])
+
+    def test_jamais_sous_4_cm_par_bonnes_conditions(self) -> None:
+        # Les conditions exactes de l'ancien −0,5 (mois 4, 5, 6, 9 ; 15-24 °C ; HR ≥ 50 ; sec).
+        for mois in (4, 5, 6, 9):
+            for temperature in (15.0, 20.0, 24.0):
+                with self.subTest(mois=mois, temperature=temperature):
+                    reco = self._reco(
+                        date(2026, mois, 15), temperature=temperature,
+                        forecast_temperature_today=temperature, humidite=65,
+                    )["hauteur_tonte_recommandee_cm"]
+                    self.assertGreaterEqual(reco, 4.0, "sous la hauteur de pousse voulue")
+
+    def test_le_stress_se_lit_dans_la_RESERVE_pas_dans_le_deficit_projete(self) -> None:
+        # ETP forte, ni pluie ni arrosage depuis 7 jours : le déficit PROJETÉ s'emballe. Mais le
+        # registre dit la réserve pleine — rien ne justifie de monter la lame.
+        chaud_et_sec = dict(etp_capteur=6.0, humidite=45)
+        avec_registre = self._reco(date(2026, 9, 15), **chaud_et_sec)
+        sans_registre = self._reco(date(2026, 9, 15), soil_balance=None, **chaud_et_sec)
+        self.assertEqual(avec_registre["hauteur_tonte_recommandee_cm"], 4.0)
+        self.assertNotIn("manque d'eau", avec_registre["hauteur_tonte_motif"])
+        # Sans registre, le repli garde l'ancien indicateur : une absence de mesure n'est pas
+        # « aucun stress ».
+        self.assertGreater(sans_registre["hauteur_tonte_recommandee_cm"], 4.0)
+        self.assertIn("déficit estimé", sans_registre["hauteur_tonte_motif"])
+
+    def test_une_reserve_reellement_basse_monte_la_lame(self) -> None:
+        paliers = []
+        for reserve in (11.5, 4.0, 1.0):
+            snap = self._reco(date(2026, 9, 15), soil_balance={"reserve_mm": reserve, "reserve_max_mm": 24.0})
+            paliers.append(snap["hauteur_tonte_recommandee_cm"])
+            if reserve < 6.0:
+                self.assertIn("réserve du sol", snap["hauteur_tonte_motif"])
+        self.assertEqual(paliers, [4.0, 4.5, 5.0])
+
+    def test_la_temperature_du_JOUR_pas_celle_du_thermometre(self) -> None:
+        aube_fraiche = self._reco(date(2026, 4, 15), hour_of_day=6, temperature=5.0,
+                                  forecast_temperature_today=17.0)
+        self.assertEqual(aube_fraiche["hauteur_tonte_recommandee_cm"], 4.0,
+                         "une aube à 5 °C d'un jour à 17 °C n'est pas une journée froide")
+        matin_avant_canicule = self._reco(date(2026, 7, 15), hour_of_day=7, temperature=19.0,
+                                          forecast_temperature_today=33.0)
+        self.assertEqual(matin_avant_canicule["hauteur_tonte_recommandee_cm"], 6.0)
+        # Sans prévision, la mesure courante sert de repli.
+        sans_prevision = self._reco(date(2026, 7, 15), temperature=33.0, forecast_temperature_today=None)
+        self.assertEqual(sans_prevision["hauteur_tonte_recommandee_cm"], 6.0)
+
+    def test_une_temperature_ABSENTE_n_est_pas_un_jour_froid(self) -> None:
+        # Premier cycle d'un redémarrage : capteurs pas encore relus. `temperature or 0.0`
+        # déclenchait « froid » (+0,5) — et, sans registre, « air sec » sur une humidité absente.
+        for registre in (self.REGISTRE_PLEIN, None):
+            with self.subTest(registre=registre is not None):
+                snap = self._reco(date(2026, 9, 15), temperature=None, forecast_temperature_today=None,
+                                  humidite=None, soil_balance=registre)
+                self.assertNotIn("froide", snap["hauteur_tonte_motif"])
+                self.assertNotIn("air sec", snap["hauteur_tonte_motif"])
+
+    def test_le_plancher_du_tiers_s_arrondit_VERS_LE_HAUT(self) -> None:
+        # Gazons dont les 2/3 tombent HORS de la grille de 0,5 : les tests voisins (12 et 15 cm)
+        # tombent pile dessus (8,0 et 10,0), et n'auraient rien vu d'un arrondi au plus proche.
+        for gazon, attendu in ((6.3, 4.5), (7.0, 5.0), (10.0, 7.0), (10.6, 7.5)):
+            with self.subTest(gazon=gazon):
+                snap = self._reco(date(2026, 9, 15), hauteur_gazon=gazon, hauteur_max_tondeuse_cm=9.0)
+                reco = snap["hauteur_tonte_recommandee_cm"]
+                self.assertEqual(reco, attendu)
+                self.assertGreaterEqual(reco, gazon * 2.0 / 3.0, "on ôterait plus d'un tiers du brin")
+                self.assertIn("règle du tiers", snap["hauteur_tonte_motif"])
+
+    def test_les_planchers_de_sursemis_s_arrondissent_VERS_LE_HAUT(self) -> None:
+        snap = self._reco(
+            date(2026, 3, 19), history=[{"type": "Sursemis", "date": "2026-03-17"}],
+            hauteur_max_tondeuse_cm=9.0,
+        )
+        self.assertEqual(snap["phase_active"], "Sursemis")
+        reco = snap["hauteur_tonte_recommandee_cm"]
+        plancher = {"Germination": 7.5, "Enracinement": 7.0}.get(snap["sous_phase"], 6.5)
+        self.assertGreaterEqual(reco, plancher, f"semis conseillé sous son plancher ({snap['sous_phase']})")
+
+    def test_le_motif_dit_pourquoi(self) -> None:
+        snap = self._reco(date(2026, 9, 11), temperature=21.8, forecast_temperature_today=23.7)
+        self.assertEqual(snap["hauteur_tonte_recommandee_cm"], 4.0)
+        self.assertEqual(snap["hauteur_tonte_motif"], "Septembre : base 4,0 cm (hauteur de pousse).")
+        plafonne = self._reco(date(2026, 7, 15), forecast_temperature_today=34.0, hauteur_max_tondeuse_cm=5.5)
+        self.assertIn("plafonnée au maximum de la tondeuse (5,5 cm)", plafonne["hauteur_tonte_motif"])
+
+    def _theorique(self, jour: date, **kw) -> tuple[float, list[str]]:
+        """Hauteur théorique AVANT arrondi, par les vrais bundles : l'arrondi au plus proche
+        absorbe un terme de +0,2, donc un test sur la valeur publiée ne verrait pas son retour."""
+        dm = importlib.import_module("custom_components.gazon_intelligent.decision_mowing")
+        params = dict(
+            history=[], today=jour, hour_of_day=10, temperature=18.0,
+            forecast_temperature_today=18.0, pluie_24h=0, pluie_demain=0, humidite=60,
+            type_sol="limoneux", etp_capteur=2.5, soil_balance=self.REGISTRE_PLEIN,
+        )
+        params.update(kw)
+        contexte = decision.DecisionContext.from_legacy_args(**params)
+        phase = decision.build_phase_bundle(contexte)
+        eau = decision.build_water_bundle(contexte, phase)
+        risque = decision.build_risk_bundle(contexte, phase, eau)
+        return dm._hauteur_theorique_detaillee(contexte, phase, eau, risque)
+
+    def test_aucun_terme_mouille_meme_invisible_apres_arrondi(self) -> None:
+        for mois in (4, 9, 11):
+            sec, _ = self._theorique(date(2026, mois, 15))
+            for mouille in (
+                {"rosee": 1.0}, {"pluie_24h": 8.0}, {"pluie_demain": 6.0}, {"pluie_j2": 4.0},
+                {"pluie_3j": 12.0}, {"pluie_probabilite_max_3j": 95}, {"humidite": 95},
+            ):
+                with self.subTest(mois=mois, entree=mouille):
+                    valeur, _ = self._theorique(date(2026, mois, 15), **mouille)
+                    self.assertAlmostEqual(valeur, sec, places=6)
+
+    def test_un_petit_terme_ne_fait_plus_sauter_d_un_cran(self) -> None:
+        # 25 °C prévus en septembre : +0,2 → 4,2 cm théoriques. L'arrondi VERS LE HAUT publiait
+        # 4,5 ; au plus proche, 4,0. Le motif garde la trace du terme.
+        valeur, termes = self._theorique(date(2026, 9, 15), temperature=25.0, forecast_temperature_today=25.0)
+        self.assertAlmostEqual(valeur, 4.2, places=6)
+        snap = self._reco(date(2026, 9, 15), temperature=25.0, forecast_temperature_today=25.0)
+        self.assertEqual(snap["hauteur_tonte_recommandee_cm"], 4.0)
+        self.assertIn("temps chaud (25,0 °C) +0,2", snap["hauteur_tonte_motif"])
+        # « +0,2 » sous « 4,0 cm » se lisait comme une erreur : le motif dit l'arrondi.
+        self.assertIn("→ arrondi à 4,0 cm", snap["hauteur_tonte_motif"])
+        sans_terme = self._reco(date(2026, 9, 15))
+        self.assertNotIn("arrondi", sans_terme["hauteur_tonte_motif"])
+
+    def test_l_air_sec_ne_compte_plus_quand_le_registre_mesure_la_reserve(self) -> None:
+        valeur, termes = self._theorique(date(2026, 9, 15), humidite=30)
+        self.assertAlmostEqual(valeur, 4.0, places=6)
+        self.assertNotIn("air sec +0,3", termes)
+        _, termes_repli = self._theorique(date(2026, 9, 15), humidite=30, soil_balance=None)
+        self.assertIn("air sec +0,3", termes_repli)
+
+    # ─── Constats de la revue adversariale de la 0.87.0 ───────────────────────────────────
+
+    def test_le_soir_la_prevision_restante_ne_refroidit_pas_la_journee(self) -> None:
+        # Relevé chez Kévin le 10/09 : 22,5 °C prévus à 14 h, 15,8 à 23 h 40 — le fournisseur donne
+        # le maximum des heures RESTANTES. Le cliquet garde le maximum vu depuis minuit.
+        memoire = {"hauteur_tonte_temperature_jour": {"date": "2026-04-15", "max": 14.0}}
+        soir = self._reco(date(2026, 4, 15), hour_of_day=23, temperature=7.0,
+                          forecast_temperature_today=7.5, memory=memoire)
+        self.assertEqual(soir["hauteur_tonte_recommandee_cm"], 4.0)
+        self.assertNotIn("froide", soir["hauteur_tonte_motif"])
+        self.assertEqual(soir["hauteur_tonte_temperature_jour"], {"date": "2026-04-15", "max": 14.0})
+        canicule = {"hauteur_tonte_temperature_jour": {"date": "2026-07-15", "max": 33.0}}
+        soir_d_ete = self._reco(date(2026, 7, 15), hour_of_day=21, temperature=29.0,
+                                forecast_temperature_today=27.0, memory=canicule)
+        self.assertEqual(soir_d_ete["hauteur_tonte_recommandee_cm"], 6.0, "la chaleur retombe avant la nuit")
+
+    def test_le_cliquet_repart_a_zero_au_changement_de_date(self) -> None:
+        veille = {"hauteur_tonte_temperature_jour": {"date": "2026-07-14", "max": 34.0}}
+        lendemain = self._reco(date(2026, 7, 15), temperature=19.0, forecast_temperature_today=22.0, memory=veille)
+        self.assertEqual(lendemain["hauteur_tonte_recommandee_cm"], 5.0)
+        self.assertEqual(lendemain["hauteur_tonte_temperature_jour"], {"date": "2026-07-15", "max": 22.0})
+
+    def test_la_mesure_releve_une_prevision_trop_basse(self) -> None:
+        snap = self._reco(date(2026, 7, 15), hour_of_day=15, temperature=34.0, forecast_temperature_today=30.0)
+        self.assertEqual(snap["hauteur_tonte_recommandee_cm"], 6.0)
+        self.assertEqual(snap["hauteur_tonte_temperature_jour"]["max"], 34.0)
+
+    def test_une_prevision_absente_un_cycle_garde_la_journee(self) -> None:
+        memoire = {"hauteur_tonte_temperature_jour": {"date": "2026-09-15", "max": 23.0}}
+        snap = self._reco(date(2026, 9, 15), hour_of_day=15, temperature=29.0,
+                          forecast_temperature_today=None, memory=memoire)
+        # 29 °C mesurés relèvent la journée : c'est une vraie chaleur, pas un trou de prévision.
+        self.assertEqual(snap["hauteur_tonte_temperature_jour"]["max"], 29.0)
+        aube = self._reco(date(2026, 9, 15), hour_of_day=6, temperature=6.0,
+                          forecast_temperature_today=None, memory=memoire)
+        self.assertNotIn("froide", aube["hauteur_tonte_motif"])
+
+    def test_une_prevision_aberrante_est_ignoree(self) -> None:
+        for glitch in (80.0, -45.0, float("nan")):
+            with self.subTest(prevision=glitch):
+                snap = self._reco(date(2026, 9, 15), temperature=20.0, forecast_temperature_today=glitch)
+                self.assertEqual(snap["hauteur_tonte_recommandee_cm"], 4.0)
+                self.assertEqual(snap["hauteur_tonte_temperature_jour"]["max"], 20.0)
+
+    def test_la_reference_hydrique_ne_regle_pas_la_hauteur(self) -> None:
+        # Le coordinateur transmet TOUJOURS `temperature_reference_hydrique` (0,3 × prévision +
+        # 0,7 × mesure l'après-midi). La lire à la place de la prévision réintroduirait le
+        # thermomètre — la mutation la plus plausible, que le test précédent laissait passer.
+        for ref_hydrique in (40.0, 2.0):
+            with self.subTest(reference=ref_hydrique):
+                snap = self._reco(date(2026, 9, 15), temperature=20.0, forecast_temperature_today=21.0,
+                                  temperature_reference_hydrique=ref_hydrique)
+                self.assertEqual(snap["hauteur_tonte_recommandee_cm"], 4.0)
+
+    def test_seuils_de_chaleur_au_dixieme(self) -> None:
+        for prevision, attendu in ((27.9, 5.0), (28.0, 5.5), (31.9, 5.5), (32.0, 6.0)):
+            with self.subTest(prevision=prevision):
+                snap = self._reco(date(2026, 7, 15), temperature=20.0, forecast_temperature_today=prevision)
+                self.assertEqual(snap["hauteur_tonte_recommandee_cm"], attendu)
+                self.assertIn(f"({str(prevision).replace('.', ',')} °C)", snap["hauteur_tonte_motif"])
+
+    def test_seuils_de_reserve_de_part_et_d_autre(self) -> None:
+        # Sol limoneux : réserve utile 12 mm, MAD 0,5 en phase Normal → déplétion 0,5 à 6,0 mm.
+        for reserve, attendu in ((6.24, 4.0), (6.0, 4.5), (3.24, 4.5), (3.0, 5.0)):
+            with self.subTest(reserve=reserve):
+                snap = self._reco(date(2026, 9, 15), soil_balance={"reserve_mm": reserve, "reserve_max_mm": 24.0})
+                self.assertEqual(snap["hauteur_tonte_recommandee_cm"], attendu)
+
+    def test_le_seuil_suit_le_MAD_de_la_phase(self) -> None:
+        # Hivernage : MAD 0,6. Déplétion 0,55 → sous le seuil de CETTE phase, pas de relèvement
+        # (un seuil figé à 0,5 conclurait « manque d'eau modéré »).
+        snap = self._reco(date(2026, 11, 20), history=[{"type": "Hivernage", "date": "2026-11-19"}],
+                          soil_balance={"reserve_mm": 5.4, "reserve_max_mm": 24.0})
+        self.assertEqual(snap["phase_active"], "Hivernage")
+        self.assertEqual(snap["hauteur_tonte_recommandee_cm"], 5.0)
+        self.assertNotIn("manque d'eau", snap["hauteur_tonte_motif"])
+
+    def test_phase_hors_normal_et_hiver_sans_double_froid(self) -> None:
+        fertil = self._reco(date(2026, 9, 15), history=[{"type": "Fertilisation", "date": "2026-09-14"}])
+        self.assertEqual(fertil["hauteur_tonte_recommandee_cm"], 4.5)
+        self.assertIn("phase Fertilisation +0,3", fertil["hauteur_tonte_motif"])
+        # Janvier à 5 °C : « hiver » OU « journée froide », jamais les deux.
+        janvier = self._reco(date(2026, 1, 15), temperature=5.0, forecast_temperature_today=5.0)
+        self.assertEqual(janvier["hauteur_tonte_recommandee_cm"], 4.5)
+        self.assertNotIn("froide", janvier["hauteur_tonte_motif"])
+
+    def test_repli_sans_registre_valeur_exacte(self) -> None:
+        snap = self._reco(date(2026, 9, 15), soil_balance=None, etp_capteur=6.0, humidite=45)
+        self.assertEqual(snap["hauteur_tonte_recommandee_cm"], 5.0)
+        self.assertIn("manque d'eau fort (déficit estimé) +1,0", snap["hauteur_tonte_motif"])
+
+    def test_sursemis_plancher_exact_par_sous_phase(self) -> None:
+        snap = self._reco(date(2026, 3, 19), history=[{"type": "Sursemis", "date": "2026-03-17"}],
+                          hauteur_max_tondeuse_cm=9.0)
+        self.assertEqual(snap["sous_phase"], "Germination")
+        self.assertEqual(snap["hauteur_tonte_recommandee_cm"], 7.5, "plancher de germination, sur la grille")
+
+    def test_le_tiers_se_juge_sur_les_valeurs_ARRONDIES(self) -> None:
+        # Gazon 6,2 : tiers 4,13 → 4,5 vers le haut ; saison 4,2 → 4,0 au plus proche. C'est le
+        # tiers qui fait la valeur — comparés bruts (4,13 < 4,2), motif et libellé le taisaient.
+        mord = self._reco(date(2026, 9, 15), temperature=25.0, forecast_temperature_today=25.0, hauteur_gazon=6.2)
+        self.assertEqual(mord["hauteur_tonte_recommandee_cm"], 4.5)
+        self.assertIn("règle du tiers", mord["hauteur_tonte_motif"])
+        self.assertIsNotNone(mord["hauteur_tonte_garde_fou_label"])
+        self.assertIn("la saison seule aurait proposé 4.0 cm", mord["hauteur_tonte_garde_fou_label"])
+        # Fertilisation, gazon 6,5 : saison 4,3 → 4,5 ; tiers 4,33 → 4,5. Le tiers ne change rien.
+        egal = self._reco(date(2026, 9, 15), history=[{"type": "Fertilisation", "date": "2026-09-14"}], hauteur_gazon=6.5)
+        self.assertEqual(egal["hauteur_tonte_recommandee_cm"], 4.5)
+        self.assertNotIn("règle du tiers", egal["hauteur_tonte_motif"])
+        self.assertIsNone(egal.get("hauteur_tonte_garde_fou_label"))
+
+    def test_le_lissage_ne_repasse_pas_sous_le_tiers(self) -> None:
+        snap = self._reco(date(2026, 9, 15), hauteur_gazon=7.0, memory={"hauteur_tonte_recommandee_cm": 4.0})
+        self.assertEqual(snap["hauteur_tonte_recommandee_cm"], 5.0, "publié sous 2/3 de 7,0 cm")
+
+    def test_le_motif_decrit_la_valeur_PUBLIEE(self) -> None:
+        en_route = self._reco(date(2026, 9, 11), memory={"hauteur_tonte_recommandee_cm": 6.0})
+        self.assertEqual(en_route["hauteur_tonte_recommandee_cm"], 5.5)
+        self.assertIn("en route vers 4,0 cm", en_route["hauteur_tonte_motif"])
+        minimum = self._reco(date(2026, 9, 15), hauteur_min_tondeuse_cm=5.0)
+        self.assertEqual(minimum["hauteur_tonte_recommandee_cm"], 5.0)
+        self.assertIn("relevée au minimum de la tondeuse (5,0 cm)", minimum["hauteur_tonte_motif"])
+        plafond_et_tiers = self._reco(date(2026, 9, 15), hauteur_gazon=10.0, hauteur_max_tondeuse_cm=6.0)
+        self.assertEqual(plafond_et_tiers["hauteur_tonte_recommandee_cm"], 6.0)
+        self.assertIn("règle du tiers", plafond_et_tiers["hauteur_tonte_motif"])
+        self.assertIn("plafonnée au maximum de la tondeuse (6,0 cm)", plafond_et_tiers["hauteur_tonte_motif"])
+
+    def test_arrondi_au_plus_proche_demi_vers_le_haut(self) -> None:
+        dm = importlib.import_module("custom_components.gazon_intelligent.decision_mowing")
+        for valeur, attendu in ((4.1, 4.0), (4.2, 4.0), (4.25, 4.5), (4.3, 4.5), (4.75, 5.0), (2.0, 3.0)):
+            with self.subTest(valeur=valeur):
+                self.assertEqual(dm._round_nearest_to_step(valeur, 3.0, 0.5), attendu)
+
+
+class UneApplicationNeBloquePasPourToujoursTests(unittest.TestCase):
+    """0.88.0 — les résolveurs foliaire et « type inconnu » ont une fin.
+
+    Ils s'armaient sur la seule EXISTENCE de `derniere_application` — la dernière application de
+    toute la vie de l'installation. Un Traitement (foliaire par défaut) bloquait tonte ET arrosage
+    à J+100 ; pendant un sursemis, le semis restait sans eau alors que la protection de 24 h avait
+    expiré (revue du 11/09/2026). Borne : la durée de phase de l'intervention.
+
+    ⚠️ Dates en mars 2026 : `compute_application_state` lit l'heure réelle (`dt_util.now`), que ce
+    harnais fige au 04/04/2026. Des dates postérieures laisseraient la fenêtre de 24 h « active »
+    pour toujours — un artefact du harnais, pas le comportement de production.
+    """
+
+    def _snap(self, jour: date, history: list, **kw) -> dict:
+        params = dict(
+            history=history, today=jour, hour_of_day=10, temperature=24.0,
+            forecast_temperature_today=26.0, pluie_24h=0, pluie_demain=0, humidite=50,
+            type_sol="limoneux", etp_capteur=5.0, soil_balance={"reserve_mm": 4.0, "reserve_max_mm": 24.0},
+        )
+        params.update(kw)
+        return decision.build_decision_snapshot(**params)
+
+    def test_un_traitement_foliaire_bloque_deux_jours_pas_cent(self) -> None:
+        traitement = date(2026, 3, 10)
+        historique = [{"type": "Traitement", "date": traitement.isoformat(), "produit": "Fongicide X"}]
+        for jours, bloque in ((0, True), (1, True), (2, False), (3, False), (20, False)):
+            with self.subTest(jour=jours):
+                snap = self._snap(traitement + timedelta(days=jours), historique)
+                self.assertEqual(snap["arrosage_recommande"], not bloque)
+                self.assertEqual(snap["tonte_autorisee"], not bloque)
+                if not bloque:
+                    self.assertNotIn("foliaire", snap["conseil_principal"])
+                    self.assertGreater(snap["objectif_mm"], 0.0, "la réserve à 4/12 mm réclame de l'eau")
+
+    def test_un_traitement_pendant_un_semis_ne_prive_pas_le_semis_d_eau(self) -> None:
+        semis = date(2026, 2, 20)
+        historique = [
+            {"type": "Sursemis", "date": semis.isoformat()},
+            {"type": "Traitement", "date": (semis + timedelta(days=10)).isoformat()},
+        ]
+        for jours, arrose in ((9, True), (10, False), (11, False), (12, True), (20, True), (30, True)):
+            with self.subTest(jour=jours):
+                snap = self._snap(semis + timedelta(days=jours), historique,
+                                  soil_balance={"reserve_mm": 8.0, "reserve_max_mm": 24.0})
+                self.assertEqual(snap["arrosage_recommande"], arrose)
+
+    def test_la_borne_suit_la_duree_d_effet_de_l_intervention(self) -> None:
+        mem = importlib.import_module("custom_components.gazon_intelligent.memory")
+        loin = datetime(2026, 12, 31, tzinfo=timezone.utc)  # fenêtre « depuis le moment » écoulée
+        for type_, duree in (("Traitement", 2), ("Fertilisation", 2), ("Biostimulant", 1),
+                             ("Agent Mouillant", 1), ("Scarification", 1)):
+            for jours in range(0, duree + 2):
+                with self.subTest(type=type_, jour=jours):
+                    en_cours, _ = mem._application_en_cours(
+                        {"type": type_, "date": "2026-03-10"}, loin, date(2026, 3, 10) + timedelta(days=jours),
+                    )
+                    self.assertEqual(en_cours, jours < duree)
+        # Un semis ou un hivernage n'est pas une application : leur durée de phase (45 j, 999 j)
+        # n'a rien à faire ici.
+        self.assertEqual(mem.duree_effet_application_jours("Sursemis"), 1)
+        self.assertEqual(mem.duree_effet_application_jours("Hivernage"), 1)
+        # Datée dans le futur : n'agit pas encore. Sans date : ne bloque pas indéfiniment.
+        self.assertFalse(mem._application_en_cours({"type": "Traitement", "date": "2026-03-12"}, loin, date(2026, 3, 10))[0])
+        self.assertFalse(mem._application_en_cours({"type": "Traitement"}, loin, date(2026, 3, 30))[0])
+
+    def test_une_pulverisation_du_soir_reste_protegee_jusqu_au_lendemain_soir(self) -> None:
+        # Biostimulant foliaire pulvérisé le 10/03 à 21:00 (Paris) : compté en jours calendaires, la
+        # protection finissait à minuit et l'arrosage de l'aube suivait 9 h après (revue 11/09).
+        mem = importlib.import_module("custom_components.gazon_intelligent.memory")
+        item = {"type": "Biostimulant", "date": "2026-03-10", "declared_at": "2026-03-10T20:00:00+00:00",
+                "application_type": "foliaire", "application_irrigation_block_hours": 0}
+        for instant, attendu in (
+            (datetime(2026, 3, 10, 22, 59, tzinfo=timezone.utc), True),
+            (datetime(2026, 3, 11, 5, 0, tzinfo=timezone.utc), True),    # aube du lendemain
+            (datetime(2026, 3, 11, 19, 59, tzinfo=timezone.utc), True),
+            (datetime(2026, 3, 11, 20, 1, tzinfo=timezone.utc), False),
+        ):
+            with self.subTest(instant=instant.isoformat()):
+                etat = mem.compute_application_state([item], now=instant, today=instant.date())
+                self.assertEqual(etat["application_en_cours"], attendu)
+
+    def test_une_declaration_retroactive_compte_depuis_la_date_pas_la_saisie(self) -> None:
+        # Traitement du 10/03 saisi le 14/03 à 08:00 : la fenêtre part du 10/03 — ni blocage de 24 h
+        # à partir de la saisie, ni protection foliaire relancée le 15/03.
+        mem = importlib.import_module("custom_components.gazon_intelligent.memory")
+        item = {"type": "Traitement", "date": "2026-03-10", "declared_at": "2026-03-14T08:00:00+01:00"}
+        for instant in (datetime(2026, 3, 14, 9, 0, tzinfo=timezone.utc), datetime(2026, 3, 15, 9, 0, tzinfo=timezone.utc)):
+            with self.subTest(instant=instant.isoformat()):
+                etat = mem.compute_application_state([item], now=instant, today=instant.date())
+                self.assertFalse(etat["application_block_active"])
+                self.assertFalse(etat["application_en_cours"])
+
+    def test_le_resolveur_foliaire_seul_hors_traitement(self) -> None:
+        # Sur un Traitement, la phase Traitement bloque déjà J0-J+1 : le résolveur foliaire n'y est
+        # jamais discriminé (revue : le supprimer laissait la suite verte). Un Biostimulant foliaire
+        # n'a pas de phase bloquante : c'est le résolveur, et lui seul, qui protège J0.
+        jour = date(2026, 3, 10)
+        historique = [{"type": "Biostimulant", "date": jour.isoformat(), "produit": "Algues", "application_type": "foliaire"}]
+        j0 = self._snap(jour, historique)
+        self.assertFalse(j0["tonte_autorisee"])
+        self.assertFalse(j0["arrosage_recommande"])
+        self.assertIn("traitement foliaire", j0["conseil_principal"])
+        j1 = self._snap(jour + timedelta(days=1), historique)
+        self.assertTrue(j1["arrosage_recommande"], "Biostimulant : un jour d'effet, pas davantage")
+        self.assertTrue(j1["tonte_autorisee"])
+
+    def test_une_fertilisation_foliaire_pendant_un_semis_ne_le_prive_que_deux_jours(self) -> None:
+        historique = [
+            {"type": "Sursemis", "date": "2026-02-26"},
+            {"type": "Fertilisation", "date": "2026-03-10", "produit": "Foliaire F", "application_type": "foliaire"},
+        ]
+        for jour, arrose in ((date(2026, 3, 10), False), (date(2026, 3, 11), False), (date(2026, 3, 12), True)):
+            with self.subTest(jour=jour.isoformat()):
+                snap = self._snap(jour, historique, soil_balance={"reserve_mm": 8.0, "reserve_max_mm": 24.0})
+                self.assertEqual(snap["phase_active"], "Sursemis")
+                self.assertEqual(snap["arrosage_recommande"], arrose)
+
+    def test_deux_applications_le_meme_jour_le_blocage_le_plus_lointain_l_emporte(self) -> None:
+        # Fongicide à 09:00 (24 h de blocage), Floranid à 18:00 (sol, post-arrosage 5 mm) : le
+        # Floranid effaçait la protection du fongicide et lançait 5 mm 9 h après la pulvérisation.
+        mem = importlib.import_module("custom_components.gazon_intelligent.memory")
+        historique = [
+            {"type": "Traitement", "date": "2026-03-10", "declared_at": "2026-03-10T08:00:00+00:00",
+             "produit": "Fongicide", "application_type": "foliaire", "application_irrigation_block_hours": 24},
+            {"type": "Fertilisation", "date": "2026-03-10", "declared_at": "2026-03-10T17:00:00+00:00",
+             "produit": "Floranid", "application_type": "sol", "application_requires_watering_after": True,
+             "application_post_watering_mm": 5.0, "application_irrigation_block_hours": 0},
+        ]
+        a_18h10 = datetime(2026, 3, 10, 17, 10, tzinfo=timezone.utc)
+        etat = mem.compute_application_state(historique, now=a_18h10, today=a_18h10.date())
+        self.assertTrue(etat["application_block_active"])
+        self.assertEqual(etat["application_block_label"], "Fongicide")
+        lendemain = datetime(2026, 3, 11, 8, 30, tzinfo=timezone.utc)
+        self.assertFalse(mem.compute_application_state(historique, now=lendemain, today=lendemain.date())["application_block_active"])
+
+    def test_le_delai_avant_tonte_du_produit_est_respecte(self) -> None:
+        jour = date(2026, 3, 10)
+        historique = [{"type": "Traitement", "date": jour.isoformat(), "produit": "Herbicide X",
+                       "application_type": "foliaire", "produit_catalogue": {"delai_avant_tonte_jours": 5}}]
+        for jours, autorisee in ((2, False), (4, False), (5, True)):
+            with self.subTest(jour=jours):
+                snap = self._snap(jour + timedelta(days=jours), historique, hauteur_gazon=7.0,
+                                  soil_balance={"reserve_mm": 11.5, "reserve_max_mm": 24.0}, hour_of_day=11)
+                self.assertEqual(snap["tonte_autorisee"], autorisee)
+                if not autorisee:
+                    self.assertIn("pas de tonte avant le 15/03/2026", snap["mowing_block_reason_label"])
+
+    def test_un_type_d_application_inconnu_bloque_le_temps_de_l_intervention(self) -> None:
+        fertilisation = date(2026, 3, 10)
+        historique = [{"type": "Fertilisation", "date": fertilisation.isoformat(), "application_type": "granule"}]
+        for jours, bloque in ((0, True), (1, True), (2, False), (5, False)):
+            with self.subTest(jour=jours):
+                snap = self._snap(fertilisation + timedelta(days=jours), historique)
+                self.assertEqual("type d'application inconnu" in snap["conseil_principal"], bloque)
+                self.assertEqual(snap["arrosage_recommande"], not bloque)
+
+
+class LaSortieDeSemisEstProgressiveTests(unittest.TestCase):
+    """0.88.0 — le plancher de semis suit l'ÂGE du semis, par paliers de sous-phase sourcés.
+
+    Avant : à J+45 la phase repassait en Normal et la recommandation tombait de 6-7 cm vers 4 cm
+    en quelques cycles ; le barème de reprise (36-59 j) était mort depuis la 0.7.2 ; et un
+    Traitement déclaré pendant un semis faisait sauter le plancher (phase dominante).
+    Paliers (Barenbrug : 6-7 cm puis 4-5 cm ; Ohio State : ensuite la hauteur normale) :
+    Germination 7,5 · Enracinement 7,0 · Reprise 6,5 · Stabilisation 5,0 · puis la base du mois.
+    """
+
+    def _snap(self, semis: date, k: int, maxh: float, extra=(), **kw) -> dict:
+        params = dict(
+            history=[{"type": "Sursemis", "date": semis.isoformat()}, *extra],
+            today=semis + timedelta(days=k), hour_of_day=10, temperature=16.0,
+            forecast_temperature_today=17.0, pluie_24h=0, pluie_demain=0, humidite=65,
+            type_sol="limoneux", etp_capteur=2.0, hauteur_min_tondeuse_cm=3.0,
+            hauteur_max_tondeuse_cm=maxh, soil_balance={"reserve_mm": 11.5, "reserve_max_mm": 24.0},
+        )
+        params.update(kw)
+        return decision.build_decision_snapshot(**params)
+
+    def test_paliers_par_sous_phase_tondeuse_3_9(self) -> None:
+        attendus = {0: (7.5, "semis en germination (J+0) : plancher 7,5 cm"),
+                    11: (7.0, "semis en enracinement (J+11) : plancher 7,0 cm"),
+                    25: (6.5, "semis en reprise (J+25) : plancher 6,5 cm"),
+                    35: (5.0, "semis en stabilisation (J+35) : plancher 5,0 cm"),
+                    44: (5.0, "semis en stabilisation (J+44) : plancher 5,0 cm"),
+                    45: (4.0, None)}
+        for k, (hauteur, motif) in attendus.items():
+            with self.subTest(jour=k):
+                snap = self._snap(date(2026, 9, 11), k, 9.0)
+                self.assertEqual(snap["hauteur_tonte_recommandee_cm"], hauteur)
+                if motif:
+                    self.assertIn(motif, snap["hauteur_tonte_motif"])
+                else:
+                    self.assertNotIn("semis", snap["hauteur_tonte_motif"])
+
+    def test_tondeuse_plafonnee_a_6(self) -> None:
+        for k, hauteur in ((25, 6.0), (34, 6.0), (35, 5.0), (44, 5.0), (45, 4.0)):
+            with self.subTest(jour=k):
+                self.assertEqual(self._snap(date(2026, 9, 11), k, 6.0)["hauteur_tonte_recommandee_cm"], hauteur)
+
+    def test_chaque_marche_reste_sous_le_tiers(self) -> None:
+        for maxh in (6.0, 9.0):
+            valeurs = [self._snap(date(2026, 9, 11), k, maxh)["hauteur_tonte_recommandee_cm"] for k in range(0, 61)]
+            for k in range(60):
+                with self.subTest(tondeuse=maxh, jour=k):
+                    baisse = valeurs[k] - valeurs[k + 1]
+                    self.assertLessEqual(baisse, valeurs[k] / 3.0 + 1e-9, f"J+{k}→J+{k + 1} : {valeurs[k]} → {valeurs[k + 1]}")
+
+    def test_un_traitement_pendant_le_semis_garde_le_plancher(self) -> None:
+        extra = [{"type": "Traitement", "date": "2026-09-21"}]
+        for k, hauteur, libelle in ((10, 7.5, "semis en germination (J+10)"), (11, 7.0, "semis en enracinement (J+11)")):
+            with self.subTest(jour=k):
+                snap = self._snap(date(2026, 9, 11), k, 9.0, extra=extra)
+                self.assertEqual(snap["phase_active"], "Traitement", "prémisse : le Traitement domine")
+                self.assertEqual(snap["hauteur_tonte_recommandee_cm"], hauteur)
+                self.assertIn(libelle, snap["hauteur_tonte_motif"])
+                self.assertFalse(snap["tonte_autorisee"])
+        precoce = self._snap(date(2026, 9, 11), 3, 9.0, extra=[{"type": "Traitement", "date": "2026-09-14"}])
+        self.assertEqual(precoce["hauteur_tonte_recommandee_cm"], 7.5)
+
+    def test_un_hivernage_pendant_le_semis_garde_le_plancher(self) -> None:
+        snap = self._snap(date(2026, 9, 11), 40, 9.0, extra=[{"type": "Hivernage", "date": "2026-10-19"}])
+        self.assertEqual(snap["phase_active"], "Hivernage")
+        self.assertEqual(snap["hauteur_tonte_recommandee_cm"], 5.0)
+        self.assertIn("semis en stabilisation (J+40)", snap["hauteur_tonte_motif"])
+
+    def test_un_semis_date_dans_le_futur_n_a_pas_encore_de_plancher(self) -> None:
+        snap = decision.build_decision_snapshot(
+            history=[{"type": "Sursemis", "date": "2026-09-20"}], today=date(2026, 9, 15), hour_of_day=10,
+            temperature=16.0, forecast_temperature_today=17.0, pluie_24h=0, pluie_demain=0, humidite=65,
+            type_sol="limoneux", etp_capteur=2.0, hauteur_min_tondeuse_cm=3.0, hauteur_max_tondeuse_cm=9.0,
+            soil_balance={"reserve_mm": 11.5, "reserve_max_mm": 24.0},
+        )
+        self.assertNotIn("semis", snap["hauteur_tonte_motif"])
+
+    def test_le_semis_le_plus_recent_PAR_DATE(self) -> None:
+        # Une déclaration rétroactive ajoutée APRÈS un semis plus récent : l'âge suit la date.
+        historique = [{"type": "Sursemis", "date": "2026-09-11"}, {"type": "Sursemis", "date": "2026-03-01"}]
+        snap = decision.build_decision_snapshot(
+            history=historique, today=date(2026, 9, 13), hour_of_day=10, temperature=16.0,
+            forecast_temperature_today=17.0, pluie_24h=0, pluie_demain=0, humidite=65, type_sol="limoneux",
+            etp_capteur=2.0, hauteur_min_tondeuse_cm=3.0, hauteur_max_tondeuse_cm=9.0,
+            soil_balance={"reserve_mm": 11.5, "reserve_max_mm": 24.0},
+        )
+        self.assertIn("semis en germination (J+2)", snap["hauteur_tonte_motif"])
+        self.assertEqual(snap["hauteur_tonte_recommandee_cm"], 7.5)
+
+    def test_lame_inconnue_le_message_ne_pretend_pas_connaitre_la_lame(self) -> None:
+        # Sans réglage de lame connu, le seuil « hauteur trop faible » est la hauteur CONSEILLÉE :
+        # « la lame coupe à 7,0 cm » contredisait l'historique des tontes (revue du 11/09/2026).
+        snap = self._snap(date(2026, 2, 1), 30, 9.0, hauteur_gazon=6.0)
+        self.assertEqual(snap.get("raison_blocage_code"), "hauteur_trop_faible")
+        self.assertIn("hauteur conseillée est 6.5 cm (réglage de lame inconnu)", snap["mowing_block_reason_label"])
+        self.assertNotIn("la lame coupe", snap["mowing_block_reason_label"])
+
+    def test_le_motif_cite_le_plancher_qui_fait_la_valeur(self) -> None:
+        # J+28 (Reprise, 6,5), gazon à 7 cm (tiers 4,67 → 5,0) : c'est le SEMIS qui fait 6,5.
+        semis_fait = self._snap(date(2026, 9, 11), 28, 8.0, hauteur_gazon=7.0)
+        self.assertEqual(semis_fait["hauteur_tonte_recommandee_cm"], 6.5)
+        self.assertIn("semis en reprise", semis_fait["hauteur_tonte_motif"])
+        self.assertNotIn("règle du tiers", semis_fait["hauteur_tonte_motif"])
+        self.assertIsNone(semis_fait.get("hauteur_tonte_garde_fou_label"))
+        # J+40 (Stabilisation, 5,0), gazon à 9 cm (tiers 6,0) : c'est le TIERS qui fait 6,0.
+        tiers_fait = self._snap(date(2026, 9, 11), 40, 8.0, hauteur_gazon=9.0)
+        self.assertEqual(tiers_fait["hauteur_tonte_recommandee_cm"], 6.0)
+        self.assertIn("règle du tiers", tiers_fait["hauteur_tonte_motif"])
+        self.assertNotIn("semis en stabilisation", tiers_fait["hauteur_tonte_motif"])
+
+
+class LesApplicationsAHorlogeReelleTests(unittest.TestCase):
+    """0.88.0 — contre-revue : les fenêtres d'application à l'HORLOGE RÉELLE.
+
+    Le harnais fige `dt_util.now` au 04/04/2026 : avec des dates antérieures, la partie « depuis
+    le moment » de la fenêtre n'était jamais exercée, et ses défauts passaient (aube de J+2
+    bloquée, protection foliaire effacée par un second produit, incorporation abandonnée). Ici
+    l'horloge de la mémoire est patchée de façon cohérente avec le jour simulé.
+    """
+
+    PARIS = ZoneInfo("Europe/Paris")
+
+    def _globales_memoire(self) -> dict:
+        # ⚠️ Les globales du module `memory` QU'UTILISE la décision : d'autres fichiers de tests
+        # réimportent le paquet avec leurs propres stubs, et `importlib.import_module(...)` rend
+        # alors un AUTRE objet module — le patcher ne changeait rien à la décision (ces tests
+        # passaient seuls et échouaient en suite complète).
+        return decision.build_water_bundle.__globals__["compute_application_state"].__globals__
+
+    def _snap(self, instant: datetime, historique: list, **kw) -> dict:
+        params = dict(
+            history=historique, today=instant.date(), hour_of_day=instant.hour + instant.minute / 60,
+            temperature=20.0, forecast_temperature_today=21.0, pluie_24h=0, pluie_demain=0, humidite=55,
+            type_sol="limoneux", etp_capteur=4.0, soil_balance={"reserve_mm": 4.0, "reserve_max_mm": 24.0},
+        )
+        params.update(kw)
+        with patch.dict(self._globales_memoire(), {"_current_datetime": lambda: instant}):
+            return decision.build_decision_snapshot(**params)
+
+    def test_un_traitement_rend_l_aube_de_j_plus_2(self) -> None:
+        historique = [{"type": "Traitement", "date": "2026-09-11", "declared_at": "2026-09-11T08:00:00+00:00",
+                       "produit": "Fongicide X", "application_irrigation_block_hours": 24}]
+        aube_j1 = datetime(2026, 9, 12, 6, 0, tzinfo=self.PARIS)
+        self.assertFalse(self._snap(aube_j1, historique)["arrosage_recommande"])
+        aube_j2 = datetime(2026, 9, 13, 6, 0, tzinfo=self.PARIS)
+        snap = self._snap(aube_j2, historique)
+        self.assertTrue(snap["arrosage_recommande"], "l'aube de J+2 était mangée par une fenêtre de 48 h")
+        self.assertNotIn("foliaire", snap["conseil_principal"])
+
+    def test_un_traitement_pendant_un_semis_rend_l_eau_a_j_plus_2(self) -> None:
+        historique = [{"type": "Sursemis", "date": "2026-09-01"},
+                      {"type": "Traitement", "date": "2026-09-11", "declared_at": "2026-09-11T12:00:00+00:00"}]
+        for heure in (10, 12):
+            with self.subTest(heure=heure):
+                instant = datetime(2026, 9, 13, heure, 0, tzinfo=self.PARIS)
+                snap = self._snap(instant, historique, soil_balance={"reserve_mm": 8.0, "reserve_max_mm": 24.0})
+                self.assertTrue(snap["arrosage_recommande"], "micro-cycle du semis refusé à J+2")
+
+    def test_un_produit_sol_apres_un_foliaire_n_efface_pas_sa_protection(self) -> None:
+        # Catalogue réel : H2Pro (foliaire, 0 h de blocage) à 20:00, Humuslight (sol) à 20:30.
+        historique = [
+            {"type": "Agent Mouillant", "date": "2026-09-11", "declared_at": "2026-09-11T18:00:00+00:00",
+             "produit": "H2Pro TriSmart", "application_type": "foliaire", "application_irrigation_block_hours": 0},
+            {"type": "Biostimulant", "date": "2026-09-11", "declared_at": "2026-09-11T18:30:00+00:00",
+             "produit": "Humuslight", "application_type": "sol", "application_irrigation_block_hours": 0},
+        ]
+        aube = datetime(2026, 9, 12, 7, 0, tzinfo=self.PARIS)
+        snap = self._snap(aube, historique)
+        self.assertFalse(snap["arrosage_recommande"])
+        self.assertIn("H2Pro TriSmart: traitement foliaire", snap["conseil_principal"])
+        soir = datetime(2026, 9, 12, 20, 5, tzinfo=self.PARIS)
+        self.assertNotIn("foliaire", self._snap(soir, historique)["conseil_principal"])
+
+    def test_l_incorporation_retardee_par_un_autre_blocage_n_est_pas_abandonnee(self) -> None:
+        mem = importlib.import_module("custom_components.gazon_intelligent.memory")
+        historique = [
+            {"type": "Traitement", "date": "2026-09-12", "declared_at": "2026-09-12T16:00:00+00:00",
+             "produit": "Fongicide", "application_type": "foliaire", "application_irrigation_block_hours": 24},
+            {"type": "Fertilisation", "date": "2026-09-12", "declared_at": "2026-09-12T19:00:00+00:00",
+             "produit": "Floranid", "application_type": "sol", "application_requires_watering_after": True,
+             "application_post_watering_mm": 5.0, "application_irrigation_block_hours": 0,
+             "application_irrigation_mode": "auto"},
+        ]
+        pendant = datetime(2026, 9, 12, 21, 30, tzinfo=self.PARIS)
+        etat = mem.compute_application_state(historique, now=pendant, today=pendant.date())
+        self.assertEqual(etat["application_post_watering_status"], "bloque")
+        self.assertEqual(etat["application_block_label"], "Fongicide")
+        apres = datetime(2026, 9, 13, 19, 30, tzinfo=self.PARIS)
+        etat = mem.compute_application_state(historique, now=apres, today=apres.date())
+        self.assertTrue(etat["application_post_watering_pending"], "incorporation abandonnée à la levée du blocage")
+        self.assertNotEqual(etat["application_post_watering_status"], "termine")
+        self.assertEqual(etat["application_post_watering_remaining_mm"], 5.0)
+
+    def test_le_message_de_blocage_nomme_le_produit_qui_bloque(self) -> None:
+        historique = [
+            {"type": "Traitement", "date": "2026-09-12", "declared_at": "2026-09-12T16:00:00+00:00",
+             "produit": "Fongicide", "application_type": "foliaire", "application_irrigation_block_hours": 24},
+            {"type": "Fertilisation", "date": "2026-09-12", "declared_at": "2026-09-12T19:00:00+00:00",
+             "produit": "Floranid", "application_type": "sol", "application_irrigation_block_hours": 0},
+        ]
+        snap = self._snap(datetime(2026, 9, 12, 21, 30, tzinfo=self.PARIS), historique)
+        self.assertIn("Fongicide: l'arrosage est bloqué", snap["conseil_principal"])
+
+    def test_une_application_datee_dans_le_futur_n_agit_pas_encore(self) -> None:
+        mem = importlib.import_module("custom_components.gazon_intelligent.memory")
+        historique = [{"type": "Traitement", "date": "2026-09-15", "declared_at": "2026-09-11T08:00:00+00:00",
+                       "produit": "Fongicide", "application_irrigation_block_hours": 24}]
+        maintenant = datetime(2026, 9, 11, 12, 0, tzinfo=self.PARIS)
+        etat = mem.compute_application_state(historique, now=maintenant, today=maintenant.date())
+        self.assertFalse(etat["application_block_active"])
+        self.assertFalse(etat["application_en_cours"])
+        self.assertFalse(etat["application_foliaire_en_cours"])
+
+    def test_une_declaration_a_00h30_heure_locale_est_du_jour_meme(self) -> None:
+        # `declared_at` en UTC (22:30 la veille), date saisie LOCALE : comparée en UTC seule, la
+        # déclaration passait pour rétroactive et son moment retombait à 06:00 UTC.
+        water = importlib.import_module("custom_components.gazon_intelligent.water")
+        paris = types.SimpleNamespace(as_local=lambda d: d.astimezone(self.PARIS))
+        item = {"type": "Traitement", "date": "2026-09-12", "declared_at": "2026-09-11T22:30:00+00:00"}
+        with patch.object(water, "dt_util", paris):
+            moment = water.resolve_history_moment(item)
+        self.assertEqual(moment, datetime(2026, 9, 11, 22, 30, tzinfo=timezone.utc))
+
+    def test_un_semis_declare_sans_produit_ne_recoit_pas_le_produit_selectionne(self) -> None:
+        brain_mod = importlib.import_module("custom_components.gazon_intelligent.gazon_brain")
+        brain = brain_mod.GazonBrain()
+        brain.register_product(product_id="floranid", nom="Floranid", type_produit="Fertilisation",
+                               application_type="sol", reapplication_after_days=90)
+        brain.register_product(product_id="kick", nom="Kick Pro", type_produit="Traitement")
+        brain.selected_product_id = "floranid"
+        brain.declare_intervention("Sursemis", date_action=date(2026, 9, 11))
+        semis = brain.history[-1]
+        self.assertEqual(semis["type"], "Sursemis")
+        self.assertIn(semis.get("produit"), (None, ""), "le produit sélectionné a été rattaché au semis")
+
+
+class TestFenetresDeTonteElargies(unittest.TestCase):
+    """Choix de Kévin, 15/09/2026 : tondre plus tard plutôt qu'avancer l'arrosage.
+
+    L'arrosage finit désormais 15 min avant le lever du soleil, et le ressuyage retient la tonte
+    4 à 6 h ensuite. Les fenêtres s'élargissent : idéale 10:00 → 14:00, soir de 5 h avant le coucher
+    jusqu'au coucher + 30 min (coucher à 20:12 : 15:12 → 20:42 ; juillet : ~16:45 → 22:15). La nuit de la
+    tonte commence à la fin de la fenêtre du soir, pas au coucher.
+    """
+
+    COUCHER = 20 * 60 + 12
+    SOLEIL_COUCHE = {"sun_state": "below_horizon", "sun_above_horizon": False, "sun_below_horizon": True}
+    SOLEIL_LEVE = {"sun_state": "above_horizon", "sun_above_horizon": True, "sun_below_horizon": False}
+
+    def _contexte(self, heure: int, minute: int = 0, *, jour=date(2026, 9, 15), soleil=None,
+                  temperature=20.0, coucher: int | None = COUCHER):
+        return decision.DecisionContext.from_legacy_args(
+            history=[], today=jour, hour_of_day=heure + minute / 60.0, temperature=temperature,
+            pluie_24h=0, pluie_demain=0, humidite=55, type_sol="limoneux", etp_capteur=3.0,
+            sun_context=dict(soleil) if soleil else None,
+            weather_profile={} if coucher is None else {"sunset_minute": coucher},
+        )
+
+    def _fenetre(self, heure: int, minute: int = 0, **kw) -> str:
+        ctx = self._contexte(heure, minute, **kw)
+        return decision_mowing._resolve_mowing_window(ctx, weather_profile=ctx.weather_profile)[0]
+
+    def _bundle(self, heure: int, minute: int = 0, **kw) -> dict:
+        ctx = self._contexte(heure, minute, **kw)
+        phase_bundle = decision_phase.build_phase_bundle(ctx)
+        water_bundle = decision_watering.build_water_bundle(ctx, phase_bundle)
+        risk_bundle = decision_risk.build_risk_bundle(ctx, phase_bundle, water_bundle)
+        return decision_mowing.build_mowing_bundle(ctx, phase_bundle, water_bundle, risk_bundle)
+
+    def test_la_fenetre_ideale_va_de_dix_a_quatorze_heures(self) -> None:
+        soleil = self.SOLEIL_LEVE
+        self.assertEqual(self._fenetre(9, 59, soleil=soleil), "blocked")
+        self.assertEqual(self._fenetre(10, 0, soleil=soleil), "ideal")
+        self.assertEqual(self._fenetre(13, 59, soleil=soleil), "ideal")
+        # 14:00 → 15:12 : entre l'idéale et le soir, déconseillé.
+        self.assertEqual(self._fenetre(14, 0, soleil=soleil), "discouraged")
+
+    def test_le_soir_s_ouvre_cinq_heures_avant_le_coucher(self) -> None:
+        soleil = self.SOLEIL_LEVE
+        self.assertEqual(self._fenetre(15, 11, soleil=soleil), "discouraged")
+        self.assertEqual(self._fenetre(15, 12, soleil=soleil), "acceptable")
+
+    def test_le_soir_se_ferme_trente_minutes_apres_le_coucher(self) -> None:
+        # Soleil couché à 20:12 : jusqu'à 20:41 c'est encore la fenêtre, à 20:42 c'est la nuit.
+        self.assertEqual(self._fenetre(20, 11, soleil=self.SOLEIL_LEVE), "acceptable")
+        self.assertEqual(self._fenetre(20, 41, soleil=self.SOLEIL_COUCHE), "acceptable")
+        self.assertEqual(self._fenetre(20, 42, soleil=self.SOLEIL_COUCHE), "blocked")
+
+    def test_en_juillet_la_fenetre_du_soir_passe_vingt_deux_heures(self) -> None:
+        # Coucher 21:45 : 16:45 → 22:15. Le repli horaire « nuit dès 22 h » ne joue pas quand le
+        # soleil est connu.
+        juillet = dict(jour=date(2026, 7, 10), coucher=21 * 60 + 45)
+        self.assertEqual(self._fenetre(16, 44, soleil=self.SOLEIL_LEVE, **juillet), "discouraged")
+        self.assertEqual(self._fenetre(16, 45, soleil=self.SOLEIL_LEVE, **juillet), "acceptable")
+        self.assertEqual(self._fenetre(22, 14, soleil=self.SOLEIL_COUCHE, **juillet), "acceptable")
+        self.assertEqual(self._fenetre(22, 15, soleil=self.SOLEIL_COUCHE, **juillet), "blocked")
+
+    def test_en_decembre_le_soir_ne_mord_pas_sur_l_ideale(self) -> None:
+        # Coucher 16:55 : l'ouverture calculée (11:55) tombe dans l'idéale. Le soir prend le relais
+        # à 14:00 et va jusqu'à 17:25.
+        decembre = dict(jour=date(2026, 12, 15), coucher=16 * 60 + 55)
+        self.assertEqual(self._fenetre(12, 0, soleil=self.SOLEIL_LEVE, **decembre), "ideal")
+        self.assertEqual(self._fenetre(14, 0, soleil=self.SOLEIL_LEVE, **decembre), "acceptable")
+        self.assertEqual(self._fenetre(17, 24, soleil=self.SOLEIL_COUCHE, **decembre), "acceptable")
+        self.assertEqual(self._fenetre(17, 25, soleil=self.SOLEIL_COUCHE, **decembre), "blocked")
+
+    def test_les_frontieres_tombent_a_la_minute_quel_que_soit_le_coucher(self) -> None:
+        # Remultipliée par 60, l'heure décimale n'est pas exacte : `(16 + 35 / 60) * 60` vaut
+        # 994,999…. Sans arrondi, ces deux couchers-là décalaient la frontière d'une minute.
+        juillet = dict(jour=date(2026, 7, 20), coucher=21 * 60 + 35)  # soir 16:35 → 22:05
+        self.assertEqual(self._fenetre(16, 34, soleil=self.SOLEIL_LEVE, **juillet), "discouraged")
+        self.assertEqual(self._fenetre(16, 35, soleil=self.SOLEIL_LEVE, **juillet), "acceptable")
+        tot = dict(jour=date(2026, 12, 10), coucher=16 * 60 + 28)  # nuit à 16:58
+        self.assertEqual(self._fenetre(16, 57, soleil=self.SOLEIL_COUCHE, **tot), "acceptable")
+        self.assertEqual(self._fenetre(16, 58, soleil=self.SOLEIL_COUCHE, **tot), "blocked")
+
+    def test_la_fenetre_se_ferme_aussi_sans_etat_du_soleil(self) -> None:
+        # Coucher connu mais état du soleil absent : la nuit retombe sur l'horloge (22 h), et c'est
+        # la fenêtre elle-même qui doit se fermer au coucher + 30 min.
+        self.assertEqual(self._fenetre(20, 41), "acceptable")
+        self.assertEqual(self._fenetre(20, 42), "discouraged")
+
+    def test_un_coucher_illisible_ou_aberrant_est_ignore(self) -> None:
+        self.assertEqual(decision_mowing._minute_du_coucher({"sunset_minute": 1212}), 1212.0)
+        for valeur in (-1, 24 * 60 + 1, "pas une heure", None):
+            with self.subTest(sunset_minute=valeur):
+                self.assertIsNone(decision_mowing._minute_du_coucher({"sunset_minute": valeur}))
+        self.assertIsNone(decision_mowing._minute_du_coucher(None))
+
+    def test_le_matin_un_soleil_sous_l_horizon_reste_la_nuit(self) -> None:
+        # La grâce du soir ne vaut que l'après-midi : à 06:30, 20:12 + 30 est « plus tard », mais
+        # c'est la fin de la nuit.
+        ctx = self._contexte(6, 30, soleil=self.SOLEIL_COUCHE)
+        self.assertTrue(decision_mowing._est_la_nuit(ctx, ctx.weather_profile))
+
+    def test_sans_coucher_connu_le_soleil_couche_reste_la_nuit(self) -> None:
+        ctx = self._contexte(20, 20, soleil=self.SOLEIL_COUCHE, coucher=None)
+        self.assertTrue(decision_mowing._est_la_nuit(ctx, ctx.weather_profile))
+        self.assertEqual(self._fenetre(20, 20, soleil=self.SOLEIL_COUCHE, coucher=None), "blocked")
+
+    def test_la_tonte_reste_autorisee_jusqu_a_la_fin_de_la_fenetre(self) -> None:
+        # Le motif de blocage lit la même nuit que la fenêtre : sans cela, la fenêtre dirait
+        # « acceptable » pendant que `tonte_autorisee` retomberait dès le coucher.
+        pendant = self._bundle(20, 30, soleil=self.SOLEIL_COUCHE)
+        self.assertEqual(pendant["mowing_window_state"], "acceptable")
+        self.assertNotEqual(pendant["mowing_block_reason_code"], "mowing_night")
+        self.assertTrue(pendant["tonte_autorisee"], pendant.get("tonte_reason"))
+        apres = self._bundle(20, 45, soleil=self.SOLEIL_COUCHE)
+        self.assertEqual(apres["mowing_block_reason_code"], "mowing_night")
+        self.assertFalse(apres["tonte_autorisee"])
+
+    def test_apres_la_nuit_du_soir_la_prochaine_tonte_est_demain(self) -> None:
+        # Le seuil valait 22 h : à 21:00, la nuit tombée, la carte annonçait la tonte pour le jour
+        # même.
+        soir = self._bundle(21, 0, soleil=self.SOLEIL_COUCHE)
+        self.assertEqual(soir["mowing_block_reason_code"], "mowing_night")
+        self.assertEqual(soir["next_mowing_date"], "2026-09-16")
+        # Et dès la nuit tombée (20:42), pas seulement à partir de 21 h.
+        tombee = self._bundle(20, 45, soleil=self.SOLEIL_COUCHE)
+        self.assertEqual(tombee["mowing_block_reason_code"], "mowing_night")
+        self.assertEqual(tombee["next_mowing_date"], "2026-09-16")
+        petit_matin = self._bundle(5, 0, soleil=self.SOLEIL_COUCHE)
+        self.assertEqual(petit_matin["mowing_block_reason_code"], "mowing_night")
+        self.assertEqual(petit_matin["next_mowing_date"], "2026-09-15")
+
+
+class TestPasseLaFenetreDuMatinCestDemainMatin(unittest.TestCase):
+    """Passé la fenêtre du matin, la recharge vise DEMAIN matin (revue du 15/09/2026).
+
+    `_profile_for_normal` publiait `ce_matin`, avec la date du jour, tout l'après-midi et le soir.
+    Le risk bundle disait `demain_matin`, sauf quand il proposait « soir » : l'arbitrage reprenait
+    alors le profil. Relevé sur l'installation le 07/09/2026 : « Prochain arrosage » est passé de
+    « ce matin (07/09) » à 18:02:39 à « demain matin (08/09) », puis inversement à 18:02:50.
+    Depuis que la carte affiche l'heure de départ, ce va-et-vient se voyait aussi sur l'heure.
+    """
+
+    PARIS = ZoneInfo("Europe/Paris")
+    RESERVE_AU_SEUIL = dict(
+        bilan_hydrique_mm=-7.0, deficit_jour=4.0, deficit_3j=8.0, deficit_7j=20.0,
+        arrosage_recent_7j=0.0, arrosage_recent=0.0, reserve_from_soil_ledger=True,
+        reserve_utile_mm=12.0, reserve_actuelle_mm=5.0, reserve_stock_mm=5.0,
+        reserve_stock_max_mm=24.0, depletion_mm=7.0, depletion_ratio=0.583, mad_ratio=0.5,
+    )
+
+    def _profil(self, heure: int, minute: int = 0, *, phase: str = "Normal") -> dict:
+        moment = datetime(2026, 9, 7, heure, minute, tzinfo=self.PARIS)
+        with patch.object(guidance, "_current_datetime", return_value=moment):
+            return guidance.compute_watering_profile(
+                phase_dominante=phase, sous_phase=phase, water_balance=dict(self.RESERVE_AU_SEUIL),
+                today=moment.date(), pluie_24h=0.0, pluie_demain=0.0, pluie_j2=0.0, pluie_3j=0.0,
+                pluie_probabilite_max_3j=0.0, humidite=55.0, temperature=22.0, etp=4.0,
+                type_sol="limoneux", weather_profile={}, history=[],
+            )
+
+    def test_phase_normale_matin_puis_demain_matin(self) -> None:
+        attendu = ((3, 0, "ce_matin"), (5, 0, "maintenant"), (9, 59, "maintenant"),
+                   (10, 0, "demain_matin"), (18, 2, "demain_matin"), (23, 30, "demain_matin"))
+        for heure, minute, fenetre in attendu:
+            with self.subTest(heure=f"{heure:02d}:{minute:02d}"):
+                profil = self._profil(heure, minute)
+                self.assertGreater(profil["mm_final_recommande"], 0.0, "prémisse : un arrosage est demandé")
+                self.assertEqual(profil["fenetre_optimale"], fenetre)
+
+    def test_le_soir_l_arbitrage_ne_bascule_plus_avec_le_risk_bundle(self) -> None:
+        fenetre_profil = self._profil(18, 2)["fenetre_optimale"]
+        resolve = decision_watering._resolve_optimal_window
+        self.assertEqual(resolve(fenetre_profil, "soir"), "demain_matin")
+        self.assertEqual(resolve(fenetre_profil, "demain_matin"), "demain_matin")
+
+    def test_phases_agronomiques_aussi(self) -> None:
+        self.assertEqual(self._profil(5, 0, phase="Fertilisation")["fenetre_optimale"], "ce_matin")
+        self.assertEqual(self._profil(12, 0, phase="Fertilisation")["fenetre_optimale"], "demain_matin")
+        self.assertEqual(self._profil(20, 0, phase="Fertilisation")["fenetre_optimale"], "demain_matin")
+
