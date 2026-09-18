@@ -5,6 +5,12 @@
     "@kev21brv10"
   ],
   "config_flow": true,
+  "dependencies": [
+    "frontend",
+    "http",
+    "panel_custom",
+    "websocket_api"
+  ],
   "documentation": "https://github.com/kev21brv10/gazon_intelligent",
   "integration_type": "service",
   "iot_class": "calculated",
@@ -13,5 +19,5 @@
     "custom_components.gazon_intelligent"
   ],
   "requirements": [],
-  "version": "0.90.0"
+  "version": "0.96.1"
 }

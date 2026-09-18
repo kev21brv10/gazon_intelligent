@@ -64,13 +64,19 @@
           "capteur_vent": "Lokaler Wind (optional, wird zuerst genutzt, wenn vorhanden)",
           "capteur_rosee": "Tau / Blattnässe (optional, automatische Berechnung wenn nicht angegeben)",
           "capteur_rayonnement": "Gemessene Globalstrahlung (optional, W/m² — verbessert die ET0-Berechnung deutlich)",
-          "capteur_pression": "Gemessener Luftdruck (optional, hPa — verfeinert die ET0-Berechnung)"
+          "capteur_pression": "Gemessener Luftdruck (optional, hPa — verfeinert die ET0-Berechnung)",
+          "entite_pompe": "Bewässerungspumpe (optional — auf der Seite „Gazon“ angezeigt und steuerbar)",
+          "page_gazon": "Seite „Gazon“ in der Seitenleiste anzeigen",
+          "notification_cibles": "Zu benachrichtigende Telefone (optional — Warnungen und Nachrichten von Gazon Intelligent)",
+          "alertes_actives": "Automatische Warnungen (verpasster Saat-Bewässerungszyklus, Bewässerungs-Sicherheitssperre)",
+          "entite_ia": "KI für Ratschläge (optional — sonst die Standard-KI-Aufgabe von Home Assistant)"
         }
       }
     },
     "error": {
       "invalid_instance_slug": "Ungültige Rasenkennung.",
-      "entity_not_found": "Entität in Home Assistant nicht gefunden."
+      "entity_not_found": "Entität in Home Assistant nicht gefunden.",
+      "temperature_pour_rosee": "Diese Entität liefert eine Temperatur (einen Taupunkt). „Tau / Blattnässe“ erwartet eine Blattnässe: Jeder Wert über 0 bedeutet nasses Gras, das Mähen wartet. Lass das Feld leer, um den Tau schätzen zu lassen."
     },
     "abort": {
       "already_configured": "Gazon Intelligent ist bereits konfiguriert."
@@ -105,18 +111,27 @@
           "capteur_vent": "Lokaler Wind (optional, wird zuerst genutzt, wenn vorhanden)",
           "capteur_rosee": "Tau / Blattnässe (optional, automatische Berechnung wenn nicht angegeben)",
           "capteur_rayonnement": "Gemessene Globalstrahlung (optional, W/m² — verbessert die ET0-Berechnung deutlich)",
-          "capteur_pression": "Gemessener Luftdruck (optional, hPa — verfeinert die ET0-Berechnung)"
+          "capteur_pression": "Gemessener Luftdruck (optional, hPa — verfeinert die ET0-Berechnung)",
+          "entite_pompe": "Bewässerungspumpe (optional — auf der Seite „Gazon“ angezeigt und steuerbar)",
+          "page_gazon": "Seite „Gazon“ in der Seitenleiste anzeigen",
+          "notification_cibles": "Zu benachrichtigende Telefone (optional — Warnungen und Nachrichten von Gazon Intelligent)",
+          "alertes_actives": "Automatische Warnungen (verpasster Saat-Bewässerungszyklus, Bewässerungs-Sicherheitssperre)",
+          "entite_ia": "KI für Ratschläge (optional — sonst die Standard-KI-Aufgabe von Home Assistant)"
         }
       }
     },
     "abort": {
       "already_configured": "Gazon Intelligent ist bereits konfiguriert."
+    },
+    "error": {
+      "temperature_pour_rosee": "Diese Entität liefert eine Temperatur (einen Taupunkt). „Tau / Blattnässe“ erwartet eine Blattnässe: Jeder Wert über 0 bedeutet nasses Gras, das Mähen wartet. Lass das Feld leer, um den Tau schätzen zu lassen."
     }
   },
   "selector": {
     "gazon_mode": {
       "options": {
         "normal": "Normal",
+        "semis": "Aussaat",
         "sursemis": "Nachsaat",
         "traitement": "Behandlung",
         "fertilisation": "Düngung",
@@ -128,6 +143,7 @@
     },
     "gazon_intervention": {
       "options": {
+        "semis": "Aussaat",
         "sursemis": "Nachsaat",
         "traitement": "Behandlung",
         "fertilisation": "Düngung",
@@ -149,6 +165,7 @@
     },
     "gazon_phase_compatible": {
       "options": {
+        "semis": "Aussaat",
         "sursemis": "Nachsaat",
         "croissance": "Wachstum",
         "entretien": "Pflege"
@@ -391,6 +408,34 @@
         "raison": {
           "name": "Grund",
           "description": "Grund für den Abbruch, wird im Aktionsprotokoll festgehalten."
+        }
+      }
+    },
+    "send_notification": {
+      "name": "Benachrichtigung senden",
+      "description": "Sendet eine Nachricht an die in den Optionen gewählten Telefone. Ohne Nachricht wird der aktuelle Rasenzustand gesendet.",
+      "fields": {
+        "titre": {
+          "name": "Titel",
+          "description": "Titel der Benachrichtigung (optional)."
+        },
+        "message": {
+          "name": "Nachricht",
+          "description": "Zu sendender Text. Leer: der Rasenzustand."
+        }
+      }
+    },
+    "ask_ai": {
+      "name": "KI um Rat fragen",
+      "description": "Stellt der KI von Home Assistant eine Frage und übergibt ihr den Rasenzustand. Die KI steuert nichts: Sie antwortet in Textform. Jeder Aufruf zählt beim KI-Anbieter.",
+      "fields": {
+        "question": {
+          "name": "Frage",
+          "description": "Deine Frage. Leer: ein Tagesüberblick über den Rasen."
+        },
+        "notifier": {
+          "name": "Auch an Telefone senden",
+          "description": "Sendet die Antwort an die in den Optionen gewählten Telefone."
         }
       }
     }

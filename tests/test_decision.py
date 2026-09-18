@@ -1283,7 +1283,7 @@ class TestDecisionSnapshotSursemisAndHeatStress(unittest.TestCase):
 
     def test_build_decision_snapshot_sursemis_projects_next_mowing_date(self) -> None:
         snapshot = decision.build_decision_snapshot(
-            history=[{"type": "Sursemis", "date": "2026-03-17"}],
+            history=[{"type": "Semis", "date": "2026-03-17"}],
             today=date(2026, 3, 17),
             hour_of_day=10,
             temperature=18,
@@ -3634,6 +3634,54 @@ class AmortissementDuRisqueTests(unittest.TestCase):
         publies, _ = self._suite(["faible", "eleve"])
         self.assertEqual(publies[-1], "eleve", "une alerte a été retardée par l'amortissement")
 
+    def test_la_germination_ne_clignote_plus_autour_de_moins_un_mm(self) -> None:
+        """Rejoue les valeurs réellement vues dans HA la nuit du 18/09/2026."""
+        precedent = "modere"
+        publies = []
+        for bilan in (-0.8, -1.0, -0.9, -1.2, -0.8, -1.1, -0.7):
+            precedent = guidance_mod._germination_risk_floor(
+                bilan_hydrique_mm=bilan,
+                pression_hydrique=1.5,
+                risque_precedent=precedent,
+            )
+            publies.append(precedent)
+
+        self.assertEqual(publies, ["modere", "eleve", "eleve", "eleve", "eleve", "eleve", "eleve"])
+        self.assertEqual(
+            guidance_mod._germination_risk_floor(
+                bilan_hydrique_mm=-0.5,
+                pression_hydrique=1.5,
+                risque_precedent=precedent,
+            ),
+            "modere",
+        )
+
+    def test_la_pression_de_germination_a_la_meme_hysteresis(self) -> None:
+        self.assertEqual(
+            guidance_mod._germination_risk_floor(
+                bilan_hydrique_mm=0.0,
+                pression_hydrique=2.0,
+                risque_precedent="modere",
+            ),
+            "eleve",
+        )
+        self.assertEqual(
+            guidance_mod._germination_risk_floor(
+                bilan_hydrique_mm=0.0,
+                pression_hydrique=1.7,
+                risque_precedent="eleve",
+            ),
+            "eleve",
+        )
+        self.assertEqual(
+            guidance_mod._germination_risk_floor(
+                bilan_hydrique_mm=0.0,
+                pression_hydrique=1.5,
+                risque_precedent="eleve",
+            ),
+            "modere",
+        )
+
     def test_la_descente_depuis_eleve_est_amortie(self) -> None:
         """Asymétrie assumée : on monte vite en alerte, on en redescend prudemment."""
         publies, _ = self._suite(["eleve", "faible", "faible"])
@@ -3658,6 +3706,11 @@ class AmortissementDuRisqueTests(unittest.TestCase):
         source_risk = (PACKAGE_DIR / "decision_risk.py").read_text(encoding="utf-8")
         self.assertIn("amortir_niveau_risque(", source_risk,
                       "le bundle de risque n'appelle pas l'amortissement")
+        self.assertIn(
+            "risque_precedent=",
+            source_risk,
+            "la mémoire publiée n'est pas transmise à l'hystérésis de germination",
+        )
         # Amorti AVANT les deux consommateurs, sinon la décision travaille sur le brut.
         self.assertLess(source_risk.index("amortir_niveau_risque("),
                         source_risk.index("compute_next_reevaluation("),

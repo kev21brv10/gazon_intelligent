@@ -50,10 +50,18 @@ from .const import (
     DEFAULT_TYPE_SOL,
     TYPES_SOL,
     SHARED_WEATHER_CONFIG_KEYS,
+    CONF_ENTITE_POMPE,
+    CONF_PAGE_GAZON,
+    DEFAULT_PAGE_GAZON,
+    CONF_NOTIFICATION_CIBLES,
+    CONF_ALERTES_ACTIVES,
+    CONF_ENTITE_IA,
+    DEFAULT_ALERTES_ACTIVES,
 )
 from .entity_ids import normalize_instance_slug
 from .entity_migration import CURRENT_CONFIG_ENTRY_VERSION
 from .shared_state import get_shared_state
+from . import sources as sources_meteo
 
 
 def _d(val):
@@ -86,6 +94,12 @@ _OPTIONAL_CLEARABLE_KEYS = (
     CONF_CAPTEUR_TONDEUSE_EN_CHARGE,
     CONF_CAPTEUR_TONDEUSE_PROCHAIN_DEPART,
     CONF_CAPTEUR_TONDEUSE_HAUTEUR_COUPE,
+    # Vider le champ doit RETIRER la pompe : Home Assistant omet un champ vidé, et la fusion avec
+    # les options existantes l'aurait gardée.
+    CONF_ENTITE_POMPE,
+    # Même piège pour les téléphones et l'IA (0.93.0) : vider le champ doit les retirer.
+    CONF_NOTIFICATION_CIBLES,
+    CONF_ENTITE_IA,
 )
 
 # Clés de config qui contiennent des entity_id et doivent être validées
@@ -113,6 +127,9 @@ _OPTIONAL_ENTITY_KEYS = (
     CONF_CAPTEUR_TONDEUSE_EN_CHARGE,
     CONF_CAPTEUR_TONDEUSE_PROCHAIN_DEPART,
     CONF_CAPTEUR_TONDEUSE_HAUTEUR_COUPE,
+    CONF_ENTITE_POMPE,
+    # Pas les téléphones : c'est une LISTE, que `hass.states.get` ne sait pas chercher.
+    CONF_ENTITE_IA,
 )
 
 # Clés effaçables par l'OPTIONS FLOW (formulaire « Configurer » = capteurs uniquement).
@@ -126,6 +143,26 @@ _OPTIONS_CLEARABLE_KEYS = tuple(
     for key in _OPTIONAL_CLEARABLE_KEYS
     if key not in (CONF_ZONE_2, CONF_ZONE_3, CONF_ZONE_4, CONF_ZONE_5)
 )
+
+
+def _entrees_de_travers(hass, valeurs: dict) -> dict[str, str]:
+    """Les entrées que le moteur lirait forcément de travers (0.96.0) : un point de rosée pour la
+    rosée sur l'herbe. Branché par ce formulaire le 17/09/2026, il bloquait la tonte ; la page le
+    refusait déjà. Toutes les valeurs sont jugées, pas seulement les nouvelles."""
+    erreurs: dict[str, str] = {}
+    if hass is None:
+        return erreurs
+    for source in sources_meteo.SOURCES:
+        entity_id = valeurs.get(source.cle)
+        if not entity_id or not (source.unites_refusees or source.classes_refusees):
+            continue
+        etat = hass.states.get(entity_id)
+        attributs = getattr(etat, "attributes", None) or {}
+        if sources_meteo.interdit(
+            source, unite=attributs.get("unit_of_measurement"), classe=attributs.get("device_class")
+        ):
+            erreurs[source.cle] = "temperature_pour_rosee"
+    return erreurs
 
 
 def _normalize_optional_clears(
@@ -327,6 +364,28 @@ def build_advanced_schema(current: dict | None = None, *, shared_defaults: dict 
             vol.Optional(CONF_CAPTEUR_PRESSION, default=_d(current.get(CONF_CAPTEUR_PRESSION))): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="sensor", device_class="atmospheric_pressure")
             ),
+            # Page « Gazon » (0.92.0) : la pompe n'est pas pilotée par l'intégration ; la page la
+            # montre et la commande. La case décide si la page apparaît dans la barre latérale.
+            vol.Optional(CONF_ENTITE_POMPE, default=_d(current.get(CONF_ENTITE_POMPE))): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="switch")
+            ),
+            vol.Optional(
+                CONF_PAGE_GAZON,
+                default=bool(current.get(CONF_PAGE_GAZON, DEFAULT_PAGE_GAZON)),
+            ): bool,
+            # Notifications et conseil IA (0.93.0). Les alertes laissent aussi une trace dans les
+            # notifications de Home Assistant, avec ou sans téléphone choisi.
+            vol.Optional(
+                CONF_NOTIFICATION_CIBLES,
+                default=_d(current.get(CONF_NOTIFICATION_CIBLES)),
+            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="notify", multiple=True)),
+            vol.Optional(
+                CONF_ALERTES_ACTIVES,
+                default=bool(current.get(CONF_ALERTES_ACTIVES, DEFAULT_ALERTES_ACTIVES)),
+            ): bool,
+            vol.Optional(CONF_ENTITE_IA, default=_d(current.get(CONF_ENTITE_IA))): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="ai_task")
+            ),
         }
     )
 
@@ -378,6 +437,16 @@ class GazonIntelligentConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # t
                             shared_defaults=_shared_config_defaults(hass),
                         ),
                         errors={key: "entity_not_found" for key in invalid_entities},
+                    )
+                de_travers = _entrees_de_travers(hass, data)
+                if de_travers:
+                    return self.async_show_form(
+                        step_id="sensors",
+                        data_schema=build_advanced_schema(
+                            {**getattr(self, "_base_user_input", {}), **dict(user_input)},
+                            shared_defaults=_shared_config_defaults(hass),
+                        ),
+                        errors=de_travers,
                     )
             await self.async_set_unique_id(f"{DOMAIN}:{instance_slug}")
             self._abort_if_unique_id_configured()
@@ -432,6 +501,16 @@ class GazonOptionsFlow(config_entries.OptionsFlow):
             for zone_key in (CONF_ZONE_2, CONF_ZONE_3, CONF_ZONE_4, CONF_ZONE_5):
                 if merged.get(zone_key) is None:
                     merged.pop(zone_key, None)
+            de_travers = _entrees_de_travers(getattr(self, "hass", None), merged)
+            if de_travers:
+                return self.async_show_form(
+                    step_id="user",
+                    data_schema=build_advanced_schema(
+                        {**current, **dict(user_input)},
+                        shared_defaults=_shared_config_defaults(getattr(self, "hass", None)),
+                    ),
+                    errors=de_travers,
+                )
             return self.async_create_entry(title="", data=merged)
 
         return self.async_show_form(

@@ -64,13 +64,19 @@
           "capteur_vent": "Local wind (optional, used first if provided)",
           "capteur_rosee": "Dew / leaf wetness (optional, automatic if not provided)",
           "capteur_rayonnement": "Measured global solar radiation (optional, W/m² — greatly improves ET0 accuracy)",
-          "capteur_pression": "Measured atmospheric pressure (optional, hPa — refines ET0 accuracy)"
+          "capteur_pression": "Measured atmospheric pressure (optional, hPa — refines ET0 accuracy)",
+          "entite_pompe": "Irrigation pump (optional — shown and controlled on the “Gazon” page)",
+          "page_gazon": "Show the “Gazon” page in the sidebar",
+          "notification_cibles": "Phones to notify (optional — Gazon Intelligent alerts and messages)",
+          "alertes_actives": "Automatic alerts (missed seed watering cycle, watering safety lock)",
+          "entite_ia": "AI for advice (optional — otherwise Home Assistant's default AI task)"
         }
       }
     },
     "error": {
       "invalid_instance_slug": "Invalid lawn identifier.",
-      "entity_not_found": "Entity not found in Home Assistant."
+      "entity_not_found": "Entity not found in Home Assistant.",
+      "temperature_pour_rosee": "This entity reports a temperature (a dew point). “Dew / leaf wetness” expects a leaf wetness value: anything above 0 means wet grass, so mowing waits. Leave the field empty to use an estimated dew."
     },
     "abort": {
       "already_configured": "Gazon Intelligent is already configured."
@@ -105,18 +111,27 @@
           "capteur_vent": "Local wind (optional, used first if provided)",
           "capteur_rosee": "Dew / leaf wetness (optional, automatic if not provided)",
           "capteur_rayonnement": "Measured global solar radiation (optional, W/m² — greatly improves ET0 accuracy)",
-          "capteur_pression": "Measured atmospheric pressure (optional, hPa — refines ET0 accuracy)"
+          "capteur_pression": "Measured atmospheric pressure (optional, hPa — refines ET0 accuracy)",
+          "entite_pompe": "Irrigation pump (optional — shown and controlled on the “Gazon” page)",
+          "page_gazon": "Show the “Gazon” page in the sidebar",
+          "notification_cibles": "Phones to notify (optional — Gazon Intelligent alerts and messages)",
+          "alertes_actives": "Automatic alerts (missed seed watering cycle, watering safety lock)",
+          "entite_ia": "AI for advice (optional — otherwise Home Assistant's default AI task)"
         }
       }
     },
     "abort": {
       "already_configured": "Gazon Intelligent is already configured."
+    },
+    "error": {
+      "temperature_pour_rosee": "This entity reports a temperature (a dew point). “Dew / leaf wetness” expects a leaf wetness value: anything above 0 means wet grass, so mowing waits. Leave the field empty to use an estimated dew."
     }
   },
   "selector": {
     "gazon_mode": {
       "options": {
         "normal": "Normal",
+        "semis": "Seeding",
         "sursemis": "Overseeding",
         "traitement": "Treatment",
         "fertilisation": "Fertilization",
@@ -128,6 +143,7 @@
     },
     "gazon_intervention": {
       "options": {
+        "semis": "Seeding",
         "sursemis": "Overseeding",
         "traitement": "Treatment",
         "fertilisation": "Fertilization",
@@ -149,6 +165,7 @@
     },
     "gazon_phase_compatible": {
       "options": {
+        "semis": "Seeding",
         "sursemis": "Overseeding",
         "croissance": "Growth",
         "entretien": "Maintenance"
@@ -391,6 +408,34 @@
         "raison": {
           "name": "Reason",
           "description": "Why it was stopped, kept in the action log."
+        }
+      }
+    },
+    "send_notification": {
+      "name": "Send a notification",
+      "description": "Sends a message to the phones chosen in the options. Without a message, sends the current lawn status.",
+      "fields": {
+        "titre": {
+          "name": "Title",
+          "description": "Notification title (optional)."
+        },
+        "message": {
+          "name": "Message",
+          "description": "Text to send. Empty: the lawn status."
+        }
+      }
+    },
+    "ask_ai": {
+      "name": "Ask the AI for advice",
+      "description": "Asks Home Assistant's AI a question, giving it the lawn status. The AI controls nothing: it answers in text. Each call counts with the AI provider.",
+      "fields": {
+        "question": {
+          "name": "Question",
+          "description": "Your question. Empty: a daily lawn review."
+        },
+        "notifier": {
+          "name": "Also send to phones",
+          "description": "Sends the answer to the phones chosen in the options."
         }
       }
     }

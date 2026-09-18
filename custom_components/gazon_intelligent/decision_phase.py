@@ -53,6 +53,7 @@ def build_phase_bundle(context: DecisionContext) -> dict[str, Any]:
     dominant = compute_dominant_phase(
         context.history,
         today=context.today,
+        reglages=context.reglages,
     )
     phase_dominante = _safe_phase_name(dominant.get("phase_dominante"))
     date_debut = _safe_date(dominant.get("date_debut"))
@@ -63,6 +64,7 @@ def build_phase_bundle(context: DecisionContext) -> dict[str, Any]:
         date_fin=date_fin,
         today=context.today,
         now=dt_util.now(),
+        reglages=context.reglages,
     )
     jours_restants = compute_jours_restants_for(
         phase_dominante=phase_dominante,

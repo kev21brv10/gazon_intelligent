@@ -175,6 +175,9 @@ class DecisionContext:
     # cycle et l'amortissement ne servirait à rien.
     risk_context: dict[str, Any] = field(default_factory=dict)
     runtime_context: dict[str, Any] = field(default_factory=dict)
+    # Réglages de l'instance (page « Gazon »), déjà nettoyés : seulement ce qui diffère du conseil.
+    # Vide = les constantes du moteur. Chaque module les lit avec `reglages.lire`.
+    reglages: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_legacy_args(
@@ -210,6 +213,7 @@ class DecisionContext:
         mower_context: dict[str, Any] | None = None,
         risk_context: dict[str, Any] | None = None,
         runtime_context: dict[str, Any] | None = None,
+        reglages: dict[str, Any] | None = None,
     ) -> "DecisionContext":
         today = today or dt_util.now().date()
         weather_profile = weather_profile or {}
@@ -246,6 +250,7 @@ class DecisionContext:
             mower_context=mower_context or {},
             risk_context=risk_context or {},
             runtime_context=runtime_context or {},
+            reglages=dict(reglages or {}),
         )
 
 

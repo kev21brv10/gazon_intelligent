@@ -1,5 +1,403 @@
 # Changelog
 
+## 0.96.1
+
+1974 tests verts. **En Semis et Sursemis, le prochain arrosage est le prochain cycle de graines, ses cycles se répartissent sur toute la fenêtre, et les notifications ont une Veille intelligente.** Kévin, le 17/09 : « je suis en sursemis et il me dit des trucs comme ça : Prochain arrosage : dimanche 20 septembre ».
+
+### Le prochain arrosage des graines (Claude)
+
+- **Correctif** : la date annoncée était l'estimation du régime Normal (les jours avant que la réserve du sol atteigne son seuil, pour un arrosage profond à l'aube). Les graines sont arrosées chaque jour : le prochain cycle partait le lendemain à 8:30. En Semis et Sursemis, l'intégration annonce désormais aujourd'hui tant que des cycles restent à faire dans la fenêtre des graines, sinon demain (`date_prochain_arrosage_estime`). Le régime Normal garde son estimation.
+- **Correctif** : le suivi des cycles de graines n'arrivait à aucun capteur. Ses neuf attributs (`semis_followup_state`, `semis_followup_due_at`, `semis_cycles_completed_today`, `semis_cycles_remaining_today`…) étaient calculés pour la décision, mais valaient toujours vide une fois publiés. Ils sont maintenant publiés sur « Fenêtre optimale ».
+- **La page** dit où en sont les graines : « Graines : c'est fini pour aujourd'hui. Prochain cycle demain dès 8 h 30 », ou « Prochain cycle de graines vers 12 h 30 (2 cycles faits sur 3) ». L'attente normale entre deux cycles ne s'affiche plus « Bloqué ». Un vrai blocage (vent, pluie, froid) reste affiché comme tel.
+- **Aperçu local** : il se remplit avec un relevé réel de Home Assistant (états et attributs, options, réglages, fiches produit, historique des vannes), sans rien qui situe la maison. Les familles d'alertes y sont enregistrées, et « Tout remettre » revient aux réglages de la maison.
+
+### Répartition des cycles et « vrai » prochain arrosage (Codex, relu)
+
+- **Les cycles de graines se répartissent sur toute la fenêtre** au lieu de se tasser au début : le premier part à l'ouverture, le dernier une heure avant la fermeture, les intermédiaires à intervalles réguliers (exemple avec 08:30-16:00 : 2 cycles → 08:30 et 15:00 ; 3 → 08:30, 11:45, 15:00 ; 4 → 08:30, 10:40, 12:50, 15:00). Le minimum agronomique du stade (120 min en germination) reste prioritaire, et le coordinateur comme le capteur « Prochain arrosage » lisent les mêmes créneaux — vérifié que la vraie vanne suit exactement ce que la page annonce, pas seulement l'affichage.
+- Une fois les cycles du jour terminés, « Prochain arrosage » affiche désormais la date **et l'heure** du premier créneau du lendemain, recalculées avec les réglages courants, au lieu de retomber sur « Non requis ».
+- La page de réglages Graines affiche un aperçu « Départs prévus » qui suit en direct la fenêtre et le nombre de cycles choisis.
+
+### Notifications : Veille intelligente et réglages sensibles (Codex, relu)
+
+- **Veille intelligente** (nouveau, à côté du choix manuel existant) : les quatre familles restent toujours surveillées, mais seules les informations calmes (cycle suspendu ou rattrapé normalement, mesures revenues) restent dans les notifications de Home Assistant sans déranger le téléphone ; un vrai problème (verrou, tondeuse en erreur, cycle manqué, mesures manquantes) part toujours. La partie IA s'appelle désormais **Conseiller Gazon**.
+- **13 réglages sensibles** (4 tonte, 5 arrosage, 3 graines, 1 modes) affichent un avertissement sous le curseur ; ce sont de vrais réglages du registre, bornés et testés, pas de simples curseurs visuels. Les invariants de sécurité (verrou de vanne, priorités entre modes, gardes de panne…) restent non réglables.
+- **Hystérésis du risque en germination** : le niveau montait et redescendait 73 fois en une nuit sur de minuscules variations de déficit (±0,1 mm). Il monte toujours immédiatement aux seuils agronomiques, mais ne redescend qu'une fois franchement revenu en zone sûre — sans toucher aux vraies alertes (vent fort, stress sévère), qui montent toujours tout de suite.
+- **« Tes entrées »** déplacé de l'onglet Météo vers Réglages → Mon installation (une seule copie) ; « Rosée sur l'herbe » précise partout « Ce n'est pas le point de rosée », dans la page comme dans les formulaires Home Assistant.
+
+### Vérifié
+
+- 1974 tests, ruff et mypy verts (51 fichiers), syntaxe JavaScript OK.
+- Banc de mutations sur le correctif du prochain arrosage : 23 mutants sur 23 tués (après avoir couvert 4 survivants du premier passage : motif seul, « 4 sur 3 », phrase du bulletin).
+- Déployé le 18/09 : après un redémarrage complet de Home Assistant (hors arrosage), page servie identique au local, 62 entités, aucune erreur, un seul avertissement connu (le point de rosée toujours branché). Un capteur avait gardé une valeur d'un précédent redémarrage juste après coup ; un second redémarrage propre l'a remis en phase avec le reste.
+
+## 0.96.0
+
+1940 tests verts. **Les cycles des graines suivent la météo, les alertes se choisissent par famille, l'onglet Modes est refait, et un point de rosée branché sur la rosée est ignoré.** Déployé le 17/09 à la demande de Kévin (« fais ce qu'il faut et déploie »), en pleine germination : cette version change des décisions du moteur.
+
+### Les graines suivent la météo (passe de Codex)
+
+- **Le nombre de cycles réglé est celui d'une météo normale.** Avant, il servait de minimum : la météo pouvait réduire la dose, jamais le nombre de cycles.
+  - Temps humide (air à 70 % ou plus), pluie tombée ou annoncée pour le lendemain (plus de 0,5 mm), ou temps frais et peu évaporant (14 °C au plus et évaporation d'au plus 2 mm) : **un cycle de moins**, et une dose réduite.
+  - Temps chaud (28 °C, mesurés ou prévus dans la journée), évaporation d'au moins 4 mm, vent d'au moins 12 km/h ou air sec (45 % au plus) : **un cycle de plus**, et une dose plus forte.
+  - Toujours dans la limite des créneaux de la fenêtre. La pluie suffisante, le sol humide, le froid de germination et le vent au-delà de la limite gardent leurs blocages.
+  - Germination par défaut : 3 cycles en météo normale (de 2 à 4). Avec les réglages de Kévin (4 cycles, ouverture à 8:30) : 4 cycles à 8:30, 10:30, 12:30 et 14:30 ; 3 par temps humide ou frais.
+- **Le vent du jardin fait foi** pour les graines et le risque du gazon ; la prévision ne sert que s'il manque. Le 17/09, la prévision annonçait 14,4 km/h contre 3,2 km/h mesurés au jardin.
+- **L'espacement se compte depuis le début du cycle précédent**, pas depuis sa fin : un cycle de 10:00 à 10:21 place le suivant à 12:00, et le dernier ne sort plus de la fenêtre.
+- **Température minimale d'arrosage après une scarification** : un réglage (12 °C par défaut, de 5 à 20 °C). 55 réglages.
+
+### Les alertes (passe de Codex, relue)
+
+- **Quatre familles, chacune cochable** (Réglages → Mon installation → Alertes et conseils) : arrosage et graines, sécurité de l'arrosage (une vanne qui ne se ferme pas), capteurs et météo, tondeuse. Toutes cochées par défaut. Décochée, une famille retire sa trace et oublie ses retards.
+- **Nouvelle alerte « Tondeuse : erreur détectée »**, une fois par code d'erreur, retirée au retour à la normale.
+  - Corrigé avant livraison : **une pause pluie n'est pas une panne.** La Landroid publie `rain_delay` sur son capteur d'erreur : sans filtre, chaque averse aurait envoyé l'alerte.
+- La page affiche les familles actives dans la carte « Conseils et alertes ».
+
+### L'onglet Modes, refait
+
+- **Les neuf modes sur une rangée**, celui du moment marqué « en ce moment ». L'onglet s'ouvre sur le mode du moment ; toucher un autre mode affiche sa fiche. Normal, Semis et Sursemis y figurent désormais.
+- **La fiche du mode** : ce qu'il change, en quelques phrases relues sur `watering_policy.py` et `decision_mowing.py`. Pour un mode lié à un produit, sa durée avec le dessin des jours. Pour Normal, Semis et Sursemis, des raccourcis vers les onglets de leurs réglages.
+- **Une carte d'action à côté de la fiche** :
+  - pour un mode lié à un produit, « J'ai mis un produit » en premier (la fenêtre s'ouvre sur un produit de ce type), puis « Passer en … sans produit » ;
+  - pour les autres modes, « Passer en mode … » ;
+  - sur le mode du moment, le jour depuis le semis et « Revenir au mode Normal », avec l'avertissement que le suivi est effacé.
+- Les fiches des produits de ce type restent en dessous (passe de Codex). Sur téléphone, les modes tiennent en trois colonnes. Les boutons centrent leur icône avec le texte.
+- Relu avant livraison :
+  - l'hivernage ne bloque pas l'arrosage automatique **en cas de sécheresse prolongée**, alors que la page le disait toujours bloqué ;
+  - la phrase d'un mode ne répète plus ses règles ;
+  - « J'ai mis un produit » retrouve un produit dont le type a des espaces autour, comme le catalogue.
+
+### La rosée sur l'herbe
+
+- **Un point de rosée branché sur « Rosée sur l'herbe » est ignoré.** Le moteur lit « au-dessus de 0 = herbe mouillée » : une température y bloquait la tonte pour toujours et gonflait le risque de maladies. Le 17/09, le point de rosée de la station y avait été branché par « Configurer » (vide à 12:06, présent à 15:40) : risque de maladies « modéré » avec « rosée présente », arrosage du soir bloqué, et une tonte qui serait restée bloquée après la levée. La rosée est désormais estimée, et le journal le signale une fois.
+- **« Configurer » refuse un point de rosée**, à la création comme dans les options, avec un message dans les cinq langues. Tant qu'il reste dans le champ, le formulaire ne s'enregistre pas : le vider suffit.
+- La page le signale « unité inattendue », l'ignore pour « herbe mouillée », et « Changer → Aucune » le retire.
+
+### Vérifié
+
+- 1940 tests, ruff et mypy verts (51 fichiers ; mypy a relevé un conflit de type dans l'alerte tondeuse, corrigé).
+- Banc de mutations : 42 mutants sur 42 tués, sur le code final (un 43ᵉ, volontairement introuvable, vérifie que le banc le signale).
+- La page et le serveur jugent toujours pareil (475 200 cas), y compris pour ce que le moteur ignore.
+- L'onglet Modes est exécuté dans Node par un nouveau test (12 tests, avec le vrai registre et les listes du moteur). 22 mutants de l'onglet, 21 tués : le survivant retire une phrase de règle, que le test ne fige pas.
+- Dans l'aperçu local :
+  - l'onglet Modes à 1 440 px (neuf modes sur une ligne, page de 839 px), à 664 px (trois colonnes) et sur téléphone en sombre ;
+  - les boutons « Revenir au mode Normal » et « J'ai mis un produit », et les raccourcis vers les onglets ;
+  - les quatre familles d'alertes ;
+  - le point de rosée branché (« unité inattendue », herbe jugée sur l'estimation, retrait par « Aucune »).
+
+## 0.95.0
+
+1892 tests verts. **Les entrées météo et jardin se changent sur la page, et la page ne propose que ce que le moteur sait lire.**
+
+### Changer une entrée sur la page
+
+- **Onglet Météo → « Tes entrées »** : « Changer » (ou « Brancher ») sur chaque ligne, pour les administrateurs. Demandé par Kévin le 17/09.
+- La fenêtre ne liste que les entités que l'intégration sait lire. Viennent d'abord celles des appareils déjà branchés, puis celles dont le nom annonce le rôle, puis les autres. Pour chacune : sa valeur, son appareil, et si elle est déjà lue ailleurs. Une recherche par nom prend le relais au-delà de 60 entités. « Aucune » retire une entrée facultative.
+- **Les règles**, dans `sources.refus`, revérifiées par le serveur à l'enregistrement :
+  - **le domaine** (une entité météo pour l'entité météo, un capteur pour le reste) ;
+  - **une unité que le moteur lit ou convertit** : °C ; % ; km/h, m/s, mph, kn ; W/m² ; hPa, mbar, kPa, Pa, bar, inHg, mmHg ; mm ; mm/h ; cm. Des °F seraient lus comme des °C, des kW/m² diviseraient l'évaporation par cinq. Un test relie chaque unité acceptée au convertisseur du moteur ;
+  - **une classe d'appareil cohérente** : une batterie en % n'est pas une humidité ;
+  - **pour « Pluie en ce moment », une mesure de l'instant** : un cumul dirait « il pleut » toute la journée après une averse. Une unité est exigée : l'indice UV de la station, sans unité et à 2 en plein jour, n'y a pas sa place ;
+  - **pour la pluie du jour et le compteur, un cumul**, jamais une mesure de l'instant, la dernière heure ou une prévision ;
+  - **un nombre**, quand l'entité donne déjà une valeur (« Pas de pluie » n'en est pas un) ;
+  - **un nom qui annonce le rôle** pour la rosée sur l'herbe, la pluie de demain, l'évaporation, la hauteur du gazon et le retour d'arrosage. Un pluviomètre, lui aussi en mm, y reporterait les arrosages, remplacerait l'évaporation ou ferait croire à un arrosage. Même exigence pour l'humidité de l'air et du sol quand l'entité ne déclare pas de classe : le « stress thermique » de la station est en %, sans classe ;
+  - **aucun nom qui annonce autre chose** : point de rosée, ressenti, humidex ou sol pour la température ; rafales pour le vent ; sol ou feuillage pour l'humidité de l'air.
+- **Toutes ces règles ont été tirées des vrais capteurs de la maison** : à chaque étape, la liste proposée a été relue sur les entités de la station et du Netatmo.
+- **Refusé en clair, sans rien écrire** : une entrée inconnue, l'entité météo retirée, une entité absente, une entité de Gazon Intelligent (l'intégration se lirait elle-même), et tout changement **pendant un arrosage**. Le refus s'affiche en tête de la fenêtre, et le choix reste coché.
+- Une entité déjà branchée qui ne passerait pas ces règles est signalée « unité inattendue » dans le tableau.
+- **Le même résultat que « Configurer »** : options de l'entrée, configuration partagée pour les 12 entrées météo (l'autre pelouse suit), et une entrée retirée l'est aussi de la configuration d'origine, sinon elle y reprendrait sa place. L'intégration se recharge si une entrée surveillée change ; sinon, un cycle part tout de suite.
+  - `async_update_config` n'est pas utilisée : elle relance la surveillance du coordinateur pendant que l'écriture des options déclenche son rechargement. Croisés, les deux laisseraient des minuteries sur un coordinateur arrêté.
+- Les suggestions « Déjà chez toi » passent les mêmes règles.
+- La commande `gazon_intelligent/reglages/set` accepte une clé `entrees` ; la réponse rend `sources`, `appareils`, `meteo` et `recharge`.
+
+### Un pluviomètre remplacé repart de sa propre lecture
+
+- Le suivi du compteur de pluie et celui de la pluie du jour retiennent désormais **le capteur qu'ils suivent**.
+- Un autre capteur ne se compare plus au maximum de l'ancien. Plus bas, il ne comptait plus rien tant qu'il ne l'avait pas dépassé : des semaines de pluie perdues pour un compteur qui ne repart jamais à zéro. Plus haut, l'écart était pris pour une averse.
+- Sa lecture devient la référence ; le total du jour et la lame d'eau récente restent. Sans référence du tout, rien n'est inventé (« aucune référence = aucun total », PR #49). Un suivi d'avant cette version adopte le capteur du moment, sans rien changer.
+- C'est le seul effet de cette version sur le moteur, et seulement quand un capteur de pluie change.
+
+### Vérifié
+
+- 1892 tests, ruff et mypy verts (51 fichiers).
+- **La page et le serveur jugent pareil** : un test exécute les règles de la page avec Node sur 475 200 cas (15 entrées × 31 680 profils d'entité) et compare chaque verdict à celui du serveur. Il vérifie aussi que chaque champ lu par la page est servi.
+- Banc de mutations : **77 mutants sur 77 tués** : chaque règle, côté serveur et côté page, l'écriture des entrées (ordre du partage, configuration d'origine, rechargement, autre pelouse, arrosage en cours) et les deux suivis de pluie.
+- Dans l'aperçu local, avec les vrais capteurs : les listes de chaque entrée, un changement complet (« Un instant… », fenêtre fermée, tableau à jour), le refus pendant un arrosage, la recherche, et l'affichage sur téléphone sans défilement de côté. L'aperçu reprend les règles de la page elle-même, sans copie.
+
+## 0.94.1
+
+1853 tests verts. **La page ne remonte plus toute seule en haut, et l'onglet Météo ne propose plus un point de rosée pour la rosée.**
+
+### Correctifs
+
+- **La page remontait en haut pendant qu'on la faisait défiler** (signalé par Kévin le 17/09).
+  - La cause : à chaque mise à jour, la page est redessinée, et les cases neuves n'ont pas encore leur hauteur. Mesuré dans l'onglet Météo : la page tombait de 3 688 à 1 671 px le temps de les mesurer, et le défilement reculait d'autant (de 1 500 à 1 091 px), avant d'être remis en place. Pendant un défilement en cours, cette remise en place ne tenait pas : la page restait en haut.
+  - L'onglet Météo, redessiné à chaque relevé de la station, rendait le défaut fréquent.
+  - Désormais, la page garde sa hauteur pendant le rendu, et chaque case reprend d'abord la hauteur de celle qu'elle remplace.
+  - Une mise à jour qui arrive pendant un défilement attend qu'il soit fini depuis 400 ms, comme elle attendait déjà la fin d'un appui.
+- **« Rosée sur l'herbe » n'est pas un point de rosée.**
+  - Pour le moteur, cette entrée dit « au-dessus de 0, l'herbe est mouillée » : la tonte attend.
+  - La 0.94.0 l'appelait « Point de rosée » et proposait, sur la foi du nom, le point de rosée de la station. C'est une température, 11 °C par exemple : branché, il aurait fait croire l'herbe toujours mouillée, et la tonte ne serait plus partie.
+  - Il n'était pas branché. L'entrée s'appelle maintenant « Rosée sur l'herbe », et la page ne propose plus que des capteurs d'humidité du feuillage.
+  - Dans l'onglet Météo, le point de rosée affiché est celui de l'entité météo. La ligne « herbe mouillée » suit la règle du moteur : le capteur s'il répond, sinon l'air à 2 °C ou moins de son point de rosée, une humidité d'au moins 88 %, du brouillard ou de la pluie.
+  - Le README le précise à côté de `capteur_rosee`.
+
+### Vérifié
+
+- Dans l'aperçu local (Chrome), onglet Météo défilé à 1 500 px : la position ne bouge plus pendant un rendu, et aucun défilement n'est déclenché. Avec une vraie molette et un rendu toutes les 250 ms (44 rendus), la page reste où on l'a mise. Les mises à jour qui arrivent pendant le défilement donnent un seul rendu, après l'arrêt.
+- La ligne « herbe mouillée » dans cinq cas : capteur à 1 et à 0, capteur indisponible (estimation), brouillard, air à 1,5 °C de son point de rosée.
+- Un test vérifie qu'aucun nom de point de rosée n'est proposé pour la rosée, et que le nom d'un capteur d'humidité du feuillage l'est.
+
+## 0.94.0
+
+1852 tests verts. **Un onglet Météo complet sur la page « Gazon », la pompe qui se choisit sur la page, un délai d'alerte réglable, et une alerte quand une mesure météo manque.**
+
+### L'onglet Météo
+
+- **Un nouvel onglet de l'accueil**, entre Gazon et Produits, qui montre tout ce que l'intégration sait du temps :
+  - **au jardin, en ce moment** : température, humidité, vent, pression, rayonnement, point de rosée, UV et nuages. Chaque valeur dit si elle vient du jardin ou de la prévision ;
+  - **les prochains jours** (sept jours) et **les prochaines heures** (vingt-quatre heures), demandés à l'entité météo ;
+  - **la pluie** : maintenant, aujourd'hui au jardin et sur le second capteur, la dernière pluie mesurée, la part comptée pour le sol, demain et les jours suivants ;
+  - **l'évaporation** : celle du jour et sa source, ce que le sol a déjà perdu, celle de l'heure (soleil et pression mesurés ou estimés), celle du gazon (coefficient compris) ;
+  - **le vent, la rosée et les maladies** : ce que le vent autorise (arroser les graines, tondre) avec les limites réglées, l'herbe mouillée ou non, le risque de maladies, le stress du gazon ;
+  - **ce que l'intégration utilise vraiment** : les voyants de santé, en vert quand la mesure est lue, en orange quand une prévision la remplace.
+- **« Tes entrées »** : chaque entité donnée à l'intégration, ce qu'elle lui apporte, sa valeur, son âge et son état (lue, indisponible, introuvable, illisible). Une entrée non branchée dit par quoi elle est remplacée. Si un appareil déjà branché publie de quoi la tenir, la page le signale (par exemple un point de rosée).
+- **« Toutes les mesures de tes appareils »** : les appareils de ces entrées, avec toutes leurs mesures, en direct ; celles que l'intégration lit sont en vert. Ni les boutons, ni les entités désactivées, ni ce qui situerait la maison.
+- La page suit ces entités en direct seulement quand l'onglet est ouvert.
+- Sur téléphone, les mesures passent sur deux colonnes et le tableau des entrées devient une liste, sans défilement de côté.
+
+### La pompe sur la page
+
+- **Réglages → Mon installation → « Ma pompe »** : l'interrupteur de la pompe se choisit dans une liste, ceux dont le nom parle d'une pompe en tête. Ni les vannes ni les interrupteurs de l'intégration n'y figurent.
+- Enregistré avec le reste, dans les options de l'entrée (`entite_pompe`). La commande `gazon_intelligent/reglages/set` accepte une clé `pompe` ; sans elle, la pompe ne change pas. Une vanne ou un interrupteur absent est refusé en clair, et rien n'est écrit.
+
+### Les alertes
+
+- **Le délai de l'alerte des graines se règle** : Réglages → Graines → « L'alerte », de 10 minutes à 2 heures (20 minutes par défaut). 54 réglages.
+- **Une alerte quand une mesure manque depuis une heure** : chaque entrée qui mesure (entité météo, température, humidité, vent, rayonnement, pression, point de rosée, pluies, humidité du sol, évaporation) est lue au contrôle de 2 minutes.
+  - Elle est en panne quand elle n'a pas de valeur utilisable, ou quand aucune mesure de son appareil n'a bougé depuis trois heures : un appareil à piles peut garder sa dernière valeur un jour entier avant d'être déclaré absent.
+  - Le message nomme chaque mesure, son appareil et l'heure du début, et dit ce qui la remplace.
+  - Une alerte par panne : si la liste change, la trace de Home Assistant suit sans refaire sonner le téléphone ; le retour de toutes les mesures se dit, et la trace part.
+  - Une entité introuvable (renommée, supprimée) est datée de la première fois qu'on la constate.
+- Comme les autres, cette alerte n'entre dans aucune décision.
+
+### En plus
+
+- `sources.py` : la liste des entrées météo et jardin, leur rôle, ce qu'elles apportent et leur repli, partagée par la page et l'alerte. Un test vérifie qu'elle couvre toutes les entrées de la configuration et que chacune est proposée dans les options.
+- Les capteurs d'évaporation (ET0, ETo horaire, ETc) sont lus par la page.
+
+### Vérifié
+
+- 32 nouveaux tests : chaque cas de l'alerte des mesures (délai, liste qui change, retour, entité météo seule ou non, appareil muet), le délai réglé qui déplace l'alerte, la lecture des appareils, les entrées et appareils de la page (entité désactivée, bouton, position exclus), la pompe (tri, refus, clé absente).
+- Banc de mutations sur le code de la 0.93.0 et de la 0.94.0 : 79 mutations, toutes tuées. Deux avaient d'abord survécu dans la lecture des appareils ; le test a été renforcé.
+- Dans l'aperçu, sur les vraies mesures de la maison (prévisions simulées) : clair et sombre, téléphone, 1 007, 1 184, 1 440 et 1 920 px. L'origine d'une mesure ne sort plus de sa case sur téléphone. La carte des alertes et la pompe tiennent dans Mon installation. La nouvelle carte de l'onglet Graines a été placée pour garder les colonnes d'aplomb.
+
+## 0.93.0
+
+1820 tests verts. **Gazon Intelligent prévient quand un arrosage des graines ne part pas, envoie l'état du gazon sur un téléphone et répond aux questions par l'IA de Home Assistant.**
+
+### Les alertes
+
+- **Un cycle de graines qui ne part pas est signalé.** Si le moteur veut arroser et que rien ne coule 20 minutes après l'heure prévue, un message dit pourquoi :
+  - le vent au jardin dépasse la limite réglée (à la limite, le moteur attend déjà) ;
+  - l'arrosage automatique est coupé, ou le verrou de sécurité est posé ;
+  - la fenêtre des graines a fermé, y compris pour un cycle prévu après sa fermeture ;
+  - le lancement a échoué (avec le motif du refus, s'il date de moins de 3 h).
+- **Une alerte par cycle, même après un redémarrage** : ce qui a été envoyé est gardé dans l'état persisté. Quand le cycle finit par partir, un second message le dit (« cycle rattrapé ») et la trace de l'alerte est retirée.
+- **Le moteur qui renonce n'est pas une panne.** Pluie, sol humide ou froid : une simple information, une fois par jour, sans trace.
+- **Le verrou de sécurité est signalé** dès qu'il se pose (une vanne ne s'est pas fermée), avec la vanne et l'erreur. Le message rappelle que le seul déverrouillage, « Retour au mode normal », efface aussi une phase Semis ou Sursemis en cours. La trace disparaît quand le verrou est levé.
+- **Une trace dans les notifications de Home Assistant**, avec ou sans téléphone : l'alerte suivante la remplace, et elle est retirée quand le problème est réglé (ou le lendemain).
+- **Les alertes n'entrent dans aucune décision** : elles lisent ce que le moteur a décidé, au tick qui lance les arrosages, juste après la tentative de lancement. Une panne dans leur calcul est journalisée et ne retient jamais un arrosage.
+
+### Les actions
+
+- **`gazon_intelligent.send_notification`** : un message aux téléphones choisis. Sans message, l'état du gazon : phase, cycles de graines, moment conseillé, arrosage automatique, réserve, météo, tonte, semis, dernier produit, risque et conseil du moteur. L'action rend le texte envoyé et les téléphones joints ; un téléphone injoignable n'empêche pas les autres.
+- **`gazon_intelligent.ask_ai`** : une question à l'IA de Home Assistant (action « Générer des données »), accompagnée de l'état du gazon. L'IA répond en texte et ne commande rien. La réponse peut aussi partir sur les téléphones, et l'action la rend.
+  - L'IA utilisée : celle des options, sinon la seule de la maison, sinon celle que Home Assistant préfère.
+  - Aucun appel ne part tout seul : chaque question compte auprès du fournisseur d'IA. Délai maximal : 90 s.
+  - La consigne interdit d'inventer ou de prétendre avoir agi. Aucune coordonnée ni aucun nom de lieu n'est envoyé.
+- Les deux actions rendent leur résultat à qui le demande (`response_variable`, outils de développement) et restent appelables sans. 17 actions au total.
+
+### Les réglages
+
+- **Sur la page « Gazon » : Réglages → Mon installation → « Alertes et conseils »**, une carte pleine largeur avec trois réglages :
+  - prévenir ou non (alertes automatiques, allumées par défaut) ;
+  - les téléphones à prévenir, parmi les appareils à notifier de Home Assistant (plusieurs possibles) ;
+  - l'IA des conseils, parmi les entités `ai_task`, ou « Automatique ».
+- Ils suivent le même « Enregistrer » que les autres réglages, dans le même envoi.
+  - La commande `gazon_intelligent/reglages/set` accepte une clé `notifications`. Seules les clés envoyées changent.
+  - Un téléphone ou une IA qui n'existe plus est refusé en clair, et rien n'est écrit, réglages compris.
+- **Les mêmes réglages dans les options de l'intégration** (Configurer) : les deux chemins écrivent au même endroit. Vider un champ le retire. Libellés en cinq langues.
+- Ils s'appliquent sans recharger l'intégration.
+
+### La page « Gazon »
+
+- **Onglet Gazon, carte « Conseils et alertes »** : où partent les alertes, quelle IA répond, et deux boutons. Elle renvoie vers les réglages ci-dessus.
+  - « Demander conseil à l'IA » ouvre une fenêtre : la question (trois questions proposées), l'envoi sur le téléphone, puis la réponse, qui reste affichée. L'envoi et les erreurs sont dits dans la fenêtre, pas dans un message qui passerait dessous.
+  - « Envoyer l'état sur mon téléphone », quand un téléphone est choisi.
+- Vérifié dans l'aperçu : clair et sombre, téléphone (375 × 812), 1 184, 1 440 et 1 920 px.
+  - Onglet Gazon : les deux colonnes finissent à 52 px l'une de l'autre au plus.
+  - Mon installation : la carte des alertes en bas, sur toute la largeur. Dans une colonne, elle allongeait la page de 450 px.
+  - Sur téléphone, les questions proposées passent à la ligne au lieu de sortir de la fenêtre.
+- L'onglet « Mon installation » se présente désormais ainsi : « Tes arroseurs, ta tondeuse, les interrupteurs et les alertes ».
+
+### Documentation
+
+- Le README liste les deux nouvelles actions, et `reset_mower_passes`, qui manquait au tableau.
+
+### Vérifié
+
+- 76 nouveaux tests : chaque motif d'alerte, le délai de 20 min à la seconde près, le rattrapage, la journée suivante, le verrou, la mémoire qui traverse le disque (les deux listes blanches), le réglage de vent de la page réellement lu, l'isolement d'une panne, les deux actions et leurs champs, les options, et l'écriture des alertes par la page (refus compris).
+- Banc de mutations sur le nouveau code : 47 mutants sur 47 tués.
+- Dans l'aperçu : poser une question, cocher « Envoyer sur mon téléphone », une erreur du fournisseur, « Envoyer l'état », enregistrer puis annuler un choix, un téléphone disparu.
+
+## 0.92.1
+
+1744 tests verts. **Les fenêtres de la page « Gazon » défilent quand leur contenu est plus haut que l'écran.**
+
+### Corrigé
+
+- **Une fenêtre trop haute était coupée, sans défilement.** Sur téléphone, « Changer de mode » et la fiche d'un produit à modifier cachaient leur bouton de validation.
+  - La cause : le formulaire, seul enfant de la fenêtre, gardait la hauteur de son contenu. La fenêtre le coupait et son corps ne défilait jamais.
+  - Désormais, le formulaire est borné à la hauteur de la fenêtre : le corps défile entre l'en-tête et les boutons, qui restent visibles.
+- **Les blocs d'une fenêtre ne se laissent plus écraser.** Le plan des zones de « Arroser » ne montrait plus que la zone A quand la fenêtre était bornée. C'est le corps qui défile, jamais ses blocs qui rétrécissent.
+- La hauteur maximale suit la partie réellement visible de l'écran (`dvh`) quand le navigateur la connaît.
+
+### Vérifié
+
+- Les 12 fenêtres (la fiche produit en ajout et en modification), mesurées dans l'aperçu sur des écrans de 320 × 568, 375 × 667, 375 × 812 et 860 × 650, puis avec une hauteur maximale forcée à 343, 300 et 250 px, dans les six scénarios.
+  - Aucune n'est coupée ni écrasée.
+  - L'en-tête et le bouton de validation restent visibles.
+  - La fin du corps est atteinte en le faisant défiler.
+- Le contrôle repère bien l'ancien défaut quand on le remet sur un bloc : 130 px affichés pour 182.
+- Le numéro de version change l'adresse du fichier de la page (`?v=`) : un navigateur ne garde pas l'ancienne fenêtre.
+
+## 0.92.0
+
+1744 tests verts. **La page « Gazon » : une base de contrôle et 53 réglages que le moteur applique vraiment, instance par instance.**
+
+### La page
+
+- **Dans la barre latérale** (« Gazon »), activée par une case des options de l'intégration, cochée par défaut. Elle disparaît quand plus aucune instance chargée ne la veut.
+- **Accueil** : tout ce que montre la carte (bulletin, arrosage, tonte, gazon, produits), avec les actions. Le plan d'arrosage y est calculé comme le moteur l'exécute, à la seconde.
+- **Réglages** : 53 réglages en sept onglets (tonte, arrosage, graines, sursemis, semis, modes, installation), le type de terre et le catalogue de produits (ajouter, modifier, retirer). Chaque réglage a une question simple, sa valeur conseillée et un bouton « Revenir ». Rien ne s'applique avant « Enregistrer ».
+- **Une commande WebSocket** (`gazon_intelligent/reglages/get` et `…/set`). L'écriture est réservée aux administrateurs.
+  - Elle refuse en clair une valeur hors bornes, hors pas ou contradictoire, jugée contre les autres réglages ENREGISTRÉS.
+  - Elle n'enregistre que ce qui diffère du conseil, dans les options de l'entrée, puis relance un cycle : aucun redémarrage n'est nécessaire.
+- **Les noms des zones sont ceux des entités de vannes** : les renommer dans Home Assistant renomme la zone sur la page. La **pompe**, que l'intégration ne pilote pas, se choisit dans les options (facultatif).
+
+### Le branchement
+
+- **Chaque instance lit ses propres réglages.** Le coordinateur les relit dans les options à chaque cycle, écarte une valeur devenue invalide (le moteur reprend alors sa constante) et les confie au `GazonBrain`, qui les pose sur le contexte de décision.
+  - Chaque module les lit à la place de sa constante : phases, arrosage, graines, tonte, et, dans le coordinateur, la marge avant le lever, le délai de relance et les créneaux des graines.
+  - **Sans réglage, rien ne change** : les 1 653 tests d'avant passent tels quels.
+- **Trois valeurs écrites en dur suivent maintenant leur réglage** :
+  - le seuil de 8 °C de la germination ;
+  - le vent de 15 km/h des graines, désormais nommé `SEMIS_VENT_MAX_KMH` ;
+  - le J+25 de la reprise d'un semis.
+- **La durée du suivi des graines n'a plus trois copies** : `decision_mowing._SEMIS_DUREE_JOURS` est retiré et la tonte lit la durée de la phase.
+- **Les créneaux des graines suivent l'heure d'ouverture réglée.** Un créneau qui tomberait après la fermeture est retiré. Pour la même raison, l'enracinement et la reprise ont 2 arrosages par jour au plus, puisqu'un troisième tomberait après 17 h.
+- **Le libellé du rythme de tonte suit le chiffre réglé** (« 1 / semaine »). Un mois non touché garde son texte.
+- **Une fin de fenêtre des graines plus tardive n'invente pas de plafond à 17 h** : seul le plafond de 16 h des jours de pluie, de forte chaleur ou de vent fort reste écrit en dur.
+
+### Corrigé en route
+
+- **La pause entre deux passages ignorait la règle du 29/07.** En mode Normal, le bundle d'arrosage réécrivait « 25 min dès deux passages ». Le calcul du profil, qui ne pose la pause qu'à partir de 10 mm, était donc perdu.
+  - Conséquence : un petit arrosage coupé en deux par le budget hebdomadaire attendait 25 minutes pour rien.
+  - Désormais, la pause publiée et exécutée est celle du profil.
+
+### Tests
+
+- 91 tests ajoutés :
+  - `test_reglages_branches.py` change chaque réglage et vérifie que la DÉCISION change, par le chemin de production ;
+  - `test_panneau.py` couvre la commande et le panneau ;
+  - trois tests du coordinateur couvrent la marge avant le lever, le délai de relance et les créneaux des graines ;
+  - un autre suit les réglages de l'entrée jusqu'au cerveau.
+- **Mutations** : 79 points de passage des réglages ont été retirés ou remplacés un à un, sur une copie du dépôt. La suite les a tous détectés.
+
+## 0.91.0
+
+1622 tests verts. **Deux modes de semis : « Semis » sur terrain nu, « Sursemis » dans un gazon déjà installé, où la tonte reprend après la levée.**
+
+### Pourquoi deux modes
+
+- **La question de Kévin (16/09/2026).** « Pour le sursemis, la pelouse déjà implantée continue à pousser. » Le mode Sursemis traitait pourtant tout le gazon comme un semis sur terrain nu :
+  - tonte interdite 25 jours ;
+  - pousse estimée nulle ;
+  - hauteur plancher de 7,5 cm.
+- **Ce que ça donnait** : un gazon en place coupé à 3 cm le jour du semis approchait 10 cm vingt-cinq jours plus tard, pendant que l'intégration le croyait toujours à 3 cm. Sa première coupe aurait enlevé bien plus du tiers.
+- **Ce que disent les sources** (vérifiées) : aucune source universitaire lue ne suspend la tonte après un sursemis.
+  - Purdue (AY-13-W) : « Mow frequently to limit the competition from the established turf. Mow at 1.5 inches until new seedlings have been cut at least two times. » Ensuite, remonter la lame par paliers.
+  - UMass : arroser le sursemis « in the same manner as for new seedings ».
+
+### Semis — terrain nu
+
+- **L'ancien comportement du Sursemis, à l'identique, sous un nouveau nom** : tonte interdite jusqu'à J+24, pousse nulle, planchers 7,5 → 7,0 → 6,5 → 5,0 cm, prochaine tonte annoncée au semis + 25 jours.
+- Nouvelle option « Semis » dans le sélecteur de mode, `set_mode`, `declare_intervention` et la compatibilité des produits. Traduite en cinq langues.
+
+### Sursemis — gazon en place
+
+- **Arrosage des graines : inchangé**, identique au Semis. Mêmes micro-cycles (1,5 mm × 3 en germination à 10 h, 12 h et 14 h), mêmes conditions, même fenêtre de 10 h à 17 h. Tout ce qui concerne les graines teste désormais `phases.is_seeding_phase` :
+  - le programme de micro-cycles et l'arrosage automatique ;
+  - le Kc et le seuil MAD ;
+  - le fractionnement ;
+  - le risque et l'urgence ;
+  - les scores hydrique et de stress.
+- **Tonte suspendue pendant la levée (J0 à J7)** : les graines ne sont pas ancrées et la surface reste détrempée. C'est un choix prudent, qu'aucune source ne chiffre. Le code public reste `phase_sursemis`, connu de Node-RED et de la carte, et la prochaine tonte est annoncée à J+8.
+- **Ensuite, la tonte est permise** :
+  - fréquence visée de 1 à 2 par semaine ;
+  - au moins 5 jours d'écart entre deux tontes (0,35 cm/j en septembre, soit environ 6 jours pour passer de 4 à 6 cm) ;
+  - seuil de score assoupli à 65, comme la reprise d'un semis.
+- **Le gazon en place pousse au rythme du mois** : 0,35 cm/j en septembre, 0,25 cm/j en octobre.
+- **Hauteur conseillée** : 4,0 cm (Purdue : 1,5 in), puis 4,5 cm après deux coupes des plantules (arbitrage de Kévin). Cette consigne remplace la hauteur du mois, bonus de phase et de chaleur compris. Seule la règle du tiers peut la relever.
+- **Score de tonte** : le Sursemis prend le bonus ordinaire des phases (+18) au lieu de +45. Avec +45, une journée ordinaire de sursemis dépassait le seuil : la tonte, autorisée sur le papier, aurait été refusée par le score.
+- **Statut « interdite »** : seulement pendant la levée. Après, un refus vient de la météo ou du gazon, et le statut le dit.
+- **Transition de l'arrosage** (en Reprise) : en sursemis, seules comptent les tontes qui coupent des plantules, à partir de leur première coupe. Les tontes du gazon en place, dès J8, ne disent rien de leur installation.
+
+### Suivi des plantules — les deux modes
+
+- **Sur le capteur « Hauteur de tonte conseillée »** : `semis_mode`, `semis_age_jours`, `plantules_levee_date`, `plantules_hauteur_estimee_cm`, `plantules_premiere_coupe_date` et `plantules_coupes`.
+- **Calendrier partagé** (`phases.py`) :
+  - levée à J+7, pour le ray-grass anglais du mélange semé (UC IPM : 5 à 10 jours ; fétuque rouge : 7 à 14 jours) ;
+  - puis 0,4 cm/j ;
+  - première coupe à 6 cm, soit une fois et demie la lame (UC IPM) : J+22.
+  - ⚠️ La vitesse de pousse des plantules est une **estimation** : les sources ne publient que des délais de première tonte (18 à 21 jours chez Team Green, 3 à 6 semaines chez DLF).
+- **Une tonte déclarée à partir de la date de première coupe compte comme une coupe des plantules.**
+
+### Au passage
+
+- **Fenêtre d'arrosage affichée pendant un semis** : les jours où le cycle de surface était bloqué (froid, pluie), les capteurs publiaient la fenêtre du matin standard, 03:45 → 10:00, alors qu'aucun arrosage n'a lieu à l'aube en semis. Les sorties anticipées de `compute_action_guidance` (pluie active, objectif nul) gardaient les bornes du matin. Elles prennent désormais celles du semis dès le début du calcul : 10:00 → 17:00, ou 16:00 après une pluie. Constaté en vérifiant une analyse transmise par Kévin.
+- Le message d'espacement entre deux tontes disait « laisse un jour de repos » quel que soit l'écart réel. Il donne maintenant le nombre de jours et la date.
+
+### Tests
+
+- 19 tests ajoutés, dont un qui suit les six attributs des plantules du moteur jusqu'au capteur, et un pour la fenêtre publiée un jour bloqué (sol nu et sursemis, froid et pluie).
+- Les tests de l'ancien comportement passent sur le mode Semis.
+- **20 mutations, toutes détectées** :
+  - levée débloquée, raccourcie ou allongée ;
+  - sursemis bloqué comme un semis ;
+  - pousse nulle ;
+  - espacement de 2 jours ;
+  - consigne ignorée ;
+  - remontée après une seule coupe ;
+  - tontes comptées dès le semis ;
+  - bonus de +45 rendu ;
+  - statut « interdite » à tout refus ;
+  - arrosage réservé au sursemis ;
+  - attribut non recopié ;
+  - projection à 25 jours ;
+  - seuil assoupli retiré ;
+  - plancher du sol nu appliqué ;
+  - transition sur toutes les tontes ;
+  - pousse des plantules ignorée ;
+  - fréquence du mois ;
+  - bornes du matin rendues aux semis.
+
+### Laissé ouvert
+
+- **Mesure à la règle des plantules**, pour recaler l'estimation : proposée, pas encore faite.
+- **Azote** : ne pas en rajouter avant environ 4 semaines après la levée (Minnesota, Purdue). La recommandation d'intervention ne le dit pas encore.
+- **Carte** : les attributs des plantules ne sont pas encore affichés.
+
 ## 0.90.0
 
 1603 tests verts. **L'arrosage du matin finit 15 min avant le lever du soleil, la tonte se décale plus tard dans des fenêtres élargies, et l'heure du prochain lancement s'affiche.**

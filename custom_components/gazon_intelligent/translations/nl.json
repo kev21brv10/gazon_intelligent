@@ -64,13 +64,19 @@
           "capteur_vent": "Lokale wind (optioneel, wordt eerst gebruikt indien aanwezig)",
           "capteur_rosee": "Dauw / bladnat (optioneel, automatische berekening als niet ingevuld)",
           "capteur_rayonnement": "Gemeten globale straling (optioneel, W/m² — verbetert de ET0-berekening sterk)",
-          "capteur_pression": "Gemeten luchtdruk (optioneel, hPa — verfijnt de ET0-berekening)"
+          "capteur_pression": "Gemeten luchtdruk (optioneel, hPa — verfijnt de ET0-berekening)",
+          "entite_pompe": "Beregeningspomp (optioneel — getoond en bediend op de pagina „Gazon”)",
+          "page_gazon": "De pagina „Gazon” in de zijbalk tonen",
+          "notification_cibles": "Te waarschuwen telefoons (optioneel — meldingen en berichten van Gazon Intelligent)",
+          "alertes_actives": "Automatische meldingen (gemiste zaadbewateringscyclus, veiligheidsvergrendeling van de beregening)",
+          "entite_ia": "AI voor advies (optioneel — anders de standaard AI-taak van Home Assistant)"
         }
       }
     },
     "error": {
       "invalid_instance_slug": "Ongeldige grasperceel-ID.",
-      "entity_not_found": "Entiteit niet gevonden in Home Assistant."
+      "entity_not_found": "Entiteit niet gevonden in Home Assistant.",
+      "temperature_pour_rosee": "Deze entiteit geeft een temperatuur (een dauwpunt). „Dauw / bladnat” verwacht bladnatheid: elke waarde boven 0 betekent nat gras, dus het maaien wacht. Laat het veld leeg om de dauw te schatten."
     },
     "abort": {
       "already_configured": "Gazon Intelligent is al geconfigureerd."
@@ -105,18 +111,27 @@
           "capteur_vent": "Lokale wind (optioneel, wordt eerst gebruikt indien aanwezig)",
           "capteur_rosee": "Dauw / bladnat (optioneel, automatische berekening als niet ingevuld)",
           "capteur_rayonnement": "Gemeten globale straling (optioneel, W/m² — verbetert de ET0-berekening sterk)",
-          "capteur_pression": "Gemeten luchtdruk (optioneel, hPa — verfijnt de ET0-berekening)"
+          "capteur_pression": "Gemeten luchtdruk (optioneel, hPa — verfijnt de ET0-berekening)",
+          "entite_pompe": "Beregeningspomp (optioneel — getoond en bediend op de pagina „Gazon”)",
+          "page_gazon": "De pagina „Gazon” in de zijbalk tonen",
+          "notification_cibles": "Te waarschuwen telefoons (optioneel — meldingen en berichten van Gazon Intelligent)",
+          "alertes_actives": "Automatische meldingen (gemiste zaadbewateringscyclus, veiligheidsvergrendeling van de beregening)",
+          "entite_ia": "AI voor advies (optioneel — anders de standaard AI-taak van Home Assistant)"
         }
       }
     },
     "abort": {
       "already_configured": "Gazon Intelligent is al geconfigureerd."
+    },
+    "error": {
+      "temperature_pour_rosee": "Deze entiteit geeft een temperatuur (een dauwpunt). „Dauw / bladnat” verwacht bladnatheid: elke waarde boven 0 betekent nat gras, dus het maaien wacht. Laat het veld leeg om de dauw te schatten."
     }
   },
   "selector": {
     "gazon_mode": {
       "options": {
         "normal": "Normaal",
+        "semis": "Inzaai",
         "sursemis": "Doorzaai",
         "traitement": "Behandeling",
         "fertilisation": "Bemesting",
@@ -128,6 +143,7 @@
     },
     "gazon_intervention": {
       "options": {
+        "semis": "Inzaai",
         "sursemis": "Doorzaai",
         "traitement": "Behandeling",
         "fertilisation": "Bemesting",
@@ -149,6 +165,7 @@
     },
     "gazon_phase_compatible": {
       "options": {
+        "semis": "Inzaai",
         "sursemis": "Doorzaai",
         "croissance": "Groei",
         "entretien": "Onderhoud"
@@ -391,6 +408,34 @@
         "raison": {
           "name": "Reden",
           "description": "Reden voor het stoppen, bewaard in het actielogboek."
+        }
+      }
+    },
+    "send_notification": {
+      "name": "Melding versturen",
+      "description": "Stuurt een bericht naar de telefoons die in de opties zijn gekozen. Zonder bericht wordt de huidige toestand van het gazon gestuurd.",
+      "fields": {
+        "titre": {
+          "name": "Titel",
+          "description": "Titel van de melding (optioneel)."
+        },
+        "message": {
+          "name": "Bericht",
+          "description": "Te versturen tekst. Leeg: de toestand van het gazon."
+        }
+      }
+    },
+    "ask_ai": {
+      "name": "AI om advies vragen",
+      "description": "Stelt de AI van Home Assistant een vraag en geeft de toestand van het gazon mee. De AI bestuurt niets: ze antwoordt in tekst. Elke oproep telt bij de AI-aanbieder.",
+      "fields": {
+        "question": {
+          "name": "Vraag",
+          "description": "Je vraag. Leeg: een dagoverzicht van het gazon."
+        },
+        "notifier": {
+          "name": "Ook naar telefoons sturen",
+          "description": "Stuurt het antwoord naar de telefoons die in de opties zijn gekozen."
         }
       }
     }

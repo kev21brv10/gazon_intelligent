@@ -247,6 +247,35 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertEqual(assistant_sensor.native_value, "attente_conditions")
         self.assertEqual(niveau_action_sensor.native_value, "aucune_action")
 
+    def test_le_suivi_des_graines_arrive_sur_la_fenetre_optimale(self) -> None:
+        # 0.96.1 : avec une décision, `_attrs_from_result` ignorait les données du coordinateur,
+        # donc le suivi des cycles de graines n'était publié nulle part.
+        suivi = {
+            "semis_followup_state": "complete",
+            "semis_followup_due_at": None,
+            "semis_cycles_completed_today": 4,
+            "semis_cycles_remaining_today": 0,
+            "semis_daily_cycles_target": 3,
+            "semis_cycle_spacing_minutes": 120,
+            "semis_last_cycle_at": "2026-09-17T13:12:28+00:00",
+            "semis_last_cycle_display": "17/09/2026 à 15:12",
+        }
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(), data={"watering_strategy": "semis_frequent", **suivi},
+            result=_make_result(), history=[], memory={},
+        )
+        attrs = sensor.GazonFenetreOptimaleSensor(coordinator).extra_state_attributes
+        self.assertIn("watering_strategy", attrs, "prémisse : les attributs viennent bien de la décision")
+        for cle, valeur in suivi.items():
+            if valeur is None:
+                self.assertNotIn(cle, attrs)
+            else:
+                self.assertEqual(attrs.get(cle), valeur, cle)
+
+        hors_graines = _FakeCoordinator(entry=_FakeEntry(), data={}, result=_make_result(), history=[], memory={})
+        attrs = sensor.GazonFenetreOptimaleSensor(hors_graines).extra_state_attributes
+        self.assertFalse([cle for cle in attrs if cle.startswith("semis_")])
+
     def test_sensor_setup_entry_tolerates_missing_hass_domain_data(self) -> None:
         hass = types.SimpleNamespace(data={})
         added_entities: list[object] = []
@@ -276,6 +305,7 @@ class DecisionResultChainTests(unittest.TestCase):
             {
                 "possible_values": [
                     "Normal",
+                    "Semis",
                     "Sursemis",
                     "Traitement",
                     "Fertilisation",
@@ -3047,6 +3077,7 @@ class DecisionResultChainTests(unittest.TestCase):
             phase_sensor.extra_state_attributes["possible_values"],
             [
                 "Normal",
+                "Semis",
                 "Sursemis",
                 "Traitement",
                 "Fertilisation",
@@ -3238,6 +3269,85 @@ class ProchainArrosageSensorTests(unittest.TestCase):
     def test_resume_dedie_pour_la_pluie_prevue(self) -> None:
         attrs = self._sensor(status="bloque", block_reason="pluie_prevue_suffisante").extra_state_attributes
         self.assertEqual(attrs.get("summary"), "Aucun arrosage nécessaire, la pluie prévue suffit")
+
+    def test_un_micro_cycle_planifie_n_est_pas_affiche_comme_bloque(self) -> None:
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={
+                "type_arrosage": "bloque",
+                "block_reason": "semis_cycle_pending",
+                "objectif_mm": 0.0,
+                "arrosage_recommande": False,
+                "fenetre_optimale": "attendre",
+                "semis_followup_state": "waiting",
+                "semis_followup_due_at": "2026-09-18T10:30:00+02:00",
+                "semis_followup_due_display": "18/09/2026 à 10:30",
+                "semis_cycles_remaining_today": 1,
+            },
+            result=None,
+            history=[],
+            memory={},
+        )
+        capteur = sensor.GazonProchainArrosageSensor(coordinator)
+
+        self.assertEqual(capteur.native_value, "18/09/2026 à 10:30")
+        attrs = capteur.extra_state_attributes
+        self.assertEqual(attrs.get("summary"), "Prochain micro-cycle prévu le 18/09/2026 à 10:30")
+        self.assertEqual(attrs.get("target_datetime"), "2026-09-18T10:30:00+02:00")
+        self.assertNotIn("bloqu", str(attrs.get("summary") or "").lower())
+
+    def test_la_pluie_nefface_pas_un_micro_cycle_deja_planifie(self) -> None:
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={
+                "type_arrosage": "bloque",
+                "block_reason": "pluie_active",
+                "objectif_mm": 0.0,
+                "arrosage_recommande": False,
+                "fenetre_optimale": "attendre",
+                "semis_followup_state": "waiting",
+                "semis_followup_due_display": "18/09/2026 à 10:30",
+                "semis_cycles_remaining_today": 1,
+            },
+            result=None,
+            history=[],
+            memory={},
+        )
+        capteur = sensor.GazonProchainArrosageSensor(coordinator)
+
+        self.assertEqual(capteur.native_value, "18/09/2026 à 10:30")
+        self.assertEqual(
+            capteur.extra_state_attributes.get("summary"),
+            "Prochain micro-cycle prévu le 18/09/2026 à 10:30; pluie surveillée",
+        )
+
+    def test_programme_termine_affiche_le_vrai_creneau_du_lendemain(self) -> None:
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={
+                "type_arrosage": "aucune_action",
+                "objectif_mm": 0.0,
+                "arrosage_recommande": False,
+                "fenetre_optimale": "attendre",
+                "semis_followup_state": "complete",
+                "semis_followup_due_at": "2026-09-19T08:30:00+02:00",
+                "semis_followup_due_display": "19/09/2026 à 08:30",
+                "semis_cycles_completed_today": 2,
+                "semis_cycles_remaining_today": 0,
+            },
+            result=None,
+            history=[],
+            memory={},
+        )
+        capteur = sensor.GazonProchainArrosageSensor(coordinator)
+
+        self.assertEqual(capteur.native_value, "19/09/2026 à 08:30")
+        attrs = capteur.extra_state_attributes
+        self.assertEqual(attrs.get("target_display"), "19/09/2026 à 08:30")
+        self.assertEqual(
+            attrs.get("summary"),
+            "Objectif du jour atteint (2 cycles); prochain arrosage prévu le 19/09/2026 à 08:30",
+        )
 
     DEPART = 6 * 60 + 15  # lever 07:34, fin 07:19, cycle de 64 min
     FIN = 7 * 60 + 19
@@ -4047,6 +4157,51 @@ class LeMotifDeHauteurAtteintLeCapteurTests(unittest.TestCase):
                 attrs = autre.extra_state_attributes or {}
                 self.assertEqual(attrs.get("hauteur_tonte_recommandee_cm"), 4.0)
                 self.assertEqual(attrs.get("hauteur_tonte_motif"), motif)
+
+
+class LeSuiviDesPlantulesAtteintLeCapteurTests(unittest.TestCase):
+    """16/09/2026 — le suivi des plantules (Semis et Sursemis), du moteur jusqu'au capteur de
+    hauteur conseillée. Mêmes quatre points de passage que le motif : bundle de tonte, recopie de
+    `decision.py`, liste blanche du coordinateur, attributs du capteur."""
+
+    CLES = (
+        "semis_mode", "semis_age_jours", "plantules_levee_date",
+        "plantules_hauteur_estimee_cm", "plantules_premiere_coupe_date", "plantules_coupes",
+    )
+
+    def test_les_valeurs_traversent_toute_la_chaine(self) -> None:
+        decision_mod = __import__("custom_components.gazon_intelligent.decision", fromlist=["build_decision_snapshot"])
+        snapshot = decision_mod.build_decision_snapshot(
+            history=[
+                {"type": "Sursemis", "date": "2026-09-16"},
+                {"type": "tonte", "date": "2026-10-08"},
+            ],
+            today=date(2026, 10, 9), hour_of_day=11, temperature=17.0,
+            forecast_temperature_today=17.0, pluie_24h=0, pluie_demain=0, humidite=60,
+            type_sol="limoneux", etp_capteur=2.0,
+            soil_balance={"reserve_mm": 11.5, "reserve_max_mm": 24.0},
+        )
+        attendu = {
+            "semis_mode": "Sursemis",
+            "semis_age_jours": 23,
+            "plantules_levee_date": "2026-09-23",
+            "plantules_hauteur_estimee_cm": 6.4,
+            "plantules_premiere_coupe_date": "2026-10-08",
+            "plantules_coupes": 1,
+        }
+        self.assertEqual({cle: snapshot.get(cle) for cle in self.CLES}, attendu)
+
+        import ast as _ast_local
+        arbre = _ast_local.parse((PACKAGE_DIR / "coordinator.py").read_text(encoding="utf-8"))
+        cles = next(
+            _ast_local.literal_eval(n.value) for n in _ast_local.walk(arbre)
+            if isinstance(n, _ast_local.AnnAssign) and getattr(n.target, "id", "") == "_COORDINATOR_SNAPSHOT_KEYS"
+        )
+        recopie = {cle: snapshot.get(cle) for cle in cles}
+
+        coord = _FakeCoordinator(entry=_FakeEntry(), data=recopie, history=[], memory={})
+        attrs = sensor.GazonHauteurTonteSensor(coord).extra_state_attributes or {}
+        self.assertEqual({cle: attrs.get(cle) for cle in self.CLES}, attendu)
 
 
 class LaBorneDApplicationAtteintLeCapteurTests(unittest.TestCase):

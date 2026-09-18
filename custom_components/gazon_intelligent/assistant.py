@@ -273,7 +273,9 @@ def _resolve_mowing(snapshot: dict[str, Any]) -> dict[str, Any] | None:
             reason=mower_reason_label or mower_operation_label or "Tondeuse en retour station.",
         )
 
-    strong_phase_block = phase in {"Sursemis", "Traitement", "Hivernage"}
+    # Le sursemis ne bloque la tonte que pendant la levée : c'est alors le CODE `phase_sursemis`
+    # (dans `_STRONG_MOWING_BLOCK_CODES`) qui la rend forte. Après, il autorise la tonte.
+    strong_phase_block = phase in {"Semis", "Traitement", "Hivernage"}
     strong_mowing_block = (
         strong_phase_block
         or mowing_block_reason_code in _STRONG_MOWING_BLOCK_CODES

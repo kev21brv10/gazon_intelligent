@@ -1,0 +1,731 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gazon · aperçu</title>
+<style>
+  /* Variables du thème par défaut de Home Assistant, pour voir la page comme dans HA. */
+  :root {
+    --primary-color: #03a9f4;
+    --primary-background-color: #fafafa;
+    --secondary-background-color: #ececec;
+    --card-background-color: #ffffff;
+    --primary-text-color: #212121;
+    --secondary-text-color: #727272;
+    --divider-color: rgba(0, 0, 0, 0.12);
+    --app-header-background-color: #fafafa;
+    --app-header-text-color: #212121;
+    --banc-fond: #1f2a24;
+    --banc-texte: #e8efe9;
+    color-scheme: light;
+  }
+  :root[data-theme="dark"] {
+    --primary-background-color: #111111;
+    --secondary-background-color: #282828;
+    --card-background-color: #1c1c1c;
+    --primary-text-color: #e1e1e1;
+    --secondary-text-color: #9b9b9b;
+    --divider-color: rgba(225, 225, 225, 0.12);
+    --app-header-background-color: #111111;
+    --app-header-text-color: #e1e1e1;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { display: flex; flex-direction: column; background: #cfd6d1; font-family: Roboto, -apple-system, "Segoe UI", sans-serif; }
+  .banc {
+    flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+    padding: 8px 14px; background: var(--banc-fond); color: var(--banc-texte); font-size: 13px;
+  }
+  .banc strong { font-weight: 600; }
+  .banc .releve { opacity: .7; flex: 1 1 260px; }
+  .banc .groupe { display: inline-flex; border-radius: 9px; overflow: hidden; border: 1px solid #3c4a41; }
+  .banc button { font: inherit; color: inherit; background: none; border: none; padding: 5px 10px; cursor: pointer; }
+  .banc button[aria-pressed="true"] { background: #10b981; color: #062b1e; font-weight: 600; }
+  .banc button:active { background: #2e3b33; }
+  .cadre-exterieur { flex: 1; min-height: 0; display: flex; justify-content: center; align-items: flex-start; overflow: auto; }
+  .cadre { width: 100%; height: 100%; background: var(--primary-background-color); }
+  body.telephone .cadre-exterieur { padding: 16px 0 26px; }
+  body.telephone .cadre {
+    flex: none; width: min(390px, calc(100vw - 24px)); height: 844px;
+    border-radius: 28px; overflow: hidden;
+    box-shadow: 0 0 0 10px #1f2a24, 0 20px 50px rgba(0, 0, 0, .35);
+  }
+  gazon-intelligent-panel { display: block; height: 100%; }
+</style>
+</head>
+<body>
+  <div class="banc" role="toolbar" aria-label="Aperçu">
+    <strong>Aperçu local</strong>
+    <span class="releve" id="releve">rien n'est envoyé à Home Assistant</span>
+    <span class="groupe" data-groupe="theme">
+      <button data-valeur="light" aria-pressed="true">Clair</button>
+      <button data-valeur="dark" aria-pressed="false">Sombre</button>
+    </span>
+    <span class="groupe" data-groupe="largeur">
+      <button data-valeur="ordinateur" aria-pressed="true">Ordinateur</button>
+      <button data-valeur="telephone" aria-pressed="false" title="Format représentatif de l'app Home Assistant : 390 × 844 px">Téléphone</button>
+    </span>
+    <span class="groupe" data-groupe="scenario">
+      <button data-valeur="maison" aria-pressed="true">Aujourd'hui</button>
+      <button data-valeur="prevu" aria-pressed="false" title="La dose habituelle, demain à l'aube">Arrosage prévu</button>
+      <button data-valeur="gros" aria-pressed="false" title="12 mm : au-delà de 10 mm, le moteur coupe l'arrosage en deux passages">Gros arrosage</button>
+      <button data-valeur="arrosage" aria-pressed="false">Arrosage en cours</button>
+      <button data-valeur="sursemis" aria-pressed="false">Sursemis J3</button>
+      <button data-valeur="semis" aria-pressed="false">Semis J12</button>
+    </span>
+    <button id="oublier" title="Efface les réglages enregistrés dans cet aperçu et recharge la maison">Tout remettre</button>
+  </div>
+  <div class="cadre-exterieur"><div class="cadre" id="cadre"></div></div>
+
+<script type="module">
+  // Icônes : Home Assistant fournit <ha-icon>. Ici, on le remplace par les tracés MDI officiels.
+  import * as mdi from "https://cdn.jsdelivr.net/npm/@mdi/js@7.4.47/+esm";
+
+  if (!customElements.get("ha-icon")) {
+    customElements.define("ha-icon", class extends HTMLElement {
+      static get observedAttributes() { return ["icon"]; }
+      connectedCallback() { this._dessiner(); }
+      attributeChangedCallback() { this._dessiner(); }
+      _dessiner() {
+        const nom = (this.getAttribute("icon") || "").replace(/^mdi:/, "");
+        const cle = "mdi" + nom.split("-").map((m) => m.charAt(0).toUpperCase() + m.slice(1)).join("");
+        const trace = mdi[cle];
+        if (!trace && nom) console.warn(`Icône inconnue : ${nom}`);
+        this.innerHTML = `<svg viewBox="0 0 24 24" width="100%" height="100%" style="display:block;fill:currentColor" aria-hidden="true"><path d="${trace || ""}"/></svg>`;
+      }
+    });
+  }
+
+  const CLE_STOCKAGE = "gazon-apercu-reglages";
+  const CLE_CHOIX = "gazon-apercu-choix";
+  const CLE_ALERTES = "gazon-apercu-alertes";
+  const CLE_POMPE = "gazon-apercu-pompe";
+  const CLE_ENTREES = "gazon-apercu-entrees";
+  const lireCle = (cle) => { try { return JSON.parse(localStorage.getItem(cle) || "{}"); } catch { return {}; } };
+  const ecrireCle = (cle, v) => { try { localStorage.setItem(cle, JSON.stringify(v)); } catch { /* aperçu sans stockage */ } };
+  // Sans rien d'enregistré dans l'aperçu, les réglages sont ceux de la maison (relevé réel).
+  const lire = () => {
+    let brut = null;
+    try { brut = localStorage.getItem(CLE_STOCKAGE); } catch { /* aperçu sans stockage */ }
+    return brut === null ? structuredClone(maison?.reglages || {}) : lireCle(CLE_STOCKAGE);
+  };
+  const ecrire = (v) => ecrireCle(CLE_STOCKAGE, v);
+
+  let maison;
+  try {
+    maison = (await import(`./maison.local.js?t=${Date.now()}`)).default;
+  } catch {
+    maison = (await import(`./maison.exemple.js?t=${Date.now()}`)).default;
+  }
+  document.getElementById("releve").textContent = `${maison.releve} · rien n'est envoyé à Home Assistant`;
+
+  const [registre, champsServices, sourcesRegistre] = await Promise.all([
+    fetch("./registre.json", { cache: "no-store" }).then((r) => r.json()),
+    fetch("./services.json", { cache: "no-store" }).then((r) => r.json()),
+    fetch("./sources.json", { cache: "no-store" }).then((r) => r.json()),
+  ]);
+  const defauts = Object.fromEntries(registre.reglages.map((r) => [r.cle, r.defaut]));
+
+  // Comme `panneau.sources_de_l_instance`, `appareils_des_sources` et `pompe_de_l_instance` (0.94.0).
+  // Les entrées changées sur la page (0.95.0) sont gardées dans ce navigateur.
+  const branchementsActuels = () => ({ ...(maison.branchements || {}), ...lireCle(CLE_ENTREES) });
+  const nomDe = (id) => etats[id]?.attributes?.friendly_name || id;
+  const sourcesApercu = () => {
+    const branchements = branchementsActuels();
+    return sourcesRegistre.map((s) => {
+      const id = branchements[s.cle] || null;
+      return {
+        cle: s.cle, titre: s.titre, groupe: s.groupe, apporte: s.apporte, sans_elle: s.sans_elle,
+        mesure: s.mesure, numerique: s.numerique, entity_id: id, nom: id ? nomDe(id) : null, partagee: false,
+        appareil: id ? (maison.appareils || []).find((a) => a.entites.includes(id))?.id || null : null,
+        domaine: s.domaine, obligatoire: s.obligatoire, unites: s.unites, sans_unite: s.sans_unite,
+        unites_refusees: s.unites_refusees, classes_refusees: s.classes_refusees, indices: s.indices,
+        classes: s.classes, classes_etat_refusees: s.classes_etat_refusees, exige_indice: s.exige_indice,
+        indice_sans_classe: s.indice_sans_classe, noms_refuses: s.noms_refuses,
+      };
+    });
+  };
+  // Les règles du changement d'entrée sont celles de la page elle-même (son bloc « Changer une
+  // entrée »), sans troisième copie ; le serveur, lui, dit pourquoi en clair.
+  const texteDeLaPage = await fetch("/custom_components/gazon_intelligent/frontend/gazon-intelligent-panel.js", { cache: "no-store" }).then((r) => r.text());
+  const blocDesEntrees = (() => {
+    const lignes = texteDeLaPage.split("\n");
+    const debut = lignes.findIndex((l) => l.startsWith("// ─── Changer une entrée"));
+    const fin = lignes.findIndex((l, i) => i > debut && l.startsWith("// ───"));
+    const etatsSansValeur = texteDeLaPage.match(/^const ETATS_SANS_VALEUR = .*;$/m)[0];
+    return `${etatsSansValeur}\n${lignes.slice(debut, fin).join("\n")}\nreturn entreeAcceptee;`;
+  })();
+  const entreeAcceptee = new Function(blocDesEntrees)();
+  const refusEntree = (s, id) => {
+    if (!s) return "Cette entrée n'existe pas.";
+    if (!id) return s.obligatoire ? `« ${s.titre} » est obligatoire : choisis-en une autre plutôt que de la retirer.` : null;
+    const etat = etats[id];
+    if (!etat) return `Cette entité n'existe pas dans Home Assistant : ${id}.`;
+    if (id.split(".")[1]?.startsWith("gazon_intelligent_")) return `« ${id} » vient de Gazon Intelligent : l'intégration ne peut pas se lire elle-même.`;
+    return entreeAcceptee(s, id, etat.attributes || {}, etat.state) ? null : `« ${s.titre} » ne peut pas lire cette entité (aperçu : le serveur dit pourquoi).`;
+  };
+  const appareilsApercu = (lignes) => {
+    const branchements = branchementsActuels();
+    const branchees = Object.fromEntries(lignes.filter((l) => l.entity_id).map((l) => [l.entity_id, l.cle]));
+    const libres = sourcesRegistre.filter((s) => s.indices.length && !branchements[s.cle]);
+    return (maison.appareils || []).filter((a) => a.entites.some((id) => branchees[id])).map((a) => ({
+      id: a.id, nom: a.nom, fabricant: a.fabricant, modele: a.modele,
+      entites: a.entites.map((id) => ({
+        entity_id: id, nom: nomDe(id), branchee: branchees[id] || null,
+        pourrait: branchees[id] ? [] : libres
+          .filter((s) => s.indices.some((i) => id.toLowerCase().includes(i)) && !refusEntree(s, id)).map((s) => s.cle),
+      })).sort((x, y) => (x.branchee === null) - (y.branchee === null) || String(x.nom).localeCompare(String(y.nom))),
+    }));
+  };
+  const pompeActuelle = () => {
+    const gardee = lireCle(CLE_POMPE);
+    return "pompe" in gardee ? gardee.pompe : maison.pompe || null;
+  };
+  const vannesApercu = () => new Set((maison.zones || []).map((z) => z.switch));
+  const pompeChoix = () => {
+    const vannes = vannesApercu();
+    const interrupteurs = Object.keys(etats)
+      .filter((id) => id.startsWith("switch.") && !vannes.has(id) && !id.startsWith("switch.gazon_intelligent_"))
+      .map((id) => {
+        const nom = nomDe(id);
+        return { entity_id: id, nom, proposee: /pompe|pump|surpresseur/.test(`${id} ${nom}`.toLowerCase()) };
+      })
+      .sort((a, b) => (b.proposee - a.proposee) || a.nom.localeCompare(b.nom));
+    return { choisie: pompeActuelle(), interrupteurs };
+  };
+  // Prévisions datées d'aujourd'hui, toujours les mêmes pour des captures comparables.
+  const previsionsApercu = () => {
+    const base = maison.previsions || {};
+    const jours = base.jours || Array.from({ length: 7 }, (_, i) => {
+      const d = new Date();
+      d.setHours(12, 0, 0, 0);
+      d.setDate(d.getDate() + i);
+      return {
+        datetime: d.toISOString(), condition: ["partlycloudy", "sunny", "cloudy", "rainy", "partlycloudy", "sunny", "pouring"][i],
+        temperature: [22, 24, 21, 17, 19, 23, 16][i], templow: [11, 12, 13, 12, 10, 11, 12][i],
+        precipitation: [0, 0, 0.4, 4.2, 0.8, 0, 12][i], precipitation_probability: [5, 0, 30, 80, 40, 10, 90][i], wind_speed: [8, 6, 12, 18, 10, 7, 22][i],
+      };
+    });
+    if (maison.prevision) jours[0] = { ...jours[0], ...maison.prevision };
+    const heures = base.heures || Array.from({ length: 30 }, (_, i) => {
+      const d = new Date();
+      d.setMinutes(0, 0, 0);
+      d.setHours(d.getHours() + i);
+      const h = d.getHours();
+      const nuit = h < 7 || h >= 20;
+      return {
+        datetime: d.toISOString(), condition: i >= 20 ? "rainy" : nuit ? "clear-night" : "partlycloudy",
+        temperature: Math.round(15 + 7 * Math.sin(((h - 9) / 24) * 2 * Math.PI)), precipitation: i >= 20 ? 0.6 : 0,
+        precipitation_probability: i >= 20 ? 70 : 5, wind_speed: 5 + (i % 6),
+      };
+    });
+    return { jours, heures };
+  };
+
+  // Comme `panneau.notifications_de_l_instance` (0.93.0), avec ce que l'aperçu a enregistré.
+  const notificationsApercu = () => {
+    const base = {
+      cibles: [], alertes: true, ia_choisie: null, ia_disponible: true,
+      categories: { arrosage_graines: true, securite_arrosage: true, capteurs_meteo: true, tondeuse: true },
+      telephones: [{ entity_id: "notify.telephone", nom: "Téléphone" }, { entity_id: "notify.tablette", nom: "Tablette" }],
+      ias: [{ entity_id: "ai_task.apercu", nom: "IA simulée" }],
+      ...(maison.notifications || {}),
+    };
+    const gardees = lireCle(CLE_ALERTES);
+    const nomTel = (id) => base.telephones.find((t) => t.entity_id === id)?.nom || id;
+    const cibles = gardees.cibles ?? base.cibles.map((c) => c.entity_id);
+    const choisie = "ia" in gardees ? (gardees.ia || null) : base.ia_choisie;
+    const effective = choisie || (base.ias.length === 1 ? base.ias[0].entity_id : null);
+    return {
+      ...base,
+      cibles: cibles.map((id) => ({ entity_id: id, nom: nomTel(id) })),
+      alertes: gardees.alertes ?? base.alertes,
+      categories: { ...base.categories, ...(gardees.categories || {}) },
+      ia_choisie: choisie,
+      ia: effective,
+      ia_nom: effective ? (base.ias.find((x) => x.entity_id === effective)?.nom || effective) : null,
+    };
+  };
+  const identiques = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+  await import(`/custom_components/gazon_intelligent/frontend/gazon-intelligent-panel.js?dev=${Date.now()}`);
+
+  const panel = document.createElement("gazon-intelligent-panel");
+  const E = maison.entites;
+  const DEPART = new Date().toISOString();
+  // Comme dans Home Assistant : chaque état porte son identifiant et son dernier changement.
+  const initiaux = () => Object.fromEntries(
+    Object.entries(structuredClone(maison.etats)).map(([id, e]) => [id, { entity_id: id, last_changed: DEPART, last_updated: DEPART, ...e }]),
+  );
+  let etats = initiaux();
+  let sombre = false;
+
+  // ── Le catalogue : les fiches complètes, et le résumé que publie le capteur. ──
+  let produits = structuredClone(maison.produits || []);
+  const MOIS_FR = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"];
+  // memory.format_application_months_label : des plages de mois consécutifs.
+  const libelleMois = (mois) => {
+    const liste = [...new Set((mois || []).map(Number))].filter((m) => m >= 1 && m <= 12).sort((a, b) => a - b);
+    const plages = [];
+    for (const m of liste) {
+      const derniere = plages[plages.length - 1];
+      if (derniere && m === derniere[1] + 1) derniere[1] = m;
+      else plages.push([m, m]);
+    }
+    return plages.map(([a, b]) => (a === b ? MOIS_FR[a - 1] : `${MOIS_FR[a - 1]} à ${MOIS_FR[b - 1]}`)).join(", ");
+  };
+  // memory.normalize_product_id
+  const idProduit = (v) => [...String(v ?? "").trim().toLowerCase().replace(/ /g, "_")]
+    .filter((ch) => /[\p{L}\p{N}_-]/u.test(ch)).join("").replace(/^[_-]+|[_-]+$/g, "");
+  // sensor._compact_product
+  const CLES_RESUME = ["id", "nom", "type", "dose_conseillee", "usage_mode", "max_applications_per_year", "application_months_label",
+    "application_requires_watering_after", "application_post_watering_mm", "application_irrigation_mode"];
+  const publierCatalogue = () => {
+    const resume = produits.map((f) => Object.fromEntries(CLES_RESUME.filter((k) => ![undefined, null, ""].includes(f[k])).map((k) => [k, f[k]])));
+    changer(E.catalogue_produits, { state: String(produits.length) });
+    attributs(E.catalogue_produits, {
+      products_count: produits.length, products_summary: resume,
+      product_ids: produits.map((f) => f.id), product_names: produits.map((f) => f.nom),
+      summary: produits.length === 1 ? "1 produit enregistré" : `${produits.length} produits enregistrés`,
+    });
+  };
+
+  // Remplace UNE entité par un nouvel objet (les autres gardent leur référence, comme dans HA).
+  const changer = (id, modif) => {
+    const avant = etats[id];
+    if (!avant) return;
+    const apres = typeof modif === "function" ? modif(structuredClone(avant)) : { ...avant, ...modif };
+    if (apres.state !== avant.state) apres.last_changed = new Date().toISOString();
+    apres.last_updated = new Date().toISOString();
+    etats = { ...etats, [id]: apres };
+  };
+  const attributs = (id, a) => changer(id, (e) => ({ ...e, attributes: { ...e.attributes, ...a } }));
+  const pousser = () => { panel.hass = hass(); };
+
+  // ── Simulation d'un arrosage : passage après passage, zone après zone, comme le moteur. ──
+  // Une étape dure 4 s ; les attributs publiés sont ceux de `sensor.…_arrosage_en_cours`.
+  let simulation = null;
+  function demarrerArrosage(mm) {
+    arreterArrosage(false);
+    const debit = (z) => Number(etats[E[`debit_zone_${z.numero}`]]?.state);
+    const zones = maison.zones.filter((z) => debit(z) > 0);
+    if (!zones.length) return;
+    // Le découpage DU JOUR, quelle que soit la dose : c'est ce que fait le moteur.
+    const plan = etats[E.plan_arrosage]?.attributes || {};
+    const passages = Math.max(1, Number(plan.passages) || 1);
+    const pauseS = passages > 1 ? Number(plan.pause_between_passages_s) || 0 : 0;
+    const etapes = [];
+    for (let p = 1; p <= passages; p++) {
+      for (const z of zones) etapes.push({ passage: p, zone: z, secondes: ((mm / debit(z)) * 3600) / passages });
+      // Pendant la pause, le moteur annonce déjà le passage suivant.
+      if (p < passages && pauseS > 0) etapes.push({ passage: p + 1, secondes: pauseS });
+    }
+    const total = etapes.reduce((s, e) => s + e.secondes, 0);
+    const debut = new Date().toISOString();
+    const verses = {};
+    let rang = 0;
+    let ecoule = 0;
+    const avancer = () => {
+      for (const z of maison.zones) changer(z.switch, { state: "off" });
+      if (rang >= etapes.length) {
+        arreterArrosage(true, mm, debut, zones);
+        return;
+      }
+      const e = etapes[rang];
+      if (pompeActuelle()) changer(pompeActuelle(), { state: e.zone ? "on" : "off" });
+      if (e.zone) changer(e.zone.switch, { state: "on" });
+      const mmZones = Object.values(verses);
+      const pct = Math.round((ecoule / total) * 100);
+      attributs(E.arrosage_en_cours, {
+        active: true, started_at_utc: debut, active_zones: e.zone ? [e.zone.switch] : [],
+        current_passage: e.passage, passage_count: passages, target_mm: mm,
+        planned_total_seconds: total, elapsed_seconds: ecoule, remaining_session_seconds: total - ecoule, progress_percent: pct,
+        zone_mm_applied: { ...verses },
+        total_mm_applied: Math.round(mmZones.reduce((s, x) => s + x, 0) * 10) / 10,
+        surface_mm_applied: Math.round((mmZones.reduce((s, x) => s + x, 0) / zones.length) * 10) / 10,
+      });
+      changer(E.arrosage_en_cours, { state: String(pct) });
+      if (e.zone) verses[e.zone.switch] = Math.round(((verses[e.zone.switch] || 0) + mm / passages) * 10) / 10;
+      ecoule += e.secondes;
+      rang += 1;
+      pousser();
+    };
+    avancer();
+    simulation = setInterval(avancer, 4000);
+  }
+  function arreterArrosage(termine, mm, debut, zones) {
+    if (simulation) clearInterval(simulation);
+    simulation = null;
+    for (const z of maison.zones) changer(z.switch, { state: "off" });
+    if (pompeActuelle()) changer(pompeActuelle(), { state: "off" });
+    attributs(E.arrosage_en_cours, {
+      active: false, progress_percent: 0, remaining_session_seconds: 0, active_zones: [], zone_mm_applied: {},
+      total_mm_applied: 0, surface_mm_applied: 0, current_passage: undefined, passage_count: undefined, target_mm: undefined,
+    });
+    changer(E.arrosage_en_cours, { state: "0.0" });
+    if (termine) {
+      const fin = new Date();
+      const session = {
+        date: fin.toISOString().slice(0, 10), started_at: debut, recorded_at: fin.toISOString(),
+        source: "manual_irrigation", watering_cause: "hydrique", total_mm: mm, zone_count: zones.length,
+        zones: zones.map((z) => ({ entity_id: z.switch, duration_min: Math.round((mm / Number(etats[E[`debit_zone_${z.numero}`]].state)) * 600) / 10, mm })),
+      };
+      const quand = fin.toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }).replace(" ", " à ");
+      attributs(E.dernier_arrosage, {
+        last_watering_when: quand, zone_count: zones.length,
+        derniers_arrosages: [session, ...(etats[E.dernier_arrosage].attributes.derniers_arrosages || [])],
+      });
+      changer(E.dernier_arrosage, { state: String(mm) });
+      const reserve = Math.min(Number(etats[E.reserve].state) + mm, Number(etats[E.reserve].attributes.reserve_utile_mm || 12));
+      changer(E.reserve, { state: reserve.toFixed(1) });
+    }
+    pousser();
+  }
+
+  // Un arrosage calculé par le moteur, prévu DEMAIN à l'aube (le capteur ne publie l'heure de
+  // départ que pour aujourd'hui ou demain).
+  function prevoir(s) {
+    const demain = new Intl.DateTimeFormat("en-CA", { timeZone: maison.fuseau }).format(new Date(Date.now() + 86400000));
+    const [a, mo, j] = demain.split("-");
+    const affiche = `${j}/${mo}/${a}`;
+    changer(E.objectif, { state: s.mm.toFixed(1) });
+    attributs(E.objectif, { besoin_mm: s.mm });
+    changer(E.prochain_arrosage, { state: affiche });
+    attributs(E.prochain_arrosage, {
+      objective_mm: s.mm, target_date: demain, target_display: affiche,
+      target_datetime: `${demain}T${s.depart}:00`, departure_time: s.depart, end_time: s.fin,
+      target_window: "demain_matin", target_window_label: "Demain matin", type_arrosage: "auto",
+      summary: `Arrosage prévu demain matin à ${s.depart}, fin vers ${s.fin} (${affiche})`,
+      next_action: "Arrosage prévu demain matin",
+      jours_avant_arrosage_estime: undefined, date_prochain_arrosage_estime: undefined,
+    });
+    changer(E.fenetre_optimale, { state: "demain_matin" });
+    changer(E.plan_arrosage, { state: String(s.plan.total_duration_min) });
+    attributs(E.plan_arrosage, { ...s.plan, source: "calculated_from_objective", reason: undefined });
+    changer(E.assistant, { state: "arrosage" });
+    attributs(E.assistant, { action: "arrosage", moment: "demain_matin", quantity_mm: s.mm, status: "action_required", reason: "Arrosage requis" });
+  }
+
+  const hass = () => ({
+    language: "fr",
+    locale: { language: "fr" },
+    config: { time_zone: maison.fuseau },
+    themes: { darkMode: sombre },
+    user: { name: "Aperçu", is_admin: true },
+    states: etats,
+    connection: {
+      async sendMessagePromise(message) {
+        if (message.type === "call_service" && message.service === "get_forecasts") {
+          const id = message.service_data.entity_id;
+          const p = previsionsApercu();
+          return { response: { [id]: { forecast: message.service_data.type === "hourly" ? p.heures : p.jours } } };
+        }
+        throw { code: "unknown_command", message: `Message non simulé : ${message.type}` };
+      },
+    },
+    async callApi(methode, chemin) {
+      await new Promise((r) => setTimeout(r, 300));
+      const m = chemin.match(/^history\/period\/[^?]+\?filter_entity_id=([^&]+)/);
+      if (methode !== "GET" || !m) throw { message: `API non simulée : ${methode} ${chemin}` };
+      return m[1].split(",").map((id) => {
+        const liste = [{ entity_id: id, state: "off", last_changed: new Date(Date.now() - 7 * 86400000).toISOString() }];
+        for (const [debut, fin] of (maison.historique || {})[id] || []) {
+          liste.push({ state: "on", last_changed: new Date(debut).toISOString() });
+          liste.push({ state: "off", last_changed: new Date(fin).toISOString() });
+        }
+        if (etats[id]?.state === "on") liste.push({ state: "on", last_changed: etats[id].last_changed });
+        return liste;
+      });
+    },
+    async callWS(message) {
+      await new Promise((r) => setTimeout(r, 250));
+      if (message.type === "gazon_intelligent/reglages/get") {
+        return {
+          instances: [{ entry_id: "apercu", titre: maison.titre }],
+          entry_id: "apercu",
+          titre: maison.titre,
+          sous_titre: maison.sous_titre,
+          registre,
+          valeurs: { ...defauts, ...lire() },
+          // Les choix vivent dans les options de l'entrée (type_sol), pas dans les réglages.
+          choix: { ...(maison.choix || {}), ...lireCle(CLE_CHOIX) },
+          produits: structuredClone(produits),
+          entites: maison.entites,
+          zones: maison.zones,
+          pompe: pompeActuelle(),
+          meteo: branchementsActuels().entite_meteo || maison.meteo,
+          notifications: notificationsApercu(),
+          sources: sourcesApercu(),
+          appareils: appareilsApercu(sourcesApercu()),
+          pompe_choix: pompeChoix(),
+        };
+      }
+      if (message.type === "call_service") {
+        // Actions à réponse (`return_response`) : même contrôle des champs que `callService`.
+        await this.callService(message.domain, message.service, message.service_data || {});
+        if (message.service === "ask_ai") {
+          await new Promise((r) => setTimeout(r, 1500));
+          const question = (message.service_data || {}).question || "";
+          // Question « panne » : l'erreur que Home Assistant rend quand le fournisseur refuse.
+          if (question === "panne") throw { code: "home_assistant_error", message: "L'IA a refusé la demande : quota dépassé" };
+          const envoye_a = (message.service_data || {}).notifier ? ["notify.telephone"] : undefined;
+          return {
+            context: {},
+            response: {
+              question: question || "Fais le point sur mon gazon aujourd'hui.",
+              reponse: "Réponse simulée : les graines ont reçu leurs cycles du jour, la réserve est pleine.\nPas de tonte avant la levée ; surveille le vent cet après-midi.",
+              entite_ia: "ai_task.apercu",
+              ...(envoye_a ? { envoye_a } : {}),
+            },
+          };
+        }
+        return { context: {}, response: null };
+      }
+      if (message.type === "gazon_intelligent/reglages/set") {
+        const gardees = lire();
+        for (const [cle, valeur] of Object.entries(message.valeurs || {})) {
+          if (!(cle in defauts)) return { ok: false, erreurs: { [cle]: "Réglage inconnu." } };
+          if (identiques(valeur, defauts[cle])) delete gardees[cle];
+          else gardees[cle] = valeur;
+        }
+        const choix = { ...(maison.choix || {}), ...lireCle(CLE_CHOIX) };
+        for (const [cle, valeur] of Object.entries(message.choix || {})) {
+          const fiche = (registre.choix || []).find((c) => c.cle === cle);
+          if (!fiche) return { ok: false, erreurs: { [cle]: "Choix inconnu." } };
+          if (!fiche.options.some((o) => o.valeur === valeur)) return { ok: false, erreurs: { [cle]: "Choix hors liste." } };
+          choix[cle] = valeur;
+        }
+        if ("pompe" in message && message.pompe) {
+          if (vannesApercu().has(message.pompe)) return { ok: false, erreurs: { pompe: "Une vanne ne peut pas servir de pompe." } };
+          if (!String(message.pompe).startsWith("switch.") || !etats[message.pompe]) {
+            return { ok: false, erreurs: { pompe: `Cet interrupteur n'existe pas dans Home Assistant : ${message.pompe}.` } };
+          }
+        }
+        const entrees = message.entrees || null;
+        if (entrees) {
+          for (const [cle, id] of Object.entries(entrees)) {
+            const refus = refusEntree(sourcesRegistre.find((s) => s.cle === cle), id || null);
+            if (refus) return { ok: false, erreurs: { entrees: refus } };
+          }
+          // Une vanne ouverte : un arrosage est en cours (comme `arrosage_en_cours`).
+          if ((maison.zones || []).some((z) => etats[z.switch]?.state === "on")) {
+            return { ok: false, erreurs: { entrees: "Un arrosage est en cours : change les entrées quand il sera fini, le changement recharge l'intégration." } };
+          }
+        }
+        const alertes = message.notifications || {};
+        if (Object.keys(alertes).length) {
+          const n = notificationsApercu();
+          const inconnu = (alertes.cibles || []).find((id) => !n.telephones.some((t) => t.entity_id === id));
+          if (inconnu) return { ok: false, erreurs: { notifications: `Ce téléphone n'existe plus dans Home Assistant : ${inconnu}.` } };
+          const categorieInconnue = Object.keys(alertes.categories || {}).find((cle) => !(cle in n.categories));
+          if (categorieInconnue) return { ok: false, erreurs: { notifications: `Catégorie de notification inconnue : ${categorieInconnue}.` } };
+          if (alertes.ia && !n.ias.some((x) => x.entity_id === alertes.ia)) {
+            return { ok: false, erreurs: { notifications: `Cette IA n'existe pas dans Home Assistant : ${alertes.ia}.` } };
+          }
+        }
+        ecrire(gardees);
+        ecrireCle(CLE_CHOIX, choix);
+        if (Object.keys(alertes).length) {
+          const avant = lireCle(CLE_ALERTES);
+          ecrireCle(CLE_ALERTES, {
+            ...avant, ...alertes,
+            ...(alertes.categories ? { categories: { ...(avant.categories || {}), ...alertes.categories } } : {}),
+          });
+        }
+        if ("pompe" in message) ecrireCle(CLE_POMPE, { pompe: message.pompe || null });
+        if (entrees) {
+          ecrireCle(CLE_ENTREES, { ...lireCle(CLE_ENTREES), ...Object.fromEntries(Object.entries(entrees).map(([c, v]) => [c, v || null])) });
+          await new Promise((r) => setTimeout(r, 600));
+        }
+        if (message.choix?.type_sol && E.phase) {
+          attributs(E.phase, { type_sol: message.choix.type_sol });
+          setTimeout(pousser, 250);
+        }
+        console.info("Aperçu — enregistré :", message.valeurs, message.choix);
+        return {
+          ok: true, valeurs: { ...defauts, ...gardees }, choix, notifications: notificationsApercu(),
+          pompe: pompeActuelle(), pompe_choix: pompeChoix(),
+          ...(entrees ? {
+            recharge: !Object.keys(entrees).every((c) => ["capteur_pluie_cumul", "capteur_pluie_actuelle"].includes(c)),
+            meteo: branchementsActuels().entite_meteo || maison.meteo,
+            sources: sourcesApercu(),
+            appareils: appareilsApercu(sourcesApercu()),
+          } : {}),
+        };
+      }
+      throw { code: "unknown_command", message: `Commande inconnue : ${message.type}` };
+    },
+    async callService(domaine, service, donnees) {
+      console.info("Aperçu — service appelé (simulé) :", domaine, service, donnees);
+      await new Promise((r) => setTimeout(r, 300));
+      // Home Assistant refuse un champ inconnu : on applique le même schéma, tiré de services.yaml.
+      if (domaine === "gazon_intelligent") {
+        const permis = champsServices[service];
+        if (!permis) throw { code: "service_not_found", message: `Service inconnu : ${domaine}.${service}` };
+        const inconnus = Object.keys(donnees).filter((k) => !permis.includes(k));
+        if (inconnus.length) throw { code: "invalid_format", message: `extra keys not allowed @ data['${inconnus[0]}']` };
+      }
+      const ids = [].concat(donnees.entity_id || []);
+      if (domaine === "switch") {
+        for (const id of ids) {
+          const allume = service === "toggle" ? etats[id]?.state !== "on" : service === "turn_on";
+          changer(id, { state: allume ? "on" : "off" });
+        }
+      } else if (domaine === "number") {
+        changer(ids[0], { state: Number(donnees.value).toFixed(1) });
+      } else if (domaine === "select") {
+        changer(ids[0], { state: donnees.option });
+        changer(E.phase, { state: donnees.option });
+      } else if (service === "start_manual_irrigation") {
+        demarrerArrosage(Number(donnees.objectif_mm));
+      } else if (service === "stop_irrigation") {
+        arreterArrosage(false);
+      } else if (service === "declare_mowing") {
+        attributs(E.tonte_autorisee, { derniere_tonte_date: new Date().toISOString().slice(0, 10) });
+      } else if (service === "declare_intervention") {
+        const produits = etats[E.catalogue_produits].attributes.products_summary || [];
+        const fiche = produits.find((p) => p.id === donnees.produit_id) || {};
+        const [j, mo, a] = (donnees.date_action || "").split("/");
+        const entree = { produit_id: fiche.id, libelle: fiche.nom, type: donnees.intervention, date_action: a ? `${a}-${mo}-${j}` : new Date().toISOString().slice(0, 10), dose: fiche.dose_conseillee, note: donnees.note };
+        attributs(E.derniere_application, { application_history: [...(etats[E.derniere_application].attributes.application_history || []), entree] });
+        changer(E.derniere_application, { state: fiche.nom || "" });
+      } else if (service === "remove_last_application") {
+        attributs(E.derniere_application, { application_history: (etats[E.derniere_application].attributes.application_history || []).slice(0, -1) });
+      } else if (service === "recalibrate_reserve") {
+        const utile = Number(etats[E.reserve].attributes.reserve_utile_mm || 12);
+        const mm = Number(donnees.reserve_mm);
+        changer(E.reserve, { state: Math.min(mm, utile).toFixed(1) });
+        attributs(E.reserve, { reserve_stock_mm: mm, reserve_available_ratio: Math.min(mm, utile) / utile });
+        attributs(E.etat_hydrique, { reserve_actuelle_mm: Math.min(mm, utile), reserve_available_ratio: Math.min(mm, utile) / utile, depletion_mm: Math.max(0, utile - mm) });
+      } else if (service === "register_product") {
+        // REMPLACEMENT TOTAL, comme gazon_brain.register_product : seuls les champs envoyés restent.
+        const id = idProduit(donnees.product_id);
+        if (!id) throw { code: "invalid", message: "Identifiant ou produit invalide." };
+        const fiche = { id };
+        for (const [k, v] of Object.entries(donnees)) {
+          if (["entity_id", "product_id"].includes(k) || [undefined, null, ""].includes(v) || (Array.isArray(v) && !v.length)) continue;
+          fiche[k] = v;
+        }
+        if (fiche.application_months) fiche.application_months_label = libelleMois(fiche.application_months);
+        const rang = produits.findIndex((f) => f.id === id);
+        if (rang >= 0) produits[rang] = fiche;
+        else produits.push(fiche);
+        publierCatalogue();
+      } else if (service === "remove_product") {
+        produits = produits.filter((f) => f.id !== idProduit(donnees.product_id));
+        publierCatalogue();
+      } else if (service === "reset_mode") {
+        changer(E.mode, { state: "Normal" });
+        changer(E.phase, { state: "Normal" });
+      }
+      // Home Assistant renvoie un NOUVEL objet hass à chaque changement d'état : pareil ici.
+      setTimeout(pousser, 250);
+    },
+  });
+
+  function scenario(nom) {
+    arreterArrosage(false);
+    etats = initiaux();
+    produits = structuredClone(maison.produits || []);
+    if (nom === "sursemis" || nom === "semis") {
+      const mode = nom === "sursemis" ? "Sursemis" : "Semis";
+      const age = nom === "sursemis" ? 3 : 12;
+      const etape = nom === "sursemis" ? "Germination" : "Enracinement";
+      const stage = nom === "sursemis" ? "germination" : "enracinement";
+      const dose = nom === "sursemis" ? 1.5 : 3;
+      const cycles = nom === "sursemis" ? 3 : 1;
+      const hauteur = nom === "semis" ? 7 : 4;
+      const motifTonte = nom === "sursemis"
+        ? "Sursemis / germination (J+3) : tonte suspendue jusqu'à J+7, le temps que les graines s'ancrent."
+        : "Semis / enracinement (J+12) : la tonte attend que le jeune gazon soit assez haut et bien enraciné.";
+      const motifHauteur = nom === "sursemis"
+        ? "Sursemis : J+3, lame à 4,0 cm après la levée pour laisser la lumière aux plantules."
+        : "Semis : J+12, pas de tonte pendant l'enracinement ; première coupe haute quand les plantules seront prêtes.";
+      const demain = new Date();
+      demain.setDate(demain.getDate() + 1);
+      const prochainJour = demain.toISOString().slice(0, 10);
+      changer(E.mode, { state: mode });
+      changer(E.phase, { state: mode });
+      changer(E.assistant, { state: "aucune_action" });
+      attributs(E.assistant, { action: "aucune_action", moment: "attendre", quantity_mm: 0, status: "no_need", reason: motifTonte,
+        gazon_permet_tonte: false, machine_permet_tonte: true });
+      changer(E.prochain_arrosage, { state: "Non requis" });
+      attributs(E.prochain_arrosage, { objective_mm: 0, watering_window_display: "10:00–17:00",
+        jours_avant_arrosage_estime: 1, date_prochain_arrosage_estime: prochainJour });
+      changer(E.fenetre_optimale, { state: "attendre" });
+      attributs(E.fenetre_optimale, { watering_strategy: "semis_frequent", watering_stage: stage,
+        surface_cycle_mm: dose, daily_cycles_target: cycles, semis_daily_cycles_target: cycles,
+        semis_cycles_completed_today: cycles, semis_cycles_remaining_today: 0,
+        semis_followup_state: "complete", seeding_block_reason: "semis_cycle_daily_target_reached",
+        watering_window_start_minute: 600, watering_window_end_minute: 1020, watering_window_display: "10:00–17:00" });
+      changer(E.objectif, { state: "0.0" });
+      attributs(E.objectif, { phase_active: mode, phase_dominante: mode, sous_phase: etape, besoin_mm: dose });
+      changer(E.tonte_autorisee, { state: "off" });
+      attributs(E.tonte_autorisee, { tonte_statut: "interdite", gazon_permet_tonte: false, machine_permet_tonte: true,
+        raison_blocage_tonte: motifTonte, mowing_block_reason_label: motifTonte, mowing_frequency_label: "0 / semaine" });
+      changer(E.prochaine_tonte, { state: "En attente" });
+      attributs(E.prochaine_tonte, { target_date: null, tonte_statut: "interdite", summary: motifTonte, reason: motifTonte });
+      changer(E.hauteur_tonte, { state: hauteur.toFixed(1) });
+      attributs(E.hauteur_tonte, { semis_mode: mode, semis_age_jours: age, plantules_coupes: 0,
+        plantules_hauteur_estimee_cm: nom === "semis" ? 2 : 0, hauteur_tonte_motif: motifHauteur,
+        tonte_statut: "interdite", mowing_frequency_label: "0 / semaine", mowing_block_reason_label: motifTonte });
+      changer(E.tonte_etat, { state: "interdite" });
+      attributs(E.tonte_etat, { hauteur_tonte_recommandee_cm: hauteur, hauteur_tonte_motif: motifHauteur,
+        tonte_statut: "interdite", mowing_block_reason_label: motifTonte });
+      if (nom === "semis") {
+        changer(E.prochaine_intervention, { state: "non_requis" });
+        attributs(E.prochaine_intervention, {
+          product_name: null,
+          produit_nom: null,
+          score: 0,
+          hint: null,
+          application_constraints: [],
+          reason: null,
+          why_now: null,
+          summary: "Aucun produit conseillé pendant ce programme de semis.",
+        });
+      }
+    }
+    if ((nom === "prevu" || nom === "gros") && maison.scenarios?.[nom]) prevoir(maison.scenarios[nom]);
+    pousser();
+    if (nom === "arrosage") demarrerArrosage(5);
+  }
+
+  panel.narrow = false;
+  panel.panel = { config: {} };
+  panel.hass = hass();
+  document.getElementById("cadre").append(panel);
+
+  for (const groupe of document.querySelectorAll(".groupe")) {
+    groupe.addEventListener("click", (e) => {
+      const bouton = e.target.closest("button");
+      if (!bouton) return;
+      for (const b of groupe.querySelectorAll("button")) b.setAttribute("aria-pressed", String(b === bouton));
+      const valeur = bouton.dataset.valeur;
+      if (groupe.dataset.groupe === "theme") {
+        sombre = valeur === "dark";
+        document.documentElement.dataset.theme = valeur;
+        pousser();
+      } else if (groupe.dataset.groupe === "largeur") {
+        document.body.classList.toggle("telephone", valeur === "telephone");
+        panel.narrow = valeur === "telephone";
+      } else {
+        scenario(valeur);
+      }
+    });
+  }
+  document.getElementById("oublier").addEventListener("click", () => {
+    // Retirer la clé (et non l'écrire vide) : on retombe sur les réglages de la maison.
+    try { localStorage.removeItem(CLE_STOCKAGE); } catch { /* aperçu sans stockage */ }
+    ecrireCle(CLE_CHOIX, {});
+    ecrireCle(CLE_ALERTES, {});
+    ecrireCle(CLE_ENTREES, {});
+    ecrireCle(CLE_POMPE, {});
+    location.reload();
+  });
+  window.addEventListener("hass-toggle-menu", () => console.info("Aperçu — le menu de Home Assistant s'ouvrirait ici."));
+</script>
+</body>
+</html>

@@ -8,8 +8,11 @@ Ce module ne modifie pas le moteur existant. Il fournit :
 - un resolver de base pour arbitrer la politique active.
 """
 
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from typing import Any
+
+from .reglages import lire
 
 MODE_NORMAL = "normal"
 MODE_SURSEMIS = "sursemis"
@@ -117,6 +120,7 @@ class SemisStageProgram:
     surface_cycle_mm_max: float
     surface_cycle_mm_optimal: float
     daily_cycles_min: int
+    daily_cycles_optimal: int
     daily_cycles_max: int
     cycle_spacing_minutes_min: int
     cycle_spacing_minutes_max: int
@@ -324,7 +328,8 @@ SEMIS_STAGE_PROGRAMS: dict[str, SemisStageProgram] = {
         surface_cycle_mm_min=1.2,
         surface_cycle_mm_max=1.8,
         surface_cycle_mm_optimal=1.5,
-        daily_cycles_min=3,
+        daily_cycles_min=2,
+        daily_cycles_optimal=3,
         daily_cycles_max=4,
         cycle_spacing_minutes_min=120,
         cycle_spacing_minutes_max=120,
@@ -339,6 +344,7 @@ SEMIS_STAGE_PROGRAMS: dict[str, SemisStageProgram] = {
         surface_cycle_mm_max=3.0,
         surface_cycle_mm_optimal=2.5,
         daily_cycles_min=1,
+        daily_cycles_optimal=1,
         daily_cycles_max=2,
         cycle_spacing_minutes_min=240,
         cycle_spacing_minutes_max=240,
@@ -353,6 +359,7 @@ SEMIS_STAGE_PROGRAMS: dict[str, SemisStageProgram] = {
         surface_cycle_mm_max=4.0,
         surface_cycle_mm_optimal=3.0,
         daily_cycles_min=1,
+        daily_cycles_optimal=1,
         daily_cycles_max=2,
         cycle_spacing_minutes_min=270,
         cycle_spacing_minutes_max=270,
@@ -364,10 +371,93 @@ SEMIS_STAGE_PROGRAMS: dict[str, SemisStageProgram] = {
 }
 
 
+# RÉGLAGES DE LA PAGE « GAZON » (0.92.0) : dose et nombre d'arrosages de chaque programme.
+# « levee » sert à la reprise et à la stabilisation tant que la transition n'est pas prête : c'est
+# le programme que la page appelle « ensuite ».
+_REGLAGES_DES_PROGRAMMES: dict[str, tuple[str, str]] = {
+    "germination": ("graines_germination_dose", "graines_germination_cycles"),
+    "enracinement": ("graines_enracinement_dose", "graines_enracinement_cycles"),
+    "levee": ("graines_reprise_dose", "graines_reprise_cycles"),
+}
+# Ouverture et fermeture de la fenêtre des graines par défaut, en minutes. MÊMES valeurs que
+# `guidance.SEMIS_WINDOW_START_HOUR` et `SEMIS_WINDOW_END_HOUR` (ce module ne peut pas importer
+# `guidance`, qui l'importe) : `tests/test_reglages_branches.py` le vérifie.
+_OUVERTURE_GRAINES_MIN = 10 * 60
+_FERMETURE_GRAINES_MIN = 17 * 60
+_MARGE_FIN_GRAINES_MIN = 60
+
+
+def repartir_creneaux_semis(
+    programme: SemisStageProgram,
+    nombre_cycles: int,
+    *,
+    reglages: Mapping[str, Any] | None = None,
+) -> tuple[int, ...]:
+    """Répartit régulièrement les départs sur la fenêtre Semis/Sursemis.
+
+    Le premier cycle part à l'ouverture et le dernier conserve une heure avant la
+    fermeture pour éviter de mouiller les jeunes pousses trop tard. Si le nombre de
+    cycles exige davantage de place, le minimum agronomique du stade reste prioritaire.
+    """
+    reglages = reglages or {}
+    nombre_cycles = max(1, int(nombre_cycles))
+    debut = int(lire(reglages, "graines_fenetre_debut", _OUVERTURE_GRAINES_MIN))
+    fin = int(lire(reglages, "graines_fenetre_fin", _FERMETURE_GRAINES_MIN))
+    if nombre_cycles == 1:
+        return (debut,)
+
+    minimum = max(1, int(programme.cycle_spacing_minutes_min))
+    dernier_reparti = fin - _MARGE_FIN_GRAINES_MIN
+    dernier_minimum = debut + minimum * (nombre_cycles - 1)
+    dernier = max(dernier_reparti, dernier_minimum)
+    if dernier >= fin:
+        # Configuration trop courte : le programme résolu porte déjà les seuls créneaux
+        # compatibles. Ce repli ne fabrique jamais un départ hors fenêtre.
+        existants = tuple(c for c in programme.cycle_slots_minutes if debut <= c < fin)
+        return existants[:nombre_cycles] or (debut,)
+
+    amplitude = dernier - debut
+    return tuple(
+        debut + round(index * amplitude / (nombre_cycles - 1))
+        for index in range(nombre_cycles)
+    )
+
+
+def _programme_regle(programme: SemisStageProgram, reglages: Mapping[str, Any]) -> SemisStageProgram:
+    """Le programme d'une étape, avec la dose, le nombre d'arrosages et l'horaire réglés.
+
+    · la dose remplace l'optimum ; la marge autour (± 0,3 à ± 1 mm selon l'étape, que le moteur
+      utilise par temps chaud ou humide) est gardée telle quelle ;
+    · les créneaux suivent l'OUVERTURE réglée (10:00 → 8:00 avance tous les créneaux de deux
+      heures), et ceux qui tomberaient après la FERMETURE sont retirés : ils ne partiraient pas ;
+    · le nombre réglé est le régime nominal. Le moteur peut retirer un cycle par temps frais ou
+      humide, ou en ajouter un par temps chaud et sec, dans la limite des créneaux disponibles.
+    """
+    cle_dose, cle_cycles = _REGLAGES_DES_PROGRAMMES[programme.stage]
+    dose = float(lire(reglages, cle_dose, programme.surface_cycle_mm_optimal))
+    decalage = int(lire(reglages, "graines_fenetre_debut", _OUVERTURE_GRAINES_MIN)) - _OUVERTURE_GRAINES_MIN
+    fermeture = int(lire(reglages, "graines_fenetre_fin", _FERMETURE_GRAINES_MIN))
+    creneaux = tuple(c + decalage for c in programme.cycle_slots_minutes)
+    creneaux = tuple(c for c in creneaux if c < fermeture) or creneaux[:1]
+    cycles = int(lire(reglages, cle_cycles, programme.daily_cycles_optimal))
+    cycles = min(cycles, len(creneaux))
+    return replace(
+        programme,
+        surface_cycle_mm_optimal=dose,
+        surface_cycle_mm_min=round(max(0.1, dose - (programme.surface_cycle_mm_optimal - programme.surface_cycle_mm_min)), 2),
+        surface_cycle_mm_max=round(dose + (programme.surface_cycle_mm_max - programme.surface_cycle_mm_optimal), 2),
+        daily_cycles_min=max(1, cycles - 1),
+        daily_cycles_optimal=cycles,
+        daily_cycles_max=min(cycles + 1, len(creneaux)),
+        cycle_slots_minutes=creneaux,
+    )
+
+
 def resolve_semis_stage_program(
     sous_phase: str | None,
     *,
     transition_ready: bool = False,
+    reglages: Mapping[str, Any] | None = None,
 ) -> tuple[str, SemisStageProgram]:
     normalized = str(sous_phase or "").strip().casefold()
     if normalized == "germination":
@@ -380,7 +470,10 @@ def resolve_semis_stage_program(
         stage = "enracinement" if transition_ready else "levee"
     else:
         stage = "enracinement" if transition_ready else "levee"
-    return stage, SEMIS_STAGE_PROGRAMS[stage]
+    programme = SEMIS_STAGE_PROGRAMS[stage]
+    if reglages:
+        programme = _programme_regle(programme, reglages)
+    return stage, programme
 
 
 def _validate_policy_registry() -> None:
@@ -419,6 +512,16 @@ _validate_policy_registry()
 
 def get_watering_policy(mode: str | None) -> WateringPolicy:
     return WATERING_POLICIES[_normalize_mode_name(mode)]
+
+
+def _configured_policy(policy: WateringPolicy, settings: Mapping[str, Any] | None) -> WateringPolicy:
+    if policy.mode != MODE_SCARIFICATION or not settings:
+        return policy
+    conditions = dict(policy.conditions)
+    conditions["temperature_min_c"] = float(
+        lire(settings, "mode_scarification_temperature_min", conditions["temperature_min_c"])
+    )
+    return replace(policy, conditions=conditions)
 
 
 def _evaluate_weather_guard(weather: dict[str, Any]) -> BlockingEvaluation:
@@ -505,6 +608,7 @@ def resolve_watering_policy(
     weather: dict[str, Any] | None = None,
     hydric_state: str | None = None,
     active_modes: list[str] | tuple[str, ...] | None = None,
+    reglages: Mapping[str, Any] | None = None,
 ) -> ResolvedWateringPolicy:
     """Résout la politique active à partir du contexte métier.
 
@@ -529,6 +633,8 @@ def resolve_watering_policy(
             if allowed_mode in override_modes:
                 selected_policy = WATERING_POLICIES[allowed_mode]
                 break
+
+    selected_policy = _configured_policy(selected_policy, reglages)
 
     target_range, override_behavior = _select_target_range(selected_policy, application_type)
     blocking = _evaluate_blocking(

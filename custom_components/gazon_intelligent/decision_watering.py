@@ -30,6 +30,7 @@ from .guidance import (
     palier_et0_stress,
 )
 from .memory import compute_application_state
+from .phases import is_seeding_phase
 from .soil_balance import biais_etc_mesure
 from .scores import classify_stress_level
 from .water import (
@@ -72,7 +73,7 @@ def compute_kc_gazon(phase_dominante: str, sous_phase: str | None = None, days_s
     sous_phase = str(sous_phase or "").strip()
     if phase == "Normal":
         kc = 0.8
-    elif phase == "Sursemis":
+    elif is_seeding_phase(phase):
         if sous_phase == "Germination":
             kc = 1.0
         else:
@@ -221,6 +222,7 @@ def build_water_bundle(
         else False
     )
     watering_profile = compute_watering_profile(
+        reglages=context.reglages,
         incorporation_terminee=_incorporation_terminee,
         points_etp_stress=points_etp_stress,
         phase_dominante=phase_bundle["phase_dominante"],
@@ -231,6 +233,7 @@ def build_water_bundle(
         pluie_demain=context.pluie_demain,
         humidite=context.humidite,
         temperature=context.temperature,
+        vent=context.vent,
         etp=etp,
         type_sol=context.type_sol,
         weather_profile=context.weather_profile,
@@ -457,7 +460,8 @@ def _soil_fractionation_passages(
         return 1
 
     max_mm_per_passage = 2.0
-    if phase_dominante == "Sursemis":
+    semis_en_cours = is_seeding_phase(phase_dominante)
+    if semis_en_cours:
         if sous_phase == "Germination":
             max_mm_per_passage = 1.0
         elif sous_phase == "Enracinement":
@@ -472,17 +476,17 @@ def _soil_fractionation_passages(
         max_mm_per_passage = 1.5
 
     if temperature >= 30 or etp >= 4 or humidite <= 40:
-        max_mm_per_passage = min(max_mm_per_passage, 1.0 if phase_dominante == "Sursemis" else 1.5)
+        max_mm_per_passage = min(max_mm_per_passage, 1.0 if semis_en_cours else 1.5)
 
     if objectif_mm > 2.0:
-        max_mm_per_passage = min(max_mm_per_passage, 1.5 if phase_dominante == "Sursemis" else 2.0)
+        max_mm_per_passage = min(max_mm_per_passage, 1.5 if semis_en_cours else 2.0)
 
     if stress_level == "fort" and objectif_mm >= 2.0:
         max_mm_per_passage = min(max_mm_per_passage, 1.5)
 
     max_mm_per_passage = max(0.5, max_mm_per_passage)
     passages = ceil(objectif_mm / max_mm_per_passage)
-    if phase_dominante == "Sursemis" and objectif_mm > 0.5:
+    if semis_en_cours and objectif_mm > 0.5:
         passages = max(passages, 2 if objectif_mm > 1.0 else 1)
     if soil_profile == "argileux" and objectif_mm >= 2.5:
         passages = max(passages, 2)
@@ -1259,7 +1263,9 @@ def _resolve_fertilization_window_override(state: dict[str, Any]) -> dict[str, A
 
 
 def _resolve_sursemis_override(state: dict[str, Any]) -> dict[str, Any] | None:
-    if state["phase_dominante"] != "Sursemis":
+    # Semis sur sol nu ET sursemis : les graines ont les mêmes besoins (UMass : « Irrigate in the
+    # same manner as for new seedings »). Seule la tonte diffère entre les deux modes.
+    if not is_seeding_phase(state["phase_dominante"]):
         return None
     sursemis_allowed = bool(state["water_bundle"].get("sursemis_micro_apport_allowed"))
     surface_sec = bool(state["water_bundle"].get("surface_sec"))
@@ -1316,12 +1322,12 @@ def _resolve_sursemis_override(state: dict[str, Any]) -> dict[str, Any] | None:
             type_arrosage="aucune_action",
             arrosage_conseille="personnalise",
             conseil_principal=(
-                f"Sursemis {watering_stage}: stratégie semis_frequent déjà satisfaite pour aujourd'hui."
+                f"{state['phase_dominante']} {watering_stage}: stratégie semis_frequent déjà satisfaite pour aujourd'hui."
             ),
             action_recommandee="Aucun cycle supplémentaire aujourd'hui.",
             action_a_eviter="Lancer un cycle supplémentaire inutilement.",
             raison_decision=(
-                f"Sursemis / {state['sous_phase']}: objectif de cycles quotidiens atteint. "
+                f"{state['phase_dominante']} / {state['sous_phase']}: objectif de cycles quotidiens atteint. "
                 f"{_hydric_summary_text(state['objectif_mm_brut'], state['deficit_mm_ajuste'], 0.0)}"
             ),
             niveau_confiance="info",
@@ -1395,14 +1401,14 @@ def _resolve_sursemis_override(state: dict[str, Any]) -> dict[str, Any] | None:
             type_arrosage="bloque",
             arrosage_conseille="personnalise",
             conseil_principal=(
-                f"Sursemis {watering_stage}: prochain cycle déjà programmé, attends l'échéance."
+                f"{state['phase_dominante']} {watering_stage}: prochain cycle déjà programmé, attends l'échéance."
             ),
             action_recommandee=(
                 f"Prochain cycle semis_frequent à {semis_followup_due_display or 'bientôt'}."
             ),
             action_a_eviter="Déclencher un nouveau cycle avant l'échéance.",
             raison_decision=(
-                f"Sursemis / {state['sous_phase']}: cycle suivant déjà planifié. "
+                f"{state['phase_dominante']} / {state['sous_phase']}: cycle suivant déjà planifié. "
                 f"Prochain créneau={semis_followup_due_display or 'bientôt'}. "
                 f"{_hydric_summary_text(state['objectif_mm_brut'], state['deficit_mm_ajuste'], 0.0)}"
             ),
@@ -1478,7 +1484,7 @@ def _resolve_sursemis_override(state: dict[str, Any]) -> dict[str, Any] | None:
         # déjà `semis_frequent`, la nuance de régime n'est donc pas perdue.
         type_arrosage = "auto" if sursemis_auto_ok else "manuel_frequent"
         conseil_principal = (
-            f"Sursemis {watering_stage}: maintiens la surface humide avec une stratégie {watering_strategy}."
+            f"{state['phase_dominante']} {watering_stage}: maintiens la surface humide avec une stratégie {watering_strategy}."
         )
         action_recommandee = (
             f"Appliquer {surface_cycle_mm:.1f} mm en cycle de surface, "
@@ -1488,7 +1494,7 @@ def _resolve_sursemis_override(state: dict[str, Any]) -> dict[str, Any] | None:
     else:
         objectif_mm = 0.0
         type_arrosage = "bloque" if sursemis_block_reason else "aucune_action"
-        conseil_principal = sursemis_reason or "Sursemis: cycle de surface reporté."
+        conseil_principal = sursemis_reason or f"{state['phase_dominante']}: cycle de surface reporté."
         action_recommandee = "Surveille l'humidité et réévalue au prochain créneau."
         action_a_eviter = "Multiplier les petits cycles."
 
@@ -1505,7 +1511,7 @@ def _resolve_sursemis_override(state: dict[str, Any]) -> dict[str, Any] | None:
         mm_final=objectif_mm,
     )
     raison_decision_sursemis = (
-        f"Sursemis / {state['sous_phase']}: stratégie semis_frequent en cycle de surface. "
+        f"{state['phase_dominante']} / {state['sous_phase']}: stratégie semis_frequent en cycle de surface. "
         f"Surface cycle={surface_cycle_mm:.1f} mm, "
         f"objectif={daily_cycles_target} cycle(s)/jour, "
         f"espacement={cycle_spacing_minutes} min. "
@@ -1745,6 +1751,7 @@ def build_watering_bundle(
         # ⚠️ Ajouter la phase ici ne suffit PAS : les résolveurs de priorité court-circuitent
         # le bloc qui pose `arrosage_auto_autorise = auto_ok` (l.1800+). C'est pourquoi
         # `auto_ok` est publié dans `priority_state` et relu par l'override Sursemis.
+        "Semis",
         "Sursemis",
     }
     block_reason_value = water_bundle.get("block_reason")
@@ -1759,7 +1766,7 @@ def build_watering_bundle(
         application_payload=application_payload,
         watering_target_date=watering_target_date,
     )
-    if phase_dominante != "Sursemis":
+    if not is_seeding_phase(phase_dominante):
         _reset_semis_fields_for_non_sursemis(base_bundle)
 
     application_type_known = application_type in {APPLICATION_TYPE_SOL, APPLICATION_TYPE_FOLIAIRE}
@@ -2085,7 +2092,14 @@ def build_watering_bundle(
             # petites-doses de _soil_fractionation_passages qui plafonne à 1.5 mm/passage en
             # canicule et donne 3 passages de 4 mm → le sol re-sèche entre les passages).
             watering_passages = max(1, int(water_bundle.get("watering_passages") or 1))
-            watering_pause_minutes = 25 if watering_passages > 1 else 0
+            # ⚠️ LA PAUSE VIENT DU PROFIL, COMME LES PASSAGES (0.92.0). Elle était réécrite ici en
+            # « 25 dès deux passages » : la règle du 29/07/2026 (pause réservée aux doses d'au
+            # moins 10 mm) restait donc lettre morte dès qu'un petit arrosage était coupé en deux
+            # par le budget hebdo, et le cycle exécuté attendait 25 min pour rien. Les réglages de
+            # la page (durée de la pause, dose qui la déclenche) n'auraient rien changé non plus.
+            watering_pause_minutes = (
+                max(0, int(water_bundle.get("watering_pause_minutes") or 0)) if watering_passages > 1 else 0
+            )
         else:
             watering_passages = _soil_fractionation_passages(
                 phase_dominante,
@@ -2142,8 +2156,8 @@ def build_watering_bundle(
             "Mode Normal: arrosage profond et rare, déclenché sur déficit utile, "
             f"garde-fou hebdomadaire dynamique {weekly_guardrail_min:.1f} à {weekly_guardrail_max:.1f} mm sur 7 jours glissants."
         )
-    elif phase_dominante == "Sursemis":
-        raison_parts.append("Sursemis: micro-apports légers et fréquents, jamais d'auto standard.")
+    elif is_seeding_phase(phase_dominante):
+        raison_parts.append(f"{phase_dominante}: micro-apports légers et fréquents, jamais d'auto standard.")
     if heat_stress_level != "normal":
         raison_parts.append(f"Stress hydrique={heat_stress_level}; matin renforcé, soirée plus restrictive.")
     if heat_stress_phase_value not in (None, "normal"):

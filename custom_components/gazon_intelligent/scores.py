@@ -47,6 +47,7 @@ _HYDRIC_WATERING_MALUS = (
 )
 
 _HYDRIC_PHASE_BONUS = {
+    "Semis": 10.0,
     "Sursemis": 10.0,
     "Scarification": 6.0,
 }
@@ -80,11 +81,12 @@ _STRESS_RAIN_WEIGHTS = {
 }
 
 _STRESS_PHASE_BONUS = {
+    "Semis": 18.0,
     "Sursemis": 18.0,
 }
 
 _STRESS_PHASE_FAMILIES = {
-    "high": ({"Sursemis", "Scarification", "Traitement"}, 15.0),
+    "high": ({"Semis", "Sursemis", "Scarification", "Traitement"}, 15.0),
     "medium": ({"Fertilisation", "Biostimulant", "Agent Mouillant"}, 6.0),
 }
 
@@ -121,8 +123,13 @@ _TONTE_WATERING_WEIGHTS = (
     (0.1, 6.0),
 )
 
+# ⚠️ « Sursemis » N'EST PAS dans cette table (16/09/2026) : sur gazon en place, la tonte fait partie
+# du plan dès la levée (Purdue : « Mow frequently to limit the competition from the established
+# turf »). Il prend le bonus par défaut des phases (18). Avec +45, une journée ordinaire de sursemis
+# (arrosage récent +12, stress transféré ~12) dépassait le seuil de 65 et la tonte, autorisée sur
+# le papier, était refusée par le score. Le semis sur sol nu garde +45 : il ne tond pas avant J+25.
 _TONTE_PHASE_BONUS = {
-    "Sursemis": 45.0,
+    "Semis": 45.0,
     "Traitement": 38.0,
     "Hivernage": 38.0,
 }

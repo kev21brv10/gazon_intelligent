@@ -301,7 +301,7 @@ def _application_type_for_item(item: dict[str, Any]) -> str | None:
     return str(value).strip().lower()
 
 
-_TYPES_SANS_APPLICATION = frozenset({"Sursemis", "Hivernage"})
+_TYPES_SANS_APPLICATION = frozenset({"Semis", "Sursemis", "Hivernage"})
 
 # Durée d'EFFET d'une application, en jours, jour de l'application compris : c'est pendant elle
 # que l'application « agit encore » (protection foliaire, prudence d'un type inconnu). Les VRAIES

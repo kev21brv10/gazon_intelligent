@@ -30,12 +30,12 @@ cycle. `compute_decision` et `build_decision_snapshot` sont, eux, de vraies faç
 sans appelant de production (seuls les tests passent encore par elles).
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from homeassistant.util import dt as dt_util
 
-from .const import DEFAULT_AUTO_IRRIGATION_ENABLED
+from .const import DEFAULT_AUTO_IRRIGATION_ENABLED, WATERING_STRATEGY_SEMIS_FREQUENT
 from .decision_models import DecisionContext, DecisionResult
 from .decision_mowing import build_mowing_bundle
 from .decision_phase import build_phase_bundle
@@ -232,6 +232,36 @@ def _build_legacy_runtime_bundles(
     return phase_bundle, water_bundle, risk_bundle, mowing_bundle, watering_bundle
 
 
+def _prochain_arrosage_estime(
+    context: DecisionContext,
+    water_bundle: dict[str, Any],
+    risk_bundle: dict[str, Any],
+    watering_bundle: dict[str, Any],
+) -> tuple[int | None, str | None]:
+    """Le jour du prochain arrosage, tel qu'on l'annonce (affichage seul).
+
+    ⚠️ EN SEMIS ET SURSEMIS, L'ESTIMATION DU RÉGIME NORMAL NE VEUT RIEN DIRE (0.96.1). Elle
+    compte les jours avant que la réserve du sol atteigne son seuil, pour un arrosage profond à
+    l'aube. Les graines, elles, sont arrosées CHAQUE jour par petits cycles : le 17/09, en
+    germination, la page annonçait « Prochain arrosage : dimanche 20 septembre » alors que le
+    prochain cycle partait le lendemain à 8:30. Le prochain arrosage des graines est aujourd'hui
+    tant que des cycles restent à faire dans la fenêtre, sinon demain.
+
+    ⚠️ La fenêtre des graines est celle du conseil (`risk_bundle`, celle que publient les
+    capteurs) : `water_bundle` porte la fenêtre du matin du régime Normal (fin à 10:00).
+    """
+    jours = water_bundle.get("jours_avant_arrosage_estime")
+    date_estimee = water_bundle.get("date_prochain_arrosage_estime")
+    if watering_bundle.get("watering_strategy") != WATERING_STRATEGY_SEMIS_FREQUENT:
+        return jours, date_estimee
+    fin = risk_bundle.get("watering_window_acceptable_end_minute")
+    minute = context.hour_of_day * 60.0 if context.hour_of_day is not None else None
+    fenetre_passee = fin is not None and minute is not None and minute >= float(fin)
+    fini_pour_aujourd_hui = watering_bundle.get("seeding_block_reason") == "semis_cycle_daily_target_reached"
+    jours = 1 if fini_pour_aujourd_hui or fenetre_passee else 0
+    return jours, (context.today + timedelta(days=jours)).isoformat()
+
+
 def _build_decision_extra(
     *,
     context: DecisionContext,
@@ -270,6 +300,7 @@ def _build_decision_extra(
         if key.startswith(("tondeuse_", "mower_")) and value is not None
     }
 
+    jours_estimes, date_estimee = _prochain_arrosage_estime(context, water_bundle, risk_bundle, watering_bundle)
     payload = {
         "mode": phase_bundle.get("phase_dominante"),
         "phase_active": phase_bundle.get("phase_dominante"),
@@ -288,8 +319,8 @@ def _build_decision_extra(
         "et0_source": context.et0_source,
         "kc_gazon": water_bundle.get("kc_gazon"),
         "etc_mm": water_bundle.get("etc_mm"),
-        "jours_avant_arrosage_estime": water_bundle.get("jours_avant_arrosage_estime"),
-        "date_prochain_arrosage_estime": water_bundle.get("date_prochain_arrosage_estime"),
+        "jours_avant_arrosage_estime": jours_estimes,
+        "date_prochain_arrosage_estime": date_estimee,
         "humidite_sol": advanced_context.get("humidite_sol"),
         "vent": advanced_context.get("vent"),
         "rosee": advanced_context.get("rosee"),
@@ -468,6 +499,13 @@ def _build_decision_extra(
             "hauteur_tonte_garde_fou_label", mowing_bundle.get("hauteur_tonte_garde_fou_label")
         ),
         "hauteur_tonte_motif": mowing_bundle.get("hauteur_tonte_motif"),
+        # Suivi des plantules (Semis et Sursemis), publié sur le capteur de hauteur conseillée.
+        "semis_mode": mowing_bundle.get("semis_mode"),
+        "semis_age_jours": mowing_bundle.get("semis_age_jours"),
+        "plantules_levee_date": mowing_bundle.get("plantules_levee_date"),
+        "plantules_hauteur_estimee_cm": mowing_bundle.get("plantules_hauteur_estimee_cm"),
+        "plantules_premiere_coupe_date": mowing_bundle.get("plantules_premiere_coupe_date"),
+        "plantules_coupes": mowing_bundle.get("plantules_coupes"),
         # Cliquet de la température du jour (maximum prévu ou mesuré depuis minuit) : relu par la
         # décision suivante via la mémoire, que `gazon_brain.compute_snapshot` alimente.
         "hauteur_tonte_temperature_jour": mowing_bundle.get("hauteur_tonte_temperature_jour"),
