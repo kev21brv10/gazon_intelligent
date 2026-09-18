@@ -176,6 +176,7 @@ FAO_P_MIN, FAO_P_MAX = 0.1, 0.8
 # consignes agronomiques délibérées (semis arrosé plus souvent, hivernage plus tolérant), pas
 # des approximations de la FAO. Ne pas les basculer sans raison propre.
 _PHASE_MAD_RATIO: dict[str, float] = {
+    "Semis": 0.35,
     "Sursemis": 0.35,
     "Hivernage": 0.6,
 }

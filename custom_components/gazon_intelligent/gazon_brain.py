@@ -64,6 +64,10 @@ class GazonBrain:
         self.products: dict[str, dict[str, Any]] = {}
         self.soil_balance: dict[str, Any] = {}
         self.last_result: DecisionResult | None = None
+        # Réglages de l'instance (page « Gazon »), posés par le coordinateur à chaque cycle depuis
+        # les options de l'entrée, déjà nettoyés. Ils ne sont PAS dans `dump_state` : leur seule
+        # source est l'entrée, jamais une copie persistée qui pourrait diverger.
+        self.reglages: dict[str, Any] = {}
 
     @staticmethod
     def _coerce_date(value: Any) -> date | None:
@@ -377,7 +381,7 @@ class GazonBrain:
             start = date.fromisoformat(str(raw_date))
         except ValueError:
             return False
-        duration_days = max(phase_duration_days(item_type), 0)
+        duration_days = max(phase_duration_days(item_type, self.reglages), 0)
         end = start + timedelta(days=max(duration_days - 1, 0))
         return today > end
 
@@ -973,6 +977,7 @@ class GazonBrain:
             hauteur_max_tondeuse_cm=hauteur_max_tondeuse_cm,
             mower_context=mower_context,
             runtime_context=runtime_context,
+            reglages=self.reglages,
         )
         previous_result = self.last_result
         result = build_decision_result(context)

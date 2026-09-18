@@ -52,6 +52,24 @@ CONF_HAUTEUR_COUPE_TONDEUSE_MM = "hauteur_coupe_tondeuse_mm"
 CONF_HAUTEUR_MIN_TONDEUSE_CM = "hauteur_min_tondeuse_cm"
 CONF_HAUTEUR_MAX_TONDEUSE_CM = "hauteur_max_tondeuse_cm"
 CONF_TYPE_SOL = "type_sol"
+# Page « Gazon » (0.92.0). Les réglages vivent dans les options, sous une seule clé : seules les
+# valeurs qui diffèrent du conseil y sont écrites (voir `reglages.nettoyer`).
+CONF_REGLAGES = "reglages"
+# Case des options : la page apparaît dans la barre latérale tant qu'une instance au moins la veut.
+CONF_PAGE_GAZON = "page_gazon"
+# Pompe de l'arrosage, facultative : l'intégration ne la pilote pas, la page la montre et la commande.
+CONF_ENTITE_POMPE = "entite_pompe"
+# Notifications (0.93.0) : les téléphones prévenus (entités `notify.*`), les alertes automatiques
+# (cochées par défaut : un cycle de graines manqué ne doit jamais passer inaperçu) et l'entité
+# `ai_task.*` utilisée pour les conseils (sinon celle que Home Assistant propose par défaut).
+CONF_NOTIFICATION_CIBLES = "notification_cibles"
+CONF_ALERTES_ACTIVES = "alertes_actives"
+CONF_MODE_NOTIFICATIONS = "mode_notifications"
+CONF_NOTIFIER_ARROSAGE_GRAINES = "notifier_arrosage_graines"
+CONF_NOTIFIER_SECURITE_ARROSAGE = "notifier_securite_arrosage"
+CONF_NOTIFIER_CAPTEURS_METEO = "notifier_capteurs_meteo"
+CONF_NOTIFIER_TONDEUSE = "notifier_tondeuse"
+CONF_ENTITE_IA = "entite_ia"
 
 SHARED_WEATHER_CONFIG_KEYS = frozenset(
     {
@@ -79,6 +97,11 @@ KC_GAZON_NORMAL_DEFAUT = 0.8
 
 DEFAULT_MODE = "Normal"
 DEFAULT_TYPE_SOL = "limoneux"
+DEFAULT_PAGE_GAZON = True
+DEFAULT_ALERTES_ACTIVES = True
+DEFAULT_MODE_NOTIFICATIONS = "manuel"
+MODES_NOTIFICATIONS = ("veille_intelligente", "manuel")
+DEFAULT_NOTIFICATION_CATEGORIE_ACTIVE = True
 DEFAULT_HAUTEUR_MIN_TONDEUSE_CM = 3.0
 DEFAULT_HAUTEUR_MAX_TONDEUSE_CM = 8.0
 DEFAULT_APPLICATION_POST_WATERING_MM = 1.0
@@ -129,6 +152,7 @@ TYPES_SOL = (
 )
 
 INTERVENTIONS_ACTIONS = (
+    "Semis",
     "Sursemis",
     "Traitement",
     "Fertilisation",

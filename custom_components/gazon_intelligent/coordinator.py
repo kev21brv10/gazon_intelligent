@@ -73,7 +73,13 @@ from .mower_coordination import build_mower_coordination_context
 from .entity_ids import public_entity_id, resolve_entry_instance_slug
 from .shared_state import get_shared_state, resolve_effective_config
 from .soil_balance import appliquer_cliquet_pluie
-from .const import SHARED_WEATHER_CONFIG_KEYS
+from .const import CONF_REGLAGES, SHARED_WEATHER_CONFIG_KEYS
+from .reglages import lire as lire_reglage
+from .reglages import nettoyer as nettoyer_reglages
+from . import ia
+from . import notifications
+from . import sources as sources_meteo
+from .guidance import SEMIS_VENT_MAX_KMH
 from .coordinator_constants import (
     AUTO_IRRIGATION_AUTO_SOURCES,
     AUTO_IRRIGATION_CHECK_INTERVAL,
@@ -159,7 +165,7 @@ from .water import (
 )
 from .weather_adapter import WeatherAdapter
 from .watering_plan import WateringPlan, build_watering_plan, normalize_existing_plan
-from .watering_policy import resolve_semis_stage_program
+from .watering_policy import repartir_creneaux_semis, resolve_semis_stage_program
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -199,6 +205,12 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "hauteur_tonte_max_cm",
     "hauteur_tonte_garde_fou_label",
     "hauteur_tonte_motif",
+    "semis_mode",
+    "semis_age_jours",
+    "plantules_levee_date",
+    "plantules_hauteur_estimee_cm",
+    "plantules_premiere_coupe_date",
+    "plantules_coupes",
     "derniere_tonte_date",
     "tondeuse_source_entity",
     "tondeuse_nom",
@@ -344,6 +356,24 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "fungal_risk_reduce_watering",
 )
 
+
+def _changer_de_reference(suivi: dict[str, Any], entite: Any, lecture: float) -> None:
+    """Un pluviomètre remplacé repart de SA lecture ; le total du jour et la lame récente restent.
+
+    ⚠️ UN AUTRE CAPTEUR NE SE COMPARE PAS AU MAXIMUM DE L'ANCIEN (0.95.0, la page change les
+    entrées). Plus bas, il ne compterait plus rien tant qu'il n'a pas dépassé ce maximum — des
+    semaines de pluie perdues pour le compteur, qui ne repart jamais à zéro. Plus haut, l'écart
+    serait pris pour une averse. Aucun des deux n'est de la pluie : la nouvelle lecture devient la
+    référence, et rien n'est compté sur ce cycle.
+    Un suivi d'avant la 0.95.0 n'a pas d'entité : il adopte celle du moment, sans rien changer.
+    Sans référence du tout, rien n'est inventé : « aucune référence = aucun total » (PR #49).
+    """
+    entite = str(entite or "")
+    if suivi.get("entite") not in (None, entite) and suivi.get("pic") is not None:
+        suivi["pic"] = lecture
+    suivi["entite"] = entite
+
+
 class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Coordinateur principal de l'intégration Gazon Intelligent."""
 
@@ -354,6 +384,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # ⚠️ Vrai UNIQUEMENT pendant `_async_update_data`. Lu par
     # `_rafraichir_apres_action_utilisateur` pour interdire la réentrance — voir sa docstring.
     _dans_le_cycle: bool = False
+    # (réglages bruts lus dans les options, réglages nettoyés) — voir `_reglages_instance`.
+    _reglages_cache: tuple[Any, dict[str, Any]] | None = None
+    # Entrées configurées introuvables dans Home Assistant, et depuis quand (mémoire seule).
+    _mesures_absentes_depuis: dict[str, datetime] | None = None
+    _rosees_ignorees: set[str] | None = None
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         """Initialise le coordinateur."""
@@ -730,6 +765,12 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
         for key in _COORDINATOR_SNAPSHOT_KEYS:
             payload[key] = snapshot.get(key)
+        # ⚠️ LE SUIVI DES GRAINES N'ARRIVAIT À AUCUN CAPTEUR (0.96.1). Il entre dans la décision
+        # par le contexte d'exécution, mais `DecisionResult` ne le porte pas : les neuf clés
+        # `semis_*` de la liste ci-dessus valaient donc toujours `None`, et la page ne savait ni
+        # combien de cycles étaient faits ni l'heure du suivant. Recalculé ici sur la décision
+        # qui vient d'être prise.
+        payload.update(self._suivi_des_graines(snapshot))
         payload["auto_irrigation_enabled"] = snapshot.get(
             "auto_irrigation_enabled",
             self.auto_irrigation_enabled,
@@ -902,7 +943,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         vent = vent_capteur
         if vent is None:
             vent = weather_profile.get("weather_wind_speed")
-        rosee = self._get_float_state(self._get_conf(CONF_CAPTEUR_ROSEE))
+        rosee = self._lire_rosee()
         if rosee is None:
             rosee = self._estimate_rosee(weather_profile, temperature, humidite)
         # ET0 HORAIRE (FAO-56 Eq. 53) — ⚠️ ENTRE DANS LA DÉCISION depuis la 0.19.0 : publiée juste
@@ -950,6 +991,8 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         mower_context.update(self._declarer_tonte_du_jour(mower_context))
         runtime_context = self._build_runtime_context()
         current_dt = self._current_datetime()
+        # Réglages de la page « Gazon », relus à chaque cycle depuis les options de l'entrée.
+        self.brain.reglages = self._reglages_instance()
         snapshot = self.brain.compute_snapshot(
             today=self._current_date(),
             # ⚠️ HEURE DÉCIMALE, pas l'heure entière. Avec `current_dt.hour`, la pousse du
@@ -1519,18 +1562,10 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ),
         }
 
-    def _build_runtime_context(self) -> dict[str, Any]:
-        semis_progress = self._semis_cycle_progress()
+    def _suivi_des_graines(self, snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Où en sont les cycles des graines aujourd'hui (tout à `None` hors semis)."""
+        semis_progress = self._semis_cycle_progress(snapshot)
         return {
-            # Instant courant UTC réel. Les modules de décision sont purs (sans accès à Home
-            # Assistant ni à la base de fuseaux) : sans cette valeur ils reconstruisaient « maintenant »
-            # à partir de today + hour_of_day, or hour_of_day est une heure LOCALE (Europe/Paris)
-            # qu'ils estampillaient en UTC — les durées écoulées étaient donc surestimées de
-            # l'offset local (1 h en hiver, 2 h en été) face aux horodatages d'arrosage, eux en UTC réel.
-            "now_utc": self._serialize_runtime_value(self._current_utc_datetime()),
-            "active_irrigation_session": self._get_active_irrigation_session(),
-            "last_irrigation_execution": self._runtime_state.get("last_irrigation_execution"),
-            "mowing_cooldown_after_watering_minutes": self.mowing_cooldown_after_watering_minutes,
             "semis_followup_state": semis_progress.get("state") if semis_progress else None,
             "semis_followup_due_at": self._serialize_runtime_value(
                 semis_progress.get("next_due_at") if semis_progress else None
@@ -1544,6 +1579,20 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 semis_progress.get("last_cycle_at") if semis_progress else None
             ),
             "semis_last_cycle_display": semis_progress.get("last_cycle_display") if semis_progress else None,
+        }
+
+    def _build_runtime_context(self) -> dict[str, Any]:
+        return {
+            # Instant courant UTC réel. Les modules de décision sont purs (sans accès à Home
+            # Assistant ni à la base de fuseaux) : sans cette valeur ils reconstruisaient « maintenant »
+            # à partir de today + hour_of_day, or hour_of_day est une heure LOCALE (Europe/Paris)
+            # qu'ils estampillaient en UTC — les durées écoulées étaient donc surestimées de
+            # l'offset local (1 h en hiver, 2 h en été) face aux horodatages d'arrosage, eux en UTC réel.
+            "now_utc": self._serialize_runtime_value(self._current_utc_datetime()),
+            "active_irrigation_session": self._get_active_irrigation_session(),
+            "last_irrigation_execution": self._runtime_state.get("last_irrigation_execution"),
+            "mowing_cooldown_after_watering_minutes": self.mowing_cooldown_after_watering_minutes,
+            **self._suivi_des_graines(),
         }
 
     def _semis_cycle_history_items(self) -> list[dict[str, Any]]:
@@ -1606,10 +1655,24 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         stage_name, stage_program = resolve_semis_stage_program(
             watering_stage,
             transition_ready=transition_ready,
+            reglages=self._reglages_instance(),
         )
-        cycle_slots_minutes = list(stage_program.cycle_slots_minutes[:daily_cycles_target])
+        # La valeur du snapshot peut provenir d'une ancienne version ou d'un réglage
+        # incomplet. L'exécuteur reste la dernière barrière : jamais moins que le minimum
+        # agronomique du stade (120 min en germination).
+        cycle_spacing_minutes = max(
+            cycle_spacing_minutes,
+            stage_program.cycle_spacing_minutes_min,
+        )
+        cycle_slots_minutes = list(
+            repartir_creneaux_semis(
+                stage_program,
+                daily_cycles_target,
+                reglages=self._reglages_instance(),
+            )
+        )
         if len(cycle_slots_minutes) < daily_cycles_target:
-            fallback_spacing = max(cycle_spacing_minutes, stage_program.cycle_spacing_minutes_min)
+            fallback_spacing = cycle_spacing_minutes
             while len(cycle_slots_minutes) < daily_cycles_target:
                 if not cycle_slots_minutes:
                     cycle_slots_minutes.append(stage_program.cycle_slots_minutes[0])
@@ -1622,8 +1685,13 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         history_items = self._semis_cycle_history_items()
         if history_items:
             last_item = history_items[-1]
-            recorded_at = last_item.get("recorded_at") or last_item.get("detected_at") or last_item.get("date")
-            last_cycle_at = self._parse_datetime_value(recorded_at)
+            cycle_started_at = (
+                last_item.get("started_at")
+                or last_item.get("recorded_at")
+                or last_item.get("detected_at")
+                or last_item.get("date")
+            )
+            last_cycle_at = self._parse_datetime_value(cycle_started_at)
 
         now = self._current_datetime()
         next_due_at: datetime | None = None
@@ -1637,6 +1705,21 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 microsecond=0,
             )
             if last_cycle_at is not None and cycle_spacing_minutes > 0:
+                spacing_due_at = last_cycle_at + timedelta(minutes=cycle_spacing_minutes)
+                if spacing_due_at > next_due_at:
+                    next_due_at = spacing_due_at
+        else:
+            # Le programme du jour est fini, mais le prochain arrosage n'est pas inconnu :
+            # c'est le premier créneau du lendemain, selon les réglages actuels. On conserve
+            # aussi la barrière entre deux départs si un cycle exceptionnel s'est terminé tard.
+            first_slot = cycle_slots_minutes[0]
+            next_due_at = (now + timedelta(days=1)).replace(
+                hour=first_slot // 60,
+                minute=first_slot % 60,
+                second=0,
+                microsecond=0,
+            )
+            if last_cycle_at is not None:
                 spacing_due_at = last_cycle_at + timedelta(minutes=cycle_spacing_minutes)
                 if spacing_due_at > next_due_at:
                     next_due_at = spacing_due_at
@@ -1755,6 +1838,40 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             fallback_day_start_minute=_FALLBACK_DAY_START_MINUTE,
             fallback_day_end_minute=_FALLBACK_DAY_END_MINUTE,
         )
+
+    def _lire_rosee(self) -> float | None:
+        """La rosée sur l'herbe mesurée, ou `None` pour l'estimer.
+
+        ⚠️ UN POINT DE ROSÉE EST IGNORÉ (0.96.0). Le moteur lit « au-dessus de 0 = herbe mouillée »
+        (blocage de tonte, ressuyage, risque de maladies) : une température de 11 °C y dirait
+        « mouillée » pour toujours. Le 17/09/2026, le point de rosée de la station a été branché
+        par « Configurer » ; la page le refusait déjà. Signalé une fois par entité dans le journal.
+        """
+        entity_id = self._get_conf(CONF_CAPTEUR_ROSEE)
+        if not isinstance(entity_id, str) or not entity_id:
+            return None
+        hass = getattr(self, "hass", None)
+        etat = hass.states.get(entity_id) if hass is not None else None
+        attributs = getattr(etat, "attributes", None) or {}
+        if sources_meteo.interdit(
+            sources_meteo.PAR_CLE[CONF_CAPTEUR_ROSEE],
+            unite=attributs.get("unit_of_measurement"),
+            classe=attributs.get("device_class"),
+        ):
+            signalees = self._rosees_ignorees
+            if signalees is None:
+                signalees = self._rosees_ignorees = set()
+            if entity_id not in signalees:
+                signalees.add(entity_id)
+                _LOGGER.warning(
+                    "« Rosée sur l'herbe » : %s donne une température (un point de rosée), pas une "
+                    "humidité du feuillage. Ignoré : la rosée est estimée. À retirer sur la page "
+                    "« Gazon » (Réglages → Mon installation → Tes entrées → Rosée sur l'herbe "
+                    "→ Changer → Aucune).",
+                    entity_id,
+                )
+            return None
+        return self._get_float_state(entity_id)
 
     def _estimate_rosee(
         self,
@@ -2002,6 +2119,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if suivi.get("date") != aujourd_hui:
                 suivi["date"] = aujourd_hui
                 suivi["total_jour"] = 0.0   # ⚠️ NOTRE minuit, pas celui du capteur.
+            _changer_de_reference(suivi, self._get_conf(CONF_CAPTEUR_PLUIE_CUMUL), lecture)
 
             pic = _to_float_or_none(suivi.get("pic"))
             # ⚠️ AUCUNE RÉFÉRENCE = AUCUN TOTAL, PAS UN TOTAL DE ZÉRO. Relevé par la revue
@@ -2109,6 +2227,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 _lame_orpheline = self._cumuler_lame_glissante(suivi, 0.0, maintenant)
                 self._runtime_state["pluie_mesuree"] = suivi
                 return {**vide, "pluie_mesuree_lame_mm": _lame_orpheline}
+            _changer_de_reference(suivi, self._get_conf(CONF_CAPTEUR_PLUIE_24H), cumul)
 
             precedent = _to_float_or_none(suivi.get("pic"))
             derniere_hausse = suivi.get("derniere_hausse")
@@ -3469,6 +3588,219 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         maybe_schedule = self._maybe_schedule_auto_irrigation(snapshot)
         if asyncio.iscoroutine(maybe_schedule):
             await maybe_schedule
+        # APRÈS la tentative de lancement : l'alerte lit le motif qu'elle vient de laisser.
+        await self._async_verifier_alertes(snapshot)
+
+    # ── Alertes, notifications et conseil IA (0.93.0) ───────────────────────────────────────
+
+    async def _async_verifier_alertes(self, snapshot: dict[str, Any]) -> None:
+        """Observation SEULE : rien ici n'entre dans la décision ni dans le lancement.
+
+        ⚠️ ISOLÉE PAR UN `except` LARGE, à dessein : cette méthode tourne dans le tick qui lance
+        les arrosages. Une faute dans un message ne doit jamais retenir un cycle de graines.
+        """
+        try:
+            if not notifications.alertes_voulues(self.entry):
+                return
+            memoire = self._runtime_state.get("alertes_gazon")
+            alertes, etat = notifications.evaluer_alertes(memoire, **self._contexte_des_alertes(snapshot))
+            if etat != memoire:
+                # Écrit AVANT l'envoi : un redémarrage entre les deux ne renverra rien.
+                self._runtime_state["alertes_gazon"] = etat
+                await self._persist_runtime_state()
+            if alertes:
+                await notifications.async_publier(self.hass, self.entry, alertes)
+        except Exception:  # noqa: BLE001 - une alerte ne doit jamais casser le tick d'arrosage
+            _LOGGER.exception("Alertes du gazon non évaluées")
+
+    def arrosage_en_cours(self) -> bool:
+        """De l'eau coule ou va couler : une session, une vanne commune occupée, un cycle lancé."""
+        scheduler = getattr(self, "_auto_irrigation_scheduler_task", None)
+        return bool(
+            self._watering_session_active()
+            or self._shared_valve_busy_elsewhere()
+            or (scheduler is not None and not scheduler.done())
+        )
+
+    def _contexte_des_alertes(self, snapshot: dict[str, Any]) -> dict[str, Any]:
+        maintenant = self._current_datetime()
+        derniere = self._runtime_state.get("last_auto_irrigation_reason")
+        raison = derniere.get("reason") if isinstance(derniere, dict) else None
+        execution = self._runtime_state.get("last_irrigation_execution")
+        execution = execution if isinstance(execution, dict) else {}
+        en_cours = self.arrosage_en_cours()
+        try:
+            vent_kmh: float | None = float(snapshot["vent"]) if snapshot.get("vent") is not None else None
+        except (TypeError, ValueError):
+            vent_kmh = None
+        try:
+            fin_fenetre: int | None = (
+                int(float(snapshot["watering_window_end_minute"]))
+                if snapshot.get("watering_window_end_minute") is not None
+                else None
+            )
+        except (TypeError, ValueError):
+            fin_fenetre = None
+        zone = execution.get("last_failed_zone")
+        return {
+            "maintenant": maintenant,
+            "progression": self._semis_cycle_progress(snapshot),
+            "en_cours": en_cours,
+            "raison": raison,
+            "fenetre": snapshot.get("fenetre_optimale"),
+            "vent_kmh": vent_kmh,
+            "vent_max_kmh": float(
+                lire_reglage(self._reglages_instance(), "graines_vent_max", SEMIS_VENT_MAX_KMH)
+            ),
+            "fin_fenetre_minute": fin_fenetre,
+            "motif_decision": snapshot.get("block_reason") or snapshot.get("seeding_block_reason"),
+            "echec_lancement": self._refus_de_lancement_recent(maintenant),
+            "verrou": self._auto_irrigation_safety_lock_active(),
+            "erreur_verrou": execution.get("last_error"),
+            "zone_verrou": self._nom_lisible(zone) if zone else None,
+            "delai_graines": timedelta(minutes=float(lire_reglage(
+                self._reglages_instance(),
+                "graines_alerte_retard",
+                notifications.DELAI_RETARD_GRAINES.total_seconds() / 60,
+            ))),
+            "mesures": self._mesures_des_sources(maintenant),
+            "erreur_tondeuse": snapshot.get("tondeuse_erreur"),
+            "libelle_erreur_tondeuse": snapshot.get("tondeuse_erreur_libelle"),
+            "sujets_actifs": notifications.sujets_voulus(self.entry),
+        }
+
+    def _mesures_des_sources(self, maintenant: datetime) -> list[Any]:
+        """Chaque entrée qui mesure, lue telle que Home Assistant la voit en ce moment.
+
+        Une entité absente de Home Assistant (renommée, supprimée) n'a pas d'horodatage : son
+        absence est datée de la première fois qu'on la constate, en mémoire seulement.
+        """
+        absentes: dict[str, datetime] = getattr(self, "_mesures_absentes_depuis", None) or {}
+        self._mesures_absentes_depuis = absentes
+        mesures: list[Any] = []
+        for source in sources_meteo.SOURCES:
+            if not source.mesure:
+                continue
+            entity_id = self._get_conf(source.cle)
+            if not isinstance(entity_id, str) or not entity_id:
+                absentes.pop(source.cle, None)
+                continue
+            etat = self.hass.states.get(entity_id)
+            if etat is None:
+                depuis: datetime | None = absentes.setdefault(source.cle, maintenant)
+            else:
+                absentes.pop(source.cle, None)
+                depuis = getattr(etat, "last_changed", None)
+            mesures.append(notifications.mesure_d_une_entite(
+                cle=source.cle,
+                dans_une_phrase=source.dans_une_phrase,
+                nom=self._nom_lisible(entity_id),
+                etat=etat.state if etat is not None else None,
+                dernier_changement=depuis,
+                numerique=source.numerique,
+                derniere_nouvelle_appareil=self._derniere_nouvelle_de_l_appareil(entity_id),
+                maintenant=maintenant,
+            ))
+        return mesures
+
+    def _derniere_nouvelle_de_l_appareil(self, entity_id: str) -> datetime | None:
+        """La nouvelle la plus récente parmi les capteurs de l'appareil de `entity_id`.
+
+        `last_reported` avance même quand la valeur ne change pas (relevés périodiques) ; à défaut,
+        `last_updated`. `None` sans appareil connu, ou avec moins de deux capteurs à comparer.
+        """
+        try:
+            from homeassistant.helpers import entity_registry as er
+
+            registre = er.async_get(self.hass)
+            entree = registre.async_get(entity_id)
+            if entree is None or not getattr(entree, "device_id", None):
+                return None
+            voisines = er.async_entries_for_device(registre, entree.device_id)
+        except Exception:  # noqa: BLE001 - sans registre, on ne juge que la valeur
+            return None
+        nouvelles: list[datetime] = []
+        for voisine in voisines:
+            if str(voisine.entity_id).split(".", 1)[0] not in ("sensor", "binary_sensor"):
+                continue
+            etat = self.hass.states.get(voisine.entity_id)
+            if etat is None or str(etat.state).strip().lower() in sources_meteo.ETATS_SANS_VALEUR:
+                continue
+            quand = getattr(etat, "last_reported", None) or getattr(etat, "last_updated", None)
+            if isinstance(quand, datetime):
+                nouvelles.append(quand)
+        return max(nouvelles) if len(nouvelles) >= 2 else None
+
+    def _refus_de_lancement_recent(self, maintenant: datetime) -> str | None:
+        """Le motif du dernier lancement refusé, s'il date de moins de 3 h (sinon il ne dit rien
+        du cycle en retard)."""
+        memoire = self.memory if isinstance(getattr(self, "memory", None), dict) else {}
+        action = memoire.get("derniere_action_utilisateur")
+        if not isinstance(action, dict) or str(action.get("state") or "").strip().lower() != "refuse":
+            return None
+        quand = self._parse_datetime_value(action.get("triggered_at"))
+        if quand is None or abs((maintenant - quand).total_seconds()) > 3 * 3600:
+            return None
+        return str(action.get("reason") or "").strip() or None
+
+    def _nom_lisible(self, entity_id: Any) -> str:
+        etat = self.hass.states.get(str(entity_id)) if getattr(self, "hass", None) is not None else None
+        nom = etat.attributes.get("friendly_name") if etat is not None else None
+        return str(nom or entity_id)
+
+    def _resume_du_gazon(self) -> list[str]:
+        return notifications.resume_du_gazon(
+            self._current_snapshot(),
+            maintenant=self._current_datetime(),
+            arrosage_auto=self.auto_irrigation_enabled,
+            blocage="verrou de sécurité posé" if self._auto_irrigation_safety_lock_active() else None,
+        )
+
+    async def async_envoyer_notification(
+        self,
+        titre: str | None = None,
+        message: str | None = None,
+    ) -> dict[str, Any]:
+        """Envoie un message aux téléphones choisis ; sans message, l'état du gazon."""
+        cibles = notifications.cibles_configurees(self.entry)
+        if not cibles:
+            raise HomeAssistantError(
+                "Aucun téléphone à prévenir : choisis-en un dans les options de Gazon Intelligent "
+                "(Paramètres → Appareils et services → Gazon Intelligent → Configurer)."
+            )
+        texte = str(message or "").strip()
+        if not texte:
+            titre = titre or "🌱 État du gazon"
+            texte = "\n".join(self._resume_du_gazon()) or "Aucune donnée disponible pour l'instant."
+        entete = str(titre or "").strip() or "Gazon Intelligent"
+        jointes = await notifications.async_envoyer(self.hass, cibles, entete, texte)
+        if not jointes:
+            raise HomeAssistantError(
+                "Aucun téléphone n'a pu être joint : vérifie les entités choisies dans les options."
+            )
+        return {"envoye_a": jointes, "titre": entete, "message": texte}
+
+    async def async_demander_ia(self, question: str | None = None, *, notifier: bool = False) -> dict[str, Any]:
+        """Pose une question à l'IA de la maison, avec l'état du gazon ; rend sa réponse."""
+        entite = ia.entite_effective(self.hass, self.entry)
+        instructions = ia.consigne(question, self._resume_du_gazon(), maintenant=self._current_datetime())
+        try:
+            reponse = await ia.async_demander(self.hass, instructions, entite=entite)
+        except ia.IaIndisponible as err:
+            raise HomeAssistantError(str(err)) from err
+        resultat: dict[str, Any] = {
+            "question": str(question or "").strip() or ia.QUESTION_PAR_DEFAUT,
+            "reponse": reponse,
+            "entite_ia": entite,
+        }
+        if notifier:
+            cibles = notifications.cibles_configurees(self.entry)
+            resultat["envoye_a"] = (
+                await notifications.async_envoyer(self.hass, cibles, "🤖 Conseil pour le gazon", reponse)
+                if cibles
+                else []
+            )
+        return resultat
 
     def _marquer_origine_cycle(self, origine: str) -> None:
         """Note ce qui a demandé le prochain cycle. Purement descriptif.
@@ -3940,6 +4272,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "risque_amortissement": self._serialize_runtime_value(
                 self._runtime_state.get("risque_amortissement")
             ),
+            # Alertes déjà envoyées (0.93.0). Non persistée, un redémarrage renverrait l'alerte du
+            # cycle en retard, et n'enverrait jamais son rattrapage. Jumelle dans la restauration.
+            "alertes_gazon": self._serialize_runtime_value(
+                self._runtime_state.get("alertes_gazon")
+            ),
             "persisted_watering_session": persisted_watering_session,
             "last_irrigation_execution_persisted": self._serialize_runtime_value(last_execution),
         }
@@ -3994,6 +4331,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "mower_travaux_termines": runtime.get("mower_travaux_termines"),
             "risque_amortissement": runtime.get("risque_amortissement"),
             "stress_palier_et0": runtime.get("stress_palier_et0"),
+            "alertes_gazon": runtime.get("alertes_gazon"),
         }
 
     def _get_active_irrigation_session(self) -> dict[str, Any] | None:
@@ -4559,7 +4897,14 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             if last_completed is not None:
                 elapsed = (self._current_utc_datetime() - last_completed).total_seconds()
-                if elapsed < AUTO_IRRIGATION_RELAUNCH_COOLDOWN.total_seconds():
+                delai_relance_h = float(
+                    lire_reglage(
+                        self._reglages_instance(),
+                        "arrosage_delai_relance",
+                        AUTO_IRRIGATION_RELAUNCH_COOLDOWN.total_seconds() / 3600,
+                    )
+                )
+                if elapsed < delai_relance_h * 3600:
                     return False, "relaunch_cooldown"
 
         current = self._current_datetime()
@@ -4687,7 +5032,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # PAUSES COMPRISES : un cycle fractionné en deux passages dure bien plus que la somme
             # de ses zones (`total_duration_s`, pas `total_duration_min`, qui les ignore).
             duration_s=float(plan.total_duration_s),
-            margin_minutes=WATERING_SUNRISE_MARGIN_MINUTES,
+            margin_minutes=int(
+                lire_reglage(self._reglages_instance(), "arrosage_marge_avant_lever", WATERING_SUNRISE_MARGIN_MINUTES)
+            ),
         )
 
     _SKIP_NOISE_REASONS: frozenset[str] = frozenset(
@@ -6685,6 +7032,27 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 pass
         self._auto_irrigation_task = None
 
+    def _reglages_instance(self) -> dict[str, Any]:
+        """Les réglages de la page « Gazon » pour CETTE instance, nettoyés (`reglages.nettoyer`).
+
+        Relus dans les options à chaque appel : une écriture depuis la page s'applique au cycle
+        suivant, sans recharger l'intégration (`_async_update_listener` ne recharge que si un
+        capteur source change). Le nettoyage n'est refait que si le contenu brut a changé.
+        """
+        entry: Any = getattr(self, "entry", None)
+        try:
+            entry = self.hass.config_entries.async_get_entry(entry.entry_id) or entry
+        except AttributeError:
+            pass
+        options = getattr(entry, "options", None)
+        brut = options.get(CONF_REGLAGES) if isinstance(options, Mapping) else None
+        cache = self._reglages_cache
+        if cache is not None and cache[0] == brut:
+            return cache[1]
+        propres = nettoyer_reglages(brut)
+        self._reglages_cache = (dict(brut) if isinstance(brut, Mapping) else brut, propres)
+        return propres
+
     def _get_conf(self, key: str) -> Any:
         """Récupère la valeur effective (options > partagé > data > défaut)."""
         default = DEFAULT_TYPE_SOL if key == CONF_TYPE_SOL else None
@@ -6716,6 +7084,54 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self.async_start_source_monitoring()
         await self.async_start_zone_monitoring()
         await self._rafraichir_apres_action_utilisateur()
+
+    async def async_changer_entrees(self, changements: Mapping[str, Any]) -> bool:
+        """Branche ou retire des entrées depuis la page « Gazon » (0.95.0). Rend vrai si
+        l'intégration va se recharger.
+
+        Même résultat que le formulaire « Configurer », dans cet ordre :
+        1. les entrées météo PARTAGÉES d'abord, pour que l'autre pelouse en hérite et que le
+           rechargement qui suit les voie déjà ;
+        2. les options de l'entrée. Une entrée retirée l'est aussi de la configuration d'origine :
+           sinon elle y reprendrait sa place (priorité options > partagé > configuration d'origine) ;
+        3. `_async_update_listener` recharge l'entrée si une entrée surveillée a changé.
+
+        ⚠️ `async_update_config` n'est PAS utilisée ici : elle relance la surveillance de ce
+        coordinateur pendant que l'écriture des options déclenche son rechargement. Croisés, les
+        deux laisseraient des minuteries sur un coordinateur arrêté — donc des cycles doublés.
+        """
+        changements = dict(changements)
+        if not changements:
+            return False
+        hass = self.hass
+        entry = hass.config_entries.async_get_entry(self.entry.entry_id) or self.entry
+        partagees = {cle: valeur for cle, valeur in changements.items() if cle in SHARED_WEATHER_CONFIG_KEYS}
+        shared_state = getattr(self, "shared_state", None)
+        if shared_state is not None and partagees:
+            await shared_state.async_update_shared_config(partagees)
+        mise_a_jour: dict[str, Any] = {"options": {**entry.options, **changements}}
+        a_retirer = [
+            cle for cle, valeur in changements.items()
+            if valeur is None and entry.data.get(cle) not in (None, "", [], {})
+        ]
+        if a_retirer:
+            mise_a_jour["data"] = {**entry.data, **dict.fromkeys(a_retirer)}
+        hass.config_entries.async_update_entry(entry, **mise_a_jour)
+        recharge = self.source_config_changed()
+        if partagees:
+            # L'autre pelouse lit peut-être la même valeur partagée.
+            for autre in list((hass.data.get(DOMAIN) or {}).values()):
+                if autre is self or not isinstance(autre, GazonIntelligentCoordinator):
+                    continue
+                if autre.source_config_changed():
+                    hass.async_create_task(hass.config_entries.async_reload(autre.entry.entry_id))
+                else:
+                    hass.async_create_task(autre.async_request_refresh())
+        if not recharge:
+            # Entrée lue à chaque cycle sans être surveillée (compteur, pluie en ce moment) :
+            # un cycle tout de suite suffit.
+            await self._rafraichir_apres_action_utilisateur()
+        return recharge
 
     async def _async_refresh_all_coordinators(self, *, restart_monitoring: bool = False) -> None:
         coordinators = self.hass.data.get(DOMAIN)

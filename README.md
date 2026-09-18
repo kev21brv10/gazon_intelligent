@@ -56,7 +56,7 @@ Gazon Intelligent ne se contente pas d'allumer des zones d'arrosage ou de remont
 - **Coordination robot tondeuse** (optionnelle, par pelouse) : pas de tonte sous la pluie ni pendant l'arrosage, hauteur de coupe synchronisable, et séparation nette entre « gazon autorisé » et « machine disponible ».
 
 **🌱 Phases du gazon**
-- Suit la phase dominante (Normal, Sursemis, Traitement, Scarification, Hivernage…) et adapte l'arrosage **et** la tonte en conséquence.
+- Suit la phase dominante (Normal, Semis, Sursemis, Traitement, Scarification, Hivernage…) et adapte l'arrosage **et** la tonte en conséquence.
 
 **🧪 Interventions produit**
 - Catalogue de produits (engrais, biostimulants, agent mouillant…), **scoring** selon phase / saison / météo, et recommandation de la prochaine application.
@@ -101,9 +101,13 @@ Tout se fait depuis l'interface (config flow), **par pelouse**.
 
 **1. Pelouse** — `instance_slug` (pour séparer plusieurs gazons), zones `zone_1`…`zone_5` avec leurs débits `debit_zone_1`…`debit_zone_5`, et `type_sol`.
 
-**2. Météo et capteurs** *(tous optionnels — l'intégration estime ce qui manque)* — `entite_meteo`, `capteur_pluie_24h`, `capteur_pluie_demain`, `capteur_temperature`, `capteur_etp`, `capteur_humidite`, `capteur_humidite_sol`, `capteur_vent`, `capteur_rosee`, `capteur_rayonnement`, `capteur_pression`, `capteur_hauteur_gazon`, `capteur_retour_arrosage`.
+**2. Météo et capteurs** *(tous optionnels sauf l'entité météo — l'intégration estime ce qui manque ; ils se changent aussi sur la page « Gazon », onglet Météo)* — `entite_meteo`, `capteur_pluie_24h`, `capteur_pluie_demain`, `capteur_temperature`, `capteur_etp`, `capteur_humidite`, `capteur_humidite_sol`, `capteur_vent`, `capteur_rosee`, `capteur_rayonnement`, `capteur_pression`, `capteur_hauteur_gazon`, `capteur_retour_arrosage`.
 
 > 💡 **Pour une ET0 précise, renseignez `capteur_rayonnement` et `capteur_pression`.** Ils alimentent le calcul FAO-56 **horaire** (Eq. 53) dont le bilan du sol se sert pour savoir combien d'eau s'est *réellement* évaporée. Sans eux, l'intégration retombe sur un rayonnement déduit de la couverture nuageuse et une pression standard — utilisable, mais nettement moins fidèle. Le `capteur_rayonnement` attend un **rayonnement global en W/m²** (par ex. un capteur REST Open-Meteo `shortwave_radiation`), la `capteur_pression` une **pression en hPa**. Le capteur de diagnostic `ETo horaire` indique dans ses attributs (`radiation_source`, `pressure_source`) si le calcul tourne sur des valeurs mesurées ou sur les replis. Renseigner aussi `capteur_vent` et `capteur_humidite` est recommandé : ils sont prioritaires sur la prévision météo, souvent moins proche du jardin.
+
+> 🔌 **Ce que la page accepte pour une entrée.** Elle refuse ce que le moteur lirait de travers : une autre unité que celles qu'il lit ou convertit (°C ; % ; km/h, m/s, mph, kn ; W/m² ; hPa, mbar, kPa, Pa, bar, inHg, mmHg ; mm ; mm/h ; cm), une autre classe d'appareil (une batterie en % n'est pas une humidité), un cumul pour « pluie en ce moment », une mesure de l'instant pour la pluie du jour, un texte là où il faut un nombre, un nom qui annonce autre chose (point de rosée, ressenti ou humidex pour la température, rafales pour le vent), et les entités de Gazon Intelligent. La rosée sur l'herbe, la pluie de demain, l'évaporation, la hauteur du gazon et le retour d'arrosage exigent un nom qui annonce le rôle : un pluviomètre, lui aussi en mm, n'y a pas sa place. Pas de changement pendant un arrosage : il recharge souvent l'intégration.
+
+> ⚠️ **`capteur_rosee` n'est pas un point de rosée.** Il attend une **humidité du feuillage** : au-dessus de 0, l'herbe est mouillée et la tonte attend. Un point de rosée (une température, 11 °C par exemple) ferait croire l'herbe toujours mouillée : le formulaire le refuse, et un point de rosée déjà branché est ignoré (avec un avertissement dans le journal). Sans ce capteur, l'intégration estime la rosée (air à 2 °C ou moins de son point de rosée, humidité d'au moins 88 %, brouillard ou pluie).
 
 **3. Robot tondeuse** *(optionnel, par pelouse)* — `entite_tondeuse`, `capteur_tondeuse_erreur`, `capteur_tondeuse_batterie`, `capteur_tondeuse_pluie`, `capteur_tondeuse_en_charge`, `capteur_tondeuse_prochain_depart`, `capteur_tondeuse_hauteur_coupe`, `hauteur_min_tondeuse_cm`, `hauteur_max_tondeuse_cm`.
 
@@ -152,7 +156,28 @@ La météo bloque à **toute heure** : pluie en cours/imminente, rosée présent
 
 ### Phases sensibles
 
-`Sursemis`, `Traitement`, `Hivernage`, `Scarification` dominent la lecture publique — ex. *« Phase Sursemis : tonte interdite pendant l'installation du gazon. »*
+`Semis`, `Sursemis`, `Traitement`, `Hivernage`, `Scarification` dominent la lecture publique — ex. *« Semis / Germination : tonte interdite pendant l'installation du gazon. »*
+
+**Semis ou Sursemis ?** Les deux arrosent les graines de la même façon (micro-cycles de 10 h à 17 h par défaut, fenêtre réglable). Le nombre de cycles réglé est celui d'une météo normale : un cycle de moins, et une dose plus faible, par temps humide, pluvieux ou frais ; un de plus, et une dose plus forte, par temps chaud, sec ou venteux, dans la limite des créneaux. La tonte diffère :
+
+| | **Semis** (terrain nu) | **Sursemis** (gazon déjà installé) |
+| --- | --- | --- |
+| Tonte | interdite 25 jours | suspendue pendant la levée (J0-J7), puis permise |
+| Hauteur | 7,5 → 7,0 → 6,5 → 5,0 cm | 4,0 cm, puis 4,5 cm après deux coupes des plantules |
+| Écart entre deux tontes | 6 puis 3 jours (après J25) | 5 jours |
+| Pousse estimée | nulle jusqu'à J24 | le gazon en place pousse au rythme du mois |
+
+Le capteur de hauteur conseillée suit aussi les **plantules** : hauteur estimée, date de levée, date de première coupe et nombre de coupes.
+
+## 🌱 La page « Gazon »
+
+Une page dans la barre latérale de Home Assistant, activée par la case **« Afficher la page Gazon »** des options de l'intégration (cochée par défaut) :
+
+- **Accueil** — l'état du moment, le plan d'arrosage calculé comme le moteur l'exécute, la tonte, le gazon, la **météo**, les produits, et les actions (arroser, arrêter, déclarer, changer de mode, demander conseil à l'IA…).
+- **Météo** — la mesure du jardin, les prévisions par jour et par heure, la pluie, l'évaporation, le vent et les maladies, chaque entrée donnée à l'intégration avec sa valeur et son état, et toutes les mesures de leurs appareils. **Chaque entrée se change ici** (« Changer » ou « Brancher ») : la liste ne propose que les entités que l'intégration sait lire.
+- **Réglages** — 55 réglages expliqués simplement (horaires et seuils de la tonte, fenêtre et découpage de l'arrosage, programme des graines, sursemis, semis, durée des modes et température d'arrosage après une scarification), le type de terre et le catalogue de produits. Les 13 réglages qui peuvent augmenter l'eau, le stress du gazon ou le risque matériel portent un avertissement précis. L'onglet **Modes** aligne les neuf modes : pour chacun, ce qu'il change, sa durée quand elle se règle là, les fiches des produits de ce type, et le bouton pour y passer, déclarer un produit ou revenir au mode Normal. L'écriture est réservée aux administrateurs.
+
+Les réglages sont propres à chaque instance et s'appliquent au cycle suivant, sans redémarrage. Seuls ceux qui diffèrent du conseil sont enregistrés : une mise à jour qui corrige un conseil profite donc aux réglages non touchés. Les zones portent le nom de leurs entités de vannes. La pompe, les téléphones à prévenir, les alertes et l'IA se choisissent dans *Mon installation* (ou dans les options de l'intégration).
 
 ## 🎛️ Réglages et actions
 
@@ -171,12 +196,17 @@ La météo bloque à **toute heure** : pluie en cours/imminente, rosée présent
 |---|---|
 | **Métier** | `set_mode` · `reset_mode` · `set_date_action` |
 | **Arrosage** | `start_manual_irrigation` · `start_auto_irrigation` · `start_application_irrigation` · **`stop_irrigation`** · `declare_watering` · `recalibrate_reserve` |
-| **Tonte** | `declare_mowing` |
+| **Tonte** | `declare_mowing` · `reset_mower_passes` |
 | **Produits** | `declare_intervention` · `remove_last_application` · `register_product` · `remove_product` |
+| **Alertes et IA** | `send_notification` · `ask_ai` |
 
 `stop_irrigation` arrête immédiatement le cycle en cours : la vanne ouverte se ferme, l'eau déjà appliquée est enregistrée (y compris la zone interrompue, au prorata) et le cycle est libéré. Également disponible en bouton (`button.gazon_intelligent_arreter_arrosage`), pour l'avoir à portée sur un tableau de bord.
 
 `recalibrate_reserve` recale la réserve hydrique du sol à une valeur connue (calibration manuelle, persistante au redémarrage).
+
+`send_notification` envoie un message aux téléphones choisis dans les options ; sans message, l'état du gazon. `ask_ai` pose une question à l'IA de Home Assistant (action « Générer des données ») avec l'état du gazon : elle répond en texte et ne commande rien. Les deux rendent leur résultat (`response_variable`).
+
+Sans rien appeler, l'intégration **alerte** quand un arrosage des graines ne part pas après son heure (20 minutes par défaut, réglable ; vent, arrosage automatique coupé, fenêtre fermée…), quand le verrou de sécurité de l'arrosage se pose (une vanne qui ne se ferme pas), quand une mesure météo manque depuis une heure, et quand la tondeuse signale une nouvelle erreur (une pause pluie n'en est pas une) : une trace dans les notifications de Home Assistant, et un message aux téléphones choisis. **Veille intelligente** surveille les quatre familles et ne pousse sur le téléphone que les problèmes qui demandent une action ; **Choix manuel** permet de cocher chaque famille. La partie IA s'appelle **Conseiller Gazon** : elle explique et conseille, sans commander les machines. Ces réglages sont sur la page « Gazon » (Réglages → Mon installation).
 
 ## 🧩 Carte Lovelace
 

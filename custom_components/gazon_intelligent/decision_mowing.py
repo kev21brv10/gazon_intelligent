@@ -23,7 +23,17 @@ from .water import (
     HISTORY_DATE_ONLY_FALLBACK_HOUR,
     resolve_history_moment,
 )
-from .phases import SUBPHASE_RULES
+from .phases import (
+    SEEDING_PHASES,
+    hauteur_coupe_sursemis_cm,
+    is_seeding_phase,
+    jours_avant_premiere_coupe,
+    levee_sursemis_jours,
+    phase_duration_days,
+    pousse_plantules_cm_jour,
+    regles_des_sous_phases,
+)
+from .reglages import lire
 from .scores import classify_stress_level
 
 _MOWER_STEP_CM = 0.5
@@ -115,6 +125,12 @@ _MOWING_BUNDLE_CORE_KEYS = (
     "hauteur_tonte_garde_fou_label",
     "hauteur_tonte_motif",
     "hauteur_tonte_temperature_jour",
+    "semis_mode",
+    "semis_age_jours",
+    "plantules_levee_date",
+    "plantules_hauteur_estimee_cm",
+    "plantules_premiere_coupe_date",
+    "plantules_coupes",
     "mowing_blocked_by_watering",
     "mowing_blocked",
     "mowing_block_reason_code",
@@ -183,23 +199,49 @@ _NOMS_DES_MOIS = (
 )
 
 
-def _seasonal_base_height(month: int) -> float:
-    """Hauteur de coupe de base du mois (voir `_HAUTEUR_BASE_PAR_MOIS`)."""
+def _seasonal_base_height(month: int, reglages: dict[str, Any] | None = None) -> float:
+    """Hauteur de coupe de base du mois (voir `_HAUTEUR_BASE_PAR_MOIS`), ou celle réglée."""
+    table = lire(reglages, "tonte_hauteur_par_mois", None)
+    if table is not None and 1 <= month <= 12:
+        return float(table[month - 1])
     return _HAUTEUR_BASE_PAR_MOIS.get(month, 4.0)
 
 
-def _seasonal_mowing_frequency(month: int) -> tuple[float, str]:
-    return _MOWING_FREQUENCY_BY_MONTH.get(month, (3.0, "2 à 4 / semaine"))
+def _libelle_frequence(par_semaine: float) -> str:
+    """« 3 / semaine », ou « 2 à 3 / semaine » pour une demi-valeur : la forme des libellés du moteur."""
+    if float(par_semaine).is_integer():
+        return f"{int(par_semaine)} / semaine"
+    return f"{math.floor(par_semaine)} à {math.ceil(par_semaine)} / semaine"
+
+
+def _seasonal_mowing_frequency(month: int, reglages: dict[str, Any] | None = None) -> tuple[float, str]:
+    defaut = _MOWING_FREQUENCY_BY_MONTH.get(month, (3.0, "2 à 4 / semaine"))
+    table = lire(reglages, "tonte_frequence_par_mois", None)
+    if table is None or not 1 <= month <= 12:
+        return defaut
+    valeur = float(table[month - 1])
+    # Le libellé SUIT le chiffre réglé : garder « 4 à 6 / semaine » sur un rythme passé à 2
+    # ferait dire à l'intégration l'inverse de la page. Le mois non touché garde son texte.
+    if abs(valeur - defaut[0]) < 1e-9:
+        return defaut
+    return valeur, _libelle_frequence(valeur)
 
 
 def _phase_adjusted_mowing_frequency(
     phase_bundle: dict[str, Any],
     month: int,
+    reglages: dict[str, Any] | None = None,
 ) -> tuple[float, str]:
     phase_dominante = str(phase_bundle.get("phase_dominante") or "")
     sous_phase = str(phase_bundle.get("sous_phase") or "")
-    if phase_dominante != "Sursemis":
-        return _seasonal_mowing_frequency(month)
+    if phase_dominante == "Sursemis":
+        # Gazon en place : rien pendant la levée, puis des passages espacés (« de temps en temps »,
+        # Kévin) que la règle du tiers déclenche au rythme de la pousse.
+        if _sursemis_en_levee(phase_bundle, reglages):
+            return 0.0, "0 / semaine"
+        return 1.5, "1 à 2 / semaine"
+    if phase_dominante != "Semis":
+        return _seasonal_mowing_frequency(month, reglages)
     if sous_phase in {"Germination", "Enracinement"}:
         return 0.0, "0 / semaine"
     if sous_phase == "Reprise":
@@ -209,7 +251,37 @@ def _phase_adjusted_mowing_frequency(
     return 1.0, "1 / semaine"
 
 
+# Semis sur sol NU : la tonte attend l'installation (comportement historique, conservé).
 _SURSEMIS_MOWING_BLOCKED_SUBPHASES = {"Germination", "Enracinement"}
+
+# SURSEMIS — graines dans un gazon EN PLACE (arbitrage de Kévin, 16/09/2026). Sources relues :
+#   · Purdue AY-13-W (PDF lu) : « Mow frequently to limit the competition from the established
+#     turf. Mow at 1.5 inches until new seedlings have been cut at least two times. After that,
+#     raise the mowing height in 1/2 inch intervals » ;
+#   · UC IPM : levée du ray-grass anglais en 5 à 10 j, de la fétuque rouge en 7 à 14 j ; première
+#     coupe de plantules à une fois et demie la hauteur de tonte ;
+#   · mélange semé le 16/09 (Team-Prestige) : 50 % ray-grass anglais, 50 % fétuque rouge.
+# ⚠️ Deux valeurs sont des CHOIX, pas des chiffres sourcés : la suspension pendant la levée
+# (graines non ancrées, surface détrempée) et la pousse des plantules (0,4 cm/j ; seuls des délais
+# de première tonte sont publiés : 18 à 21 j chez Team Green, 3 à 6 semaines chez DLF).
+# Le calendrier des plantules (levée, pousse, hauteur de coupe) vit dans `phases.py`.
+SURSEMIS_HAUTEUR_FINALE_CM = 4.5         # fin de remontée (Kévin)
+SURSEMIS_COUPES_AVANT_REMONTEE = 2       # Purdue : « cut at least two times »
+SURSEMIS_ESPACEMENT_TONTE_JOURS = 5      # 0,35 cm/j en septembre : ~6 j pour passer de 4 à 6 cm
+# Régime ordinaire (hors semis, sursemis et phases sensibles) : réglables depuis la page.
+_ESPACEMENT_TONTE_JOURS = 2
+_TONTES_PAR_JOUR_MAX = 2
+
+
+def _sursemis_en_levee(phase_bundle: dict[str, Any], reglages: dict[str, Any] | None = None) -> bool:
+    """Vrai tant qu'un sursemis est dans sa levée : la tonte y est suspendue."""
+    if str(phase_bundle.get("phase_dominante") or "") != "Sursemis":
+        return False
+    try:
+        age = int(phase_bundle.get("phase_age_days") or 0)
+    except (TypeError, ValueError):
+        age = 0
+    return age <= levee_sursemis_jours(reglages)
 
 
 def _mowing_window_label(state: str) -> str:
@@ -444,7 +516,9 @@ def _watering_related_mowing_block(
         if humidite_sol_value is not None and humidite_sol_value >= 70:
             return True, "soil_wet", "Sol humide: attendre le ressuyage."
 
-    if float(context.humidite or 0.0) >= _MOWING_WINDOW_BLOCK_HUMIDITY:
+    if float(context.humidite or 0.0) >= float(
+        lire(context.reglages, "tonte_humidite_bloquee", _MOWING_WINDOW_BLOCK_HUMIDITY)
+    ):
         return True, "soil_wet", "Sol humide: attendre le ressuyage."
 
     return False, None, None
@@ -511,8 +585,10 @@ def _encore_le_jour_apres_le_coucher(
     if hour is None or sunset is None:
         return False
     # Minutes entières, comme la fenêtre du soir : les deux frontières doivent tomber ensemble.
+    # Même réglage que la fin de la fenêtre du soir, pour la même raison.
     minute = round(float(hour) * 60.0)
-    return 12 * 60 <= minute < sunset + _MOWING_EVENING_END_AFTER_SUNSET_MIN
+    apres_coucher = int(lire(context.reglages, "tonte_soir_apres_coucher", _MOWING_EVENING_END_AFTER_SUNSET_MIN))
+    return 12 * 60 <= minute < sunset + apres_coucher
 
 
 def _resolve_mowing_window(
@@ -545,6 +621,19 @@ def _resolve_mowing_window(
         vent = None
     rosee = context.rosee
     month = context.today.month
+    # Réglages de l'instance (page « Gazon »), en minutes depuis minuit pour la fenêtre idéale.
+    reglages = context.reglages
+    ideal_debut = int(lire(reglages, "tonte_fenetre_ideale_debut", _MOWING_WINDOW_IDEAL_START * 60))
+    ideal_fin = int(lire(reglages, "tonte_fenetre_ideale_fin", _MOWING_WINDOW_IDEAL_END * 60))
+    soir_avant_coucher = int(lire(reglages, "tonte_soir_avant_coucher", _MOWING_EVENING_START_BEFORE_SUNSET_MIN))
+    soir_apres_coucher = int(lire(reglages, "tonte_soir_apres_coucher", _MOWING_EVENING_END_AFTER_SUNSET_MIN))
+    vent_a_eviter = float(lire(reglages, "tonte_vent_a_eviter", _MOWING_WINDOW_DISCOURAGED_WIND))
+    vent_bloque = float(lire(reglages, "tonte_vent_bloque", _MOWING_WINDOW_BLOCK_WIND))
+    chaleur_a_eviter = float(lire(reglages, "tonte_temperature_a_eviter", _MOWING_WINDOW_DISCOURAGED_TEMP_MIN))
+    chaleur_bloquee = float(lire(reglages, "tonte_temperature_bloquee", _MOWING_WINDOW_BLOCK_TEMP_MIN))
+    # L'heure décimale × 60, SANS arrondi, pour la fenêtre idéale : c'est exactement l'ancien test
+    # `hour < 10` (les bornes réglables tombent au quart d'heure, exact en virgule flottante).
+    minute_exacte = float(hour) * 60.0
 
     # Bornes du soir, recalculées chaque jour depuis le coucher réel, en MINUTES ENTIÈRES. L'heure
     # décimale remultipliée par 60 n'est pas exacte : `(16 + 35 / 60) * 60` vaut 994,999…, et la
@@ -556,8 +645,8 @@ def _resolve_mowing_window(
     if sunset is not None:
         # Quand le coucher est tôt (décembre, ~16:55), l'ouverture calculée (11:55) tombe dans
         # l'idéale : sans effet, l'idéale est testée AVANT, et le soir prend le relais à 14:00.
-        soir_debut = sunset - _MOWING_EVENING_START_BEFORE_SUNSET_MIN
-        soir_fin = sunset + _MOWING_EVENING_END_AFTER_SUNSET_MIN
+        soir_debut = sunset - soir_avant_coucher
+        soir_fin = sunset + soir_apres_coucher
 
     if is_active_rain_weather(weather_profile):
         return "blocked", "Pluie en cours ou imminente."
@@ -567,9 +656,9 @@ def _resolve_mowing_window(
     # les autres garde-fous (pluie, rosée, horaire) continuent de s'appliquer.
     if temperature is not None and float(temperature) < 8:
         return "blocked", "Température trop basse pour tondre."
-    if temperature is not None and float(temperature) > _MOWING_WINDOW_BLOCK_TEMP_MIN:
+    if temperature is not None and float(temperature) > chaleur_bloquee:
         return "blocked", "Température trop élevée pour tondre."
-    if vent is not None and vent > _MOWING_WINDOW_BLOCK_WIND:
+    if vent is not None and vent > vent_bloque:
         return "blocked", "Vent trop fort pour tondre."
     # ⚠️ L'HEURE PASSE AVANT LES VERDICTS « À ÉVITER ».
     # Ces deux bornes-là sont BLOQUANTES ; le vent soutenu et la chaleur, eux, ne font que
@@ -584,22 +673,22 @@ def _resolve_mowing_window(
     # contredisait le motif de blocage, qui disait « Nuit » au même instant.
     if _est_la_nuit(context, weather_profile):
         return "blocked", "Nuit: attendre le lever du soleil."
-    if hour < _MOWING_WINDOW_IDEAL_START:
+    if minute_exacte < ideal_debut:
         return "blocked", "Matin trop tôt: attendre le ressuyage."
-    if vent is not None and vent >= _MOWING_WINDOW_DISCOURAGED_WIND:
+    if vent is not None and vent >= vent_a_eviter:
         return "discouraged", "Vent soutenu: à éviter."
     if (
         temperature is not None
-        and _MOWING_WINDOW_DISCOURAGED_TEMP_MIN <= float(temperature) <= _MOWING_WINDOW_BLOCK_TEMP_MIN
+        and chaleur_a_eviter <= float(temperature) <= chaleur_bloquee
     ):
         return "discouraged", "Température élevée: à éviter."
-    if _MOWING_WINDOW_IDEAL_START <= hour < _MOWING_WINDOW_IDEAL_END:
+    if ideal_debut <= minute_exacte < ideal_fin:
         return "ideal", "Fenêtre idéale du matin."
     if soir_debut <= minute_courante < soir_fin:
         if month in {7, 8} and temperature is not None and float(temperature) >= 28:
             return "discouraged", "Fin de journée chaude: à éviter."
         return "acceptable", "Fenêtre acceptable de fin de journée."
-    if _MOWING_WINDOW_IDEAL_END * 60 <= minute_courante < soir_debut:
+    if ideal_fin <= minute_courante < soir_debut:
         if month in {7, 8} and temperature is not None and float(temperature) >= 28:
             return "discouraged", "Plein après-midi en été: à éviter."
         return "discouraged", "Créneau intermédiaire: à éviter."
@@ -947,12 +1036,13 @@ def _resolve_mowing_block(
         # ⚠️ VIRGULE décimale, pas un point : c'est la graphie française, ET un point décimal
         # crée une fausse fin de phrase pour tout consommateur qui coupe le motif à la première
         # phrase (la carte le faisait — « pour tondre (32 »). Corrigé des deux côtés.
-        if temperature > _MOWING_WINDOW_BLOCK_TEMP_MIN:
+        chaleur_bloquee = float(lire(context.reglages, "tonte_temperature_bloquee", _MOWING_WINDOW_BLOCK_TEMP_MIN))
+        if temperature > chaleur_bloquee:
             return (
                 True,
                 "temp_extreme",
                 f"Trop chaud pour tondre ({temperature:.1f}".replace(".", ",")
-                + f" °C, seuil {_MOWING_WINDOW_BLOCK_TEMP_MIN:.0f} °C) :"
+                + f" °C, seuil {chaleur_bloquee:.0f} °C) :"
                 " attendre une fenêtre plus fraîche.",
                 None,
                 None,
@@ -1090,7 +1180,7 @@ def _estimate_mowing_ressuyage_hours(
     if temperature >= 28 and humidite <= 55:
         hours -= 0.5
 
-    if phase_bundle["phase_dominante"] == "Sursemis":
+    if is_seeding_phase(phase_bundle["phase_dominante"]):
         hours += 1.0
 
     return max(0.5, min(hours, 10.0))
@@ -1151,9 +1241,12 @@ def _mowing_projection_forecast_offset_days(
         offsets.append(1)
         reasons.append("sechage_faible")
 
-    if phase_dominante == "Sursemis" and sous_phase in {"Germination", "Enracinement"}:
+    if phase_dominante == "Semis" and sous_phase in {"Germination", "Enracinement"}:
         offsets.append(1)
         reasons.append(f"sous_phase={sous_phase.lower()}")
+    elif _sursemis_en_levee(phase_bundle, context.reglages):
+        offsets.append(1)
+        reasons.append("sursemis=levee")
     elif phase_dominante in {"Traitement", "Hivernage"}:
         offsets.append(1)
         reasons.append(f"phase={phase_dominante.lower()}")
@@ -1228,7 +1321,7 @@ def _mowing_overdue_state(
     cible calculé depuis la fréquence saisonnière/phase.
     Retourne (False, 0.0, 0) si la fréquence cible est nulle ou pas de tonte connue.
     """
-    frequency, _ = _phase_adjusted_mowing_frequency(phase_bundle, context.today.month)
+    frequency, _ = _phase_adjusted_mowing_frequency(phase_bundle, context.today.month, context.reglages)
     if frequency <= 0:
         return False, 0.0, 0
     last_mowing = _last_mowing_date(context)
@@ -1381,7 +1474,10 @@ def _growth_rate_cm_per_day(phase_bundle: dict[str, Any], month: int) -> float:
     """Vitesse de croissance journalière estimée selon la phase et le mois."""
     phase_dominante = str(phase_bundle.get("phase_dominante") or "")
     sous_phase = str(phase_bundle.get("sous_phase") or "")
-    if phase_dominante == "Sursemis":
+    # Sur sol NU, il n'y a que des plantules : rien à couper avant leur installation. En SURSEMIS,
+    # le gazon en place pousse au rythme du mois — le mettre à zéro (comportement d'avant le
+    # 16/09/2026) le laissait « à 3 cm » dans le modèle pendant qu'il en gagnait 7.
+    if phase_dominante == "Semis":
         if sous_phase in {"Germination", "Enracinement"}:
             return 0.0
         if sous_phase == "Reprise":
@@ -1624,16 +1720,19 @@ def _pousse_acquise_avant_aujourdhui(
 
 def _mowing_spacing_min_days(
     phase_bundle: dict[str, Any],
+    reglages: dict[str, Any] | None = None,
 ) -> int:
     """Espacement minimal entre deux tontes selon la phase métier."""
     phase_dominante = str(phase_bundle.get("phase_dominante") or "")
     sous_phase = str(phase_bundle.get("sous_phase") or "")
-    if phase_dominante == "Sursemis":
+    if phase_dominante == "Semis":
         if sous_phase == "Reprise":
             return 6
         if sous_phase == "Stabilisation":
             return 3
-    return 2
+    if phase_dominante == "Sursemis":
+        return int(lire(reglages, "sursemis_ecart_tontes", SURSEMIS_ESPACEMENT_TONTE_JOURS))
+    return int(lire(reglages, "tonte_ecart_min_jours", _ESPACEMENT_TONTE_JOURS))
 
 
 def _project_next_mowing_date(
@@ -1654,9 +1753,26 @@ def _project_next_mowing_date(
         phase_dominante = str(phase_bundle.get("phase_dominante") or "")
         sous_phase = str(phase_bundle.get("sous_phase") or "")
         phase_start = phase_bundle.get("date_action")
-        if phase_dominante == "Sursemis" and sous_phase in {"Germination", "Enracinement"} and phase_start:
+        if phase_dominante == "Sursemis" and phase_start:
             try:
-                reprise_start_date = date.fromisoformat(str(phase_start)) + timedelta(days=25)
+                fin_levee = date.fromisoformat(str(phase_start)) + timedelta(
+                    days=levee_sursemis_jours(context.reglages) + 1
+                )
+                return (
+                    fin_levee.isoformat(),
+                    fin_levee.strftime("%d/%m/%Y"),
+                    "sursemis=levee",
+                )
+            except ValueError:
+                anchor = None
+        elif phase_dominante == "Semis" and sous_phase in {"Germination", "Enracinement"} and phase_start:
+            try:
+                # Premier jour de la reprise : le lendemain de la fin de l'enracinement (J+25 par
+                # défaut). Écrit « 25 » en dur, il ne suivait pas la borne réglée.
+                fin_enracinement = dict(
+                    (libelle, borne) for borne, libelle in regles_des_sous_phases("Semis", context.reglages)
+                ).get("Enracinement", 24)
+                reprise_start_date = date.fromisoformat(str(phase_start)) + timedelta(days=fin_enracinement + 1)
                 return (
                     reprise_start_date.isoformat(),
                     reprise_start_date.strftime("%d/%m/%Y"),
@@ -1686,7 +1802,7 @@ def _project_next_mowing_date(
         return projected_date.isoformat(), projected_date.strftime("%d/%m/%Y"), "nuit"
     elif reason_code == "mowing_spacing":
         last_mowing = _last_mowing_date(context)
-        spacing_days = _mowing_spacing_min_days(phase_bundle)
+        spacing_days = _mowing_spacing_min_days(phase_bundle, context.reglages)
         if last_mowing is not None:
             projected_date = max(context.today, last_mowing + timedelta(days=spacing_days))
             return (
@@ -1767,7 +1883,8 @@ def _cm(valeur: float) -> str:
     return f"{valeur:.1f}".replace(".", ",")
 
 
-# Planchers d'un semis en cours, par sous-phase (bornes : SUBPHASE_RULES["Sursemis"]).
+# Planchers d'un semis sur SOL NU, par sous-phase (bornes : SUBPHASE_RULES["Semis"]). Le sursemis
+# n'en a pas : sa hauteur suit `_consigne_sursemis`.
 # Germination et Enracinement : la tonte est interdite de toute façon. Reprise (J+25 à J+34) :
 # premières coupes HAUTES. Stabilisation (J+35 à J+44) : deuxième palier, puis la base du mois.
 # Sur la grille de 0,5 cm : 7,6 et 6,6 étaient publiés 8,0 et 7,0 (arrondi vers le haut d'un
@@ -1778,28 +1895,113 @@ _SEMIS_PLANCHERS_CM: dict[str, float] = {
     "Reprise": 6.5,
     "Stabilisation": 5.0,
 }
-_SEMIS_DUREE_JOURS = 45  # PHASE_DURATIONS_DAYS["Sursemis"] : âges 0 à 44
+_PLANCHERS_REGLABLES: dict[str, str] = {
+    "Germination": "semis_hauteur_germination",
+    "Enracinement": "semis_hauteur_enracinement",
+    "Reprise": "semis_hauteur_reprise",
+    "Stabilisation": "semis_hauteur_stabilisation",
+}
+# La durée du suivi des graines n'a plus de copie ici (c'était `_SEMIS_DUREE_JOURS = 45`) : elle se
+# lit dans `phases.phase_duration_days`, comme la phase elle-même, réglage compris.
 
 
-def _age_du_dernier_semis(context: DecisionContext) -> int | None:
-    """Âge en jours du semis le plus RÉCENT par date (jamais dans le futur), ou None.
+def _dernier_semis(context: DecisionContext) -> tuple[str, date] | None:
+    """Type (« Semis » ou « Sursemis ») et date du semis le plus RÉCENT, jamais dans le futur.
 
     Par DATE et non par position dans l'historique : une déclaration rétroactive ajoutée après
-    un semis plus récent ne doit pas faire lire un âge plus vieux que celui de la phase.
+    un semis plus récent ne doit pas faire lire un âge plus vieux que celui de la phase. À date
+    égale, la dernière déclaration l'emporte : c'est une correction de l'utilisateur.
     """
-    dates = []
+    dernier: tuple[str, date] | None = None
     for item in context.history:
-        if not isinstance(item, dict) or item.get("type") != "Sursemis":
+        if not isinstance(item, dict) or item.get("type") not in SEEDING_PHASES:
             continue
         try:
             jour = date.fromisoformat(str(item.get("date"))[:10])
         except (TypeError, ValueError):
             continue
-        if jour <= context.today:
-            dates.append(jour)
-    if not dates:
+        if jour > context.today:
+            continue
+        if dernier is None or jour >= dernier[1]:
+            dernier = (str(item.get("type")), jour)
+    return dernier
+
+
+def _age_du_dernier_semis(context: DecisionContext) -> int | None:
+    """Âge en jours du semis le plus récent (sol nu ou sursemis), ou None."""
+    dernier = _dernier_semis(context)
+    return None if dernier is None else (context.today - dernier[1]).days
+
+
+def _tontes_depuis(context: DecisionContext, debut: date) -> int:
+    """Nombre de tontes déclarées à partir de `debut`, ce jour compris."""
+    total = 0
+    for item in context.history:
+        if not isinstance(item, dict) or item.get("type") != "tonte":
+            continue
+        try:
+            jour = date.fromisoformat(str(item.get("date"))[:10])
+        except (TypeError, ValueError):
+            continue
+        if debut <= jour <= context.today:
+            total += 1
+    return total
+
+
+def _etat_plantules(context: DecisionContext) -> dict[str, Any] | None:
+    """Suivi ESTIMÉ des plantules du dernier semis, sol nu ou sursemis — ou None hors semis.
+
+    Répond à la question de Kévin (16/09/2026) : « au bout de combien de temps elles sont à la
+    bonne taille ». Nulles jusqu'à la levée, puis `PLANTULES_POUSSE_CM_JOUR`. Première coupe quand
+    elles atteignent une fois et demie la hauteur de coupe du sursemis (UC IPM). Une tonte déclarée
+    à partir de cette date compte comme une coupe des plantules.
+    """
+    dernier = _dernier_semis(context)
+    if dernier is None:
         return None
-    return (context.today - max(dates)).days
+    type_semis, jour_semis = dernier
+    age = (context.today - jour_semis).days
+    if age >= phase_duration_days(type_semis, context.reglages):
+        return None
+    levee = levee_sursemis_jours(context.reglages)
+    hauteur = max(0.0, (age - levee) * pousse_plantules_cm_jour(context.reglages))
+    premiere_coupe = jour_semis + timedelta(days=jours_avant_premiere_coupe(context.reglages))
+    coupes = _tontes_depuis(context, premiere_coupe) if context.today >= premiere_coupe else 0
+    return {
+        "semis_mode": type_semis,
+        "semis_age_jours": age,
+        "plantules_levee_date": (jour_semis + timedelta(days=levee)).isoformat(),
+        "plantules_hauteur_estimee_cm": round(hauteur, 1),
+        "plantules_premiere_coupe_date": premiere_coupe.isoformat(),
+        "plantules_coupes": coupes,
+    }
+
+
+def _consigne_sursemis(context: DecisionContext) -> tuple[float, str] | None:
+    """Hauteur visée pendant un SURSEMIS, et son pourquoi — ou None hors sursemis.
+
+    Lame courte pour limiter l'ombre et la concurrence du gazon en place, puis remontée une fois
+    les plantules coupées deux fois (Purdue AY-13-W). Elle REMPLACE la hauteur du mois, bonus de
+    phase et de chaleur compris ; seule la règle du tiers peut la relever.
+    """
+    etat = _etat_plantules(context)
+    if etat is None or etat["semis_mode"] != "Sursemis":
+        return None
+    age = etat["semis_age_jours"]
+    coupes = etat["plantules_coupes"]
+    coupes_requises = int(lire(context.reglages, "sursemis_coupes_avant_remontee", SURSEMIS_COUPES_AVANT_REMONTEE))
+    if coupes >= coupes_requises:
+        finale = float(lire(context.reglages, "sursemis_lame_finale", SURSEMIS_HAUTEUR_FINALE_CM))
+        return finale, (
+            f"J+{age}, plantules coupées {coupes} fois : lame remontée à {_cm(finale)} cm"
+        )
+    lame = hauteur_coupe_sursemis_cm(context.reglages)
+    # « deuxième coupe » était écrit en dur : il suit maintenant le nombre de coupes réglé.
+    rang = "première" if coupes_requises == 1 else ("deuxième" if coupes_requises == 2 else f"{coupes_requises}ᵉ")
+    return lame, (
+        f"J+{age}, lame courte à {_cm(lame)} cm pour laisser la lumière aux "
+        f"plantules, jusqu'à leur {rang} coupe"
+    )
 
 
 def _plancher_semis(context: DecisionContext) -> tuple[float, str] | None:
@@ -1820,18 +2022,28 @@ def _plancher_semis(context: DecisionContext) -> tuple[float, str] | None:
         progressivement jusqu'au niveau normal ; semis d'automne : plus de tonte avant le printemps.
     Chaque marche reste sous le tiers. Une descente de 0,5 cm par semaine (première version) était
     défendable pour un semis de printemps (RHS) : le choix du rythme reste à arbitrer.
-    ⚠️ Une fin MANUELLE de la phase avant J+45 (« Retour au mode normal ») retire l'entrée Sursemis
+    ⚠️ Une fin MANUELLE de la phase avant J+45 (« Retour au mode normal ») retire l'entrée Semis
     de l'historique : le plancher disparaît avec elle.
     """
-    age = _age_du_dernier_semis(context)
-    if age is None or age >= _SEMIS_DUREE_JOURS:
+    dernier = _dernier_semis(context)
+    if dernier is None or dernier[0] != "Semis":
+        return None  # le sursemis suit `_consigne_sursemis`
+    age = (context.today - dernier[1]).days
+    if age >= phase_duration_days("Semis", context.reglages):
         return None
     sous_phase = "Stabilisation"
-    for borne, libelle in sorted(SUBPHASE_RULES["Sursemis"], key=lambda regle: regle[0]):
+    for borne, libelle in sorted(regles_des_sous_phases("Semis", context.reglages), key=lambda regle: regle[0]):
         if age <= borne:
             sous_phase = libelle
             break
-    return _SEMIS_PLANCHERS_CM.get(sous_phase, _SEMIS_PLANCHERS_CM["Stabilisation"]), f"semis en {sous_phase.lower()} (J+{age})"
+    if sous_phase not in _SEMIS_PLANCHERS_CM:
+        sous_phase_plancher = "Stabilisation"
+    else:
+        sous_phase_plancher = sous_phase
+    plancher = float(
+        lire(context.reglages, _PLANCHERS_REGLABLES[sous_phase_plancher], _SEMIS_PLANCHERS_CM[sous_phase_plancher])
+    )
+    return plancher, f"semis en {sous_phase.lower()} (J+{age})"
 
 
 _TEMPERATURE_JOUR_KEY = "hauteur_tonte_temperature_jour"
@@ -1946,7 +2158,7 @@ def _hauteur_theorique_detaillee(
         intègre déjà la sécheresse de l'air (FAO-56). Gardé en repli, avec le stress d'avant.
     """
     month = context.today.month
-    base = _seasonal_base_height(month)
+    base = _seasonal_base_height(month, context.reglages)
     target = base
     termes: list[str] = []
     temperature, _ = _temperature_de_reference_hauteur(context)
@@ -2022,15 +2234,24 @@ def _select_mowing_block_reason(
     phase_dominante = str(phase_bundle["phase_dominante"])
     min_height_after_cut = None if current_height is None else current_height * (2.0 / 3.0)
     last_mowing = _last_mowing_date(context)
-    spacing_days = _mowing_spacing_min_days(phase_bundle)
+    spacing_days = _mowing_spacing_min_days(phase_bundle, context.reglages)
 
-    if phase_dominante == "Sursemis":
+    # Le CODE public reste `phase_sursemis` pour les deux modes : Node-RED et la carte le
+    # connaissent déjà ; c'est le libellé qui dit de quel semis il s'agit.
+    if phase_dominante == "Semis":
         if phase_bundle["sous_phase"] in _SURSEMIS_MOWING_BLOCKED_SUBPHASES:
             return (
-                f"Sursemis / {phase_bundle['sous_phase']}: tonte interdite pendant l'installation du gazon.",
+                f"Semis / {phase_bundle['sous_phase']}: tonte interdite pendant l'installation du gazon.",
                 "phase_sursemis",
                 False,
             )
+    elif _sursemis_en_levee(phase_bundle, context.reglages):
+        return (
+            f"Sursemis / levée (J+{int(phase_bundle.get('phase_age_days') or 0)}) : tonte suspendue "
+            f"jusqu'à J+{levee_sursemis_jours(context.reglages)}, le temps que les graines s'ancrent.",
+            "phase_sursemis",
+            False,
+        )
     if phase_dominante in {"Traitement", "Hivernage"}:
         return f"Phase {phase_dominante}: mieux vaut différer la tonte.", f"phase_{phase_dominante.lower()}", False
 
@@ -2063,7 +2284,10 @@ def _select_mowing_block_reason(
                 (
                     _MOWING_BLOCK_PRIORITIES["mowing_spacing"],
                     "mowing_spacing",
-                    f"Dernière tonte récente: laisse un jour de repos au gazon avant le {next_allowed.strftime('%d/%m/%Y')}.",
+                    # L'écart dépend de la phase (2 jours d'ordinaire, 5 en sursemis) : « un jour de
+                    # repos », écrit en dur, était faux dès qu'il valait autre chose que 2.
+                    f"Dernière tonte récente : {spacing_days} jours minimum entre deux tontes, "
+                    f"prochaine possible le {next_allowed.strftime('%d/%m/%Y')}.",
                     False,
                 )
             )
@@ -2078,7 +2302,7 @@ def _select_mowing_block_reason(
             )
         )
 
-    if float(context.vent or 0.0) > _MOWING_WINDOW_BLOCK_WIND:
+    if float(context.vent or 0.0) > float(lire(context.reglages, "tonte_vent_bloque", _MOWING_WINDOW_BLOCK_WIND)):
         candidates.append(
             (
                 _MOWING_BLOCK_PRIORITIES["vent_fort"],
@@ -2189,12 +2413,14 @@ def _compute_mowing_status(
     tonte_ok: bool,
     height_rule_blocked: bool,
     score_tonte: int,
+    reason_code: str | None = None,
 ) -> str:
     tonte_statut = compute_tonte_statut(
         phase_dominante=phase_bundle["phase_dominante"],
         tonte_autorisee=tonte_ok,
         score_tonte=score_tonte,
         risque_gazon=risk_bundle["risque_gazon"],
+        blocage_code=reason_code,
     )
     if height_rule_blocked and tonte_statut != "interdite":
         return "deconseillee"
@@ -2203,12 +2429,13 @@ def _compute_mowing_status(
 
 def _mowing_daily_session_policy(
     phase_bundle: dict[str, Any],
+    reglages: dict[str, Any] | None = None,
 ) -> tuple[int, str]:
     """Retourne la politique métier de sessions de tonte par jour."""
     phase_dominante = str(phase_bundle.get("phase_dominante") or "").strip()
-    if phase_dominante in {"Sursemis", "Traitement", "Scarification", "Hivernage"}:
+    if phase_dominante in {"Semis", "Sursemis", "Traitement", "Scarification", "Hivernage"}:
         return 1, "phase_sensitive"
-    return 2, "standard"
+    return int(lire(reglages, "tonte_max_par_jour", _TONTES_PAR_JOUR_MAX)), "standard"
 
 
 def _build_mowing_bundle_payload(
@@ -2311,7 +2538,10 @@ def _recommended_mowing_height(
     # vers le haut, puis on garde le plus haut. Tout arrondir au plus proche ferait conseiller
     # 4,5 cm sur un gazon à 7 cm dont le tiers interdit de descendre sous 4,67 — et, lame
     # inconnue, le moteur se bloquerait sur sa propre recommandation (`target_height`).
-    saison_arrondie = _round_nearest_to_step(theoretical_before_third, min_height, step)
+    # En SURSEMIS, la consigne remplace la hauteur du mois ; le tiers reste au-dessus d'elle.
+    sursemis = _consigne_sursemis(context)
+    valeur_de_base = sursemis[0] if sursemis is not None else theoretical_before_third
+    saison_arrondie = _round_nearest_to_step(valeur_de_base, min_height, step)
     semis = _plancher_semis(context)
     plancher_semis = semis[0] if semis is not None else None
     planchers = [
@@ -2367,7 +2597,8 @@ def _recommended_mowing_height(
         garde_fou_label = (
             f"Règle du tiers : on n'ôte pas plus d'un tiers du limbe. Gazon à "
             f"{float(current_height):g} cm → ne pas descendre sous {third_floor:.1f} cm "
-            f"(la saison seule aurait proposé {saison_arrondie:.1f} cm)."
+            f"({'la consigne du sursemis' if sursemis is not None else 'la saison seule'} "
+            f"aurait proposé {saison_arrondie:.1f} cm)."
         )
     else:
         garde_fou_label = None
@@ -2375,19 +2606,22 @@ def _recommended_mowing_height(
     # Le POURQUOI de la valeur, en clair. Sans lui, « 6,0 cm toute l'année » (question de Kévin
     # le 11/09/2026) ne se comprenait qu'en relisant ce fichier : le stress qui la montait
     # n'était publié nulle part. Il décrit la valeur PUBLIÉE : bornes machine et lissage compris.
-    mois = _NOMS_DES_MOIS[context.today.month - 1]
-    motif = f"{mois.capitalize()} : base {_cm(_seasonal_base_height(context.today.month))} cm"
-    motif += f", {', '.join(termes)}" if termes else " (hauteur de pousse)"
-    # L'arrondi, quand il change la somme : « +0,2 » sous « 4,0 cm » se lisait comme une erreur.
-    if termes and abs(theoretical_before_third - saison_arrondie) > 1e-9:
-        motif += f" → arrondi à {_cm(saison_arrondie)} cm"
+    if sursemis is not None:
+        motif = f"Sursemis : {sursemis[1]}"
+    else:
+        mois = _NOMS_DES_MOIS[context.today.month - 1]
+        motif = f"{mois.capitalize()} : base {_cm(_seasonal_base_height(context.today.month, context.reglages))} cm"
+        motif += f", {', '.join(termes)}" if termes else " (hauteur de pousse)"
+        # L'arrondi, quand il change la somme : « +0,2 » sous « 4,0 cm » se lisait comme une erreur.
+        if termes and abs(theoretical_before_third - saison_arrondie) > 1e-9:
+            motif += f" → arrondi à {_cm(saison_arrondie)} cm"
     if semis_mord and semis is not None:
         motif += f" ; {semis[1]} : plancher {_cm(semis_arrondi or 0.0)} cm"
     if tiers_mord:
         motif += " ; relevée par la règle du tiers"
     if cible > allowed_max + 1e-9:
         motif += f" ; plafonnée au maximum de la tondeuse ({_cm(allowed_max)} cm)"
-    elif theoretical_before_third < allowed_min - 1e-9 and cible_bornee <= allowed_min + 1e-9:
+    elif valeur_de_base < allowed_min - 1e-9 and cible_bornee <= allowed_min + 1e-9:
         # Les arrondis ramènent déjà tout sous le minimum SUR le minimum : on compare la brute.
         motif += f" ; relevée au minimum de la tondeuse ({_cm(allowed_min)} cm)"
     if abs(recommended_height - cible_bornee) > 1e-9:
@@ -2395,10 +2629,18 @@ def _recommended_mowing_height(
     motif += "."
 
     _, temperature_jour = _temperature_de_reference_hauteur(context)
+    plantules = _etat_plantules(context) or {}
 
     return {
         "hauteur_tonte_recommandee_cm": round(recommended_height, 2),
         "hauteur_tonte_motif": motif,
+        # Suivi des plantules, sol nu ou sursemis : None hors semis.
+        "semis_mode": plantules.get("semis_mode"),
+        "semis_age_jours": plantules.get("semis_age_jours"),
+        "plantules_levee_date": plantules.get("plantules_levee_date"),
+        "plantules_hauteur_estimee_cm": plantules.get("plantules_hauteur_estimee_cm"),
+        "plantules_premiere_coupe_date": plantules.get("plantules_premiere_coupe_date"),
+        "plantules_coupes": plantules.get("plantules_coupes"),
         "hauteur_tonte_temperature_jour": temperature_jour,
         "hauteur_tonte_min_cm": round(allowed_min, 2),
         "hauteur_tonte_max_cm": round(allowed_max, 2),
@@ -2422,7 +2664,10 @@ def build_mowing_bundle(
     score_stress = int(risk_bundle["scores"]["score_stress"])
     phase_dominante = str(phase_bundle.get("phase_dominante") or "")
     sous_phase = str(phase_bundle.get("sous_phase") or "")
-    if phase_dominante == "Sursemis" and sous_phase in {"Reprise", "Stabilisation"}:
+    semis_tondable = (
+        phase_dominante == "Semis" and sous_phase in {"Reprise", "Stabilisation"}
+    ) or (phase_dominante == "Sursemis" and not _sursemis_en_levee(phase_bundle, context.reglages))
+    if semis_tondable:
         baseline_tonte_ok = score_tonte < 65 and score_stress < 75
     else:
         baseline_tonte_ok = score_tonte < 55 and score_stress < 70
@@ -2430,6 +2675,7 @@ def build_mowing_bundle(
     mowing_frequency_target_per_week, mowing_frequency_label = _phase_adjusted_mowing_frequency(
         phase_bundle,
         context.today.month,
+        context.reglages,
     )
     height_recommendation = _recommended_mowing_height(context, phase_bundle, water_bundle, risk_bundle)
     # ⚠️ LA LAME RÉELLE FAIT FOI, PAS LA RECOMMANDATION. `hauteur_tonte_recommandee_cm` est ce
@@ -2713,12 +2959,13 @@ def build_mowing_bundle(
         tonte_ok=tonte_ok,
         height_rule_blocked=height_rule_blocked,
         score_tonte=score_tonte,
+        reason_code=reason_code,
     )
     if reason_code == "mowing_night":
         tonte_statut = "interdite"
 
     mowing_daily_session_limit, mowing_daily_session_policy = _mowing_daily_session_policy(
-        phase_bundle
+        phase_bundle, context.reglages
     )
 
     bundle = _build_mowing_bundle_payload(

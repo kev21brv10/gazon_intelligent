@@ -165,6 +165,12 @@ Attributs canoniques:
 - `mowing_block_reason_code`
 - `mowing_block_reason_label`
 - `mowing_cooldown_remaining_minutes`
+- `semis_mode` : `Semis` (terrain nu) ou `Sursemis` (gazon en place) pendant les 45 jours d'un semis, absent sinon
+- `semis_age_jours`
+- `plantules_levee_date` (ISO)
+- `plantules_hauteur_estimee_cm` : ESTIMATION (0 jusqu'à la levée, puis 0,4 cm/j)
+- `plantules_premiere_coupe_date` (ISO) : date où les plantules atteignent 6 cm
+- `plantules_coupes` : tontes déclarées à partir de cette date
 
 ### `sensor.*_reserve_actuelle`
 

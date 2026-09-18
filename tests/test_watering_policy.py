@@ -80,6 +80,36 @@ class WateringPolicyTests(unittest.TestCase):
         self.assertEqual(transition_program.surface_cycle_mm_max, 4.0)
         self.assertEqual(transition_program.surface_cycle_mm_optimal, 3.0)
 
+    def test_deux_cycles_sont_repartis_sur_toute_la_fenetre_des_graines(self) -> None:
+        reglages = {
+            "graines_fenetre_debut": 8 * 60 + 30,
+            "graines_fenetre_fin": 16 * 60,
+        }
+        for stage in ("Germination", "Levée", "Enracinement"):
+            with self.subTest(stage=stage):
+                _, programme = policy.resolve_semis_stage_program(stage, reglages=reglages)
+                self.assertEqual(
+                    policy.repartir_creneaux_semis(programme, 2, reglages=reglages),
+                    (8 * 60 + 30, 15 * 60),
+                )
+
+    def test_les_cycles_sont_reguliers_et_respectent_le_minimum(self) -> None:
+        reglages = {
+            "graines_fenetre_debut": 8 * 60 + 30,
+            "graines_fenetre_fin": 16 * 60,
+        }
+        _, programme = policy.resolve_semis_stage_program("Germination", reglages=reglages)
+
+        self.assertEqual(
+            policy.repartir_creneaux_semis(programme, 3, reglages=reglages),
+            (510, 705, 900),
+        )
+        quatre = policy.repartir_creneaux_semis(programme, 4, reglages=reglages)
+        self.assertEqual(quatre, (510, 640, 770, 900))
+        self.assertTrue(
+            all(b - a >= 120 for a, b in zip(quatre, quatre[1:]))
+        )
+
 
     def test_fertilisation_weather_guard_blocks_on_heavy_rain(self) -> None:
         resolved = policy.resolve_watering_policy(
@@ -102,6 +132,24 @@ class WateringPolicyTests(unittest.TestCase):
         self.assertEqual(compensating.selected_mode, "biostimulant")
         self.assertTrue(compensating.blocking.is_blocked)
         self.assertEqual(compensating.blocking.reason, "rain_compensating")
+
+    def test_scarification_uses_configured_minimum_temperature(self) -> None:
+        weather = {"temperature_c": 13.0, "soil_humidity_state": "legerement_humide"}
+        default = policy.resolve_watering_policy(
+            phase_dominante="Scarification",
+            weather=weather,
+            hydric_state="legerement_humide",
+        )
+        configured = policy.resolve_watering_policy(
+            phase_dominante="Scarification",
+            weather=weather,
+            hydric_state="legerement_humide",
+            reglages={"mode_scarification_temperature_min": 15.0},
+        )
+
+        self.assertFalse(default.blocking.is_blocked)
+        self.assertTrue(configured.blocking.is_blocked)
+        self.assertEqual(configured.blocking.reason, "temperature_below_minimum")
 
         heavy = policy.resolve_watering_policy(
             phase_dominante="Biostimulant",

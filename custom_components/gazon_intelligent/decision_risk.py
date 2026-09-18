@@ -12,6 +12,7 @@ from .guidance import (
     compute_next_reevaluation,
     raisons_amorties,
 )
+from .phases import is_seeding_phase
 from .scores import compute_internal_scores
 
 _URGENCE_LEVELS: dict[str, int] = {
@@ -90,6 +91,7 @@ def build_risk_bundle(
         else None
     )
     action_guidance = compute_action_guidance(
+        reglages=context.reglages,
         # Le MÊME palier que celui vu par le profil d'arrosage : calculé une fois dans
         # `build_water_bundle`, jamais recalculé ici — deux calculs divergeraient.
         points_etp_stress=water_bundle.get("stress_palier_et0"),
@@ -113,6 +115,9 @@ def build_risk_bundle(
         hauteur_gazon=advanced_context.get("hauteur_gazon"),
         minutes_to_sunset=_minutes_to_sunset,
         fungal_risk_level=_fungal_level,
+        risque_precedent=(
+            ((context.risk_context or {}).get("amortissement") or {}).get("publie")
+        ),
     )
     # ⚠️ AMORTI ICI, donc AVANT `compute_next_reevaluation` et `_decision_urgence` qui le
     # lisent tous deux. Amortir seulement à la publication laisserait la décision travailler
@@ -209,7 +214,7 @@ def _decision_urgence(
         return _normalize_urgence("moyenne" if niveau_action == "surveiller" or bilan_hydrique_mm < 0 else "faible")
     if bilan_hydrique_mm <= -2.5 or niveau_action == "critique" or risque_gazon == "eleve":
         return _normalize_urgence("haute")
-    if phase_dominante == "Sursemis" and (bilan_hydrique_mm <= -1.0 or niveau_action == "a_faire"):
+    if is_seeding_phase(phase_dominante) and (bilan_hydrique_mm <= -1.0 or niveau_action == "a_faire"):
         return _normalize_urgence("moyenne")
     if niveau_action in {"a_faire", "surveiller"} or bilan_hydrique_mm <= -0.5:
         return _normalize_urgence("moyenne")

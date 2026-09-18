@@ -1,5 +1,5 @@
 set_mode:
-  description: "Choisit un mode (Sursemis, Traitement, etc.) et met à jour les calculs du gazon ciblé."
+  description: "Choisit un mode (Semis sur sol nu, Sursemis dans un gazon en place, Traitement, etc.) et met à jour les calculs du gazon ciblé."
   target:
     entity:
       integration: gazon_intelligent
@@ -12,6 +12,7 @@ set_mode:
           translation_key: gazon_mode
           options:
             - Normal
+            - Semis
             - Sursemis
             - Traitement
             - Fertilisation
@@ -106,6 +107,7 @@ declare_intervention:
         select:
           translation_key: gazon_intervention
           options:
+            - Semis
             - Sursemis
             - Traitement
             - Fertilisation
@@ -217,6 +219,7 @@ register_product:
           translation_key: gazon_phase_compatible
           multiple: true
           options:
+            - Semis
             - Sursemis
             - Croissance
             - Entretien
@@ -377,5 +380,48 @@ recalibrate_reserve:
         Désactivé : la valeur est posée mais la journée continue normalement (évapotranspiration
         débitée, pluie et arrosage crédités, jauge qui redescend). À utiliser pour corriger une
         comptabilité faussée en cours de journée sans perdre le reste de celle-ci.
+      selector:
+        boolean:
+
+send_notification:
+  description: >-
+    Envoie un message aux téléphones choisis dans les options de Gazon Intelligent. Sans
+    message, envoie l'état du gazon du moment (phase, cycles de graines, réserve, météo,
+    tonte). Rend le texte envoyé et la liste des téléphones joints.
+  target:
+    entity:
+      integration: gazon_intelligent
+  fields:
+    titre:
+      required: false
+      example: "Gazon"
+      selector:
+        text: {}
+    message:
+      required: false
+      example: "Pense à vérifier les graines ce soir."
+      selector:
+        text:
+          multiline: true
+
+ask_ai:
+  description: >-
+    Pose une question à l'IA de Home Assistant (action « Générer des données ») en lui
+    donnant l'état du gazon. L'IA ne commande rien : elle répond en texte. Chaque appel
+    compte auprès du fournisseur d'IA configuré. Rend la réponse ; peut aussi l'envoyer
+    aux téléphones choisis.
+  target:
+    entity:
+      integration: gazon_intelligent
+  fields:
+    question:
+      required: false
+      example: "Les graines ont-elles eu assez d'eau aujourd'hui ?"
+      selector:
+        text:
+          multiline: true
+    notifier:
+      required: false
+      default: false
       selector:
         boolean:

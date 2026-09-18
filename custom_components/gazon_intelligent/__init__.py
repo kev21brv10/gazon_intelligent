@@ -22,6 +22,11 @@ except ImportError:  # pragma: no cover - compatibility with older HA versions
     async_extract_config_entry_ids = None
     async_extract_entity_ids = None
 
+try:
+    from homeassistant.core import SupportsResponse
+except ImportError:  # pragma: no cover - stubs de test sans réponse de service
+    SupportsResponse = None  # type: ignore[assignment,misc]
+
 from .const import (
     DOMAIN,
     INTERVENTIONS_ACTIONS,
@@ -32,6 +37,7 @@ from .entity_migration import (
     async_cleanup_obsolete_entities,
 )
 from .entity_ids import resolve_entry_instance_slug
+from . import panneau
 from .coordinator import GazonIntelligentCoordinator
 from .date_utils import parse_optional_date
 from .migration import async_migrate_entry as _async_migrate_entry
@@ -80,6 +86,8 @@ SERVICE_DECLARE_WATERING = "declare_watering"
 SERVICE_REGISTER_PRODUCT = "register_product"
 SERVICE_REMOVE_PRODUCT = "remove_product"
 SERVICE_RECALIBRATE_RESERVE = "recalibrate_reserve"
+SERVICE_SEND_NOTIFICATION = "send_notification"
+SERVICE_ASK_AI = "ask_ai"
 
 # Tous les services du domaine, pour le dé-enregistrement à la suppression de la
 # dernière instance (évite des services orphelins après désinstallation complète).
@@ -99,6 +107,8 @@ _ALL_SERVICES = (
     SERVICE_REMOVE_PRODUCT,
     SERVICE_RECALIBRATE_RESERVE,
     SERVICE_RESET_MOWER_PASSES,
+    SERVICE_SEND_NOTIFICATION,
+    SERVICE_ASK_AI,
 )
 
 # Validateur booléen des schémas de service. `cv.boolean` accepte les formes que Home Assistant
@@ -213,14 +223,21 @@ def _register_service_if_missing(
     handler: Callable[[ServiceCall], Any],
     *,
     schema: vol.Schema | None = None,
+    avec_reponse: bool = False,
 ) -> None:
     if hass.services.has_service(DOMAIN, service_name):
         return
+    reponse: dict[str, Any] = {}
+    if avec_reponse and SupportsResponse is not None:
+        # OPTIONAL : l'action rend son résultat à qui le demande (outils de développement,
+        # `response_variable` d'un script), et reste appelable sans le demander.
+        reponse["supports_response"] = SupportsResponse.OPTIONAL
     hass.services.async_register(
         DOMAIN,
         service_name,
         handler,
         schema=schema,
+        **reponse,
     )
 
 
@@ -474,6 +491,32 @@ def _async_register_services(hass: HomeAssistant) -> None:
             }
         ),
     )
+    _register_service_if_missing(
+        hass,
+        SERVICE_SEND_NOTIFICATION,
+        _handle_send_notification,
+        schema=vol.Schema(
+            {
+                **_SERVICE_TARGET_FIELD,
+                vol.Optional("titre"): vol.Coerce(str),
+                vol.Optional("message"): vol.Coerce(str),
+            }
+        ),
+        avec_reponse=True,
+    )
+    _register_service_if_missing(
+        hass,
+        SERVICE_ASK_AI,
+        _handle_ask_ai,
+        schema=vol.Schema(
+            {
+                **_SERVICE_TARGET_FIELD,
+                vol.Optional("question"): vol.Coerce(str),
+                vol.Optional("notifier", default=False): _BOOLEAN_VALIDATOR,
+            }
+        ),
+        avec_reponse=True,
+    )
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -510,8 +553,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await _async_start_runtime_monitoring(coordinator)
     # 8. refresh différé
     coordinator.schedule_post_start_refresh(delay_seconds=30)
+    # 9. page « Gazon » (barre latérale + commande WebSocket)
+    await _async_preparer_la_page(hass)
 
     return True
+
+
+async def _async_preparer_la_page(hass: HomeAssistant) -> None:
+    """Installe ou retire la page « Gazon ». Une panne de la page ne doit jamais empêcher le
+    moteur de tourner : elle est journalisée, et l'intégration continue."""
+    try:
+        panneau.async_enregistrer_commandes(hass)
+        await panneau.async_mettre_a_jour_panneau(hass)
+    except Exception:  # noqa: BLE001
+        _LOGGER.exception("La page « Gazon » n'a pas pu être installée")
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -519,8 +574,10 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
 
     On évite un reload complet pour un simple ajustement de number (débit de zone,
     hauteur de coupe) : ces réglages écrivent aussi dans `entry.options` mais sont
-    appliqués en place et ne modifient pas les abonnements.
+    appliqués en place et ne modifient pas les abonnements. Idem pour les réglages de la page
+    « Gazon », relus à chaque cycle, et pour sa case, qui ajoute ou retire la page.
     """
+    await _async_preparer_la_page(hass)
     coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id)
     if coordinator is not None and not coordinator.source_config_changed():
         return
@@ -540,6 +597,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not domain_data:
             for service_name in _ALL_SERVICES:
                 hass.services.async_remove(DOMAIN, service_name)
+        # La page part avec la dernière instance qui la voulait.
+        await _async_preparer_la_page(hass)
 
     return unload_ok
 
@@ -728,3 +787,21 @@ async def _handle_remove_product(call: ServiceCall) -> None:
     except (HomeAssistantError, ValueError) as err:
         _LOGGER.debug("Echec remove_product pour %s: %s", call.data.get("product_id"), err)
         raise HomeAssistantError(f"Echec remove_product: {err}") from err
+
+
+async def _handle_send_notification(call: ServiceCall) -> dict[str, Any]:
+    _require_explicit_target_for_multi_instance(call)
+    coordinator = await _coordinator_from_call(call)
+    return await coordinator.async_envoyer_notification(
+        titre=call.data.get("titre"),
+        message=call.data.get("message"),
+    )
+
+
+async def _handle_ask_ai(call: ServiceCall) -> dict[str, Any]:
+    _require_explicit_target_for_multi_instance(call)
+    coordinator = await _coordinator_from_call(call)
+    return await coordinator.async_demander_ia(
+        call.data.get("question"),
+        notifier=bool(call.data.get("notifier", False)),
+    )

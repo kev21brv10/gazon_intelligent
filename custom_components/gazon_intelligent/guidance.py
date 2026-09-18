@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta, timezone
 from math import ceil
 from typing import Any
 
@@ -21,6 +22,8 @@ from .const import (
     WATERING_STRATEGY_SEMIS_FREQUENT,
 )
 from .decision_models import normalize_watering_contract
+from .phases import SEEDING_PHASES, is_seeding_phase, jours_avant_premiere_coupe
+from .reglages import lire
 from .watering_policy import resolve_semis_stage_program, resolve_watering_policy
 from .water import (
     _is_external_watering,
@@ -43,6 +46,9 @@ OPTIMAL_MORNING_END_HOUR = 8
 ACCEPTABLE_MORNING_END_HOUR = 10
 SEMIS_WINDOW_START_HOUR = 10
 SEMIS_WINDOW_END_HOUR = 17
+# Vent (km/h) à partir duquel les graines ne sont plus arrosées : l'eau tombe à côté. La valeur
+# était écrite en dur dans les deux branches semis ; nommée pour que la page puisse la régler.
+SEMIS_VENT_MAX_KMH = 15.0
 EVENING_START_HOUR = 18
 EVENING_END_HOUR = 20
 # Marge de séchage : un arrosage du soir doit finir au moins ce nombre de minutes avant
@@ -111,6 +117,7 @@ _GUARDRAIL_ALIGNEMENT_KC_REEL = 1.15
 _GUARDRAIL_CEILING_MM = 50.0         # plafond hebdo de sûreté absolu
 MODE_MIN_WATERING_MM = {
     "Normal": 10.0,
+    "Semis": 0.5,
     "Sursemis": 0.5,
     "Fertilisation": 3.0,
     "Biostimulant": 5.0,
@@ -320,15 +327,20 @@ def _latest_watering_datetime(history: list[dict[str, Any]]) -> datetime | None:
     return latest
 
 
-def _latest_phase_start_index(history: list[dict[str, Any]], phase_name: str) -> int | None:
+def _latest_phase_start_index(
+    history: list[dict[str, Any]], phase_name: str | frozenset[str]
+) -> int | None:
+    noms = {phase_name} if isinstance(phase_name, str) else set(phase_name)
     for index in range(len(history) - 1, -1, -1):
         item = history[index]
-        if isinstance(item, dict) and item.get("type") == phase_name:
+        if isinstance(item, dict) and item.get("type") in noms:
             return index
     return None
 
 
-def _count_tonte_events_since_latest_phase_start(history: list[dict[str, Any]], phase_name: str) -> int:
+def _count_tonte_events_since_latest_phase_start(
+    history: list[dict[str, Any]], phase_name: str | frozenset[str]
+) -> int:
     start_index = _latest_phase_start_index(history, phase_name)
     if start_index is None:
         return 0
@@ -336,6 +348,42 @@ def _count_tonte_events_since_latest_phase_start(history: list[dict[str, Any]], 
     for item in history[start_index + 1 :]:
         if isinstance(item, dict) and item.get("type") == "tonte":
             count += 1
+    return count
+
+
+def _count_tontes_utiles_depuis_le_dernier_semis(
+    history: list[dict[str, Any]], reglages: Mapping[str, Any] | None = None
+) -> int:
+    """Tontes qui comptent pour la transition d'un semis.
+
+    Sur sol NU, toute tonte après le semis coupe des plantules. En SURSEMIS, la tonte du gazon en
+    place commence dès la fin de la levée : seules comptent celles qui tombent à partir de la
+    première coupe des plantules (`jours_avant_premiere_coupe`), sinon la transition partirait
+    avant qu'aucune plantule ait été coupée.
+    """
+    start_index = _latest_phase_start_index(history, SEEDING_PHASES)
+    if start_index is None:
+        return 0
+    entree = history[start_index]
+    seuil: date | None = None
+    if entree.get("type") == "Sursemis":
+        try:
+            seuil = date.fromisoformat(str(entree.get("date"))[:10]) + timedelta(
+                days=jours_avant_premiere_coupe(reglages)
+            )
+        except (TypeError, ValueError):
+            seuil = None
+    count = 0
+    for item in history[start_index + 1 :]:
+        if not isinstance(item, dict) or item.get("type") != "tonte":
+            continue
+        if seuil is not None:
+            try:
+                if date.fromisoformat(str(item.get("date"))[:10]) < seuil:
+                    continue
+            except (TypeError, ValueError):
+                continue
+        count += 1
     return count
 
 
@@ -351,11 +399,12 @@ def _compute_transition_sursemis_pret(
     pluie_demain: float,
     pluie_probabilite_24h: float,
     temperature: float,
+    reglages: Mapping[str, Any] | None = None,
 ) -> tuple[bool, int]:
     if sous_phase != "Reprise":
         return False, 0
 
-    tonte_count = _count_tonte_events_since_latest_phase_start(history, "Sursemis")
+    tonte_count = _count_tontes_utiles_depuis_le_dernier_semis(history, reglages)
     age_ok = (sous_phase_age_days or 0) >= 16
     progression_ok = (sous_phase_progression or 0.0) >= 70.0
     tonte_ok = tonte_count >= 2
@@ -384,6 +433,7 @@ def _select_sursemis_policy(
     pluie_demain: float,
     pluie_probabilite_24h: float,
     temperature: float,
+    reglages: Mapping[str, Any] | None = None,
 ) -> tuple[str, dict[str, Any], bool, int]:
     transition_ready, tonte_count = _compute_transition_sursemis_pret(
         history=history,
@@ -396,6 +446,7 @@ def _select_sursemis_policy(
         pluie_demain=pluie_demain,
         pluie_probabilite_24h=pluie_probabilite_24h,
         temperature=temperature,
+        reglages=reglages,
     )
     if sous_phase == "Germination":
         policy_key = "germination_stricte"
@@ -406,6 +457,8 @@ def _select_sursemis_policy(
     else:
         policy_key = "enracinement_prudent"
     policy = dict(SURSEMIS_POLICY_CONFIGS[policy_key])
+    # Une seule température minimale pour les quatre politiques : c'est ce que la page règle.
+    policy["temperature_min"] = float(lire(reglages, "graines_temperature_min", policy["temperature_min"]))
     policy["policy_key"] = policy_key
     policy["transition_ready"] = transition_ready
     policy["tonte_count_since_sursemis"] = tonte_count
@@ -520,13 +573,18 @@ def _sursemis_micro_apport_decision(
     bilan_hydrique_mm: float,
     mm_detected_24h: float,
     temperature: float,
+    forecast_temperature_today: float | None,
+    etp: float,
     humidite: float,
     humidite_sol: float | None,
     vent: float | None,
     soil_profile: str,
+    reglages: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     policy_key = str(policy.get("policy_key") or "enracinement_prudent")
-    watering_stage, stage_program = resolve_semis_stage_program(sous_phase, transition_ready=transition_ready)
+    watering_stage, stage_program = resolve_semis_stage_program(
+        sous_phase, transition_ready=transition_ready, reglages=reglages
+    )
     surface_bilan_max = float(policy.get("surface_bilan_max") or 2.0)
     pluie_24h_max = float(policy.get("pluie_24h_max") or 1.0)
     pluie_demain_max = float(policy.get("pluie_demain_max") or 1.0)
@@ -577,15 +635,18 @@ def _sursemis_micro_apport_decision(
     # mot. Posé avant, il fixait bien `block_reason = "temperature_trop_basse_germination"`, mais
     # son propre `allowed = False` déclenchait aussitôt le bloc ci-dessus qui écrasait le motif par
     # le générique « temperature_trop_basse » : le diagnostic spécifique n'atteignait jamais l'UI.
-    if sous_phase in {"Germination", "Levée"} and temperature <= 8.0:
+    # Même seuil que la politique (8 °C, ou la valeur réglée) : écrit en dur ici, il aurait
+    # continué de bloquer la germination sous 8 °C après un réglage plus bas.
+    if sous_phase in {"Germination", "Levée"} and temperature <= temperature_min:
         allowed = False
         block_reason = "temperature_trop_basse_germination"
         reason = "Germination bloquée: température trop basse pour la levée."
 
     cycle_mm = stage_program.surface_cycle_mm_optimal
-    daily_cycles_target = max(stage_program.daily_cycles_min, min(stage_program.daily_cycles_max, stage_program.daily_cycles_min))
+    daily_cycles_target = stage_program.daily_cycles_optimal
     cycle_spacing_minutes = stage_program.cycle_spacing_minutes_max
-    if temperature >= 28.0 or (vent or 0.0) >= 15.0 or humidite <= 45.0:
+    temperature_sechage = max(temperature, forecast_temperature_today or temperature)
+    if temperature_sechage >= 28.0 or etp >= 4.0 or (vent or 0.0) >= 12.0 or humidite <= 45.0:
         cycle_mm = min(stage_program.surface_cycle_mm_max, cycle_mm + 0.5)
         daily_cycles_target = min(stage_program.daily_cycles_max, daily_cycles_target + 1)
         cycle_spacing_minutes = stage_program.cycle_spacing_minutes_min
@@ -593,9 +654,10 @@ def _sursemis_micro_apport_decision(
         cycle_mm = max(stage_program.surface_cycle_mm_min, cycle_mm - 0.5)
         daily_cycles_target = max(stage_program.daily_cycles_min, daily_cycles_target - 1)
         cycle_spacing_minutes = stage_program.cycle_spacing_minutes_max
-    elif temperature <= 14.0:
+    elif temperature_sechage <= 14.0 and etp <= 2.0:
         cycle_mm = max(stage_program.surface_cycle_mm_min, cycle_mm - 0.5)
-        cycle_spacing_minutes = max(stage_program.cycle_spacing_minutes_min, stage_program.cycle_spacing_minutes_min)
+        daily_cycles_target = max(stage_program.daily_cycles_min, daily_cycles_target - 1)
+        cycle_spacing_minutes = stage_program.cycle_spacing_minutes_max
     cycle_mm = round(_clamp(cycle_mm, stage_program.surface_cycle_mm_min, stage_program.surface_cycle_mm_max), 1)
     runoff_risk = stage_program.runoff_risk
     if soil_profile == "argileux" and cycle_mm >= 2.5:
@@ -665,6 +727,7 @@ def _resolve_phase_policy(
     saturation_block: bool = False,
     application_type: str | None = None,
     prolonged_drought: bool = False,
+    reglages: Mapping[str, Any] | None = None,
 ) -> Any:
     soil_humidity_state = None
     if phase_dominante == "Scarification":
@@ -680,6 +743,7 @@ def _resolve_phase_policy(
             soil_humidity_state=soil_humidity_state,
             prolonged_drought=prolonged_drought,
         ),
+        reglages=reglages,
     )
 
 
@@ -894,7 +958,9 @@ def _rain_signals(
 
 
 def _morning_window_bounds(
-    phase_dominante: str, temperature: float | None
+    phase_dominante: str,
+    temperature: float | None,
+    reglages: Mapping[str, Any] | None = None,
 ) -> tuple[int, int, int, str]:
     # `OPTIMAL_MORNING_START_HOUR` vaut 3,75 (03h45, ouvert 15 min avant 04h pour éviter le bord
     # d'heure) : le produit donnait 225.0, un FLOTTANT, là où toute la chaîne aval déclare des
@@ -903,9 +969,9 @@ def _morning_window_bounds(
     # été prouvé par comparaison d'empreinte sur 8 640 scénarios.
     """Retourne une fenêtre matinale explicite: optimale 4-8h, acceptable jusqu'à 10h."""
     band = _temperature_band(temperature)
-    optimal_start = int(OPTIMAL_MORNING_START_HOUR * 60)
-    optimal_end = OPTIMAL_MORNING_END_HOUR * 60
-    acceptable_end = ACCEPTABLE_MORNING_END_HOUR * 60
+    optimal_start = int(lire(reglages, "arrosage_ouverture", int(OPTIMAL_MORNING_START_HOUR * 60)))
+    optimal_end = int(lire(reglages, "arrosage_fin_optimale", OPTIMAL_MORNING_END_HOUR * 60))
+    acceptable_end = int(lire(reglages, "arrosage_fin_acceptable", ACCEPTABLE_MORNING_END_HOUR * 60))
     return optimal_start, optimal_end, acceptable_end, band
 
 
@@ -916,37 +982,42 @@ def _semis_window_bounds(
     vent: float | None,
     pluie_24h: float,
     pluie_demain: float,
+    reglages: Mapping[str, Any] | None = None,
 ) -> tuple[int, int, int, str]:
     """Retourne une fenêtre semis qui autorise les micro-cycles de journée sans relâcher les garde-fous."""
-    optimal_start = SEMIS_WINDOW_START_HOUR * 60
-    optimal_end = SEMIS_WINDOW_END_HOUR * 60
-    acceptable_end = SEMIS_WINDOW_END_HOUR * 60
+    optimal_start = int(lire(reglages, "graines_fenetre_debut", SEMIS_WINDOW_START_HOUR * 60))
+    fin = int(lire(reglages, "graines_fenetre_fin", SEMIS_WINDOW_END_HOUR * 60))
+    optimal_end = fin
+    acceptable_end = fin
     band = _temperature_band(temperature)
 
     vent_value = float(vent or 0.0)
     humidite_value = float(humidite or 0.0)
 
-    # ⚠️ SEULS LES PLAFONDS À 16 H AGISSENT. `acceptable_end` part de SEMIS_WINDOW_END_HOUR = 17 h
-    # et n'est jamais relevé : les trois `min(…, 17 * 60)` ci-dessous sont donc l'IDENTITÉ. Ils
+    # ⚠️ SEULS LES PLAFONDS À 16 H AGISSENT. `acceptable_end` part de la fin de la fenêtre et
+    # n'est jamais relevé : les trois `min(…, fin)` ci-dessous sont donc l'IDENTITÉ. Ils
     # explicitent des paliers (26-30 °C, vent 12-18, air sec) dont la réponse correcte se trouve
-    # être la valeur par défaut — le comportement est juste, mais on pourrait croire en lisant
+    # être la fin de la fenêtre — le comportement est juste, mais on pourrait croire en lisant
     # qu'une règle « 26-30 °C = fenêtre réduite » s'applique. Elle ne s'applique pas.
     # Ne PAS « corriger » en abaissant ces paliers sans raison agronomique : ce serait resserrer
     # la fenêtre de semis, pas nettoyer du code.
+    # ⚠️ `fin` et non plus `17 * 60` (0.92.0) : avec une fin réglée à 18 h, ces trois lignes
+    # seraient devenues de VRAIS plafonds à 17 h, que la page ne montre nulle part. Seul le
+    # plafond de 16 h des jours de pluie, de forte chaleur ou de vent fort reste écrit en dur.
     if pluie_24h >= 0.5 or pluie_demain >= 0.5 or humidite_value >= 70.0:
         acceptable_end = min(acceptable_end, 16 * 60)
     elif temperature is not None and temperature >= 30.0:
         acceptable_end = min(acceptable_end, 16 * 60)
     elif temperature is not None and temperature >= 26.0:
-        acceptable_end = min(acceptable_end, 17 * 60)
+        acceptable_end = min(acceptable_end, fin)
 
     if vent_value >= 18.0:
         acceptable_end = min(acceptable_end, 16 * 60)
     elif vent_value >= 12.0:
-        acceptable_end = min(acceptable_end, 17 * 60)
+        acceptable_end = min(acceptable_end, fin)
 
     if humidite_value <= 35.0:
-        acceptable_end = min(acceptable_end, 17 * 60)
+        acceptable_end = min(acceptable_end, fin)
 
     return optimal_start, optimal_end, acceptable_end, band
 
@@ -1220,7 +1291,7 @@ def _dynamic_weekly_guardrail(
         minimum -= 1.0
         maximum -= 0.5
 
-    if phase_dominante == "Sursemis":
+    if is_seeding_phase(phase_dominante):
         minimum = max(0.5, minimum - 8.0)
         maximum = max(minimum + 1.0, maximum - 8.0)
     elif phase_dominante in {"Fertilisation", "Biostimulant"}:
@@ -1298,9 +1369,9 @@ def _confidence_assessment(
 
     if phase_dominante in {"Traitement", "Hivernage"}:
         score += 0
-    elif phase_dominante == "Sursemis":
+    elif is_seeding_phase(phase_dominante):
         score -= 2
-        reasons.append("sursemis: besoin plus variable")
+        reasons.append(f"{phase_dominante.lower()}: besoin plus variable")
 
     if block_reason in {"pluie_active", "mode_bloque"}:
         score += 0
@@ -1567,7 +1638,7 @@ def _evaluer_risque_gazon(
     if heat_stress_phase == "stress_prolonge":
         _monter("stress prolongé")
 
-    # PLANCHER — en Sursemis, la phase impose « au moins modéré » quoi qu'en dise l'eau : un
+    # PLANCHER — en Semis comme en Sursemis, la phase impose « au moins modéré » quoi qu'en dise l'eau : un
     # semis fragile ne doit jamais être annoncé « sans risque ». Le helper ne peut donc que
     # MONTER au-dessus de ce niveau, jamais descendre en dessous. En phase Normal, aucun
     # plancher : c'est là tout l'objet du correctif — pouvoir redescendre à « faible » quand
@@ -1579,6 +1650,32 @@ def _evaluer_risque_gazon(
     if not raisons:
         raisons.append("aucun facteur de risque")
     return niveau, raisons
+
+
+def _germination_risk_floor(
+    *,
+    bilan_hydrique_mm: float,
+    pression_hydrique: float,
+    risque_precedent: str | None,
+) -> str:
+    """Stabilise le plancher germination sans retarder une vraie alerte.
+
+    Le niveau monte aux seuils agronomiques historiques (-1,0 mm / 2,0), puis ne
+    redescend qu'une fois revenu franchement dans la zone sûre (-0,6 mm / 1,6).
+    Les risques sévères restent évalués séparément par `_evaluer_risque_gazon`.
+    """
+    precedent = str(risque_precedent or "").strip().lower()
+    if precedent == "eleve":
+        return (
+            "eleve"
+            if bilan_hydrique_mm <= -0.6 or pression_hydrique >= 1.6
+            else "modere"
+        )
+    return (
+        "eleve"
+        if bilan_hydrique_mm <= -1.0 or pression_hydrique >= 2.0
+        else "modere"
+    )
 
 
 def _clamp(value: float, minimum: float, maximum: float) -> float:
@@ -1644,6 +1741,7 @@ class _WateringCtx:
     pluie_probabilite_24h: float
     humidite: float
     temperature: float
+    forecast_temperature_today: float | None
     etp: float
     vent: float | None
     soil_profile: str
@@ -1689,6 +1787,8 @@ class _WateringCtx:
     saturation_block: bool = False
     evening_allowed: bool = False
     sunset_minute: int | None = None
+    # Réglages de l'instance (page « Gazon ») : vide = les constantes de ce module.
+    reglages: Mapping[str, Any] = field(default_factory=dict)
 
 
 def _build_watering_ctx(
@@ -1703,6 +1803,7 @@ def _build_watering_ctx(
     pluie_probabilite_max_3j: float,
     humidite: float,
     temperature: float,
+    vent: float | None,
     etp: float,
     type_sol: str,
     weather_profile: dict[str, Any],
@@ -1716,10 +1817,11 @@ def _build_watering_ctx(
     evening_cooling_enabled: bool = True,
     fungal_risk_level: str | None = None,
     points_etp_stress: int | None = None,
+    reglages: Mapping[str, Any] | None = None,
 ) -> _WateringCtx:
     pluie_probabilite_24h_raw = _to_float(weather_profile.get("weather_precipitation_probability"))
     pluie_probabilite_24h = pluie_probabilite_24h_raw if pluie_probabilite_24h_raw is not None else 0.0
-    vent = _to_float(weather_profile.get("weather_wind_speed"))
+    vent = vent if vent is not None else _to_float(weather_profile.get("weather_wind_speed"))
     soil_profile = (type_sol or "limoneux").strip().lower()
     # Garde-fou hebdo : on ne compte que les arrosages pilotés par l'intégration (pas les sessions
     # externes `zone_session`), cohérent avec le budget mm exclu côté water.py.
@@ -1814,7 +1916,7 @@ def _build_watering_ctx(
     )
     seasonal_profile_payload = _seasonal_profile_payload(today)
     morning_start_minute, morning_end_minute, acceptable_end_minute, temperature_band = _morning_window_bounds(
-        phase_dominante=phase_dominante, temperature=temperature,
+        phase_dominante=phase_dominante, temperature=temperature, reglages=reglages,
     )
     return _WateringCtx(
         phase_dominante=phase_dominante,
@@ -1832,6 +1934,7 @@ def _build_watering_ctx(
         pluie_probabilite_24h=pluie_probabilite_24h,
         humidite=humidite,
         temperature=temperature,
+        forecast_temperature_today=forecast_temperature_today,
         etp=etp,
         vent=vent,
         soil_profile=soil_profile,
@@ -1867,6 +1970,7 @@ def _build_watering_ctx(
         morning_end_minute=morning_end_minute,
         acceptable_end_minute=acceptable_end_minute,
         temperature_band=temperature_band,
+        reglages=dict(reglages or {}),
     )
 
 
@@ -1882,7 +1986,9 @@ def _fill_post_preamble(ctx: _WateringCtx) -> None:
         pluie_3j=ctx.pluie_3j,
         pluie_probabilite_max_3j=ctx.pluie_probabilite_max_3j,
     )
-    ctx.saturation_block = ctx.phase_dominante != "Sursemis" and ctx.bilan_hydrique_mm > SATURATION_BILAN_HYDRIQUE_MM
+    ctx.saturation_block = (
+        not is_seeding_phase(ctx.phase_dominante) and ctx.bilan_hydrique_mm > SATURATION_BILAN_HYDRIQUE_MM
+    )
     _minutes_to_sunset = (
         ctx.sunset_minute - ctx.now_minutes if ctx.sunset_minute is not None else None
     )
@@ -1966,7 +2072,9 @@ def _profile_for_sursemis(ctx: _WateringCtx) -> dict[str, Any]:
         vent=ctx.vent,
         pluie_24h=ctx.pluie_24h,
         pluie_demain=ctx.pluie_demain,
+        reglages=ctx.reglages,
     )
+    vent_max = float(lire(ctx.reglages, "graines_vent_max", SEMIS_VENT_MAX_KMH))
     resolved_policy = _resolve_phase_policy(
         phase_dominante=ctx.phase_dominante,
         sous_phase=ctx.sous_phase,
@@ -1982,6 +2090,7 @@ def _profile_for_sursemis(ctx: _WateringCtx) -> dict[str, Any]:
         pluie_demain=ctx.pluie_demain,
         pluie_probabilite_24h=ctx.pluie_probabilite_24h,
         temperature=ctx.temperature,
+        reglages=ctx.reglages,
     )
     sursemis_state = _sursemis_micro_apport_decision(
         policy=sursemis_policy,
@@ -1993,6 +2102,8 @@ def _profile_for_sursemis(ctx: _WateringCtx) -> dict[str, Any]:
         bilan_hydrique_mm=ctx.bilan_hydrique_mm,
         mm_detected_24h=float(ctx.water_balance.get("arrosage_recent_jour", 0.0) or 0.0),
         temperature=ctx.temperature,
+        forecast_temperature_today=ctx.forecast_temperature_today,
+        etp=ctx.etp,
         humidite=ctx.humidite,
         humidite_sol=(
             _to_float(ctx.water_balance.get("humidite_sol"))
@@ -2001,6 +2112,7 @@ def _profile_for_sursemis(ctx: _WateringCtx) -> dict[str, Any]:
         ),
         vent=ctx.vent,
         soil_profile=ctx.soil_profile,
+        reglages=ctx.reglages,
     )
     mm_cible = float(sursemis_state.get("surface_cycle_mm") or 0.0) if sursemis_state["allowed"] else 0.0
     block_reason = sursemis_state["block_reason"]
@@ -2017,7 +2129,7 @@ def _profile_for_sursemis(ctx: _WateringCtx) -> dict[str, Any]:
             fenetre_optimale = "attendre"
         elif ctx.now_minutes < opt_start:
             fenetre_optimale = "ce_matin"
-        elif ctx.now_minutes < acc_end and (ctx.vent is None or ctx.vent < 15):
+        elif ctx.now_minutes < acc_end and (ctx.vent is None or ctx.vent < vent_max):
             fenetre_optimale = "maintenant"
         else:
             fenetre_optimale = "attendre"
@@ -2026,7 +2138,7 @@ def _profile_for_sursemis(ctx: _WateringCtx) -> dict[str, Any]:
     elif policy_key == "germination_stricte":
         fenetre_optimale = "apres_pluie" if ctx.pluie_compensatrice or ctx.pluie_proche else (
             "ce_matin" if ctx.now_minutes < opt_start
-            else "maintenant" if ctx.now_minutes < acc_end and (ctx.vent is None or ctx.vent < 15)
+            else "maintenant" if ctx.now_minutes < acc_end and (ctx.vent is None or ctx.vent < vent_max)
             else "demain_matin"
         )
         niveau_action = "critique" if ctx.bilan_hydrique_mm <= -1.0 or ctx.pression_hydrique >= 1.8 else "a_faire"
@@ -2034,7 +2146,7 @@ def _profile_for_sursemis(ctx: _WateringCtx) -> dict[str, Any]:
     else:
         fenetre_optimale = "apres_pluie" if ctx.pluie_compensatrice or ctx.pluie_proche else (
             "ce_matin" if ctx.now_minutes < opt_start
-            else "maintenant" if ctx.now_minutes < acc_end and (ctx.vent is None or ctx.vent < 15)
+            else "maintenant" if ctx.now_minutes < acc_end and (ctx.vent is None or ctx.vent < vent_max)
             else "demain_matin"
         )
         niveau_action = "critique" if ctx.pression_hydrique >= 2.2 or ctx.bilan_hydrique_mm <= -1.5 else "a_faire"
@@ -2043,7 +2155,7 @@ def _profile_for_sursemis(ctx: _WateringCtx) -> dict[str, Any]:
         water_balance=ctx.water_balance,
         bilan_hydrique_mm=ctx.bilan_hydrique_mm,
         pression_hydrique=ctx.pression_hydrique,
-        utiliser_reserve=False,          # Sursemis
+        utiliser_reserve=False,          # Semis / Sursemis
         plancher=risque_gazon,           # la phase impose son minimum
         vent=ctx.vent,
         hauteur_gazon=ctx.hauteur_gazon,
@@ -2067,7 +2179,7 @@ def _profile_for_sursemis(ctx: _WateringCtx) -> dict[str, Any]:
         confidence_score=confidence_score,
         confidence_reasons=confidence_reasons,
         raison_decision_base=(
-            f"Sursemis / {ctx.sous_phase}: stratégie semis_frequent en cycle de surface, "
+            f"{ctx.phase_dominante} / {ctx.sous_phase}: stratégie semis_frequent en cycle de surface, "
             f"{daily_cycles_target} cycle(s)/jour cible(s), {cycle_spacing_minutes} min entre cycles."
         ),
         block_reason=block_reason,
@@ -2529,10 +2641,12 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
         <= ctx.now_minutes
         < ctx.sunset_minute
     )
+    cooling_temp_min = float(lire(ctx.reglages, "rafraichissement_temperature", EVENING_COOLING_MIN_TEMP))
+    cooling_mm = float(lire(ctx.reglages, "rafraichissement_dose", EVENING_COOLING_MM))
     cooling_active = (
         ctx.evening_cooling_enabled
         and ctx.heat_stress_level in {"eleve", "severe"}
-        and ctx.temperature >= EVENING_COOLING_MIN_TEMP
+        and ctx.temperature >= cooling_temp_min
         and ctx.evening_allowed
         and cooling_window
         and not ctx.pluie_compensatrice
@@ -2547,8 +2661,8 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
         and not ctx.saturation_block
     )
     if cooling_active:
-        mm_cible = EVENING_COOLING_MM
-        mm_final = EVENING_COOLING_MM
+        mm_cible = cooling_mm
+        mm_final = cooling_mm
         block_reason = None
     # Anticipation (affichage) : le rafraîchissement du soir est PROBABLE quand il SERAIT
     # réellement l'action du soir — mêmes conditions que `cooling_active` (vague de chaleur, vrai
@@ -2558,7 +2672,7 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
     evening_cooling_likely = bool(
         ctx.evening_cooling_enabled
         and ctx.heat_stress_level in {"eleve", "severe"}
-        and ctx.temperature >= EVENING_COOLING_MIN_TEMP
+        and ctx.temperature >= cooling_temp_min
         and ctx.evening_allowed
         and not ctx.pluie_compensatrice
         and not ctx.pluie_proche
@@ -2585,16 +2699,17 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
             else None
         ),
         "temperature": round(ctx.temperature, 1),
-        "temperature_min_cooling": EVENING_COOLING_MIN_TEMP,
+        "temperature_min_cooling": cooling_temp_min,
         "pluie_block": bool(ctx.pluie_compensatrice or ctx.pluie_proche),
         "depletion_ratio": round(_depletion_ratio, 3),
         "mad_ratio": round(_mad_ratio, 2),
         "block_reason": block_reason,
     }
     passages = 1
+    seuil_decoupage_mm = float(lire(ctx.reglages, "arrosage_decoupage_seuil", FRACTIONNEMENT_NORMAL_SEUIL_MM))
     if max_session_mm is not None and mm_final > max_session_mm:
         passages = max(passages, int(ceil(mm_final / max_session_mm)))
-    elif mm_final > FRACTIONNEMENT_NORMAL_SEUIL_MM:
+    elif mm_final > seuil_decoupage_mm:
         passages = 2
     if ctx.recent_watering_count >= 2 and ctx.recent_watering_mm_7j >= ctx.guardrail_max_mm:
         passages = max(passages, 2)
@@ -2610,8 +2725,8 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
     # après deux arrosages récents) : imposer alors 25 minutes d'attente à une petite dose
     # rallongeait la séance sans rien apporter, et repoussait la fin hors du créneau frais.
     pause_minutes = (
-        PAUSE_ENTRE_PASSAGES_MIN
-        if passages > 1 and mm_final >= PAUSE_LONGUE_MIN_DOSE_MM
+        int(lire(ctx.reglages, "arrosage_pause_duree", PAUSE_ENTRE_PASSAGES_MIN))
+        if passages > 1 and mm_final >= float(lire(ctx.reglages, "arrosage_pause_dose_min", PAUSE_LONGUE_MIN_DOSE_MM))
         else 0
     )
     confidence_score, confidence_level, confidence_reasons = _confidence(ctx, block_reason, mm_final)
@@ -2731,6 +2846,7 @@ def _profile_for_agro_phases(ctx: _WateringCtx) -> dict[str, Any]:
         pluie_compensatrice=ctx.pluie_compensatrice,
         temperature=ctx.temperature,
         saturation_block=ctx.saturation_block,
+        reglages=ctx.reglages,
     )
     # ⚠️ LE PLANCHER AGIT ICI EN PREMIER, ET C'EST LE VRAI. `_clamp(besoin, minimum, maximum)`
     # remonte la cible au minimum de la politique AVANT tout garde-fou de déficit : les fonctions
@@ -2922,6 +3038,7 @@ def compute_watering_profile(
     pluie_probabilite_max_3j: float | None = None,
     humidite: float | None = None,
     temperature: float | None = None,
+    vent: float | None = None,
     etp: float | None = None,
     type_sol: str = "limoneux",
     weather_profile: dict[str, Any] | None = None,
@@ -2935,11 +3052,13 @@ def compute_watering_profile(
     evening_cooling_enabled: bool = True,
     fungal_risk_level: str | None = None,
     points_etp_stress: int | None = None,
+    reglages: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     today = today or _current_date()
     weather_profile = weather_profile or {}
     history = [item for item in (history or []) if isinstance(item, dict)]
     ctx = _build_watering_ctx(
+        reglages=reglages,
         phase_dominante=phase_dominante,
         sous_phase=sous_phase,
         water_balance=water_balance,
@@ -2952,6 +3071,7 @@ def compute_watering_profile(
         pluie_probabilite_max_3j=pluie_probabilite_max_3j or 0.0,
         humidite=humidite or 0.0,
         temperature=temperature or 0.0,
+        vent=vent,
         etp=etp or 0.0,
         type_sol=type_sol,
         weather_profile=weather_profile,
@@ -2976,7 +3096,7 @@ def compute_watering_profile(
     if is_active_rain_weather(weather_profile):
         return _profile_for_blocked(ctx, "pluie_active")
     _fill_post_preamble(ctx)
-    if phase_dominante == "Sursemis":
+    if is_seeding_phase(phase_dominante):
         return _profile_for_sursemis(ctx)
     if phase_dominante == "Traitement":
         return _profile_for_traitement(ctx)
@@ -3086,6 +3206,8 @@ def compute_action_guidance(
     minutes_to_sunset: float | None = None,
     fungal_risk_level: str | None = None,
     points_etp_stress: int | None = None,
+    reglages: Mapping[str, Any] | None = None,
+    risque_precedent: str | None = None,
 ) -> dict[str, Any]:
     advanced_context = advanced_context or {}
     pluie_24h = pluie_24h or 0.0
@@ -3115,10 +3237,25 @@ def compute_action_guidance(
     now_minutes = now_hour * 60 + int(now.minute if hour_of_day is None else 0)
     vent = _to_float(advanced_context.get("vent"))
     hauteur_gazon = _to_float(advanced_context.get("hauteur_gazon"))
-    optimal_start_minute, optimal_end_minute, acceptable_end_minute, temperature_band = _morning_window_bounds(
-        phase_dominante=phase_dominante,
-        temperature=temperature,
-    )
+    if is_seeding_phase(phase_dominante):
+        # Semis et sursemis n'arrosent jamais à l'aube : leurs micro-cycles vivent de 10 h à 17 h.
+        # Calculées ici et non dans la seule branche semis, plus bas : les sorties anticipées (pluie
+        # active, objectif nul) publiaient sinon la fenêtre du matin standard. Les jours où le cycle
+        # était bloqué (froid, pluie), les capteurs affichaient 03:45 → 10:00 (vérifié le 16/09/2026).
+        optimal_start_minute, optimal_end_minute, acceptable_end_minute, temperature_band = _semis_window_bounds(
+            temperature=temperature,
+            humidite=humidite,
+            vent=vent,
+            pluie_24h=pluie_24h,
+            pluie_demain=pluie_demain,
+            reglages=reglages,
+        )
+    else:
+        optimal_start_minute, optimal_end_minute, acceptable_end_minute, temperature_band = _morning_window_bounds(
+            phase_dominante=phase_dominante,
+            temperature=temperature,
+            reglages=reglages,
+        )
     heat_stress_level = _heat_stress_level(
         temperature=temperature,
         etp=etp,
@@ -3171,7 +3308,7 @@ def compute_action_guidance(
 
     if is_active_rain_weather(advanced_context):
         return _build_guidance_window_payload(
-            risque_gazon="modere" if phase_dominante == "Sursemis" else "faible",
+            risque_gazon="modere" if is_seeding_phase(phase_dominante) else "faible",
             niveau_action="surveiller" if phase_dominante != "Normal" else "aucune_action",
             fenetre_optimale="apres_pluie",
             heat_stress_level=heat_stress_level,
@@ -3220,14 +3357,16 @@ def compute_action_guidance(
             evening_allowed=evening_allowed,
         )
 
-    if phase_dominante == "Sursemis":
+    if is_seeding_phase(phase_dominante):
         optimal_start_minute, optimal_end_minute, acceptable_end_minute, temperature_band = _semis_window_bounds(
             temperature=temperature,
             humidite=humidite,
             vent=vent,
             pluie_24h=pluie_24h,
             pluie_demain=pluie_demain,
+            reglages=reglages,
         )
+        vent_max = float(lire(reglages, "graines_vent_max", SEMIS_VENT_MAX_KMH))
         policy_key, _, transition_ready, tonte_count = _select_sursemis_policy(
             history=[item for item in (history or []) if isinstance(item, dict)],
             sous_phase=sous_phase,
@@ -3239,6 +3378,7 @@ def compute_action_guidance(
             pluie_demain=pluie_demain,
             pluie_probabilite_24h=pluie_probabilite_max_3j,
             temperature=temperature,
+            reglages=reglages,
         )
         if policy_key == "germination_stricte":
             niveau_action = "critique" if pression_hydrique >= 1.8 or bilan_hydrique_mm <= -1.0 else "a_faire"
@@ -3253,18 +3393,22 @@ def compute_action_guidance(
                 fenetre_optimale = "attendre"
             elif now_minutes < optimal_start_minute:
                 fenetre_optimale = "ce_matin"
-            elif now_minutes < acceptable_end_minute and (vent is None or vent < 15):
+            elif now_minutes < acceptable_end_minute and (vent is None or vent < vent_max):
                 fenetre_optimale = "maintenant"
             else:
                 fenetre_optimale = "attendre"
         elif now_minutes < optimal_start_minute:
             fenetre_optimale = "ce_matin"
-        elif now_minutes < acceptable_end_minute and (vent is None or vent < 15):
+        elif now_minutes < acceptable_end_minute and (vent is None or vent < vent_max):
             fenetre_optimale = "maintenant"
         else:
             fenetre_optimale = "demain_matin"
         if policy_key == "germination_stricte":
-            risque_gazon = "eleve" if bilan_hydrique_mm <= -1.0 or pression_hydrique >= 2.0 else "modere"
+            risque_gazon = _germination_risk_floor(
+                bilan_hydrique_mm=bilan_hydrique_mm,
+                pression_hydrique=pression_hydrique,
+                risque_precedent=risque_precedent,
+            )
         elif policy_key == "reprise_transition" and transition_ready:
             risque_gazon = "modere" if pression_hydrique < 2.0 else "eleve"
         else:
@@ -3481,7 +3625,7 @@ def compute_next_reevaluation(
         return "dans quelques heures"
     if phase_dominante in {"Traitement", "Hivernage"}:
         return "dans 24 h"
-    if phase_dominante == "Sursemis":
+    if is_seeding_phase(phase_dominante):
         return "dans 24 h"
     if niveau_action == "critique":
         return "dans 12 h"
@@ -3497,9 +3641,14 @@ def compute_tonte_statut(
     tonte_autorisee: bool,
     score_tonte: int,
     risque_gazon: str,
+    blocage_code: str | None = None,
 ) -> str:
     if not tonte_autorisee:
-        if phase_dominante in {"Sursemis", "Traitement", "Hivernage"}:
+        if phase_dominante in {"Semis", "Traitement", "Hivernage"}:
+            return "interdite"
+        # En sursemis, la phase n'interdit la tonte que pendant la levée (`phase_sursemis`). Après,
+        # un refus vient de la météo ou du gazon : « interdite » mentirait sur la raison.
+        if phase_dominante == "Sursemis" and blocage_code == "phase_sursemis":
             return "interdite"
         if score_tonte >= 70 or risque_gazon == "eleve":
             return "deconseillee"

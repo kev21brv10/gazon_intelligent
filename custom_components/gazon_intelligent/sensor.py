@@ -1420,6 +1420,19 @@ def _motif_de_blocage_effectif(entite) -> str | None:
     return motif
 
 
+# Le suivi des cycles de graines, publié par le coordinateur (0.96.1).
+_CLES_SUIVI_GRAINES = (
+    "semis_followup_state",
+    "semis_followup_due_at",
+    "semis_followup_due_display",
+    "semis_cycles_completed_today",
+    "semis_cycles_remaining_today",
+    "semis_daily_cycles_target",
+    "semis_cycle_spacing_minutes",
+    "semis_last_cycle_at",
+    "semis_last_cycle_display",
+)
+
 class GazonArrosageAutoBlocageSensor(GazonEntityBase, SensorEntity):
     """Diagnostic : dit explicitement pourquoi l'arrosage automatique ne se déclenche pas."""
 
@@ -1708,6 +1721,12 @@ class GazonHauteurTonteSensor(GazonEntityBase, SensorEntity):
             "hauteur_tonte_max_cm",
             "hauteur_tonte_garde_fou_label",
             "hauteur_tonte_motif",
+            "semis_mode",
+            "semis_age_jours",
+            "plantules_levee_date",
+            "plantules_hauteur_estimee_cm",
+            "plantules_premiere_coupe_date",
+            "plantules_coupes",
             "tonte_statut",
             "phase_active",
             "mowing_frequency_target_per_week",
@@ -4242,6 +4261,42 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
                 "watering_cause": "post_application",
             }
 
+        semis_followup_state = str(extra.get("semis_followup_state") or "").strip().lower()
+        semis_due_display = str(extra.get("semis_followup_due_display") or "").strip()
+        try:
+            semis_remaining = int(extra.get("semis_cycles_remaining_today") or 0)
+        except (TypeError, ValueError):
+            semis_remaining = 0
+        if semis_followup_state == "waiting" and semis_remaining > 0 and semis_due_display:
+            summary = f"Prochain micro-cycle prévu le {semis_due_display}"
+            if block_reason in {"pluie_active", "pluie_en_cours", "rain", "rain_detected"}:
+                summary = f"{summary}; pluie surveillée"
+            return {
+                "status": "en_attente",
+                "next_action": "Attendre le prochain micro-cycle",
+                "summary": summary,
+                "target_display": semis_due_display,
+                "target_datetime": extra.get("semis_followup_due_at"),
+                "watering_cause": "hydrique",
+            }
+        if semis_followup_state == "complete" and semis_due_display:
+            try:
+                semis_completed = int(extra.get("semis_cycles_completed_today") or 0)
+            except (TypeError, ValueError):
+                semis_completed = 0
+            cycles_label = f"{semis_completed} cycle{'s' if semis_completed != 1 else ''}"
+            return {
+                "status": "en_attente",
+                "next_action": "Attendre le premier créneau du prochain jour",
+                "summary": (
+                    f"Objectif du jour atteint ({cycles_label}); "
+                    f"prochain arrosage prévu le {semis_due_display}"
+                ),
+                "target_display": semis_due_display,
+                "target_datetime": extra.get("semis_followup_due_at"),
+                "watering_cause": "hydrique",
+            }
+
         # ⚠️ Un garde-fou armé n'est un BLOCAGE que s'il a retenu de l'eau — cf.
         # `blocage_sans_objet` (assistant.py). Sinon on laisse passer vers « rien à faire ».
         _sans_objet = blocage_sans_objet(
@@ -4486,7 +4541,9 @@ class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
             "forecast_probabilite_max_3j",
         )
         if attrs:
-            return attrs
+            # Le suivi des graines vit dans les données du coordinateur, pas dans la décision :
+            # sans cet ajout, `_attrs_from_result` l'ignorait dès qu'une décision existait (0.96.1).
+            return {**attrs, **(self._attrs_from_data(*_CLES_SUIVI_GRAINES) or {})}
         return self._attrs_from_data(
             "watering_cause",
             "next_action_date",
@@ -4647,7 +4704,7 @@ class GazonProchainArrosageSensor(GazonFenetreOptimaleSensor):
         contextual = self._contextual_watering_state() or {}
         status = str(contextual.get("status") or "").strip().lower()
         objective_mm = _objective_mm_value(self)
-        target_display = self._target_display()
+        target_display = str(contextual.get("target_display") or "").strip() or self._target_display()
         window_value = str(self._decision_value("fenetre_optimale") or "").strip().lower()
         window_label = _window_display_label(window_value)
 
@@ -4683,8 +4740,16 @@ class GazonProchainArrosageSensor(GazonFenetreOptimaleSensor):
         window_value = str(self._decision_value("fenetre_optimale") or "").strip().lower()
         window_label = _window_display_label(window_value)
         block_reason = str(base_attrs.get("block_reason") or "").strip()
-        expose_target = status not in {"bloque", "termine"} and objective_mm > 0.0
-        target_date = self._target_date() if expose_target else None
+        contextual_target_display = str(contextual.get("target_display") or "").strip()
+        contextual_target_datetime = str(contextual.get("target_datetime") or "").strip()
+        expose_target = status not in {"bloque", "termine"} and (
+            objective_mm > 0.0 or bool(contextual_target_display)
+        )
+        target_date = (
+            contextual_target_datetime[:10]
+            if expose_target and contextual_target_datetime
+            else self._target_date() if expose_target else None
+        )
         optimal_target_datetime = (
             _datetime_from_date_and_minute(
                 target_date,
@@ -4706,7 +4771,8 @@ class GazonProchainArrosageSensor(GazonFenetreOptimaleSensor):
             else None
         )
         target_datetime = (
-            departure_datetime
+            contextual_target_datetime
+            or departure_datetime
             or optimal_target_datetime
             or _datetime_from_date_and_minute(
                 target_date,
@@ -4718,7 +4784,11 @@ class GazonProchainArrosageSensor(GazonFenetreOptimaleSensor):
         summary = str(contextual.get("summary") or "").strip() or None
         next_action = str(contextual.get("next_action") or "").strip() or None
         block_reason_label = _block_reason_display_label(block_reason)
-        target_display = self._target_display() if expose_target else None
+        target_display = (
+            contextual_target_display or self._target_display()
+            if expose_target
+            else None
+        )
         if status == "bloque":
             if block_reason in {"sol_non_adapte", "soil_wet", "wet_grass"}:
                 summary = "Arrosage à reprendre après ressuyage du sol"

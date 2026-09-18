@@ -733,6 +733,141 @@ class WateringSessionMonitoringTests(unittest.TestCase):
         self.assertFalse(should_launch)
         self.assertEqual(reason, "relaunch_cooldown")
 
+    def test_le_cycle_confie_au_cerveau_les_reglages_de_l_entree(self) -> None:
+        # Le chemin de production : options de l'entrée → nettoyage → `brain.reglages`, AVANT le
+        # calcul. Une valeur égale au conseil n'est pas transmise (elle ne change rien).
+        coordinator = _build_update_data_coordinator(weather_temperature=20.0)
+        brain = coordinator.brain
+        calcul = type(brain).compute_snapshot
+        vus: list[dict[str, object]] = []
+
+        def compute_snapshot(**kwargs):
+            vus.append(dict(getattr(brain, "reglages", {}) or {}))
+            return calcul(brain, **kwargs)
+
+        brain.compute_snapshot = compute_snapshot
+        coordinator.entry.options = {"reglages": {"tonte_max_par_jour": 3, "tonte_vent_a_eviter": 20}}
+        asyncio.run(coordinator._async_update_data())
+        self.assertEqual(vus, [{"tonte_max_par_jour": 3}])
+
+    def test_relaunch_cooldown_suit_le_reglage_de_la_page(self) -> None:
+        # Page « Gazon » : délai de relance réglé à 1 h dans les options de l'entrée. Un cycle fini
+        # il y a 2 h ne bloque plus ; sans le réglage, les 6 h du moteur le bloquent encore.
+        coordinator = _build_coordinator()
+        coordinator.history = []
+        snapshot = _ready_launch_snapshot(coordinator)
+        coordinator._runtime_state["last_auto_irrigation_completed_at"] = (
+            coordinator._current_utc_datetime() - timedelta(hours=2)
+        )
+        coordinator.entry.options = {"reglages": {"arrosage_delai_relance": 1}}
+        self.assertEqual(coordinator._should_launch_auto_irrigation(snapshot), (True, "ready"))
+        coordinator.entry.options = {}
+        self.assertEqual(coordinator._should_launch_auto_irrigation(snapshot), (False, "relaunch_cooldown"))
+
+    def test_les_creneaux_des_graines_suivent_l_ouverture_reglee(self) -> None:
+        coordinator = _build_coordinator()
+        coordinator.history = []
+        snapshot = {
+            "watering_strategy": "semis_frequent",
+            "objective_scope": "surface_cycle",
+            "watering_stage": "germination",
+            "surface_cycle_mm": 1.5,
+            "daily_cycles_target": 3,
+            "cycle_spacing_minutes": 120,
+            "seeding_transition_ready": False,
+        }
+        current = datetime(2026, 4, 27, 7, 30, tzinfo=timezone.utc)
+        coordinator._current_datetime = lambda: current
+        coordinator._current_utc_datetime = lambda: current
+        coordinator._current_date = lambda: current.date()
+        coordinator._local_datetime_text = lambda moment: moment.isoformat()
+        progress = coordinator._semis_cycle_progress(snapshot)
+        assert progress is not None
+        self.assertEqual((progress["next_due_at"].hour, progress["next_due_at"].minute), (10, 0))
+        coordinator.entry.options = {"reglages": {"graines_fenetre_debut": 8 * 60}}
+        progress = coordinator._semis_cycle_progress(snapshot)
+        assert progress is not None
+        self.assertEqual((progress["next_due_at"].hour, progress["next_due_at"].minute), (8, 0))
+        self.assertEqual(progress["cycle_slots_minutes"], (480, 720, 960))
+
+    def test_le_suivi_des_graines_est_publie(self) -> None:
+        # 0.96.1 : les neuf clés `semis_*` valaient toujours None dans les données publiées,
+        # `DecisionResult` ne les portant pas.
+        coordinator = _build_coordinator()
+        current = datetime(2026, 9, 17, 16, 30, tzinfo=timezone.utc)
+        coordinator._current_datetime = lambda: current
+        coordinator._current_utc_datetime = lambda: current
+        coordinator._current_date = lambda: current.date()
+        coordinator._local_datetime_text = lambda moment: moment.isoformat()
+        coordinator.history = [
+            {
+                "type": "arrosage", "date": "2026-09-17",
+                "started_at": f"2026-09-17T{heure}:00+00:00", "recorded_at": f"2026-09-17T{heure}:00+00:00",
+                "watering_strategy": "semis_frequent", "objective_scope": "surface_cycle",
+            }
+            for heure in ("06:30", "08:44", "10:58", "13:12")
+        ]
+        graines = {
+            "watering_strategy": "semis_frequent", "objective_scope": "surface_cycle",
+            "watering_stage": "germination", "surface_cycle_mm": 1.2, "daily_cycles_target": 3,
+            "cycle_spacing_minutes": 120, "seeding_transition_ready": False,
+        }
+        publie = coordinator._build_public_snapshot_data(
+            graines, pluie_demain_source="meteo_forecast", temperature=21.0, temperature_source="capteur",
+            temperature_reference_hydrique=21.0, forecast_summary={}, et0_source="capteur",
+        )
+        self.assertEqual(publie["semis_followup_state"], "complete")
+        self.assertEqual(publie["semis_cycles_completed_today"], 4)
+        self.assertEqual(publie["semis_cycles_remaining_today"], 0)
+        self.assertEqual(publie["semis_daily_cycles_target"], 3)
+        self.assertEqual(publie["semis_last_cycle_at"], "2026-09-17T13:12:00+00:00")
+        self.assertEqual(publie["semis_followup_due_at"], "2026-09-18T10:00:00+00:00")
+        self.assertEqual(publie["semis_followup_due_display"], "2026-09-18T10:00:00+00:00")
+
+        coordinator.history = coordinator.history[:2]
+        publie = coordinator._build_public_snapshot_data(
+            graines, pluie_demain_source="meteo_forecast", temperature=21.0, temperature_source="capteur",
+            temperature_reference_hydrique=21.0, forecast_summary={}, et0_source="capteur",
+        )
+        self.assertEqual(publie["semis_cycles_remaining_today"], 1)
+        self.assertEqual(publie["semis_followup_state"], "ready")
+
+        normal = coordinator._build_public_snapshot_data(
+            {"watering_strategy": "deplete_to_mad"}, pluie_demain_source="meteo_forecast", temperature=21.0,
+            temperature_source="capteur", temperature_reference_hydrique=21.0, forecast_summary={}, et0_source="capteur",
+        )
+        self.assertFalse([cle for cle, valeur in normal.items() if cle.startswith("semis_") and valeur is not None])
+
+    def test_l_espacement_des_graines_part_du_debut_du_cycle(self) -> None:
+        coordinator = _build_coordinator()
+        snapshot = {
+            "watering_strategy": "semis_frequent",
+            "objective_scope": "surface_cycle",
+            "watering_stage": "germination",
+            "surface_cycle_mm": 1.8,
+            "daily_cycles_target": 4,
+            "cycle_spacing_minutes": 120,
+            "seeding_transition_ready": False,
+        }
+        coordinator.history = [{
+            "type": "arrosage",
+            "date": "2026-04-27",
+            "started_at": "2026-04-27T10:00:00+00:00",
+            "recorded_at": "2026-04-27T10:21:00+00:00",
+            "watering_strategy": "semis_frequent",
+            "objective_scope": "surface_cycle",
+            "surface_cycle_mm": 1.8,
+        }]
+        current = datetime(2026, 4, 27, 11, 0, tzinfo=timezone.utc)
+        coordinator._current_datetime = lambda: current
+        coordinator._current_utc_datetime = lambda: current
+        coordinator._current_date = lambda: current.date()
+
+        progress = coordinator._semis_cycle_progress(snapshot)
+        assert progress is not None
+        self.assertEqual(progress["last_cycle_at"], datetime(2026, 4, 27, 10, 0, tzinfo=timezone.utc))
+        self.assertEqual(progress["next_due_at"], datetime(2026, 4, 27, 12, 0, tzinfo=timezone.utc))
+
     def test_relaunch_cooldown_clears_after_delay(self) -> None:
         # Au-delà du cooldown (6 h), un nouveau cycle est de nouveau autorisé.
         coordinator = _build_coordinator()
@@ -2081,8 +2216,14 @@ class WateringSessionMonitoringTests(unittest.TestCase):
         self.assertEqual(progress["state"], "waiting")
         self.assertEqual(progress["cycles_completed_today"], 1)
         self.assertEqual(progress["cycles_remaining_today"], 2)
+        self.assertEqual(progress["cycle_spacing_minutes"], 120)
 
-        current = datetime(2026, 4, 27, 12, 5, tzinfo=timezone.utc)
+        current = datetime(2026, 4, 27, 12, 59, tzinfo=timezone.utc)
+        should_launch, reason = coordinator._should_launch_auto_irrigation(snapshot)
+        self.assertFalse(should_launch)
+        self.assertEqual(reason, "semis_cycle_pending")
+
+        current = datetime(2026, 4, 27, 13, 0, tzinfo=timezone.utc)
         should_launch, reason = coordinator._should_launch_auto_irrigation(snapshot)
         self.assertTrue(should_launch)
         self.assertEqual(reason, "ready")
@@ -2092,7 +2233,7 @@ class WateringSessionMonitoringTests(unittest.TestCase):
                 {
                     "type": "arrosage",
                     "date": "2026-04-27",
-                    "recorded_at": "2026-04-27T12:05:00+00:00",
+                    "recorded_at": "2026-04-27T13:05:00+00:00",
                     "watering_strategy": "semis_frequent",
                     "objective_scope": "surface_cycle",
                     "watering_stage": "germination",
@@ -2108,7 +2249,7 @@ class WateringSessionMonitoringTests(unittest.TestCase):
                 {
                     "type": "arrosage",
                     "date": "2026-04-27",
-                    "recorded_at": "2026-04-27T14:05:00+00:00",
+                    "recorded_at": "2026-04-27T16:05:00+00:00",
                     "watering_strategy": "semis_frequent",
                     "objective_scope": "surface_cycle",
                     "watering_stage": "germination",
@@ -2123,7 +2264,7 @@ class WateringSessionMonitoringTests(unittest.TestCase):
                 },
             ]
         )
-        current = datetime(2026, 4, 27, 15, 0, tzinfo=timezone.utc)
+        current = datetime(2026, 4, 27, 17, 0, tzinfo=timezone.utc)
         should_launch, reason = coordinator._should_launch_auto_irrigation(snapshot)
         self.assertFalse(should_launch)
         self.assertEqual(reason, "semis_target_reached")
@@ -2170,7 +2311,91 @@ class WateringSessionMonitoringTests(unittest.TestCase):
         assert progress is not None
         self.assertEqual(progress["state"], "waiting")
         self.assertEqual(progress["last_cycle_display"], "27/04/2026 à 12:05")
-        self.assertEqual(progress["next_due_display"], "27/04/2026 à 13:35")
+        self.assertEqual(progress["next_due_display"], "27/04/2026 à 14:05")
+        self.assertEqual(progress["cycle_spacing_minutes"], 120)
+
+    def test_deux_cycles_de_germination_sont_repartis_a_deux_heures(self) -> None:
+        coordinator = _build_coordinator()
+        snapshot = {
+            "watering_strategy": "semis_frequent",
+            "objective_scope": "surface_cycle",
+            "watering_stage": "germination",
+            "surface_cycle_mm": 1.2,
+            "daily_cycles_target": 2,
+            "cycle_spacing_minutes": 90,
+        }
+        current = datetime(2026, 4, 27, 8, 0, tzinfo=timezone.utc)
+        coordinator._current_datetime = lambda: current
+        coordinator._current_utc_datetime = lambda: current
+        coordinator._current_date = lambda: current.date()
+
+        progress = coordinator._semis_cycle_progress(snapshot)
+        assert progress is not None
+        slots = progress["cycle_slots_minutes"]
+        self.assertEqual(len(slots), 2)
+        self.assertEqual(slots, (10 * 60, 16 * 60))
+        self.assertGreaterEqual(slots[1] - slots[0], 120)
+        self.assertEqual(progress["cycle_spacing_minutes"], 120)
+
+    def test_deux_cycles_regles_sont_repartis_du_matin_a_l_apres_midi(self) -> None:
+        coordinator = _build_coordinator()
+        coordinator.entry.options = {
+            "reglages": {
+                "graines_fenetre_debut": 8 * 60 + 30,
+                "graines_fenetre_fin": 16 * 60,
+            }
+        }
+        snapshot = {
+            "watering_strategy": "semis_frequent",
+            "objective_scope": "surface_cycle",
+            "watering_stage": "germination",
+            "surface_cycle_mm": 1.2,
+            "daily_cycles_target": 2,
+            "cycle_spacing_minutes": 120,
+        }
+        current = datetime(2026, 9, 18, 8, 0, tzinfo=timezone.utc)
+        coordinator._current_datetime = lambda: current
+        coordinator._current_utc_datetime = lambda: current
+        coordinator._current_date = lambda: current.date()
+
+        progress = coordinator._semis_cycle_progress(snapshot)
+        assert progress is not None
+        self.assertEqual(progress["cycle_slots_minutes"], (510, 900))
+        self.assertEqual(progress["next_due_at"].strftime("%H:%M"), "08:30")
+
+    def test_programme_termine_publie_le_vrai_premier_creneau_du_lendemain(self) -> None:
+        coordinator = _build_coordinator()
+        coordinator.entry.options = {"reglages": {"graines_fenetre_debut": 8 * 60 + 30}}
+        snapshot = {
+            "watering_strategy": "semis_frequent",
+            "objective_scope": "surface_cycle",
+            "watering_stage": "germination",
+            "surface_cycle_mm": 1.2,
+            "daily_cycles_target": 2,
+            "cycle_spacing_minutes": 120,
+        }
+        coordinator.history = [
+            {
+                "type": "arrosage",
+                "date": "2026-09-18",
+                "started_at": f"2026-09-18T{heure}:00+00:00",
+                "watering_strategy": "semis_frequent",
+                "objective_scope": "surface_cycle",
+            }
+            for heure in ("08:30", "10:30")
+        ]
+        current = datetime(2026, 9, 18, 11, 0, tzinfo=timezone.utc)
+        coordinator._current_datetime = lambda: current
+        coordinator._current_utc_datetime = lambda: current
+        coordinator._current_date = lambda: current.date()
+
+        progress = coordinator._semis_cycle_progress(snapshot)
+        assert progress is not None
+        self.assertEqual(progress["state"], "complete")
+        self.assertEqual(
+            progress["next_due_at"],
+            datetime(2026, 9, 19, 8, 30, tzinfo=timezone.utc),
+        )
 
     def test_source_monitoring_refreshes_on_external_entity_change(self) -> None:
         coordinator = _build_coordinator()
@@ -5210,6 +5435,17 @@ class TestDepartCaleSurLeLeverDuSoleil(unittest.TestCase):
         self.assertEqual(self._decision(coordinator), (True, "ready"))
         self.assertEqual(self._publie(coordinator)["watering_departure_minute"], 6 * 60 + 19)
 
+    def test_la_marge_avant_le_lever_suit_le_reglage_de_la_page(self) -> None:
+        # Marge réglée à 30 min : 07:34 − 30 − 24 = 06:40, pour le lanceur ET pour l'heure publiée.
+        def avec_marge(heure: int, minute: int = 0):
+            coordinator = self._coordinateur(heure=heure, minute=minute)
+            coordinator.entry.options = {"reglages": {"arrosage_marge_avant_lever": 30}}
+            return coordinator
+
+        self.assertEqual(self._decision(avec_marge(6, 39)), (False, "waiting_sunrise_departure"))
+        self.assertEqual(self._decision(avec_marge(6, 40)), (True, "ready"))
+        self.assertEqual(self._publie(avec_marge(5))["watering_departure_minute"], 6 * 60 + 40)
+
     def test_sans_lever_connu_on_part_a_l_ouverture_comme_avant(self) -> None:
         self.assertEqual(self._decision(self._coordinateur(heure=4, lever={})), (True, "ready"))
 
@@ -7882,6 +8118,9 @@ class PluieMesureeTests(unittest.TestCase):
         coord._parse_datetime_value = (
             coordinator_mod.GazonIntelligentCoordinator._parse_datetime_value.__get__(coord)
         )
+        # 0.95.0 : le suivi retient QUEL capteur il suit (un autre repart de sa propre lecture).
+        coord._entite_pluie = "sensor.pluie_du_jour"
+        coord._get_conf = lambda cle: coord._entite_pluie if cle == "capteur_pluie_24h" else None
         return coord
 
     def _rejouer(self, lectures, *, depart=None, coord=None):
@@ -7894,6 +8133,17 @@ class PluieMesureeTests(unittest.TestCase):
             coord._current_datetime = lambda t=instant: t
             sortie = coord._suivre_pluie_mesuree(cumul)
         return sortie, coord
+
+    # ── un autre capteur (0.95.0 : la page change les entrées) ──────────────────────────
+    def test_un_autre_capteur_plus_HAUT_n_est_pas_une_averse(self) -> None:
+        _, coord = self._rejouer([(0, 1.0), (10, 1.0)])
+        coord._entite_pluie = "sensor.station_pluie"
+        sortie, _ = self._rejouer([(20, 3.5)], coord=coord)
+        self.assertFalse(sortie["pluie_mesuree_active"], "2,5 mm d'écart entre deux capteurs ne sont pas une averse")
+        self.assertEqual(sortie["pluie_mesuree_lame_mm"], 0.0)
+        sortie, _ = self._rejouer([(30, 3.8)], coord=coord)
+        self.assertTrue(sortie["pluie_mesuree_active"], "la pluie du nouveau capteur est vue")
+        self.assertAlmostEqual(sortie["pluie_mesuree_lame_mm"], 0.3, places=2)
 
     # ── le détecteur de hausse ────────────────────────────────────────────────────────
     def test_sans_capteur_la_reponse_est_inconnue_jamais_un_non(self) -> None:
@@ -8894,6 +9144,209 @@ class PluieDuJourDepuisCumulTests(unittest.TestCase):
         flow = (PACKAGE_DIR / "config_flow.py").read_text(encoding="utf-8")
         self.assertIn("vol.Optional(CONF_CAPTEUR_PLUIE_CUMUL", flow)
 
+    # ── un autre compteur (0.95.0 : la page change les entrées) ──────────────────────────
+    @staticmethod
+    def _brancher(coord, entite):
+        coord._get_conf = lambda cle: entite if cle == "capteur_pluie_cumul" else None
+
+    def test_un_compteur_plus_BAS_compte_sa_propre_pluie(self) -> None:
+        """Comparé au maximum de l'ancien, il ne comptait plus rien tant qu'il ne l'avait pas
+        dépassé : des semaines de pluie perdues, pour un compteur qui ne repart jamais à zéro."""
+        sortie, coord = self._rejouer([250.0, 251.0])
+        self._brancher(coord, "sensor.nouveau")
+        sortie, _ = self._rejouer([3.0], coord=coord)
+        self.assertAlmostEqual(sortie["pluie_cumul_jour_mm"], 1.0, places=2, msg="rien n'est compté au changement")
+        sortie, _ = self._rejouer([3.4], coord=coord)
+        self.assertAlmostEqual(sortie["pluie_cumul_jour_mm"], 1.4, places=2, msg="la pluie du nouveau compteur compte")
+
+    def test_un_compteur_plus_HAUT_n_est_pas_une_averse(self) -> None:
+        sortie, coord = self._rejouer([250.0, 250.5])
+        self._brancher(coord, "sensor.nouveau")
+        sortie, _ = self._rejouer([262.0], coord=coord)
+        self.assertAlmostEqual(sortie["pluie_cumul_jour_mm"], 0.5, places=2, msg="11,5 mm d'écart ne sont pas tombés")
+        self.assertAlmostEqual(sortie["pluie_cumul_lame_mm"], 0.5, places=2)
+        self.assertEqual(sortie["pluie_gain_rejete_mm"], 0.0, "ni une trame corrompue")
+
+    def test_un_suivi_d_AVANT_la_0_95_garde_sa_reference(self) -> None:
+        runtime = {"pluie_cumul": {"date": "2026-09-01", "total_jour": 0.3, "pic": 250.0, "gain_rejete": 0.0}}
+        sortie, _ = self._rejouer([250.4], coord=self._coord(runtime=runtime))
+        self.assertAlmostEqual(sortie["pluie_cumul_jour_mm"], 0.7, places=2)
+        self.assertEqual(runtime["pluie_cumul"]["entite"], "sensor.cumul")
+
+    def test_sans_reference_un_changement_n_invente_pas_de_total(self) -> None:
+        runtime = {"pluie_cumul": {"date": "2026-09-01", "total_jour": 0.0, "entite": "sensor.ancien"}}
+        sortie, _ = self._rejouer([3.0], coord=self._coord(runtime=runtime))
+        self.assertIsNone(sortie["pluie_cumul_jour_mm"], "aucune référence = aucun total (PR #49)")
+
+
+class ChangerLesEntreesDepuisLaPageTests(unittest.TestCase):
+    """0.95.0 : une entrée changée sur la page, avec le même résultat que « Configurer ».
+
+    ⚠️ `async_update_config` relance la surveillance de CE coordinateur pendant que l'écriture
+    des options déclenche son rechargement : croisés, les deux laisseraient des minuteries sur un
+    coordinateur arrêté. Ces tests verrouillent l'autre chemin.
+    """
+
+    def _monter(self, *, options=None, data=None, recharge=True, partage=True):
+        journal: list = []
+        entree = types.SimpleNamespace(entry_id="e1", options=dict(options or {}), data=dict(data or {}))
+
+        def async_update_entry(e, **kwargs):
+            journal.append(("entrée", {k: dict(v) for k, v in kwargs.items()}))
+            for cle, valeur in kwargs.items():
+                setattr(e, cle, valeur)
+            return True
+
+        taches: list = []
+        hass = types.SimpleNamespace(
+            config_entries=types.SimpleNamespace(
+                async_get_entry=lambda entry_id: entree if entry_id == "e1" else None,
+                async_update_entry=async_update_entry,
+                async_reload=lambda entry_id: ("recharger", entry_id),
+            ),
+            data={},
+            async_create_task=taches.append,
+        )
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord.hass = hass
+        coord.entry = entree
+        coord.source_config_changed = lambda: recharge
+        coord._rafraichir_apres_action_utilisateur = AsyncMock()
+        coord.async_update_config = AsyncMock()
+
+        async def async_update_shared_config(maj):
+            journal.append(("partagé", dict(maj)))
+
+        coord.shared_state = types.SimpleNamespace(async_update_shared_config=async_update_shared_config) if partage else None
+        hass.data[coordinator_mod.DOMAIN] = {"e1": coord}
+        return coord, entree, journal, taches
+
+    def _autre(self, *, recharge):
+        autre = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        autre.entry = types.SimpleNamespace(entry_id="e2")
+        autre.source_config_changed = lambda: recharge
+        autre.async_request_refresh = lambda: ("rafraichir", "e2")
+        return autre
+
+    def test_le_partage_d_abord_puis_les_options_puis_le_rechargement(self) -> None:
+        coord, entree, journal, taches = self._monter(options={"reglages": {"x": 1}, "capteur_vent": "sensor.a"})
+        recharge = asyncio.run(coord.async_changer_entrees({"capteur_vent": "sensor.b"}))
+        self.assertTrue(recharge)
+        self.assertEqual(journal, [
+            ("partagé", {"capteur_vent": "sensor.b"}),
+            ("entrée", {"options": {"reglages": {"x": 1}, "capteur_vent": "sensor.b"}}),
+        ])
+        coord._rafraichir_apres_action_utilisateur.assert_not_awaited()
+        coord.async_update_config.assert_not_awaited()
+        self.assertEqual(taches, [])
+
+    def test_une_entree_du_sol_n_est_pas_partagee(self) -> None:
+        coord, _, journal, _ = self._monter()
+        asyncio.run(coord.async_changer_entrees({"capteur_humidite_sol": "sensor.sonde"}))
+        self.assertEqual([j[0] for j in journal], ["entrée"])
+
+    def test_sans_etat_partage_les_options_suffisent(self) -> None:
+        coord, entree, journal, _ = self._monter(partage=False)
+        asyncio.run(coord.async_changer_entrees({"capteur_vent": "sensor.b"}))
+        self.assertEqual(entree.options, {"capteur_vent": "sensor.b"})
+        self.assertEqual([j[0] for j in journal], ["entrée"])
+
+    def test_retirer_efface_aussi_la_configuration_d_origine(self) -> None:
+        """Sinon la valeur d'origine reprendrait sa place : options > partagé > origine."""
+        coord, entree, journal, _ = self._monter(data={"capteur_vent": "sensor.vieux", "zone_1": "switch.v1"})
+        asyncio.run(coord.async_changer_entrees({"capteur_vent": None}))
+        self.assertEqual(journal[-1], ("entrée", {
+            "options": {"capteur_vent": None},
+            "data": {"capteur_vent": None, "zone_1": "switch.v1"},
+        }))
+
+    def test_la_configuration_d_origine_n_est_touchee_que_si_besoin(self) -> None:
+        coord, _, journal, _ = self._monter(data={"capteur_vent": None, "capteur_pression": "sensor.p"})
+        asyncio.run(coord.async_changer_entrees({"capteur_vent": None, "capteur_pression": "sensor.q"}))
+        self.assertNotIn("data", journal[-1][1])
+
+    def test_sans_rechargement_un_cycle_part_tout_de_suite(self) -> None:
+        coord, _, _, _ = self._monter(recharge=False)
+        self.assertFalse(asyncio.run(coord.async_changer_entrees({"capteur_pluie_cumul": "sensor.compteur"})))
+        coord._rafraichir_apres_action_utilisateur.assert_awaited_once()
+
+    def test_l_autre_pelouse_suit_une_entree_partagee(self) -> None:
+        for recharge_autre, attendu in ((True, ("recharger", "e2")), (False, ("rafraichir", "e2"))):
+            with self.subTest(recharge_autre=recharge_autre):
+                coord, _, _, taches = self._monter()
+                coord.hass.data[coordinator_mod.DOMAIN]["e2"] = self._autre(recharge=recharge_autre)
+                coord.hass.data[coordinator_mod.DOMAIN]["pas_un_coordinateur"] = object()
+                asyncio.run(coord.async_changer_entrees({"capteur_vent": "sensor.b"}))
+                self.assertEqual(taches, [attendu])
+                taches.clear()
+                asyncio.run(coord.async_changer_entrees({"capteur_hauteur_gazon": "sensor.h"}))
+                self.assertEqual(taches, [], "une entrée propre à cette pelouse ne touche pas l'autre")
+
+    def test_rien_a_changer(self) -> None:
+        coord, _, journal, taches = self._monter()
+        self.assertFalse(asyncio.run(coord.async_changer_entrees({})))
+        self.assertEqual((journal, taches), ([], []))
+        coord._rafraichir_apres_action_utilisateur.assert_not_awaited()
+
+    def test_arrosage_en_cours(self) -> None:
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        fini = types.SimpleNamespace(done=lambda: True)
+        lance = types.SimpleNamespace(done=lambda: False)
+        cas = [
+            ((True, False, None), True),
+            ((False, True, None), True),
+            ((False, False, lance), True),
+            ((False, False, fini), False),
+            ((False, False, None), False),
+        ]
+        for (session, vanne, tache), attendu in cas:
+            with self.subTest(session=session, vanne=vanne, tache=tache):
+                coord._watering_session_active = lambda s=session: s
+                coord._shared_valve_busy_elsewhere = lambda v=vanne: v
+                coord._auto_irrigation_scheduler_task = tache
+                self.assertIs(coord.arrosage_en_cours(), attendu)
+
+
+class RoseeLueSurLHerbeTests(unittest.TestCase):
+    """0.96.0 : un point de rosée branché sur « Rosée sur l'herbe » est ignoré.
+
+    Le moteur lit « au-dessus de 0 = herbe mouillée » (tonte bloquée, ressuyage, maladies). Le
+    17/09/2026, le point de rosée de la station (9,2 °C) y était branché par « Configurer ».
+    """
+
+    def _coord(self, entite, etat):
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord.hass = types.SimpleNamespace(states=types.SimpleNamespace(get=lambda e: etat if e == entite else None))
+        coord._get_conf = lambda cle: entite if cle == "capteur_rosee" else None
+        coord._get_float_state = lambda e: float(etat.state) if etat is not None and e == entite else None
+        return coord
+
+    def test_un_point_de_rosee_est_ignore_et_signale_une_fois(self) -> None:
+        for attributs in ({"unit_of_measurement": "°C", "device_class": "temperature"}, {"unit_of_measurement": "°F"}, {"device_class": "temperature"}):
+            with self.subTest(attributs=attributs):
+                coord = self._coord("sensor.point_de_rosee", types.SimpleNamespace(state="9.2", attributes=attributs))
+                with self.assertLogs(coordinator_mod._LOGGER, level="WARNING") as journal:
+                    self.assertIsNone(coord._lire_rosee())
+                    self.assertIsNone(coord._lire_rosee())
+                self.assertEqual(len(journal.output), 1, "une seule fois par entité")
+                self.assertIn("sensor.point_de_rosee", journal.output[0])
+                self.assertIn("Réglages → Mon installation", journal.output[0])
+
+    def test_une_humidite_du_feuillage_est_lue(self) -> None:
+        for etat, attendu in (("0", 0.0), ("1", 1.0), ("35", 35.0)):
+            with self.subTest(etat=etat):
+                coord = self._coord("sensor.feuillage", types.SimpleNamespace(state=etat, attributes={"unit_of_measurement": "%"}))
+                self.assertEqual(coord._lire_rosee(), attendu)
+
+    def test_sans_entree_ni_entite(self) -> None:
+        self.assertIsNone(self._coord(None, None)._lire_rosee())
+        self.assertIsNone(self._coord("sensor.disparue", None)._lire_rosee())
+
+    def test_le_cycle_passe_par_cette_lecture(self) -> None:
+        source = (PACKAGE_DIR / "coordinator.py").read_text(encoding="utf-8")
+        self.assertIn("rosee = self._lire_rosee()\n", source)
+        self.assertNotIn("self._get_float_state(self._get_conf(CONF_CAPTEUR_ROSEE))", source)
+
 
 class RafraichissementApresActionTests(unittest.TestCase):
     """⚠️ « Quand je clique j'ai quelques secondes avant que ça se mette à jour » — Kévin,
@@ -8920,6 +9373,8 @@ class RafraichissementApresActionTests(unittest.TestCase):
         "async_reset_mower_passes", "async_stop_irrigation", "async_update_config",
         # Oubliés au premier jet, trouvés par la revue du 10/09/2026.
         "async_register_product", "async_remove_product",
+        # 0.95.0 : une entrée changée sur la page (quand rien ne se recharge).
+        "async_changer_entrees",
     )
 
     # ⚠️ CHEMINS MIXTES — ils servent une action de Kévin **et** l'exécuteur d'arrosage.

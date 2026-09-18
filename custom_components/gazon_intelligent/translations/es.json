@@ -64,13 +64,19 @@
           "capteur_vent": "Viento local (opcional, se usa primero si existe)",
           "capteur_rosee": "Rocío / humedad foliar (opcional, cálculo automático si no se indica)",
           "capteur_rayonnement": "Radiación global medida (opcional, W/m² — mejora mucho el cálculo de ET0)",
-          "capteur_pression": "Presión atmosférica medida (opcional, hPa — afina el cálculo de ET0)"
+          "capteur_pression": "Presión atmosférica medida (opcional, hPa — afina el cálculo de ET0)",
+          "entite_pompe": "Bomba de riego (opcional — se muestra y se controla en la página «Gazon»)",
+          "page_gazon": "Mostrar la página «Gazon» en la barra lateral",
+          "notification_cibles": "Teléfonos a avisar (opcional — alertas y mensajes de Gazon Intelligent)",
+          "alertes_actives": "Alertas automáticas (ciclo de riego de semillas perdido, bloqueo de seguridad del riego)",
+          "entite_ia": "IA para los consejos (opcional — si no, la tarea de IA predeterminada de Home Assistant)"
         }
       }
     },
     "error": {
       "invalid_instance_slug": "Identificador de césped no válido.",
-      "entity_not_found": "Entidad no encontrada en Home Assistant."
+      "entity_not_found": "Entidad no encontrada en Home Assistant.",
+      "temperature_pour_rosee": "Esta entidad da una temperatura (un punto de rocío). «Rocío / humedad foliar» espera una humedad de la hoja: cualquier valor por encima de 0 significa césped mojado y el corte espera. Deja el campo vacío para estimar el rocío."
     },
     "abort": {
       "already_configured": "Gazon Intelligent ya está configurado."
@@ -105,18 +111,27 @@
           "capteur_vent": "Viento local (opcional, se usa primero si existe)",
           "capteur_rosee": "Rocío / humedad foliar (opcional, cálculo automático si no se indica)",
           "capteur_rayonnement": "Radiación global medida (opcional, W/m² — mejora mucho el cálculo de ET0)",
-          "capteur_pression": "Presión atmosférica medida (opcional, hPa — afina el cálculo de ET0)"
+          "capteur_pression": "Presión atmosférica medida (opcional, hPa — afina el cálculo de ET0)",
+          "entite_pompe": "Bomba de riego (opcional — se muestra y se controla en la página «Gazon»)",
+          "page_gazon": "Mostrar la página «Gazon» en la barra lateral",
+          "notification_cibles": "Teléfonos a avisar (opcional — alertas y mensajes de Gazon Intelligent)",
+          "alertes_actives": "Alertas automáticas (ciclo de riego de semillas perdido, bloqueo de seguridad del riego)",
+          "entite_ia": "IA para los consejos (opcional — si no, la tarea de IA predeterminada de Home Assistant)"
         }
       }
     },
     "abort": {
       "already_configured": "Gazon Intelligent ya está configurado."
+    },
+    "error": {
+      "temperature_pour_rosee": "Esta entidad da una temperatura (un punto de rocío). «Rocío / humedad foliar» espera una humedad de la hoja: cualquier valor por encima de 0 significa césped mojado y el corte espera. Deja el campo vacío para estimar el rocío."
     }
   },
   "selector": {
     "gazon_mode": {
       "options": {
         "normal": "Normal",
+        "semis": "Siembra",
         "sursemis": "Resiembra",
         "traitement": "Tratamiento",
         "fertilisation": "Fertilización",
@@ -128,6 +143,7 @@
     },
     "gazon_intervention": {
       "options": {
+        "semis": "Siembra",
         "sursemis": "Resiembra",
         "traitement": "Tratamiento",
         "fertilisation": "Fertilización",
@@ -149,6 +165,7 @@
     },
     "gazon_phase_compatible": {
       "options": {
+        "semis": "Siembra",
         "sursemis": "Resiembra",
         "croissance": "Crecimiento",
         "entretien": "Mantenimiento"
@@ -391,6 +408,34 @@
         "raison": {
           "name": "Motivo",
           "description": "Motivo de la parada, recogido en el registro de acciones."
+        }
+      }
+    },
+    "send_notification": {
+      "name": "Enviar una notificación",
+      "description": "Envía un mensaje a los teléfonos elegidos en las opciones. Sin mensaje, envía el estado actual del césped.",
+      "fields": {
+        "titre": {
+          "name": "Título",
+          "description": "Título de la notificación (opcional)."
+        },
+        "message": {
+          "name": "Mensaje",
+          "description": "Texto a enviar. Vacío: el estado del césped."
+        }
+      }
+    },
+    "ask_ai": {
+      "name": "Pedir consejo a la IA",
+      "description": "Hace una pregunta a la IA de Home Assistant dándole el estado del césped. La IA no controla nada: responde en texto. Cada llamada cuenta ante el proveedor de IA.",
+      "fields": {
+        "question": {
+          "name": "Pregunta",
+          "description": "Tu pregunta. Vacío: un repaso del césped del día."
+        },
+        "notifier": {
+          "name": "Enviar también a los teléfonos",
+          "description": "Envía la respuesta a los teléfonos elegidos en las opciones."
         }
       }
     }

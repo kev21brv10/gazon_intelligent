@@ -428,9 +428,117 @@ class OptionsFlowPreservesZonesTests(unittest.TestCase):
             with self.subTest(zone=key):
                 self.assertNotIn(key, merged)
 
+    def test_telephones_alertes_et_ia_sont_proposes_et_effacables(self) -> None:
+        schema = config_flow_mod.build_advanced_schema({"alertes_actives": False})
+        champs = {key.args[0]: (key, valeur) for key, valeur in schema.schema.items()}
+        for cle in ("notification_cibles", "alertes_actives", "entite_ia"):
+            with self.subTest(champ=cle):
+                self.assertIn(cle, champs)
+                self.assertEqual(champs[cle][0].kind, "optional")
+        # La case garde la valeur enregistrée ; cochée par défaut.
+        self.assertIs(champs["alertes_actives"][0].kwargs["default"], False)
+        self.assertIs(
+            {k.args[0]: k for k in config_flow_mod.build_advanced_schema().schema}["alertes_actives"].kwargs["default"],
+            True,
+        )
+        # Plusieurs téléphones, et seulement des entités `notify` ; une seule IA `ai_task`.
+        _, arguments, _ = champs["notification_cibles"][1]
+        self.assertEqual(arguments[0].kwargs, {"domain": "notify", "multiple": True})
+        _, arguments_ia, _ = champs["entite_ia"][1]
+        self.assertEqual(arguments_ia[0].kwargs, {"domain": "ai_task"})
+        for cle in ("notification_cibles", "entite_ia"):
+            with self.subTest(effacable=cle):
+                self.assertIn(cle, config_flow_mod._OPTIONS_CLEARABLE_KEYS)
+        # Une liste ne se cherche pas dans `hass.states` : pas dans la validation des entités.
+        self.assertNotIn("notification_cibles", config_flow_mod._OPTIONAL_ENTITY_KEYS)
+        self.assertIn("entite_ia", config_flow_mod._OPTIONAL_ENTITY_KEYS)
+
+    def test_vider_les_telephones_les_retire(self) -> None:
+        merged = self._run_options_flow(
+            entry_data={"zone_1": "switch.z1"},
+            entry_options={"notification_cibles": ["notify.iphone"], "entite_ia": "ai_task.openai"},
+            user_input={"capteur_temperature": "sensor.temp"},
+        )
+        self.assertIsNone(merged.get("notification_cibles"))
+        self.assertIsNone(merged.get("entite_ia"))
+
     def test_les_zones_sont_absentes_du_tuple_des_options(self) -> None:
         for key in self.ZONE_KEYS:
             with self.subTest(zone=key):
                 self.assertNotIn(key, config_flow_mod._OPTIONS_CLEARABLE_KEYS)
                 # …mais restent effaçables par le flow « Reconfigurer », qui les affiche.
                 self.assertIn(key, config_flow_mod._OPTIONAL_CLEARABLE_KEYS)
+
+
+class UnPointDeRoseeEstRefuseTests(unittest.TestCase):
+    """0.96.0 : « Configurer » refuse une température pour la rosée sur l'herbe.
+
+    Le 17/09/2026, le point de rosée de la station (9 à 12 °C) a été branché par ce formulaire. Le
+    moteur lit « au-dessus de 0 = herbe mouillée » : la tonte aurait été bloquée pour toujours.
+    """
+
+    ETATS = {
+        "sensor.point_de_rosee": types.SimpleNamespace(
+            state="11.8", attributes={"unit_of_measurement": "°C", "device_class": "temperature"}
+        ),
+        "sensor.rosee_sans_unite": types.SimpleNamespace(state="11.8", attributes={"device_class": "temperature"}),
+        "sensor.feuillage": types.SimpleNamespace(state="0", attributes={"unit_of_measurement": "%"}),
+        "sensor.temp": types.SimpleNamespace(state="19", attributes={"unit_of_measurement": "°C"}),
+    }
+
+    def _hass(self):
+        return types.SimpleNamespace(states=types.SimpleNamespace(get=self.ETATS.get), data={})
+
+    def _options(self, *, entry_options, user_input):
+        entry = types.SimpleNamespace(data={"zone_1": "switch.z1"}, options=entry_options)
+        flow = config_flow_mod.GazonOptionsFlow(entry)
+        flow.hass = self._hass()
+        flow.async_create_entry = lambda title, data: {"type": "create_entry", "data": data}
+        flow.async_show_form = lambda **kwargs: {"type": "form", **kwargs}
+        return asyncio.run(flow.async_step_user(user_input))
+
+    def test_configurer_refuse_un_point_de_rosee(self) -> None:
+        for entite in ("sensor.point_de_rosee", "sensor.rosee_sans_unite"):
+            with self.subTest(entite=entite):
+                resultat = self._options(entry_options={}, user_input={"capteur_rosee": entite})
+                self.assertEqual(resultat["type"], "form")
+                self.assertEqual(resultat["errors"], {"capteur_rosee": "temperature_pour_rosee"})
+
+    def test_une_humidite_du_feuillage_passe(self) -> None:
+        resultat = self._options(entry_options={}, user_input={"capteur_rosee": "sensor.feuillage"})
+        self.assertEqual(resultat["type"], "create_entry")
+        self.assertEqual(resultat["data"]["capteur_rosee"], "sensor.feuillage")
+
+    def test_le_point_de_rosee_deja_branche_bloque_jusqu_a_son_retrait(self) -> None:
+        # Formulaire rouvert pour autre chose : le point de rosée resté dans le champ est refusé…
+        resultat = self._options(
+            entry_options={"capteur_rosee": "sensor.point_de_rosee"},
+            user_input={"capteur_rosee": "sensor.point_de_rosee", "capteur_temperature": "sensor.temp"},
+        )
+        self.assertEqual(resultat["errors"], {"capteur_rosee": "temperature_pour_rosee"})
+        # …et le vider suffit.
+        resultat = self._options(
+            entry_options={"capteur_rosee": "sensor.point_de_rosee"},
+            user_input={"capteur_temperature": "sensor.temp"},
+        )
+        self.assertEqual(resultat["type"], "create_entry")
+        self.assertIsNone(resultat["data"]["capteur_rosee"])
+
+    def test_la_creation_refuse_aussi(self) -> None:
+        flow = config_flow_mod.GazonIntelligentConfigFlow()
+        flow.hass = self._hass()
+        flow._base_user_input = {config_flow_mod.CONF_INSTANCE_SLUG: "jardin", config_flow_mod.CONF_ZONE_1: "switch.z1"}
+        flow.async_show_form = lambda **kwargs: {"type": "form", **kwargs}
+        flow.async_create_entry = lambda **kwargs: {"type": "create_entry", **kwargs}
+        resultat = asyncio.run(flow.async_step_sensors({"capteur_rosee": "sensor.point_de_rosee"}))
+        self.assertEqual((resultat["type"], resultat["step_id"]), ("form", "sensors"))
+        self.assertEqual(resultat["errors"], {"capteur_rosee": "temperature_pour_rosee"})
+
+    def test_le_message_existe_dans_chaque_langue(self) -> None:
+        import json
+
+        for fichier in ("strings.json", *(f"translations/{l}.json" for l in ("fr", "en", "de", "es", "nl"))):
+            with self.subTest(fichier=fichier):
+                textes = json.loads((PACKAGE_DIR / fichier).read_text(encoding="utf-8"))
+                for flux in ("config", "options"):
+                    self.assertIn("temperature_pour_rosee", textes[flux]["error"])

@@ -84,6 +84,8 @@ def _install_homeassistant_stubs() -> None:
 
     core_mod.HomeAssistant = object
     core_mod.ServiceCall = ServiceCall
+    # Les actions qui rendent un résultat (0.93.0) s'enregistrent avec `supports_response`.
+    core_mod.SupportsResponse = types.SimpleNamespace(NONE="none", OPTIONAL="optional", ONLY="only")
     config_entries_mod.ConfigEntry = ConfigEntry
     exceptions_mod.HomeAssistantError = HomeAssistantError
     helpers_typing_mod.ConfigType = dict
@@ -151,8 +153,12 @@ class _FakeServices:
     def has_service(self, domain: str, service: str) -> bool:
         return (domain, service) in self._services
 
-    def async_register(self, domain: str, service: str, handler, schema=None) -> None:
-        self._services[(domain, service)] = {"handler": handler, "schema": schema}
+    def async_register(self, domain: str, service: str, handler, schema=None, supports_response=None) -> None:
+        self._services[(domain, service)] = {
+            "handler": handler,
+            "schema": schema,
+            "supports_response": supports_response,
+        }
         self.register_calls.append((domain, service))
 
     def async_remove(self, domain: str, service: str) -> None:
@@ -290,11 +296,47 @@ class InitModuleTests(unittest.TestCase):
     def test_async_setup_initializes_domain_data_and_registers_services_idempotently(self) -> None:
         self.assertTrue(asyncio.run(self.module.async_setup(self.hass, {})))
         self.assertIn(self.module.DOMAIN, self.hass.data)
-        # 15 depuis 0.53.2 : `reset_mower_passes` s'ajoute aux 14 précédents.
-        self.assertEqual(len(self.hass.services.register_calls), 15)
+        # 17 depuis 0.93.0 : `send_notification` et `ask_ai` s'ajoutent aux 15 précédents.
+        self.assertEqual(len(self.hass.services.register_calls), 17)
 
         self.assertTrue(asyncio.run(self.module.async_setup(self.hass, {})))
-        self.assertEqual(len(self.hass.services.register_calls), 15)
+        self.assertEqual(len(self.hass.services.register_calls), 17)
+
+    def test_notification_et_ia_rendent_leur_resultat(self) -> None:
+        """Seules ces deux actions rendent un résultat ; les autres restent sans réponse."""
+        asyncio.run(self.module.async_setup(self.hass, {}))
+        avec_reponse = {
+            service
+            for (_domain, service), infos in self.hass.services._services.items()
+            if infos["supports_response"] is not None
+        }
+        self.assertEqual(avec_reponse, {"send_notification", "ask_ai"})
+        for service in avec_reponse:
+            with self.subTest(service=service):
+                self.assertEqual(
+                    self.hass.services._services[(self.module.DOMAIN, service)]["supports_response"],
+                    "optional",
+                    "une réponse OBLIGATOIRE casserait les automatisations qui appellent sans la demander",
+                )
+
+    def test_les_actions_notification_et_ia_passent_leurs_champs(self) -> None:
+        asyncio.run(self.module.async_setup_entry(self.hass, self.entry))
+        coordinator = self.hass.data[self.module.DOMAIN][self.entry.entry_id]
+        coordinator.async_envoyer_notification = AsyncMock(return_value={"envoye_a": ["notify.x"]})
+        coordinator.async_demander_ia = AsyncMock(return_value={"reponse": "Oui"})
+        call_cls = sys.modules["homeassistant.core"].ServiceCall
+
+        resultat = asyncio.run(self.module._handle_send_notification(
+            call_cls(self.hass, {"titre": "T", "message": "M"})
+        ))
+        self.assertEqual(resultat, {"envoye_a": ["notify.x"]})
+        coordinator.async_envoyer_notification.assert_awaited_once_with(titre="T", message="M")
+
+        resultat = asyncio.run(self.module._handle_ask_ai(
+            call_cls(self.hass, {"question": "Q", "notifier": True})
+        ))
+        self.assertEqual(resultat, {"reponse": "Oui"})
+        coordinator.async_demander_ia.assert_awaited_once_with("Q", notifier=True)
 
     def test_tout_service_enregistre_est_aussi_retire_et_documente(self) -> None:
         """Le compte ne suffit pas : c'est la CONCORDANCE des trois listes qui compte.

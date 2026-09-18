@@ -77,6 +77,98 @@ def make_snapshot(**overrides):
 
 
 class TestDecisionSnapshotSursemisRules(unittest.TestCase):
+    def test_programme_graines_adapte_les_cycles_aux_valeurs_meteo(self) -> None:
+        base = dict(
+            phase_dominante="Sursemis",
+            sous_phase="Germination",
+            water_balance={"bilan_hydrique_mm": 0.0, "arrosage_recent_jour": 0.0},
+            today=date(2026, 9, 17),
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            humidite=55.0,
+            temperature=20.0,
+            vent=3.24,
+            etp=2.5,
+            type_sol="limoneux",
+            # Reproduction ha_maison : le capteur local (3,24 km/h) fait foi devant le vent
+            # générique de l'entité météo (14,4 km/h).
+            weather_profile={"weather_precipitation_probability": 20.0, "weather_wind_speed": 14.4},
+            history=[],
+            forecast_temperature_today=22.0,
+            reglages={"graines_germination_cycles": 4},
+        )
+
+        normal = guidance.compute_watering_profile(**base)
+        self.assertEqual((normal["daily_cycles_target"], normal["surface_cycle_mm"]), (4, 1.5))
+
+        # Valeurs observées sur ha_maison le 17/09 : pluie annoncée et ET0 faible. Le réglage
+        # « 4 » est un régime nominal, pas un ordre d'arroser quatre fois quoi qu'il arrive.
+        humide = guidance.compute_watering_profile(
+            **(base | {"pluie_demain": 0.9, "humidite": 50.0, "etp": 1.7,
+                       "temperature": 20.9, "forecast_temperature_today": 22.2})
+        )
+        self.assertEqual((humide["daily_cycles_target"], humide["surface_cycle_mm"]), (3, 1.2))
+
+        chaud = guidance.compute_watering_profile(
+            **(base | {"humidite": 35.0, "etp": 5.0, "forecast_temperature_today": 32.0,
+                       "reglages": {"graines_germination_cycles": 3}})
+        )
+        self.assertEqual((chaud["daily_cycles_target"], chaud["surface_cycle_mm"]), (4, 1.8))
+
+        frais = guidance.compute_watering_profile(
+            **(base | {"temperature": 10.0, "forecast_temperature_today": 12.0, "etp": 1.0})
+        )
+        self.assertEqual((frais["daily_cycles_target"], frais["surface_cycle_mm"]), (3, 1.2))
+
+    def test_chaque_signal_meteo_joue_seul(self) -> None:
+        """Relevé par le banc de mutations (0.96.0) : le scénario « chaud » cumulait air sec,
+        évaporation et chaleur prévue, si bien qu'aucun de ces signaux n'était prouvé seul. Base
+        3 cycles (de 2 à 4) : un signal sec en ajoute un, un signal humide ou frais en retire un."""
+        base = dict(
+            phase_dominante="Sursemis", sous_phase="Germination",
+            water_balance={"bilan_hydrique_mm": 0.0, "arrosage_recent_jour": 0.0},
+            today=date(2026, 9, 17), pluie_24h=0.0, pluie_demain=0.0, humidite=55.0,
+            temperature=20.0, vent=3.0, etp=2.5, type_sol="limoneux",
+            weather_profile={"weather_precipitation_probability": 20.0, "weather_wind_speed": 3.0},
+            history=[], forecast_temperature_today=22.0, reglages={"graines_germination_cycles": 3},
+        )
+        cas = {
+            "neutre": ({}, 3),
+            "chaleur prévue seule": ({"forecast_temperature_today": 28.0}, 4),
+            "chaleur prévue sous le seuil": ({"forecast_temperature_today": 27.9}, 3),
+            "chaleur mesurée seule": ({"temperature": 28.0, "forecast_temperature_today": None}, 4),
+            "évaporation seule": ({"etp": 4.0}, 4),
+            "évaporation sous le seuil": ({"etp": 3.9}, 3),
+            "vent seul": ({"vent": 12.0}, 4),
+            "vent sous le seuil": ({"vent": 11.9}, 3),
+            "air sec seul": ({"humidite": 45.0}, 4),
+            "air presque sec": ({"humidite": 45.1}, 3),
+            "air humide": ({"humidite": 70.0}, 2),
+            "pluie demain au-dessus de 0,5": ({"pluie_demain": 0.6}, 2),
+            "pluie demain à 0,5": ({"pluie_demain": 0.5}, 3),
+            "frais et peu évaporant": ({"temperature": 10.0, "forecast_temperature_today": 12.0, "etp": 2.0}, 2),
+            "frais mais évaporant": ({"temperature": 10.0, "forecast_temperature_today": 12.0, "etp": 2.1}, 3),
+            "frais le matin, doux prévu": ({"temperature": 10.0, "forecast_temperature_today": 14.5, "etp": 1.0}, 3),
+        }
+        for nom, (changements, cycles) in cas.items():
+            with self.subTest(cas=nom):
+                profil = guidance.compute_watering_profile(**(base | changements))
+                self.assertEqual(profil["daily_cycles_target"], cycles)
+
+    def test_le_vent_du_jardin_arrive_jusqu_aux_graines(self) -> None:
+        """0.96.0 : la décision transmet le vent mesuré ; sans lui, la prévision (14,4 km/h le
+        17/09, contre 3,2 au jardin) ajoutait un cycle « venteux »."""
+        commun = dict(
+            history=[{"type": "Sursemis", "date": (FIXED_TODAY - timedelta(days=1)).isoformat()}],
+            humidite=55.0, etp_capteur=2.5, forecast_temperature_today=22.0,
+            weather_profile={"weather_precipitation_probability": 20.0, "weather_wind_speed": 14.4},
+        )
+        jardin = make_snapshot(vent=3.0, **commun)
+        prevision = make_snapshot(vent=None, **commun)
+        self.assertEqual(jardin["sous_phase"], "Germination")
+        self.assertEqual((jardin["daily_cycles_target"], jardin["surface_cycle_mm"]), (3, 1.5))
+        self.assertEqual((prevision["daily_cycles_target"], prevision["surface_cycle_mm"]), (4, 1.8))
+
     def test_build_decision_snapshot_sursemis_objectif_zero_never_recommends_zero_mm(self) -> None:
         snapshot = decision.build_decision_snapshot(
             history=[{"type": "Sursemis", "date": "2026-03-17"}],
@@ -350,7 +442,7 @@ class TestDecisionSnapshotSursemisRules(unittest.TestCase):
 
     def test_compute_action_guidance_sursemis_reprise_transition_ready_waits_more(self) -> None:
         base_kwargs = dict(
-            phase_dominante="Sursemis",
+            phase_dominante="Semis",
             sous_phase="Reprise",
             water_balance={
                 "bilan_hydrique_mm": 1.4,
@@ -374,12 +466,12 @@ class TestDecisionSnapshotSursemisRules(unittest.TestCase):
         )
 
         not_ready = decision.compute_action_guidance(
-            history=[{"type": "Sursemis", "date": "2026-03-01"}],
+            history=[{"type": "Semis", "date": "2026-03-01"}],
             **base_kwargs,
         )
         ready = decision.compute_action_guidance(
             history=[
-                {"type": "Sursemis", "date": "2026-03-01"},
+                {"type": "Semis", "date": "2026-03-01"},
                 {"type": "tonte", "date": "2026-03-15"},
                 {"type": "tonte", "date": "2026-03-18"},
             ],
@@ -511,7 +603,7 @@ class TestSursemisNUsurpePlusLeVerdictDeTonte(unittest.TestCase):
 
     def _snap(self, jour: int, history_extra=(), memory=None, pluie_24h=0.0, hour_of_day=11):
         return decision.build_decision_snapshot(
-            history=[{"type": "Sursemis", "date": "2026-03-01"}, *history_extra],
+            history=[{"type": "Semis", "date": "2026-03-01"}, *history_extra],
             today=self.D0 + timedelta(days=jour), hour_of_day=hour_of_day, temperature=18,
             pluie_24h=pluie_24h, pluie_demain=0.0, humidite=60,
             type_sol="limoneux", etp_capteur=2.0, memory=memory or {},
@@ -633,6 +725,72 @@ class TestSursemisNUsurpePlusLeVerdictDeTonte(unittest.TestCase):
         self.assertNotIn('tonte_statut="interdite"', corps)
         # Les autres overrides, eux, ont le droit de trancher la tonte : c'est leur rôle.
         self.assertIn("tonte_autorisee=False", source, "les autres overrides ont disparu")
+
+
+class LeProchainArrosageDesGrainesTests(unittest.TestCase):
+    """0.96.1 — en germination, la page annonçait « Prochain arrosage : dimanche 20 septembre ».
+
+    C'était l'estimation du régime NORMAL (jours avant que la réserve atteigne son seuil), alors
+    que les graines sont arrosées chaque jour : le prochain cycle partait le lendemain à 8:30.
+    """
+
+    def _snap(self, heure: int, suivi: dict | None = None, mode: str = "Sursemis") -> dict:
+        context = decision.DecisionContext.from_legacy_args(
+            history=[{"type": mode, "date": "2026-09-16"}],
+            today=date(2026, 9, 17),
+            hour_of_day=heure,
+            temperature=21,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=50,
+            type_sol="limoneux",
+            etp_capteur=2.5,
+            runtime_context=suivi,
+        )
+        return decision.build_decision_result(context).to_snapshot()
+
+    def _jour(self, snap: dict) -> tuple:
+        return snap.get("jours_avant_arrosage_estime"), snap.get("date_prochain_arrosage_estime")
+
+    def test_premisse_la_decision_suit_bien_les_graines(self) -> None:
+        for mode in ("Sursemis", "Semis"):
+            snap = self._snap(11, mode=mode)
+            self.assertEqual(snap["watering_strategy"], "semis_frequent", mode)
+            self.assertEqual(snap["watering_window_acceptable_end_minute"], 1020, mode)
+
+    def test_des_cycles_restent_dans_la_fenetre_c_est_aujourd_hui(self) -> None:
+        for mode in ("Sursemis", "Semis"):
+            for heure in (6, 11, 16):
+                self.assertEqual(self._jour(self._snap(heure, mode=mode)), (0, "2026-09-17"), (mode, heure))
+            attente = {"semis_followup_state": "waiting", "semis_cycles_remaining_today": 2}
+            self.assertEqual(self._jour(self._snap(11, attente, mode)), (0, "2026-09-17"), mode)
+
+    def test_cycles_du_jour_faits_ou_fenetre_fermee_c_est_demain(self) -> None:
+        fait = {"semis_followup_state": "complete", "semis_cycles_remaining_today": 0}
+        for mode in ("Sursemis", "Semis"):
+            snap = self._snap(11, fait, mode)
+            self.assertEqual(snap["seeding_block_reason"], "semis_cycle_daily_target_reached")
+            self.assertEqual(self._jour(snap), (1, "2026-09-18"), mode)
+            self.assertEqual(self._jour(self._snap(17, mode=mode)), (1, "2026-09-18"), mode)
+            self.assertEqual(self._jour(self._snap(20, mode=mode)), (1, "2026-09-18"), mode)
+
+    def test_le_regime_normal_garde_son_estimation(self) -> None:
+        context = decision.DecisionContext.from_legacy_args(
+            history=[], today=date(2026, 9, 17), hour_of_day=11, temperature=21,
+            pluie_24h=0, pluie_demain=0, humidite=50, type_sol="limoneux", etp_capteur=2.5,
+        )
+        snap = decision.build_decision_result(context).to_snapshot()
+        self.assertNotEqual(snap["watering_strategy"], "semis_frequent")
+        eau = {"jours_avant_arrosage_estime": 4, "date_prochain_arrosage_estime": "2026-09-21",
+               "watering_window_acceptable_end_minute": 1020}
+        conseil = {"watering_window_acceptable_end_minute": 600}
+        for arrosage in ({"watering_strategy": ""}, {"watering_strategy": "deplete_to_mad"}, {}):
+            self.assertEqual(decision._prochain_arrosage_estime(context, eau, conseil, arrosage), (4, "2026-09-21"))
+        self.assertEqual(
+            decision._prochain_arrosage_estime(context, eau, conseil, {"watering_strategy": "semis_frequent"}),
+            (1, "2026-09-18"),
+            "11 h, fenêtre des graines fermée à 10 h : demain (la fenêtre lue est celle du conseil)",
+        )
 
 
 class TestDecisionSnapshotApplicationsAndSensors(unittest.TestCase):
@@ -2028,7 +2186,7 @@ class TestDecisionSnapshotMowing(unittest.TestCase):
 
     def test_build_decision_snapshot_keeps_post_sursemis_height_bonus_after_return_to_normal(self) -> None:
         post_sursemis = decision.build_decision_snapshot(
-            history=[{"type": "Sursemis", "date": "2026-05-01"}],
+            history=[{"type": "Semis", "date": "2026-05-01"}],
             today=date(2026, 6, 1),
             hour_of_day=8,
             temperature=18,
@@ -2054,7 +2212,7 @@ class TestDecisionSnapshotMowing(unittest.TestCase):
             hauteur_max_tondeuse_cm=8.0,
         )
 
-        self.assertEqual(post_sursemis["phase_active"], "Sursemis")
+        self.assertEqual(post_sursemis["phase_active"], "Semis")
         self.assertGreater(post_sursemis["hauteur_tonte_recommandee_cm"], baseline["hauteur_tonte_recommandee_cm"])
 
     def test_build_decision_snapshot_blocks_mowing_on_dew(self) -> None:
@@ -2353,7 +2511,7 @@ class TestMowingOverdue(unittest.TestCase):
         # Sursemis Germination → tonte interdite même si très en retard
         context = decision.DecisionContext.from_legacy_args(
             history=[
-                {"type": "Sursemis", "date": "2026-06-01"},
+                {"type": "Semis", "date": "2026-06-01"},
                 {"type": "tonte", "date": "2026-05-20"},
             ],
             today=date(2026, 6, 15),
@@ -5211,10 +5369,10 @@ class RecommandationDeHauteurTests(unittest.TestCase):
 
     def test_les_planchers_de_sursemis_s_arrondissent_VERS_LE_HAUT(self) -> None:
         snap = self._reco(
-            date(2026, 3, 19), history=[{"type": "Sursemis", "date": "2026-03-17"}],
+            date(2026, 3, 19), history=[{"type": "Semis", "date": "2026-03-17"}],
             hauteur_max_tondeuse_cm=9.0,
         )
-        self.assertEqual(snap["phase_active"], "Sursemis")
+        self.assertEqual(snap["phase_active"], "Semis")
         reco = snap["hauteur_tonte_recommandee_cm"]
         plancher = {"Germination": 7.5, "Enracinement": 7.0}.get(snap["sous_phase"], 6.5)
         self.assertGreaterEqual(reco, plancher, f"semis conseillé sous son plancher ({snap['sous_phase']})")
@@ -5365,7 +5523,7 @@ class RecommandationDeHauteurTests(unittest.TestCase):
         self.assertIn("manque d'eau fort (déficit estimé) +1,0", snap["hauteur_tonte_motif"])
 
     def test_sursemis_plancher_exact_par_sous_phase(self) -> None:
-        snap = self._reco(date(2026, 3, 19), history=[{"type": "Sursemis", "date": "2026-03-17"}],
+        snap = self._reco(date(2026, 3, 19), history=[{"type": "Semis", "date": "2026-03-17"}],
                           hauteur_max_tondeuse_cm=9.0)
         self.assertEqual(snap["sous_phase"], "Germination")
         self.assertEqual(snap["hauteur_tonte_recommandee_cm"], 7.5, "plancher de germination, sur la grille")
@@ -5576,7 +5734,7 @@ class LaSortieDeSemisEstProgressiveTests(unittest.TestCase):
 
     def _snap(self, semis: date, k: int, maxh: float, extra=(), **kw) -> dict:
         params = dict(
-            history=[{"type": "Sursemis", "date": semis.isoformat()}, *extra],
+            history=[{"type": "Semis", "date": semis.isoformat()}, *extra],
             today=semis + timedelta(days=k), hour_of_day=10, temperature=16.0,
             forecast_temperature_today=17.0, pluie_24h=0, pluie_demain=0, humidite=65,
             type_sol="limoneux", etp_capteur=2.0, hauteur_min_tondeuse_cm=3.0,
@@ -5634,7 +5792,7 @@ class LaSortieDeSemisEstProgressiveTests(unittest.TestCase):
 
     def test_un_semis_date_dans_le_futur_n_a_pas_encore_de_plancher(self) -> None:
         snap = decision.build_decision_snapshot(
-            history=[{"type": "Sursemis", "date": "2026-09-20"}], today=date(2026, 9, 15), hour_of_day=10,
+            history=[{"type": "Semis", "date": "2026-09-20"}], today=date(2026, 9, 15), hour_of_day=10,
             temperature=16.0, forecast_temperature_today=17.0, pluie_24h=0, pluie_demain=0, humidite=65,
             type_sol="limoneux", etp_capteur=2.0, hauteur_min_tondeuse_cm=3.0, hauteur_max_tondeuse_cm=9.0,
             soil_balance={"reserve_mm": 11.5, "reserve_max_mm": 24.0},
@@ -5643,7 +5801,7 @@ class LaSortieDeSemisEstProgressiveTests(unittest.TestCase):
 
     def test_le_semis_le_plus_recent_PAR_DATE(self) -> None:
         # Une déclaration rétroactive ajoutée APRÈS un semis plus récent : l'âge suit la date.
-        historique = [{"type": "Sursemis", "date": "2026-09-11"}, {"type": "Sursemis", "date": "2026-03-01"}]
+        historique = [{"type": "Semis", "date": "2026-09-11"}, {"type": "Semis", "date": "2026-03-01"}]
         snap = decision.build_decision_snapshot(
             history=historique, today=date(2026, 9, 13), hour_of_day=10, temperature=16.0,
             forecast_temperature_today=17.0, pluie_24h=0, pluie_demain=0, humidite=65, type_sol="limoneux",
@@ -5978,3 +6136,219 @@ class TestPasseLaFenetreDuMatinCestDemainMatin(unittest.TestCase):
         self.assertEqual(self._profil(12, 0, phase="Fertilisation")["fenetre_optimale"], "demain_matin")
         self.assertEqual(self._profil(20, 0, phase="Fertilisation")["fenetre_optimale"], "demain_matin")
 
+
+
+class SursemisDansUnGazonEnPlaceTests(unittest.TestCase):
+    """Deux modes de semis depuis le 16/09/2026 (arbitrage de Kévin).
+
+    « Semis » (sol nu) garde le comportement historique : tonte interdite 25 jours, pousse nulle,
+    planchers 7,5 → 5,0 cm. « Sursemis » (gazon en place) arrose pareil, mais le gazon en place
+    continue de pousser : tonte suspendue pendant la levée (J0-J7), puis lame à 4,0 cm tous les
+    5 jours au moins, remontée à 4,5 cm après deux coupes des plantules (Purdue AY-13-W).
+    """
+
+    D0 = date(2026, 9, 16)
+    REGISTRE_PLEIN = {"reserve_mm": 11.5, "reserve_max_mm": 24.0}
+
+    def _snap(self, jour: int, mode: str = "Sursemis", tontes: tuple[int, ...] = (), **kw) -> dict:
+        history = [{"type": mode, "date": self.D0.isoformat()}]
+        history += [{"type": "tonte", "date": (self.D0 + timedelta(days=j)).isoformat()} for j in tontes]
+        params = dict(
+            history=history, today=self.D0 + timedelta(days=jour), hour_of_day=11,
+            temperature=18.0, forecast_temperature_today=18.0, pluie_24h=0, pluie_demain=0,
+            humidite=60, type_sol="limoneux", etp_capteur=2.5, hauteur_min_tondeuse_cm=3.0,
+            hauteur_max_tondeuse_cm=6.0, soil_balance=self.REGISTRE_PLEIN,
+        )
+        params.update(kw)
+        return decision.build_decision_snapshot(**params)
+
+    # ── Tonte ───────────────────────────────────────────────────────────────────────────
+    def test_la_tonte_est_suspendue_pendant_la_levee(self) -> None:
+        for jour in (0, 3, 7):
+            with self.subTest(jour=jour):
+                snap = self._snap(jour)
+                self.assertFalse(snap["tonte_autorisee"])
+                self.assertEqual(snap["raison_blocage_code"], "phase_sursemis")
+                self.assertEqual(snap["tonte_statut"], "interdite")
+                self.assertIn("levée", snap["tonte_reason"])
+                # Annoncée au lendemain de la levée, plus au semis + 25 jours.
+                self.assertEqual(snap["next_mowing_date"], "2026-09-24")
+
+    def test_la_tonte_reprend_des_le_lendemain_de_la_levee(self) -> None:
+        snap = self._snap(8)
+        self.assertEqual(snap["sous_phase"], "Germination", "prémisse : l'arrosage est encore en germination")
+        self.assertTrue(snap["tonte_autorisee"], snap.get("tonte_reason"))
+        self.assertIsNone(snap.get("raison_blocage_code"))
+        self.assertEqual(snap["mowing_frequency_label"], "1 à 2 / semaine")
+
+    def test_le_meme_jour_un_semis_sur_sol_nu_reste_interdit(self) -> None:
+        """Le contraste qui justifie deux modes : rien n'a changé pour le sol nu."""
+        snap = self._snap(8, mode="Semis")
+        self.assertFalse(snap["tonte_autorisee"])
+        self.assertEqual(snap["tonte_statut"], "interdite")
+        self.assertEqual(snap["next_mowing_date"], "2026-10-11")  # semis + 25 jours
+        self.assertIn("Semis / Germination", snap["tonte_reason"])
+
+    def test_cinq_jours_minimum_entre_deux_tontes(self) -> None:
+        refus = self._snap(12, tontes=(8,))
+        self.assertFalse(refus["tonte_autorisee"])
+        self.assertEqual(refus["raison_blocage_code"], "mowing_spacing")
+        self.assertIn("5 jours minimum", refus["tonte_reason"])
+        self.assertEqual(refus["next_mowing_date"], "2026-09-29")
+        self.assertTrue(self._snap(13, tontes=(8,))["tonte_autorisee"])
+
+    def test_seuil_de_score_assoupli_apres_la_levee(self) -> None:
+        """Après la levée, le sursemis tond jusqu'à un score de 65 au lieu de 55, comme la reprise
+        d'un semis : la tonte fait partie du plan (Purdue). Ce jour mesuré vaut 56."""
+        snap = self._snap(12, humidite=80, pluie_demain=2.5, pluie_j2=2.5, pluie_3j=5.0)
+        self.assertGreaterEqual(snap["score_tonte"], 55, "prémisse : au-dessus du seuil ordinaire")
+        self.assertLess(snap["score_tonte"], 65)
+        self.assertTrue(snap["tonte_autorisee"], snap.get("tonte_reason"))
+        # Le plafond demeure : une vraie journée de pluie reste refusée.
+        pluvieux = self._snap(
+            12, humidite=82, pluie_demain=5.5, pluie_j2=5.5, pluie_3j=9.0, pluie_probabilite_max_3j=85
+        )
+        self.assertGreaterEqual(pluvieux["score_tonte"], 65)
+        self.assertFalse(pluvieux["tonte_autorisee"])
+
+    def test_le_gazon_en_place_continue_de_pousser(self) -> None:
+        """Sur sol nu, rien à couper avant l'installation ; en sursemis, 0,35 cm/j en septembre."""
+        for sous_phase in ("Germination", "Enracinement"):
+            with self.subTest(sous_phase=sous_phase):
+                sursemis = {"phase_dominante": "Sursemis", "sous_phase": sous_phase}
+                semis = {"phase_dominante": "Semis", "sous_phase": sous_phase}
+                self.assertEqual(decision_mowing._growth_rate_cm_per_day(sursemis, 9), 0.35)
+                self.assertEqual(decision_mowing._growth_rate_cm_per_day(semis, 9), 0.0)
+
+    # ── Hauteur ─────────────────────────────────────────────────────────────────────────
+    def test_lame_courte_puis_remontee_apres_deux_coupes_des_plantules(self) -> None:
+        courte = self._snap(23, tontes=(9, 14, 19, 22))
+        self.assertEqual(courte["plantules_coupes"], 1, "prémisse : une seule tonte après le 08/10")
+        self.assertEqual(courte["hauteur_tonte_recommandee_cm"], 4.0)
+        remontee = self._snap(28, tontes=(9, 14, 19, 22, 27))
+        self.assertEqual(remontee["plantules_coupes"], 2)
+        self.assertEqual(remontee["hauteur_tonte_recommandee_cm"], 4.5)
+        self.assertEqual(
+            remontee["hauteur_tonte_motif"],
+            "Sursemis : J+28, plantules coupées 2 fois : lame remontée à 4,5 cm.",
+        )
+
+    def test_ni_le_mois_ni_la_chaleur_ne_s_ajoutent_a_la_consigne(self) -> None:
+        """La consigne REMPLACE la hauteur du mois : ni le +0,3 de phase, ni le bonus de chaleur."""
+        chaud = self._snap(10, temperature=33.0, forecast_temperature_today=33.0)
+        self.assertEqual(chaud["hauteur_tonte_recommandee_cm"], 4.0)
+        self.assertTrue(chaud["hauteur_tonte_motif"].startswith("Sursemis : J+10, lame courte à 4,0 cm"))
+        # Le sol nu, lui, garde son plancher de germination (plafonné à la tondeuse, 6 cm).
+        self.assertEqual(self._snap(10, mode="Semis")["hauteur_tonte_recommandee_cm"], 6.0)
+
+    def test_la_regle_du_tiers_reste_au_dessus_de_la_consigne(self) -> None:
+        """Un gazon laissé haut n'est pas rasé à 4 cm d'un coup."""
+        haut = self._snap(12, hauteur_gazon=9.0)
+        self.assertGreaterEqual(haut["hauteur_tonte_recommandee_cm"], 6.0)
+        self.assertIn("règle du tiers", haut["hauteur_tonte_motif"])
+        self.assertIn("la consigne du sursemis aurait proposé 4.0 cm", haut["hauteur_tonte_garde_fou_label"])
+
+    # ── Plantules ───────────────────────────────────────────────────────────────────────
+    def test_suivi_des_plantules(self) -> None:
+        attendu = {0: 0.0, 7: 0.0, 8: 0.4, 12: 2.0, 22: 6.0}
+        for jour, hauteur in attendu.items():
+            with self.subTest(jour=jour):
+                snap = self._snap(jour)
+                self.assertEqual(snap["semis_mode"], "Sursemis")
+                self.assertEqual(snap["semis_age_jours"], jour)
+                self.assertEqual(snap["plantules_hauteur_estimee_cm"], hauteur)
+                self.assertEqual(snap["plantules_levee_date"], "2026-09-23")
+                self.assertEqual(snap["plantules_premiere_coupe_date"], "2026-10-08")
+
+    def test_seules_les_tontes_a_partir_de_la_premiere_coupe_comptent(self) -> None:
+        self.assertEqual(self._snap(21, tontes=(9, 14, 19))["plantules_coupes"], 0)
+        self.assertEqual(self._snap(22, tontes=(9, 14, 19, 22))["plantules_coupes"], 1)
+
+    def test_le_suivi_existe_aussi_sur_sol_nu_et_s_arrete_a_j45(self) -> None:
+        self.assertEqual(self._snap(12, mode="Semis")["semis_mode"], "Semis")
+        fini = self._snap(45)
+        self.assertEqual(fini["phase_active"], "Normal", "prémisse : la phase est terminée")
+        # Le snapshot n'écrit pas les clés sans valeur : absentes ou None, c'est « pas de semis ».
+        self.assertIsNone(fini.get("semis_mode"))
+        self.assertIsNone(fini.get("plantules_hauteur_estimee_cm"))
+
+    # ── Arrosage : identique dans les deux modes ────────────────────────────────────────
+    def test_l_arrosage_est_le_meme_que_sur_sol_nu(self) -> None:
+        cles = ("objectif_mm", "watering_strategy", "type_arrosage", "sous_phase",
+                "semis_daily_cycles_target", "semis_cycle_spacing_minutes")
+        for jour in (5, 15, 30):
+            with self.subTest(jour=jour):
+                sursemis = self._snap(jour, hour_of_day=12, memory={"auto_irrigation_enabled": True})
+                semis = self._snap(jour, mode="Semis", hour_of_day=12, memory={"auto_irrigation_enabled": True})
+                self.assertEqual({k: sursemis.get(k) for k in cles}, {k: semis.get(k) for k in cles})
+                self.assertGreater(sursemis["objectif_mm"], 0.0, "prémisse : un cycle est dû")
+
+    def test_un_jour_bloque_la_fenetre_publiee_reste_celle_du_semis(self) -> None:
+        """Vérifié le 16/09/2026 : un cycle bloqué (froid, pluie) publiait 03:45 → 10:00.
+
+        Aucun arrosage n'a lieu à l'aube en semis : la fenêtre affichée doit rester celle des
+        micro-cycles, 10 h → 17 h (16 h s'il a plu).
+        """
+        auto = {"auto_irrigation_enabled": True}
+        cas = {
+            "froid": (dict(temperature=8.0, forecast_temperature_today=8.0), "temperature_trop_basse_germination", 1020),
+            "pluie": (dict(pluie_24h=2.0), "pluie_prevue_suffisante", 960),
+        }
+        for mode in ("Sursemis", "Semis"):
+            for nom, (meteo, motif, fin) in cas.items():
+                with self.subTest(mode=mode, cas=nom):
+                    snap = self._snap(5, mode=mode, hour_of_day=11, memory=auto, **meteo)
+                    self.assertEqual(snap["block_reason"], motif, "prémisse : le cycle est bloqué")
+                    self.assertEqual(snap["watering_window_start_minute"], 600)
+                    self.assertEqual(snap["watering_window_end_minute"], fin)
+                    self.assertEqual(snap["watering_window_optimal_start_minute"], 600)
+
+    # ── Pièces détachées ────────────────────────────────────────────────────────────────
+    def test_le_score_de_tonte_ne_porte_plus_45_en_sursemis(self) -> None:
+        """Avec +45, une journée ordinaire dépassait le seuil de 65 : tonte autorisée, puis refusée."""
+        scores = importlib.import_module("custom_components.gazon_intelligent.scores")
+        commun = dict(
+            sous_phase="Germination", pluie_24h=0.0, pluie_demain=0.0, pluie_j2=0.0, pluie_3j=0.0,
+            pluie_probabilite_max_3j=0.0, humidite=60.0, arrosage_recent=4.5, hauteur_gazon=None,
+            rosee=None, score_stress=30,
+        )
+        semis = scores._compute_score_tonte(phase_dominante="Semis", **commun)
+        sursemis = scores._compute_score_tonte(phase_dominante="Sursemis", **commun)
+        self.assertEqual(semis - sursemis, 27)
+        self.assertLess(sursemis, 65)
+
+    def test_statut_interdite_seulement_pendant_la_levee(self) -> None:
+        statut = guidance.compute_tonte_statut
+        self.assertEqual(statut("Sursemis", False, 20, "faible", blocage_code="phase_sursemis"), "interdite")
+        self.assertNotEqual(statut("Sursemis", False, 20, "faible", blocage_code="pluie_active"), "interdite")
+        self.assertEqual(statut("Semis", False, 20, "faible", blocage_code="pluie_active"), "interdite")
+
+    def test_la_transition_ne_compte_que_les_coupes_de_plantules(self) -> None:
+        """En sursemis, les tontes du gazon en place (dès J8) ne disent rien des plantules.
+
+        Sur sol nu, toute tonte après le semis compte, comme avant.
+        """
+        compte = guidance._count_tontes_utiles_depuis_le_dernier_semis
+        tontes = [{"type": "tonte", "date": d} for d in ("2026-09-25", "2026-10-01", "2026-10-08", "2026-10-13")]
+        self.assertEqual(compte([{"type": "Sursemis", "date": "2026-09-16"}, *tontes]), 2)
+        self.assertEqual(compte([{"type": "Semis", "date": "2026-09-16"}, *tontes]), 4)
+        self.assertEqual(compte(tontes), 0)
+
+    def test_la_transition_d_un_sursemis_attend_deux_coupes_de_plantules(self) -> None:
+        # ⚠️ Horloge du banc figée au 04/04/2026 : la progression de sous-phase se calcule sur
+        # elle. Semis en mars, comme `test_le_verrou_circulaire_de_transition_se_denoue`.
+        d0 = date(2026, 3, 1)
+
+        def snap(tontes: tuple[int, ...]) -> dict:
+            return decision.build_decision_snapshot(
+                history=[{"type": "Sursemis", "date": d0.isoformat()}]
+                + [{"type": "tonte", "date": (d0 + timedelta(days=j)).isoformat()} for j in tontes],
+                today=d0 + timedelta(days=32), hour_of_day=11, temperature=18, pluie_24h=0.0,
+                pluie_demain=0.0, humidite=60, type_sol="limoneux", etp_capteur=2.0, memory={},
+            )
+
+        avant = snap((9, 14, 19, 26))
+        self.assertEqual(avant["sous_phase"], "Reprise")
+        self.assertIs(avant["seeding_transition_ready"], False, "une seule coupe de plantules (J26)")
+        apres = snap((9, 14, 19, 22, 27))
+        self.assertIs(apres["seeding_transition_ready"], True)
