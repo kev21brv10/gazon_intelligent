@@ -31,16 +31,27 @@ from . import sources as sources_meteo
 from .const import (
     CONF_ALERTES_ACTIVES,
     CONF_ENTITE_IA,
+    CONF_ENTITE_VOLET_GARAGE_TONDEUSE,
     CONF_ENTITE_METEO,
     CONF_ENTITE_POMPE,
     CONF_MODE_NOTIFICATIONS,
+    CONF_NOTIFICATION_HEURES_CALMES,
+    CONF_NOTIFICATION_HEURES_CALMES_DEBUT,
+    CONF_NOTIFICATION_HEURES_CALMES_FIN,
+    CONF_NOTIFICATION_NIVEAU_MINIMAL,
+    CONF_SOURCE_NOTIFICATIONS,
+    CONF_NOTIFIER_ACTIVITE_ARROSAGE,
+    CONF_NOTIFIER_ACTIVITE_TONDEUSE,
     CONF_NOTIFIER_ARROSAGE_GRAINES,
     CONF_NOTIFIER_CAPTEURS_METEO,
+    CONF_NOTIFIER_GARAGE_TONDEUSE,
     CONF_NOTIFIER_SECURITE_ARROSAGE,
     CONF_NOTIFIER_TONDEUSE,
     CONF_NOTIFICATION_CIBLES,
     CONF_PAGE_GAZON,
     CONF_REGLAGES,
+    CONF_PILOTAGE_TONDEUSE,
+    CONF_TONDEUSE_CRENEAUX_DEPART,
     CONF_TYPE_SOL,
     CONF_ZONE_1,
     CONF_ZONE_2,
@@ -48,7 +59,11 @@ from .const import (
     CONF_ZONE_4,
     CONF_ZONE_5,
     MODES_NOTIFICATIONS,
+    NIVEAUX_NOTIFICATIONS,
+    SOURCES_NOTIFICATIONS,
     DEFAULT_PAGE_GAZON,
+    DEFAULT_MOWER_CONTROL_MODE,
+    DEFAULT_MOWER_START_WINDOW_POLICY,
     DEFAULT_TYPE_SOL,
     DOMAIN,
 )
@@ -71,6 +86,7 @@ ENTITES_DE_LA_PAGE: dict[str, str] = {
     "assistant": "assistant",
     "arrosage_en_cours": "arrosage_en_cours",
     "prochain_arrosage": "prochain_arrosage",
+    "blocage_arrosage": "arrosage_auto_blocage",
     "prochaine_tonte": "prochaine_tonte",
     "tonte_autorisee": "tonte_autorisee",
     "phase": "phase_active",
@@ -217,7 +233,12 @@ def produits_complets(coordinateur: Any) -> list[dict[str, Any]]:
 
 
 def _choix(coordinateur: Any) -> dict[str, Any]:
-    return {CONF_TYPE_SOL: coordinateur._get_conf(CONF_TYPE_SOL) or DEFAULT_TYPE_SOL}
+    return {
+        CONF_TYPE_SOL: coordinateur._get_conf(CONF_TYPE_SOL) or DEFAULT_TYPE_SOL,
+        CONF_PILOTAGE_TONDEUSE: coordinateur._get_conf(CONF_PILOTAGE_TONDEUSE) or DEFAULT_MOWER_CONTROL_MODE,
+        CONF_TONDEUSE_CRENEAUX_DEPART: coordinateur._get_conf(CONF_TONDEUSE_CRENEAUX_DEPART)
+        or DEFAULT_MOWER_START_WINDOW_POLICY,
+    }
 
 
 def _entites_du_domaine(hass: Any, domaine: str) -> list[str]:
@@ -247,11 +268,19 @@ def notifications_de_l_instance(hass: Any, entry: Any) -> dict[str, Any]:
         "cibles": [_avec_nom(hass, cible) for cible in notifications.cibles_configurees(entry)],
         "alertes": notifications.alertes_voulues(entry),
         "mode": notifications.mode_notifications(entry),
+        "source": notifications.source_notifications(entry),
+        "niveau_minimal": notifications.niveau_minimal(entry),
+        "heures_calmes": dict(zip(
+            ("active", "debut", "fin"), notifications.heures_calmes(entry), strict=True
+        )),
         "categories": {
             "arrosage_graines": notifications.SUJET_GRAINES in sujets,
             "securite_arrosage": notifications.SUJET_VERROU in sujets,
             "capteurs_meteo": notifications.SUJET_MESURES in sujets,
             "tondeuse": notifications.SUJET_TONDEUSE in sujets,
+            "activite_arrosage": notifications.SUJET_ACTIVITE_ARROSAGE in sujets,
+            "activite_tondeuse": notifications.SUJET_ACTIVITE_TONDEUSE in sujets,
+            "garage_tondeuse": notifications.SUJET_GARAGE_TONDEUSE in sujets,
         },
         "ia_choisie": ia.entite_configuree(entry),
         "ia": entite_ia,
@@ -298,11 +327,39 @@ def lire_notifications(hass: Any, envoi: Any) -> tuple[dict[str, Any], str | Non
         if not isinstance(mode, str) or mode not in MODES_NOTIFICATIONS:
             return {}, "Choisis Veille intelligente ou Choix manuel."
         mises_a_jour[CONF_MODE_NOTIFICATIONS] = mode
+    if "source" in envoi:
+        source = envoi["source"]
+        if not isinstance(source, str) or source not in SOURCES_NOTIFICATIONS:
+            return {}, "Choisis les messages de Gazon Intelligent ou du Conseiller Gazon."
+        mises_a_jour[CONF_SOURCE_NOTIFICATIONS] = source
+    if "niveau_minimal" in envoi:
+        niveau = envoi["niveau_minimal"]
+        if not isinstance(niveau, str) or niveau not in NIVEAUX_NOTIFICATIONS:
+            return {}, "Choisis Tout recevoir, Important ou Urgences seulement."
+        mises_a_jour[CONF_NOTIFICATION_NIVEAU_MINIMAL] = niveau
+    if "heures_calmes" in envoi:
+        calme = envoi["heures_calmes"]
+        if not isinstance(calme, Mapping) or set(calme) != {"active", "debut", "fin"}:
+            return {}, "Les heures calmes n'ont pas la bonne forme."
+        if not isinstance(calme["active"], bool):
+            return {}, "L'activation des heures calmes doit être cochée ou décochée."
+        if not all(isinstance(calme[cle], int) and not isinstance(calme[cle], bool) for cle in ("debut", "fin")):
+            return {}, "Les heures calmes doivent être des minutes entières."
+        if not all(0 <= calme[cle] < 24 * 60 for cle in ("debut", "fin")):
+            return {}, "Choisis des heures calmes comprises dans la journée."
+        mises_a_jour.update({
+            CONF_NOTIFICATION_HEURES_CALMES: calme["active"],
+            CONF_NOTIFICATION_HEURES_CALMES_DEBUT: calme["debut"],
+            CONF_NOTIFICATION_HEURES_CALMES_FIN: calme["fin"],
+        })
     categories = {
         "arrosage_graines": CONF_NOTIFIER_ARROSAGE_GRAINES,
         "securite_arrosage": CONF_NOTIFIER_SECURITE_ARROSAGE,
         "capteurs_meteo": CONF_NOTIFIER_CAPTEURS_METEO,
         "tondeuse": CONF_NOTIFIER_TONDEUSE,
+        "activite_arrosage": CONF_NOTIFIER_ACTIVITE_ARROSAGE,
+        "activite_tondeuse": CONF_NOTIFIER_ACTIVITE_TONDEUSE,
+        "garage_tondeuse": CONF_NOTIFIER_GARAGE_TONDEUSE,
     }
     if "categories" in envoi:
         choix = envoi["categories"]
@@ -322,7 +379,9 @@ def lire_notifications(hass: Any, envoi: Any) -> tuple[dict[str, Any], str | Non
         ):
             return {}, f"Cette IA n'existe pas dans Home Assistant : {choix_ia}."
         mises_a_jour[CONF_ENTITE_IA] = choix_ia
-    inconnues = set(envoi) - {"cibles", "alertes", "mode", "categories", "ia"}
+    inconnues = set(envoi) - {
+        "cibles", "alertes", "mode", "source", "niveau_minimal", "heures_calmes", "categories", "ia"
+    }
     if inconnues:
         return {}, f"Réglage d'alerte inconnu : {sorted(inconnues)[0]}."
     return mises_a_jour, None
@@ -556,6 +615,24 @@ def lire_pompe(hass: Any, coordinateur: Any, envoi: Any) -> tuple[str | None, st
     return envoi, None
 
 
+def garage_tondeuse_de_l_instance(hass: Any, coordinateur: Any) -> dict[str, Any]:
+    """Le volet facultatif du garage et les entités ``cover`` disponibles."""
+    choisie = coordinateur._get_conf(CONF_ENTITE_VOLET_GARAGE_TONDEUSE) or None
+    volets = [_avec_nom(hass, entity_id) for entity_id in _entites_du_domaine(hass, "cover")]
+    return {"choisie": str(choisie) if choisie else None, "volets": volets}
+
+
+def lire_garage_tondeuse(hass: Any, envoi: Any) -> tuple[str | None, str | None]:
+    """Le volet à écrire (`None` : aucun), ou la raison du refus."""
+    if envoi in (None, ""):
+        return None, None
+    if not isinstance(envoi, str):
+        return None, "Le choix du garage de la tondeuse n'a pas la bonne forme."
+    if envoi not in _entites_du_domaine(hass, "cover"):
+        return None, f"Ce volet n'existe pas dans Home Assistant : {envoi}."
+    return envoi, None
+
+
 def donnees_de_la_page(hass: Any, coordinateur: Any) -> dict[str, Any]:
     entry = coordinateur.entry
     return {
@@ -575,6 +652,7 @@ def donnees_de_la_page(hass: Any, coordinateur: Any) -> dict[str, Any]:
         "sources": (sources := sources_de_l_instance(hass, coordinateur)),
         "appareils": appareils_des_sources(hass, sources),
         "pompe_choix": pompe_de_l_instance(hass, coordinateur),
+        "garage_tondeuse": garage_tondeuse_de_l_instance(hass, coordinateur),
     }
 
 
@@ -589,6 +667,7 @@ async def ecrire_reglages(
     *,
     hass: Any = None,
     pompe: Any = ...,
+    garage_tondeuse: Any = ...,
     entrees: Any = None,
 ) -> dict[str, Any]:
     """Valide et enregistre les changements de la page ; rien n'est écrit si une valeur est refusée.
@@ -618,6 +697,12 @@ async def ecrire_reglages(
             erreurs["pompe"] = refus
         else:
             options_alertes[CONF_ENTITE_POMPE] = pompe_choisie
+    if garage_tondeuse is not ...:
+        garage_choisi, refus = lire_garage_tondeuse(hass, garage_tondeuse)
+        if refus:
+            erreurs["garage_tondeuse"] = refus
+        else:
+            options_alertes[CONF_ENTITE_VOLET_GARAGE_TONDEUSE] = garage_choisi
     changements_entrees: dict[str, str | None] = {}
     if entrees is not None:
         changements_entrees, refus = lire_entrees(hass, coordinateur, entrees)
@@ -634,6 +719,10 @@ async def ecrire_reglages(
         mises_a_jour: dict[str, Any] = {CONF_REGLAGES: nouvelles, **options_alertes}
         if CONF_TYPE_SOL in choix:
             mises_a_jour[CONF_TYPE_SOL] = choix[CONF_TYPE_SOL]
+        if CONF_PILOTAGE_TONDEUSE in choix:
+            mises_a_jour[CONF_PILOTAGE_TONDEUSE] = choix[CONF_PILOTAGE_TONDEUSE]
+        if CONF_TONDEUSE_CRENEAUX_DEPART in choix:
+            mises_a_jour[CONF_TONDEUSE_CRENEAUX_DEPART] = choix[CONF_TONDEUSE_CRENEAUX_DEPART]
         # Le chemin des autres réglages de l'entrée : options fusionnées, puis un cycle relancé.
         await coordinateur.async_update_config(mises_a_jour)
     if changements_entrees:
@@ -643,6 +732,7 @@ async def ecrire_reglages(
         resultat["notifications"] = notifications_de_l_instance(hass, coordinateur.entry)
         resultat["pompe"] = coordinateur._get_conf(CONF_ENTITE_POMPE) or None
         resultat["pompe_choix"] = pompe_de_l_instance(hass, coordinateur)
+        resultat["garage_tondeuse"] = garage_tondeuse_de_l_instance(hass, coordinateur)
         if entrees is not None:
             resultat["meteo"] = coordinateur._get_conf(CONF_ENTITE_METEO) or None
             resultat["sources"] = sources_de_l_instance(hass, coordinateur)
@@ -671,6 +761,7 @@ async def _ws_ecrire(hass: Any, connection: Any, msg: dict[str, Any]) -> None:
             msg.get("notifications") or None,
             hass=hass,
             pompe=msg["pompe"] if "pompe" in msg else ...,
+            garage_tondeuse=msg["garage_tondeuse"] if "garage_tondeuse" in msg else ...,
             entrees=msg.get("entrees"),
         )
     except Exception as err:  # noqa: BLE001 - l'erreur est rendue à la page, en clair
@@ -707,6 +798,7 @@ def async_enregistrer_commandes(hass: Any) -> None:
                 vol.Optional("notifications", default={}): dict,
                 # N'importe quoi passe ici : `lire_pompe` refuse en clair ce qui n'est pas un choix.
                 vol.Optional("pompe"): object,
+                vol.Optional("garage_tondeuse"): object,
                 # Idem : `lire_entrees` juge chaque entrée (0.95.0).
                 vol.Optional("entrees"): object,
             }

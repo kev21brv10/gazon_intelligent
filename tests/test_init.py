@@ -296,11 +296,11 @@ class InitModuleTests(unittest.TestCase):
     def test_async_setup_initializes_domain_data_and_registers_services_idempotently(self) -> None:
         self.assertTrue(asyncio.run(self.module.async_setup(self.hass, {})))
         self.assertIn(self.module.DOMAIN, self.hass.data)
-        # 17 depuis 0.93.0 : `send_notification` et `ask_ai` s'ajoutent aux 15 précédents.
-        self.assertEqual(len(self.hass.services.register_calls), 17)
+        # 18 avec l'acquittement du verrou de securite separe du changement de mode.
+        self.assertEqual(len(self.hass.services.register_calls), 18)
 
         self.assertTrue(asyncio.run(self.module.async_setup(self.hass, {})))
-        self.assertEqual(len(self.hass.services.register_calls), 17)
+        self.assertEqual(len(self.hass.services.register_calls), 18)
 
     def test_notification_et_ia_rendent_leur_resultat(self) -> None:
         """Seules ces deux actions rendent un résultat ; les autres restent sans réponse."""
@@ -324,6 +324,7 @@ class InitModuleTests(unittest.TestCase):
         coordinator = self.hass.data[self.module.DOMAIN][self.entry.entry_id]
         coordinator.async_envoyer_notification = AsyncMock(return_value={"envoye_a": ["notify.x"]})
         coordinator.async_demander_ia = AsyncMock(return_value={"reponse": "Oui"})
+        coordinator.async_clear_irrigation_safety_lock = AsyncMock()
         call_cls = sys.modules["homeassistant.core"].ServiceCall
 
         resultat = asyncio.run(self.module._handle_send_notification(
@@ -337,6 +338,9 @@ class InitModuleTests(unittest.TestCase):
         ))
         self.assertEqual(resultat, {"reponse": "Oui"})
         coordinator.async_demander_ia.assert_awaited_once_with("Q", notifier=True)
+
+        asyncio.run(self.module._handle_clear_irrigation_safety_lock(call_cls(self.hass, {})))
+        coordinator.async_clear_irrigation_safety_lock.assert_awaited_once_with()
 
     def test_tout_service_enregistre_est_aussi_retire_et_documente(self) -> None:
         """Le compte ne suffit pas : c'est la CONCORDANCE des trois listes qui compte.

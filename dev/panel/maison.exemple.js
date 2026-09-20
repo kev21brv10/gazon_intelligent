@@ -9,6 +9,7 @@ const nombre = (state, min, max, step, unite, nom, icone) => ({
   attributes: { min, max, step, mode: "slider", unit_of_measurement: unite, friendly_name: nom, icon: icone },
 });
 const interrupteur = (state, nom) => ({ state, attributes: { friendly_name: nom } });
+const volet = (state, nom) => ({ state, attributes: { friendly_name: nom, device_class: "garage" } });
 const capteur = (state, attributes = {}) => ({ state: String(state), attributes });
 
 const P = "gazon_intelligent";
@@ -34,7 +35,12 @@ export default {
   meteo: "weather.maison",
   pompe: null,
   // Les options de l'entrée que la page sait changer.
-  choix: { type_sol: "limoneux" },
+  choix: {
+    type_sol: "limoneux",
+    pilotage_tondeuse: "desactive",
+    tondeuse_creneaux_depart: "ideal_seulement",
+  },
+  garage_tondeuse: { choisie: "cover.garage_tondeuse", volets: [{ entity_id: "cover.garage_tondeuse", nom: "Garage tondeuse" }] },
   zones: [
     { numero: 1, nom: "Devant", switch: "switch.vanne_1", etat: null },
     { numero: 2, nom: "Derrière", switch: "switch.vanne_2", etat: null },
@@ -43,6 +49,7 @@ export default {
     assistant: `sensor.${P}_assistant`,
     arrosage_en_cours: `sensor.${P}_arrosage_en_cours`,
     prochain_arrosage: `sensor.${P}_prochain_arrosage`,
+    blocage_arrosage: `sensor.${P}_arrosage_auto_blocage`,
     prochaine_tonte: `sensor.${P}_prochaine_tonte`,
     tonte_autorisee: `binary_sensor.${P}_tonte_autorisee`,
     phase: `sensor.${P}_phase_dominante`,
@@ -190,6 +197,10 @@ export default {
       objective_mm: 0, summary: "Aucun arrosage nécessaire pour le moment", watering_window_display: "03:45–10:00",
       jours_avant_arrosage_estime: 2, date_prochain_arrosage_estime: "2026-06-03",
     }),
+    [`sensor.${P}_arrosage_auto_blocage`]: capteur("Aucun besoin", {
+      bloque: false, code: "no_objective", safety_lock_actif: false,
+      pourquoi: "La réserve ne demande pas d'eau.", comment_debloquer: "Aucune action requise.",
+    }),
     [`sensor.${P}_prochaine_tonte`]: capteur("01/06/2026", { target_date: "2026-06-01", tonte_statut: "autorisee", summary: "Tonte possible" }),
     [`binary_sensor.${P}_tonte_autorisee`]: capteur("on", {
       tonte_statut: "autorisee", gazon_permet_tonte: true, machine_permet_tonte: true,
@@ -213,9 +224,11 @@ export default {
     }),
     [`sensor.${P}_hauteur_gazon_estimee`]: capteur("5.1", { gazon_pousse_jour_cm: 0.25, tondeuse_hauteur_coupe_mm: 45 }),
     [`sensor.${P}_etat_de_tonte`]: capteur("autorisee", {
-      tondeuse_hauteur_coupe_mm: 45, mower_job_progress_pct: 100, mower_job_completion_state: "repos",
-      mower_auto_declaration_state: "travail_au_repos", mower_auto_declaration_threshold_minutes: 90,
+      tondeuse_hauteur_coupe_mm: 45, mower_job_progress_pct: 0, mower_job_completion_state: "en_pause",
+      mower_auto_declaration_state: "travail_en_pause", mower_auto_declaration_threshold_minutes: 90,
       mower_mowing_minutes_today: 0, mower_pass_count_today: 0, mower_full_pass_minutes_median: 80,
+      mower_control_mode: "desactive", mower_control_state: "desactive",
+      mower_control_reason: "Pilotage automatique désactivé.", mower_control_pending_action: null,
     }),
     [`sensor.${P}_objectif_d_arrosage`]: capteur("0.0", { et0_mm: 3.4, pluie_demain: 0, besoin_mm: 0, reserve_minimale_mm: 6 }),
     [`sensor.${P}_fenetre_optimale`]: capteur("attendre", { weekly_guardrail_mm_min: 20, weekly_guardrail_mm_max: 26, heat_stress_level: "normal" }),
@@ -265,5 +278,6 @@ export default {
     [`switch.${P}_rafraichissement_soir`]: interrupteur("off", "Rafraîchissement du soir"),
     [`switch.${P}_coordination_tondeuse`]: interrupteur("on", "Coordination tondeuse"),
     [`switch.${P}_declaration_tonte_auto`]: interrupteur("on", "Déclaration auto de la tonte"),
+    "cover.garage_tondeuse": volet("closed", "Garage tondeuse"),
   },
 };

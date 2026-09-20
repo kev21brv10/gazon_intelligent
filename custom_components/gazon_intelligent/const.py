@@ -1,3 +1,16 @@
+from .mower_control_constants import (
+    DEFAULT_MOWER_CONTROL_COMMAND_COOLDOWN_MINUTES as DEFAULT_MOWER_CONTROL_COMMAND_COOLDOWN_MINUTES,
+    DEFAULT_MOWER_CONTROL_MIN_BATTERY as DEFAULT_MOWER_CONTROL_MIN_BATTERY,
+    DEFAULT_MOWER_CONTROL_MODE as DEFAULT_MOWER_CONTROL_MODE,
+    DEFAULT_MOWER_START_WINDOW_POLICY as DEFAULT_MOWER_START_WINDOW_POLICY,
+    DEFAULT_MOWER_GARAGE_CLOSE_AFTER_DOCK as DEFAULT_MOWER_GARAGE_CLOSE_AFTER_DOCK,
+    DEFAULT_MOWER_GARAGE_CLOSE_DELAY_MINUTES as DEFAULT_MOWER_GARAGE_CLOSE_DELAY_MINUTES,
+    DEFAULT_MOWER_GARAGE_OPEN_BEFORE_START as DEFAULT_MOWER_GARAGE_OPEN_BEFORE_START,
+    DEFAULT_MOWER_GARAGE_OPEN_FOR_RETURN as DEFAULT_MOWER_GARAGE_OPEN_FOR_RETURN,
+    DEFAULT_MOWER_GARAGE_OPEN_LEAD_MINUTES as DEFAULT_MOWER_GARAGE_OPEN_LEAD_MINUTES,
+    MOWER_CONTROL_MODES as MOWER_CONTROL_MODES,
+    MOWER_START_WINDOW_POLICIES as MOWER_START_WINDOW_POLICIES,
+)
 from .phases import PHASE_DURATIONS_DAYS
 
 DOMAIN = "gazon_intelligent"
@@ -48,6 +61,9 @@ CONF_CAPTEUR_TONDEUSE_PLUIE = "capteur_tondeuse_pluie"
 CONF_CAPTEUR_TONDEUSE_EN_CHARGE = "capteur_tondeuse_en_charge"
 CONF_CAPTEUR_TONDEUSE_PROCHAIN_DEPART = "capteur_tondeuse_prochain_depart"
 CONF_CAPTEUR_TONDEUSE_HAUTEUR_COUPE = "capteur_tondeuse_hauteur_coupe"
+CONF_PILOTAGE_TONDEUSE = "pilotage_tondeuse"
+CONF_TONDEUSE_CRENEAUX_DEPART = "tondeuse_creneaux_depart"
+CONF_ENTITE_VOLET_GARAGE_TONDEUSE = "entite_volet_garage_tondeuse"
 CONF_HAUTEUR_COUPE_TONDEUSE_MM = "hauteur_coupe_tondeuse_mm"
 CONF_HAUTEUR_MIN_TONDEUSE_CM = "hauteur_min_tondeuse_cm"
 CONF_HAUTEUR_MAX_TONDEUSE_CM = "hauteur_max_tondeuse_cm"
@@ -65,10 +81,18 @@ CONF_ENTITE_POMPE = "entite_pompe"
 CONF_NOTIFICATION_CIBLES = "notification_cibles"
 CONF_ALERTES_ACTIVES = "alertes_actives"
 CONF_MODE_NOTIFICATIONS = "mode_notifications"
+CONF_SOURCE_NOTIFICATIONS = "source_notifications"
+CONF_NOTIFICATION_NIVEAU_MINIMAL = "notification_niveau_minimal"
+CONF_NOTIFICATION_HEURES_CALMES = "notification_heures_calmes"
+CONF_NOTIFICATION_HEURES_CALMES_DEBUT = "notification_heures_calmes_debut"
+CONF_NOTIFICATION_HEURES_CALMES_FIN = "notification_heures_calmes_fin"
 CONF_NOTIFIER_ARROSAGE_GRAINES = "notifier_arrosage_graines"
 CONF_NOTIFIER_SECURITE_ARROSAGE = "notifier_securite_arrosage"
 CONF_NOTIFIER_CAPTEURS_METEO = "notifier_capteurs_meteo"
 CONF_NOTIFIER_TONDEUSE = "notifier_tondeuse"
+CONF_NOTIFIER_ACTIVITE_ARROSAGE = "notifier_activite_arrosage"
+CONF_NOTIFIER_ACTIVITE_TONDEUSE = "notifier_activite_tondeuse"
+CONF_NOTIFIER_GARAGE_TONDEUSE = "notifier_garage_tondeuse"
 CONF_ENTITE_IA = "entite_ia"
 
 SHARED_WEATHER_CONFIG_KEYS = frozenset(
@@ -101,6 +125,13 @@ DEFAULT_PAGE_GAZON = True
 DEFAULT_ALERTES_ACTIVES = True
 DEFAULT_MODE_NOTIFICATIONS = "manuel"
 MODES_NOTIFICATIONS = ("veille_intelligente", "manuel")
+SOURCES_NOTIFICATIONS = ("integration", "conseiller_gazon")
+DEFAULT_SOURCE_NOTIFICATIONS = "integration"
+NIVEAUX_NOTIFICATIONS = ("information", "action", "critique")
+DEFAULT_NOTIFICATION_NIVEAU_MINIMAL = "information"
+DEFAULT_NOTIFICATION_HEURES_CALMES = False
+DEFAULT_NOTIFICATION_HEURES_CALMES_DEBUT = 22 * 60
+DEFAULT_NOTIFICATION_HEURES_CALMES_FIN = 7 * 60
 DEFAULT_NOTIFICATION_CATEGORIE_ACTIVE = True
 DEFAULT_HAUTEUR_MIN_TONDEUSE_CM = 3.0
 DEFAULT_HAUTEUR_MAX_TONDEUSE_CM = 8.0
@@ -269,6 +300,10 @@ BLOCK_REASON_DISPLAY_LABELS: dict[str, str] = {
     "temperature_trop_basse_germination": "Température trop basse (germination)",
     "semis_cycle_daily_target_reached": "Objectif du jour atteint (semis)",
     "semis_cycle_pending": "Cycle de semis en attente",
+    "temp_extreme": "Température extrême",
+    "temperature_unknown": "Température inconnue",
+    "application_type_required": "Type d'application requis",
+    "unsupported_application_type": "Type d'application non pris en charge",
     # ⚠️ Ces six codes étaient PUBLIÉS sans libellé : ils s'affichaient en snake_case brut sur
     # la carte et dans les attributs. Relevé à l'audit du 06/08/2026 en comparant les codes
     # réellement émis par decision_mowing / guidance / decision_watering à cette table.

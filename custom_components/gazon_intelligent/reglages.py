@@ -32,7 +32,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from typing import Any
 
-GENRES = ("nombre", "heure", "duree", "jour", "table_mois")
+GENRES = ("nombre", "heure", "duree", "jour", "table_mois", "interrupteur")
 
 
 @dataclass(frozen=True)
@@ -50,7 +50,7 @@ class Reglage:
     titre: str
     aide: str
     genre: str
-    defaut: float | tuple[float, ...]
+    defaut: bool | float | tuple[float, ...]
     minimum: float
     maximum: float
     pas: float
@@ -235,6 +235,14 @@ REGLAGES: tuple[Reglage, ...] = (
         "nombre", 6, 1, 24, 1, "h",
         source="coordinator_constants.AUTO_IRRIGATION_RELAUNCH_COOLDOWN",
         avertissement="Réglage sensible : un délai trop court peut permettre deux arrosages automatiques très rapprochés.",
+    ),
+    Reglage(
+        "arrosage_sensibilite_pluie", "arrosage",
+        "Comment tenir compte de la pluie annoncée ?",
+        "Prudente protège davantage le gazon, Équilibrée garde le comportement conseillé et Économe reporte plus tôt pour économiser l'eau.",
+        "nombre", 1.0, 0.75, 1.25, 0.25, "×",
+        source="guidance._rain_signals (multiplicateur des seuils de pluie prévue)",
+        avertissement="Réglage sensible : le profil Économe se fie davantage aux prévisions ; si la pluie annoncée ne tombe pas, le gazon peut attendre plus longtemps.",
     ),
     # Découpage d'une grosse dose (mode Normal). Valeurs du 29/07/2026, tirées du régime manuel
     # éprouvé de Kévin : 8,8 à 10 mm d'un seul passage, sans ruissellement.
@@ -518,11 +526,92 @@ REGLAGES: tuple[Reglage, ...] = (
         source="watering_policy.WATERING_POLICIES['scarification'].conditions['temperature_min_c']",
         avertissement="Réglage sensible : sous 12 °C la reprise est lente ; abaisser cette limite peut arroser sans bénéfice réel.",
     ),
+    # ── Pilotage matériel de la tondeuse ───────────────────────────────────────────────
+    Reglage(
+        "tondeuse_pilotage_batterie_min", "installation",
+        "Quelle batterie minimale avant un départ automatique ?",
+        "Le départ attend que la batterie atteigne ce niveau. Une valeur élevée évite un cycle incomplet.",
+        "nombre", 100, 50, 100, 5, "%",
+        source="mower_control_constants.DEFAULT_MOWER_CONTROL_MIN_BATTERY",
+        avertissement="Réglage sensible : une batterie trop basse peut interrompre la tonte avant la fin du passage.",
+    ),
+    Reglage(
+        "tondeuse_pilotage_delai_commandes", "installation",
+        "Combien de temps empêcher une commande identique ?",
+        "Ce délai évite plusieurs départs, retours ou mouvements du volet si un état tarde à remonter.",
+        "duree", 10, 5, 60, 5,
+        source="mower_control_constants.DEFAULT_MOWER_CONTROL_COMMAND_COOLDOWN_MINUTES",
+        avertissement="Réglage sensible : un délai trop court peut envoyer plusieurs fois la même commande au matériel.",
+    ),
+    Reglage(
+        "tondeuse_garage_ouvrir_avant_depart", "installation",
+        "Ouvrir automatiquement le garage avant un départ ?",
+        "Sinon, tu ouvres le volet toi-même ; la tondeuse attend toujours que son ouverture soit confirmée.",
+        "interrupteur", True, 0, 1, 1,
+        source="mower_control_constants.DEFAULT_MOWER_GARAGE_OPEN_BEFORE_START",
+        avertissement="Réglage sensible : désactivé, un volet fermé bloque le départ jusqu'à son ouverture manuelle.",
+    ),
+    Reglage(
+        "tondeuse_garage_ouvrir_pour_retour", "installation",
+        "Ouvrir automatiquement le garage pour le retour ?",
+        "Sinon, l'intégration n'ordonne pas le retour tant que le volet n'est pas confirmé ouvert.",
+        "interrupteur", True, 0, 1, 1,
+        source="mower_control_constants.DEFAULT_MOWER_GARAGE_OPEN_FOR_RETURN",
+        avertissement="Réglage sensible : désactivé, ouvre le volet avant qu'une autre automatisation rappelle la tondeuse.",
+    ),
+    Reglage(
+        "tondeuse_garage_fermer_apres_retour", "installation",
+        "Fermer automatiquement le garage après la rentrée ?",
+        "Sinon, le volet reste ouvert et tu choisis toi-même quand le fermer.",
+        "interrupteur", True, 0, 1, 1,
+        source="mower_control_constants.DEFAULT_MOWER_GARAGE_CLOSE_AFTER_DOCK",
+        avertissement="Réglage sensible : la fermeture automatique exige toujours une rentrée fortement confirmée.",
+    ),
+    Reglage(
+        "tondeuse_garage_avance_ouverture", "installation",
+        "Après l'ouverture du garage, combien de temps attendre avant le départ ?",
+        "La tondeuse ne démarre qu'après l'ouverture confirmée puis ce délai de sécurité.",
+        "duree", 2, 0, 10, 1,
+        source="mower_control_constants.DEFAULT_MOWER_GARAGE_OPEN_LEAD_MINUTES",
+        avertissement="Réglage sensible : zéro minute réduit la marge laissée au volet pour libérer complètement le passage.",
+    ),
+    Reglage(
+        "tondeuse_garage_delai_fermeture", "installation",
+        "Après la rentrée confirmée, combien de temps attendre avant de fermer ?",
+        "Le volet reste ouvert après un signal fort de station ou de charge, puis se ferme.",
+        "duree", 2, 1, 15, 1,
+        source="mower_control_constants.DEFAULT_MOWER_GARAGE_CLOSE_DELAY_MINUTES",
+        avertissement="Réglage sensible : un délai trop court peut fermer le volet alors que la tondeuse termine sa manœuvre.",
+    ),
 )
 
 # Les chiffres de chaque sol sont ceux du moteur (réserve de départ et stock maximal) :
 # `tests/test_reglages.py` les compare à `soil_balance` et à son jumeau de `water`.
 CHOIX: tuple[Choix, ...] = (
+    Choix(
+        "pilotage_tondeuse", "installation",
+        "Qui commande les départs et les retours de la tondeuse ?",
+        "Commence par Observation. Actif envoie réellement les commandes à la tondeuse et au garage configuré.",
+        "desactive",
+        (
+            Option("desactive", "Désactivé", "L'intégration observe la tondeuse mais ne décide ni départ ni retour."),
+            Option("observation", "Observation", "Elle affiche ce qu'elle ferait, sans envoyer aucune commande."),
+            Option("actif", "Actif", "Elle devient l'unique pilote des départs, retours et du garage facultatif."),
+        ),
+        source="const.MOWER_CONTROL_MODES",
+    ),
+    Choix(
+        "tondeuse_creneaux_depart", "installation",
+        "Dans quels créneaux la tondeuse peut-elle démarrer automatiquement ?",
+        "Ce choix filtre uniquement les nouveaux départs. Une tondeuse déjà dehors rentre toujours si les conditions deviennent bloquantes.",
+        "ideal_seulement",
+        (
+            Option("ideal_seulement", "Idéal seulement", "Le choix conseillé pour un gazon d'ornement : départ uniquement dans le meilleur créneau."),
+            Option("ideal_acceptable", "Idéal ou acceptable", "Autorise aussi le créneau du soir quand le meilleur moment n'a pas suffi."),
+            Option("tout_non_bloque", "Tout créneau non bloqué", "Autorise même un départ dans un créneau déconseillé ; les blocages de sécurité restent prioritaires."),
+        ),
+        source="mower_control_constants.MOWER_START_WINDOW_POLICIES",
+    ),
     Choix(
         "type_sol", "installation",
         "Quelle est la terre de ton jardin ?",
@@ -615,6 +704,8 @@ def _tombe_sur_le_pas(r: Reglage, v: float) -> bool:
 
 def _erreur_de_valeur(r: Reglage, valeur: Any) -> str | None:
     """Ce qui ne va pas dans une valeur prise seule (forme, bornes, pas), ou None."""
+    if r.genre == "interrupteur":
+        return None if isinstance(valeur, bool) else "Choisis activé ou désactivé."
     nombres = _valeurs_de(r, valeur)
     if nombres is None or not all(_est_un_nombre(v) for v in nombres):
         return "Il faut un nombre pour chaque mois." if r.genre == "table_mois" else "Il faut un nombre."
@@ -659,6 +750,8 @@ def valider(valeurs: dict[str, Any]) -> dict[str, str]:
 
 
 def _normaliser(r: Reglage, valeur: Any) -> Any:
+    if r.genre == "interrupteur":
+        return bool(valeur)
     if r.genre == "table_mois":
         return [float(v) for v in valeur]
     nombre = float(valeur)
@@ -666,6 +759,8 @@ def _normaliser(r: Reglage, valeur: Any) -> Any:
 
 
 def _egal_au_defaut(r: Reglage, valeur: Any) -> bool:
+    if r.genre == "interrupteur":
+        return valeur is r.defaut
     if isinstance(r.defaut, tuple):
         return [float(v) for v in valeur] == [float(v) for v in r.defaut]
     return abs(float(valeur) - float(r.defaut)) < 1e-9

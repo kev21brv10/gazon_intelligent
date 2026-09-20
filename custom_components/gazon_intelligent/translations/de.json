@@ -197,6 +197,10 @@
       "name": "Zurück zum Normalmodus",
       "description": "Setzt das System auf den Normalmodus zurück."
     },
+    "clear_irrigation_safety_lock": {
+      "name": "Bewässerungs-Sicherheitssperre aufheben",
+      "description": "Stellt die automatische Bewässerung nach Prüfung der Ventile wieder her, ohne den Rasenmodus zu ändern."
+    },
     "start_manual_irrigation": {
       "name": "Manuelle Bewässerung",
       "description": "Startet eine manuelle Bewässerung und gibt an, wie viel Wasser in mm ausgebracht werden soll.",
@@ -551,6 +555,10 @@
           "temperature_trop_basse_germination": "Temperatur zu niedrig (Keimung)",
           "semis_cycle_daily_target_reached": "Tagesziel erreicht (Aussaat)",
           "semis_cycle_pending": "Aussaatzyklus ausstehend",
+          "temp_extreme": "Extreme Temperatur",
+          "temperature_unknown": "Temperatur unbekannt",
+          "application_type_required": "Anwendungstyp erforderlich",
+          "unsupported_application_type": "Nicht unterstützter Anwendungstyp",
           "machine_unavailable": "Roboter nicht verfügbar",
           "mowing_window_blocked": "Außerhalb des Mähfensters",
           "recent_watering": "Kürzlich bewässert",

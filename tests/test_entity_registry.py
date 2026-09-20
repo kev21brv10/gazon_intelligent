@@ -201,6 +201,7 @@ class EntityRegistryTests(unittest.TestCase):
             switch.GazonAutoMowingDeclarationSwitch(coordinator),
             button.ArroserMaintenantButton(coordinator),
             button.RetourModeNormalButton(coordinator),
+            button.LeverVerrouSecuriteButton(coordinator),
             button.DateActionAujourdhuiButton(coordinator),
             button.ArreterArrosageButton(coordinator),
             select.GazonModeSelect(coordinator),
@@ -318,6 +319,10 @@ class EntityRegistryTests(unittest.TestCase):
     def test_button_labels_are_explicit(self) -> None:
         coordinator = _FakeCoordinator(entry=_FakeEntry(), data={})
         self.assertEqual(button.ArroserMaintenantButton(coordinator)._attr_name, "Arrosage manuel immédiat")
+        self.assertEqual(
+            button.LeverVerrouSecuriteButton(coordinator)._attr_name,
+            "Lever le verrou de sécurité",
+        )
         self.assertEqual(
             switch.GazonAutoIrrigationSwitch(coordinator)._attr_translation_key,
             "auto_irrigation_enabled",

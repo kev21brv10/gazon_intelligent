@@ -238,7 +238,8 @@ class CeQueLaPageLitTests(unittest.TestCase):
         self.assertEqual(
             set(donnees),
             {"instances", "entry_id", "titre", "sous_titre", "registre", "valeurs", "choix", "produits",
-             "entites", "zones", "pompe", "meteo", "notifications", "sources", "appareils", "pompe_choix"},
+             "entites", "zones", "pompe", "meteo", "notifications", "sources", "appareils", "pompe_choix",
+             "garage_tondeuse"},
         )
         self.assertEqual(donnees["entry_id"], "e1")
         self.assertEqual(donnees["instances"], [{"entry_id": "e1", "titre": "Gazon Intelligent"}])
@@ -253,9 +254,23 @@ class CeQueLaPageLitTests(unittest.TestCase):
         self.assertEqual(set(valeurs), {r.cle for r in reglages.REGLAGES})
 
     def test_le_type_de_sol_vient_des_options(self) -> None:
-        self.assertEqual(self._donnees()["choix"], {"type_sol": "argileux"})
+        self.assertEqual(self._donnees()["choix"], {
+            "type_sol": "argileux",
+            "pilotage_tondeuse": "desactive",
+            "tondeuse_creneaux_depart": "ideal_seulement",
+        })
         self.coordinateur._conf["type_sol"] = None
-        self.assertEqual(self._donnees()["choix"], {"type_sol": "limoneux"})
+        self.assertEqual(self._donnees()["choix"], {
+            "type_sol": "limoneux",
+            "pilotage_tondeuse": "desactive",
+            "tondeuse_creneaux_depart": "ideal_seulement",
+        })
+
+    def test_le_garage_de_tondeuse_reste_facultatif_et_liste_les_volets(self) -> None:
+        self.etats._etats["cover.garage_tondeuse"] = _Etat("closed", {"friendly_name": "Garage tondeuse"})
+        garage = self._donnees()["garage_tondeuse"]
+        self.assertIsNone(garage["choisie"])
+        self.assertEqual(garage["volets"], [{"entity_id": "cover.garage_tondeuse", "nom": "Garage tondeuse"}])
 
     def test_les_entites_suivent_le_registre_puis_le_nom_public(self) -> None:
         entites = self._donnees()["entites"]
@@ -302,11 +317,17 @@ class CeQueLaPageLitTests(unittest.TestCase):
             ],
             "alertes": True,
             "mode": "manuel",
+            "source": "integration",
+            "niveau_minimal": "information",
+            "heures_calmes": {"active": False, "debut": 1320, "fin": 420},
             "categories": {
                 "arrosage_graines": True,
                 "securite_arrosage": True,
                 "capteurs_meteo": True,
                 "tondeuse": True,
+                "activite_arrosage": False,
+                "activite_tondeuse": False,
+                "garage_tondeuse": False,
             },
             "ia_choisie": "ai_task.openai",
             "ia": "ai_task.openai",
@@ -321,13 +342,19 @@ class CeQueLaPageLitTests(unittest.TestCase):
         self.entree.options["alertes_actives"] = False
         notifications = self._donnees()["notifications"]
         self.assertEqual(notifications, {
-            "cibles": [], "alertes": False, "mode": "manuel", "ia_choisie": None, "ia": None, "ia_nom": None,
+            "cibles": [], "alertes": False, "mode": "manuel", "source": "integration",
+            "niveau_minimal": "information",
+            "heures_calmes": {"active": False, "debut": 1320, "fin": 420},
+            "ia_choisie": None, "ia": None, "ia_nom": None,
             "ia_disponible": False, "telephones": [], "ias": [],
             "categories": {
                 "arrosage_graines": True,
                 "securite_arrosage": True,
                 "capteurs_meteo": True,
                 "tondeuse": True,
+                "activite_arrosage": False,
+                "activite_tondeuse": False,
+                "garage_tondeuse": False,
             },
         })
 
@@ -387,9 +414,18 @@ class CeQueLaPageLitTests(unittest.TestCase):
 
     def test_le_bandeau_en_ce_moment_est_range_sur_mobile(self) -> None:
         page = (panneau.DOSSIER_FRONTEND / panneau.FICHIER_PANNEAU).read_text(encoding="utf-8")
+        self.assertIn(".en-ce-moment .puces {\n    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));", page)
         self.assertIn(".meteo-ligne {\n    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));", page)
+        self.assertIn(".meteo-ligne span:nth-child(n + 5) { display: none; }", page)
         self.assertIn("border-top: 1px solid rgba(255, 255, 255, .28)", page)
-        self.assertIn(".en-ce-moment .puce { max-width: 100%; white-space: normal; }", page)
+        self.assertIn(".en-ce-moment .puce { max-width: 100%; min-height: 28px;", page)
+
+    def test_le_verrou_de_securite_a_sa_propre_action_dans_la_page(self) -> None:
+        page = (panneau.DOSSIER_FRONTEND / panneau.FICHIER_PANNEAU).read_text(encoding="utf-8")
+        self.assertIn('dialogue: "deverrouiller"', page)
+        self.assertIn('["gazon_intelligent", "clear_irrigation_safety_lock"', page)
+        self.assertIn("Le mode du gazon et le suivi Semis ou Sursemis sont conservés.", page)
+        self.assertIn("Le verrou de sécurité restera posé", page)
 
     def test_la_fenetre_de_changement_de_mode_part_du_mode_choisi(self) -> None:
         # L'onglet Modes lui-même est exécuté dans `test_panneau_modes.py`.
@@ -404,10 +440,15 @@ class CeQueLaPageLitTests(unittest.TestCase):
         page = (panneau.DOSSIER_FRONTEND / panneau.FICHIER_PANNEAU).read_text(encoding="utf-8")
         self.assertIn("Que veux-tu recevoir ?", page)
         self.assertIn('data-action="alerte-categorie"', page)
-        for categorie in ("arrosage_graines", "securite_arrosage", "capteurs_meteo", "tondeuse"):
+        for categorie in (
+            "arrosage_graines", "securite_arrosage", "capteurs_meteo", "tondeuse",
+            "activite_arrosage", "activite_tondeuse", "garage_tondeuse",
+        ):
             self.assertIn(f'["{categorie}",', page)
         self.assertIn("Une même panne n'est envoyée qu'une fois.", page)
-        self.assertIn("Veille intelligente", page)
+        self.assertIn("Qui rédige les notifications ?", page)
+        self.assertIn('puce("alerte-source"', page)
+        self.assertIn("Gazon Intelligent", page)
         self.assertIn("Conseiller Gazon", page)
 
     def test_les_animations_respectent_la_reduction_des_mouvements(self) -> None:
@@ -775,7 +816,11 @@ class CeQueLaPageEcritTests(unittest.TestCase):
         self.assertEqual(self.entree.options["debit_zone_1"], 14.0, "les autres options restent")
         self.assertEqual(reponse["valeurs"]["tonte_vent_bloque"], 45)
         self.assertEqual(reponse["valeurs"]["tonte_fenetre_ideale_fin"], 900)
-        self.assertEqual(reponse["choix"], {"type_sol": "limoneux"})
+        self.assertEqual(reponse["choix"], {
+            "type_sol": "limoneux",
+            "pilotage_tondeuse": "desactive",
+            "tondeuse_creneaux_depart": "ideal_seulement",
+        })
 
     def test_revenir_au_conseil_retire_la_valeur(self) -> None:
         self.assertTrue(self._ecrire({"tonte_fenetre_ideale_fin": 14 * 60})["ok"])
@@ -798,9 +843,41 @@ class CeQueLaPageEcritTests(unittest.TestCase):
         reponse = self._ecrire({}, {"type_sol": "sableux"})
         self.assertTrue(reponse["ok"])
         self.assertEqual(self.entree.options["type_sol"], "sableux")
-        self.assertEqual(reponse["choix"], {"type_sol": "sableux"})
+        self.assertEqual(reponse["choix"], {
+            "type_sol": "sableux",
+            "pilotage_tondeuse": "desactive",
+            "tondeuse_creneaux_depart": "ideal_seulement",
+        })
         refus = self._ecrire({}, {"type_sol": "tourbe"})
         self.assertEqual(refus["erreurs"], {"type_sol": "Choisis parmi : sableuse, limoneuse, argileuse."})
+
+    def test_le_pilotage_tondeuse_est_un_choix_separe_des_autres_reglages(self) -> None:
+        reponse = self._ecrire({}, {"pilotage_tondeuse": "observation"})
+        self.assertTrue(reponse["ok"])
+        self.assertEqual(self.entree.options["pilotage_tondeuse"], "observation")
+        refus = self._ecrire({}, {"pilotage_tondeuse": "magique"})
+        self.assertIn("pilotage_tondeuse", refus["erreurs"])
+
+    def test_les_creneaux_de_depart_sont_un_choix_separe_du_mode_actif(self) -> None:
+        reponse = self._ecrire({}, {"tondeuse_creneaux_depart": "ideal_acceptable"})
+        self.assertTrue(reponse["ok"])
+        self.assertEqual(self.entree.options["tondeuse_creneaux_depart"], "ideal_acceptable")
+        self.assertNotIn("pilotage_tondeuse", self.entree.options)
+        refus = self._ecrire({}, {"tondeuse_creneaux_depart": "nimporte_quand"})
+        self.assertIn("tondeuse_creneaux_depart", refus["erreurs"])
+
+    def test_le_volet_du_garage_est_valide_avant_ecriture(self) -> None:
+        hass = types.SimpleNamespace(states=_Etats({"cover.garage_tondeuse": _Etat("closed")}))
+        reponse = asyncio.run(panneau.ecrire_reglages(
+            self.coordinateur, {}, {}, hass=hass, garage_tondeuse="cover.garage_tondeuse"
+        ))
+        self.assertTrue(reponse["ok"])
+        self.assertEqual(self.entree.options["entite_volet_garage_tondeuse"], "cover.garage_tondeuse")
+        refus = asyncio.run(panneau.ecrire_reglages(
+            self.coordinateur, {}, {}, hass=hass, garage_tondeuse="cover.introuvable"
+        ))
+        self.assertFalse(refus["ok"])
+        self.assertIn("garage_tondeuse", refus["erreurs"])
 
     def test_un_envoi_mal_forme_est_refuse(self) -> None:
         for valeurs, choix in (([], {}), ({}, "sableux")):
@@ -867,12 +944,18 @@ class LesAlertesSeReglentSurLaPageTests(unittest.TestCase):
                 "securite_arrosage": True,
                 "capteurs_meteo": False,
                 "tondeuse": True,
+                "activite_arrosage": True,
+                "activite_tondeuse": False,
+                "garage_tondeuse": True,
             },
         })["ok"])
         self.assertIs(self.entree.options["notifier_arrosage_graines"], False)
         self.assertIs(self.entree.options["notifier_securite_arrosage"], True)
         self.assertIs(self.entree.options["notifier_capteurs_meteo"], False)
         self.assertIs(self.entree.options["notifier_tondeuse"], True)
+        self.assertIs(self.entree.options["notifier_activite_arrosage"], True)
+        self.assertIs(self.entree.options["notifier_activite_tondeuse"], False)
+        self.assertIs(self.entree.options["notifier_garage_tondeuse"], True)
 
     def test_la_page_relit_chaque_famille(self) -> None:
         """Relevé par le banc de mutations (0.96.0) : chaque famille décochée doit se relire
@@ -882,18 +965,46 @@ class LesAlertesSeReglentSurLaPageTests(unittest.TestCase):
             "securite_arrosage": "notifier_securite_arrosage",
             "capteurs_meteo": "notifier_capteurs_meteo",
             "tondeuse": "notifier_tondeuse",
+            "activite_arrosage": "notifier_activite_arrosage",
+            "activite_tondeuse": "notifier_activite_tondeuse",
+            "garage_tondeuse": "notifier_garage_tondeuse",
         }
+        actifs_par_defaut = {"arrosage_graines", "securite_arrosage", "capteurs_meteo", "tondeuse"}
         for famille, option in familles.items():
             with self.subTest(famille=famille):
-                entree = _Entree("e1", options={option: False})
+                entree = _Entree("e1", options={option: famille not in actifs_par_defaut})
                 lues = panneau.notifications_de_l_instance(types.SimpleNamespace(states=_Etats()), entree)["categories"]
-                self.assertEqual(lues, {f: f != famille for f in familles})
+                attendu = {f: f in actifs_par_defaut for f in familles}
+                attendu[famille] = famille not in actifs_par_defaut
+                self.assertEqual(lues, attendu)
 
     def test_le_mode_de_notification_est_enregistre(self) -> None:
         reponse = self._ecrire({"mode": "veille_intelligente"})
         self.assertTrue(reponse["ok"])
         self.assertEqual(self.entree.options["mode_notifications"], "veille_intelligente")
         self.assertEqual(reponse["notifications"]["mode"], "veille_intelligente")
+
+    def test_la_source_des_messages_est_enregistree(self) -> None:
+        reponse = self._ecrire({"source": "conseiller_gazon"})
+        self.assertTrue(reponse["ok"])
+        self.assertEqual(self.entree.options["source_notifications"], "conseiller_gazon")
+        self.assertEqual(reponse["notifications"]["source"], "conseiller_gazon")
+
+    def test_niveau_et_heures_calmes_sont_enregistres_ensemble(self) -> None:
+        reponse = self._ecrire({
+            "niveau_minimal": "action",
+            "heures_calmes": {"active": True, "debut": 21 * 60 + 30, "fin": 6 * 60 + 45},
+        })
+        self.assertTrue(reponse["ok"])
+        self.assertEqual(self.entree.options["notification_niveau_minimal"], "action")
+        self.assertIs(self.entree.options["notification_heures_calmes"], True)
+        self.assertEqual(self.entree.options["notification_heures_calmes_debut"], 1290)
+        self.assertEqual(self.entree.options["notification_heures_calmes_fin"], 405)
+        self.assertEqual(reponse["notifications"]["niveau_minimal"], "action")
+        self.assertEqual(
+            reponse["notifications"]["heures_calmes"],
+            {"active": True, "debut": 1290, "fin": 405},
+        )
 
     def test_automatique_efface_le_choix_de_l_ia(self) -> None:
         self.entree.options["entite_ia"] = "ai_task.openai"
@@ -913,6 +1024,10 @@ class LesAlertesSeReglentSurLaPageTests(unittest.TestCase):
             "catégorie inconnue": ({"categories": {"pluie": True}}, "Catégorie de notification inconnue : pluie."),
             "valeur de catégorie mal formée": ({"categories": {"tondeuse": "oui"}}, "Chaque catégorie de notification doit être cochée ou décochée."),
             "mode inconnu": ({"mode": "magique"}, "Choisis Veille intelligente ou Choix manuel."),
+            "source inconnue": ({"source": "magique"}, "Choisis les messages de Gazon Intelligent ou du Conseiller Gazon."),
+            "niveau inconnu": ({"niveau_minimal": "bruyant"}, "Choisis Tout recevoir, Important ou Urgences seulement."),
+            "heures calmes mal formées": ({"heures_calmes": {"active": True}}, "Les heures calmes n'ont pas la bonne forme."),
+            "heure hors journée": ({"heures_calmes": {"active": True, "debut": 1440, "fin": 420}}, "Choisis des heures calmes comprises dans la journée."),
             "ia mal formée": ({"ia": 3}, "Cette IA n'existe pas dans Home Assistant : 3."),
             "clé inconnue": ({"sirene": True}, "Réglage d'alerte inconnu : sirene."),
         }

@@ -562,6 +562,50 @@ def _scarification_soil_humidity_state(*, saturation_block: bool) -> str:
     return "legerement_humide"
 
 
+def _ajustement_meteo_graines(
+    *,
+    temperature_sechage: float,
+    etp: float,
+    vent: float | None,
+    humidite: float,
+    pluie_24h: float,
+    pluie_demain: float,
+    ajustement_precedent: str | None,
+) -> str:
+    """Stabilise l'ajustement météo des cycles de graines (chaud_sec/neutre/humide_frais).
+
+    Sans marge, chacun des seuils (température, ETP, vent, humidité, pluie) bascule sur un
+    simple bruit de mesure/prévision — mesuré le 18/09/2026 : ±0,3 °C autour de 28 °C suffit
+    à faire sauter le prochain cycle annoncé de 75 min (`repartir_creneaux_semis`). Même
+    défaut, même remède que `palier_et0_stress`/`_germination_risk_floor` : entrer dans un
+    état reste immédiat (un vrai coup de chaud/froid doit agir tout de suite), en sortir
+    demande une marge — sinon la sortie se ferait sur le seuil qui vient de faire entrer.
+    """
+    vent_v = vent or 0.0
+    chaud_sec = temperature_sechage >= 28.0 or etp >= 4.0 or vent_v >= 12.0 or humidite <= 45.0
+    humide_frais = (
+        humidite >= 70.0
+        or pluie_24h > 0.5
+        or pluie_demain > 0.5
+        or (temperature_sechage <= 14.0 and etp <= 2.0)
+    )
+    precedent = str(ajustement_precedent or "").strip().lower()
+    if precedent == "chaud_sec" and not chaud_sec:
+        chaud_sec = temperature_sechage >= 27.0 or etp >= 3.5 or vent_v >= 11.0 or humidite <= 48.0
+    elif precedent == "humide_frais" and not humide_frais and not chaud_sec:
+        humide_frais = (
+            humidite >= 67.0
+            or pluie_24h > 0.3
+            or pluie_demain > 0.3
+            or (temperature_sechage <= 15.0 and etp <= 2.5)
+        )
+    if chaud_sec:
+        return "chaud_sec"
+    if humide_frais:
+        return "humide_frais"
+    return "neutre"
+
+
 def _sursemis_micro_apport_decision(
     *,
     policy: dict[str, Any],
@@ -580,6 +624,7 @@ def _sursemis_micro_apport_decision(
     vent: float | None,
     soil_profile: str,
     reglages: Mapping[str, Any] | None = None,
+    ajustement_precedent: str | None = None,
 ) -> dict[str, Any]:
     policy_key = str(policy.get("policy_key") or "enracinement_prudent")
     watering_stage, stage_program = resolve_semis_stage_program(
@@ -646,15 +691,20 @@ def _sursemis_micro_apport_decision(
     daily_cycles_target = stage_program.daily_cycles_optimal
     cycle_spacing_minutes = stage_program.cycle_spacing_minutes_max
     temperature_sechage = max(temperature, forecast_temperature_today or temperature)
-    if temperature_sechage >= 28.0 or etp >= 4.0 or (vent or 0.0) >= 12.0 or humidite <= 45.0:
+    ajustement_meteo = _ajustement_meteo_graines(
+        temperature_sechage=temperature_sechage,
+        etp=etp,
+        vent=vent,
+        humidite=humidite,
+        pluie_24h=pluie_24h,
+        pluie_demain=pluie_demain,
+        ajustement_precedent=ajustement_precedent,
+    )
+    if ajustement_meteo == "chaud_sec":
         cycle_mm = min(stage_program.surface_cycle_mm_max, cycle_mm + 0.5)
         daily_cycles_target = min(stage_program.daily_cycles_max, daily_cycles_target + 1)
         cycle_spacing_minutes = stage_program.cycle_spacing_minutes_min
-    elif humidite >= 70.0 or pluie_24h > 0.5 or pluie_demain > 0.5:
-        cycle_mm = max(stage_program.surface_cycle_mm_min, cycle_mm - 0.5)
-        daily_cycles_target = max(stage_program.daily_cycles_min, daily_cycles_target - 1)
-        cycle_spacing_minutes = stage_program.cycle_spacing_minutes_max
-    elif temperature_sechage <= 14.0 and etp <= 2.0:
+    elif ajustement_meteo == "humide_frais":
         cycle_mm = max(stage_program.surface_cycle_mm_min, cycle_mm - 0.5)
         daily_cycles_target = max(stage_program.daily_cycles_min, daily_cycles_target - 1)
         cycle_spacing_minutes = stage_program.cycle_spacing_minutes_max
@@ -693,6 +743,7 @@ def _sursemis_micro_apport_decision(
         "transition_ready": transition_ready,
         "surface_saturation_level": round(float(saturation_level), 1),
         "surface_saturation_limit": round(float(saturation_limit), 1),
+        "semis_meteo_ajustement": ajustement_meteo,
     }
 
 
@@ -931,7 +982,9 @@ def _rain_signals(
     pluie_j2: float,
     pluie_3j: float,
     pluie_probabilite_max_3j: float,
+    reglages: Mapping[str, Any] | None = None,
 ) -> tuple[bool, bool]:
+    sensibilite = float(lire(reglages, "arrosage_sensibilite_pluie", 1.0))
     # Confiance J+1 = 70%, J+2 = 45%, J+3 = 30%
     pluie_demain_effective = pluie_demain * 0.70
     pluie_j2_effective = pluie_j2 * 0.45
@@ -940,18 +993,18 @@ def _rain_signals(
     # significative : une averse de trace (ex. 0,8 mm annoncée à 80-100 %) ne doit pas
     # bloquer l'arrosage d'un sol sec — sinon on laisse le gazon en stress alors qu'il
     # ne tombera quasiment rien. On exige donc ≥ 4 mm de cumul prévu sur 3 jours.
-    proba_pluie_significative = pluie_probabilite_max_3j >= 80.0 and pluie_3j >= 4.0
+    proba_pluie_significative = pluie_probabilite_max_3j >= 80.0 and pluie_3j >= 4.0 * sensibilite
     pluie_compensatrice = (
-        pluie_demain_effective >= max(2.0, objective_reference_mm * 0.8)
-        or pluie_j2_effective >= max(2.0, objective_reference_mm * 0.8)
-        or pluie_3j_effective >= max(4.0, objective_reference_mm * 1.2)
+        pluie_demain_effective >= max(2.0, objective_reference_mm * 0.8) * sensibilite
+        or pluie_j2_effective >= max(2.0, objective_reference_mm * 0.8) * sensibilite
+        or pluie_3j_effective >= max(4.0, objective_reference_mm * 1.2) * sensibilite
         or proba_pluie_significative
     )
     pluie_proche = (
         pluie_24h >= 4.0
-        or pluie_demain_effective >= 4.0
-        or pluie_j2_effective >= 4.0
-        or pluie_3j_effective >= 6.0
+        or pluie_demain_effective >= 4.0 * sensibilite
+        or pluie_j2_effective >= 4.0 * sensibilite
+        or pluie_3j_effective >= 6.0 * sensibilite
         or proba_pluie_significative
     )
     return pluie_compensatrice, pluie_proche
@@ -1789,6 +1842,9 @@ class _WateringCtx:
     sunset_minute: int | None = None
     # Réglages de l'instance (page « Gazon ») : vide = les constantes de ce module.
     reglages: Mapping[str, Any] = field(default_factory=dict)
+    # Ajustement météo Semis/Sursemis du cycle PRÉCÉDENT (chaud_sec/neutre/humide_frais),
+    # mémoire de `_ajustement_meteo_graines` — voir compute_watering_profile.
+    semis_ajustement_precedent: str | None = None
 
 
 def _build_watering_ctx(
@@ -1818,6 +1874,7 @@ def _build_watering_ctx(
     fungal_risk_level: str | None = None,
     points_etp_stress: int | None = None,
     reglages: Mapping[str, Any] | None = None,
+    semis_ajustement_precedent: str | None = None,
 ) -> _WateringCtx:
     pluie_probabilite_24h_raw = _to_float(weather_profile.get("weather_precipitation_probability"))
     pluie_probabilite_24h = pluie_probabilite_24h_raw if pluie_probabilite_24h_raw is not None else 0.0
@@ -1879,12 +1936,10 @@ def _build_watering_ctx(
         (pluie_24h * 0.35) + (pluie_demain * 0.35) + (pluie_j2 * 0.2) + (pluie_3j * 0.1),
     )
     historique_support = min(recent_watering_mm_7j * 0.2, deficit_mm_brut * 0.5)
-    humidite_penalty = 0.0
-    if humidite >= 85:
-        humidite_penalty = deficit_mm_brut * 0.2
-    elif humidite >= 75:
-        humidite_penalty = deficit_mm_brut * 0.1
-    deficit_mm_ajuste = max(0.0, deficit_mm_brut - pluie_support - historique_support - humidite_penalty)
+    # L'humidite de l'air est deja integree a l'ET0 (deficit de pression de vapeur).
+    # La soustraire encore ici reduisait deux fois la demande et pouvait meme armer le
+    # garde-fou hebdomadaire a l'aube, lorsque l'air est naturellement le plus humide.
+    deficit_mm_ajuste = max(0.0, deficit_mm_brut - pluie_support - historique_support)
     # Utiliser la prévision du maximum journalier si elle dépasse la température actuelle :
     # à l'aube (04h-06h) la temp réelle peut être ≤25°C alors que le pic prévu est >35°C.
     # Sans ce max(), le score thermique reste "vigilance" → garde_fou bloque → arrosage décalé
@@ -1971,6 +2026,7 @@ def _build_watering_ctx(
         acceptable_end_minute=acceptable_end_minute,
         temperature_band=temperature_band,
         reglages=dict(reglages or {}),
+        semis_ajustement_precedent=semis_ajustement_precedent,
     )
 
 
@@ -1985,6 +2041,7 @@ def _fill_post_preamble(ctx: _WateringCtx) -> None:
         pluie_j2=ctx.pluie_j2,
         pluie_3j=ctx.pluie_3j,
         pluie_probabilite_max_3j=ctx.pluie_probabilite_max_3j,
+        reglages=ctx.reglages,
     )
     ctx.saturation_block = (
         not is_seeding_phase(ctx.phase_dominante) and ctx.bilan_hydrique_mm > SATURATION_BILAN_HYDRIQUE_MM
@@ -2113,6 +2170,7 @@ def _profile_for_sursemis(ctx: _WateringCtx) -> dict[str, Any]:
         vent=ctx.vent,
         soil_profile=ctx.soil_profile,
         reglages=ctx.reglages,
+        ajustement_precedent=ctx.semis_ajustement_precedent,
     )
     mm_cible = float(sursemis_state.get("surface_cycle_mm") or 0.0) if sursemis_state["allowed"] else 0.0
     block_reason = sursemis_state["block_reason"]
@@ -2259,6 +2317,7 @@ def _profile_for_sursemis(ctx: _WateringCtx) -> dict[str, Any]:
             "surface_saturation_limit": sursemis_state.get("surface_saturation_limit"),
             "seeding_transition_ready": transition_ready,
             "seeding_block_reason": block_reason,
+            "semis_meteo_ajustement": sursemis_state.get("semis_meteo_ajustement"),
         },
     )
 
@@ -3053,6 +3112,7 @@ def compute_watering_profile(
     fungal_risk_level: str | None = None,
     points_etp_stress: int | None = None,
     reglages: Mapping[str, Any] | None = None,
+    semis_ajustement_precedent: str | None = None,
 ) -> dict[str, Any]:
     today = today or _current_date()
     weather_profile = weather_profile or {}
@@ -3084,6 +3144,7 @@ def compute_watering_profile(
         forecast_temperature_today=forecast_temperature_today,
         evening_cooling_enabled=evening_cooling_enabled,
         fungal_risk_level=fungal_risk_level,
+        semis_ajustement_precedent=semis_ajustement_precedent,
     )
     if phase_dominante == "Hivernage":
         resolved_policy = _resolve_phase_policy(
@@ -3231,6 +3292,7 @@ def compute_action_guidance(
         pluie_j2=pluie_j2,
         pluie_3j=pluie_3j,
         pluie_probabilite_max_3j=pluie_probabilite_max_3j,
+        reglages=reglages,
     )
     now = _current_datetime()
     now_hour = hour_of_day if hour_of_day is not None else now.hour

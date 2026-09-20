@@ -25,6 +25,15 @@ from .const import (
     DEFAULT_AUTO_MOWING_DECLARATION_MINUTES,
     DEFAULT_EVENING_COOLING_ENABLED,
     DEFAULT_MOWER_COORDINATION_ENABLED,
+    DEFAULT_MOWER_CONTROL_MODE,
+    DEFAULT_MOWER_START_WINDOW_POLICY,
+    DEFAULT_MOWER_CONTROL_MIN_BATTERY,
+    DEFAULT_MOWER_CONTROL_COMMAND_COOLDOWN_MINUTES,
+    DEFAULT_MOWER_GARAGE_CLOSE_AFTER_DOCK,
+    DEFAULT_MOWER_GARAGE_OPEN_LEAD_MINUTES,
+    DEFAULT_MOWER_GARAGE_CLOSE_DELAY_MINUTES,
+    DEFAULT_MOWER_GARAGE_OPEN_BEFORE_START,
+    DEFAULT_MOWER_GARAGE_OPEN_FOR_RETURN,
     DEFAULT_MOWING_COOLDOWN_AFTER_WATERING_MINUTES,
     CONF_CAPTEUR_ETP,
     CONF_CAPTEUR_PLUIE_24H,
@@ -42,6 +51,7 @@ from .const import (
     CONF_CAPTEUR_HAUTEUR_GAZON,
     CONF_CAPTEUR_RETOUR_ARROSAGE,
     CONF_ENTITE_TONDEUSE,
+    CONF_ENTITE_VOLET_GARAGE_TONDEUSE,
     CONF_CAPTEUR_TONDEUSE_ERREUR,
     CONF_CAPTEUR_TONDEUSE_BATTERIE,
     CONF_CAPTEUR_TONDEUSE_PLUIE,
@@ -51,6 +61,8 @@ from .const import (
     CONF_HAUTEUR_COUPE_TONDEUSE_MM,
     CONF_HAUTEUR_MAX_TONDEUSE_CM,
     CONF_HAUTEUR_MIN_TONDEUSE_CM,
+    CONF_PILOTAGE_TONDEUSE,
+    CONF_TONDEUSE_CRENEAUX_DEPART,
     DEFAULT_HAUTEUR_MAX_TONDEUSE_CM,
     DEFAULT_HAUTEUR_MIN_TONDEUSE_CM,
     CONF_TYPE_SOL,
@@ -65,11 +77,15 @@ from .const import (
 )
 from .decision_models import DecisionResult
 from .gazon_brain import GazonBrain
-from .decision_risk import compute_fungal_risk as _compute_fungal_risk
+from .decision_risk import (
+    compute_fungal_risk as _compute_fungal_risk,
+    update_fungal_wetness_state,
+)
 from .memory import compute_application_state
 from .decision_mowing import _NO_ERROR_CODES
 from .mower_adapter import build_mower_context, derive_related_entity_id
 from .mower_coordination import build_mower_coordination_context
+from .mower_control import evaluate_mower_control
 from .entity_ids import public_entity_id, resolve_entry_instance_slug
 from .shared_state import get_shared_state, resolve_effective_config
 from .soil_balance import appliquer_cliquet_pluie
@@ -169,6 +185,11 @@ from .watering_policy import repartir_creneaux_semis, resolve_semis_stage_progra
 
 _LOGGER = logging.getLogger(__name__)
 
+# Un arrêt demandé pendant les toutes dernières écritures ne doit pas rester suspendu si le
+# stockage Home Assistant se bloque. La tâche continue sous shield : elle porte l'événement de fin,
+# le cooldown et la dernière exécution, donc l'annuler créerait un état plus ambigu que l'attente.
+_STOP_FINALIZATION_TIMEOUT_SECONDS = 30.0
+
 _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "mode",
     "phase_active",
@@ -194,6 +215,7 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "risque_gazon_brut",
     "risque_amortissement",
     "stress_palier_et0",
+    "semis_meteo_ajustement",
     "phase_dominante",
     "phase_dominante_source",
     "sous_phase",
@@ -243,10 +265,20 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "mower_is_mowing",
     "mower_is_returning",
     "mower_is_safe_for_watering",
+    "mower_dock_signal_fort",
     "mower_reason_code",
     "mower_reason_label",
     "mower_battery",
     "mower_next_departure",
+    "mower_control_mode",
+    "mower_control_state",
+    "mower_control_reason",
+    "mower_control_pending_action",
+    "mower_control_last_action",
+    "mower_control_last_action_at",
+    "mower_control_last_error",
+    "mower_garage_entity",
+    "mower_garage_state",
     "mower_resolution_state",
     "mower_resolution_reason",
     "mower_resolution_candidate_count",
@@ -354,6 +386,9 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "fungal_risk_reasons",
     "fungal_risk_evening_block",
     "fungal_risk_reduce_watering",
+    "fungal_wetness_duration_hours",
+    "fungal_wetness_source",
+    "fungal_wetness_status",
 )
 
 
@@ -422,6 +457,8 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # quand une boucle asyncio devient disponible.
         self._irrigation_launch_lock: asyncio.Lock | None = asyncio.Lock()
         self._latest_full_snapshot: dict[str, Any] | None = None
+        # Non persisté : chaque redémarrage impose au moins un cycle complet sans commande.
+        self._mower_control_bootstrap_complete = False
         self._runtime_state: dict[str, Any] = {
             "active_irrigation_session": None,
             "last_irrigation_execution": None,
@@ -943,9 +980,36 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         vent = vent_capteur
         if vent is None:
             vent = weather_profile.get("weather_wind_speed")
+        current_dt = self._current_datetime()
         rosee = self._lire_rosee()
+        rosee_mesuree = rosee
         if rosee is None:
             rosee = self._estimate_rosee(weather_profile, temperature, humidite)
+        if rosee_mesuree is not None:
+            _wetness_source = "sensor"
+            _wetness_observation = rosee_mesuree
+        elif (
+            (temperature is not None and humidite is not None)
+            or weather_profile.get("weather_dew_point") is not None
+            or weather_profile.get("weather_condition") is not None
+        ):
+            _wetness_source = "estimated"
+            _wetness_observation = rosee if rosee is not None else 0.0
+        else:
+            _wetness_source = "unavailable"
+            _wetness_observation = None
+        _fungal_wetness = update_fungal_wetness_state(
+            self._runtime_state.get("fungal_wetness"),
+            observed_at=current_dt,
+            leaf_wetness=_wetness_observation,
+            source=_wetness_source,
+        )
+        self._runtime_state["fungal_wetness"] = _fungal_wetness
+        _fungal_wetness_hours = (
+            float(_fungal_wetness.get("wet_minutes") or 0.0) / 60.0
+            if _fungal_wetness.get("status") != "unknown"
+            else 0.0
+        )
         # ET0 HORAIRE (FAO-56 Eq. 53) — ⚠️ ENTRE DANS LA DÉCISION depuis la 0.19.0 : publiée juste
         # en dessous dans `weather_profile`, elle est convertie en ETc par gazon_brain puis
         # INTÉGRÉE PAR LE LEDGER pour débiter la réserve du sol (donc la dose et le déclenchement).
@@ -990,7 +1054,6 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # cycle-ci. La placer après repousserait la correction de deux minutes pour rien.
         mower_context.update(self._declarer_tonte_du_jour(mower_context))
         runtime_context = self._build_runtime_context()
-        current_dt = self._current_datetime()
         # Réglages de la page « Gazon », relus à chaque cycle depuis les options de l'entrée.
         self.brain.reglages = self._reglages_instance()
         snapshot = self.brain.compute_snapshot(
@@ -1029,6 +1092,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             risk_context={
                 "amortissement": self._runtime_state.get("risque_amortissement"),
                 "palier_et0": self._runtime_state.get("stress_palier_et0"),
+                "semis_meteo_ajustement": self._runtime_state.get("semis_meteo_ajustement"),
+                "fungal_wetness_duration_hours": _fungal_wetness_hours,
+                "fungal_wetness_source": _fungal_wetness.get("source"),
             },
             runtime_context=runtime_context,
         )
@@ -1042,6 +1108,12 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         _memoire_risque = snapshot.get("risque_amortissement")
         if isinstance(_memoire_risque, dict):
             self._runtime_state["risque_amortissement"] = _memoire_risque
+        # ⚠️ MÊME PIÈGE QUE `stress_palier_et0` : sans cette mémoire reportée au cycle
+        # suivant, l'ajustement météo des cycles de graines rebasculerait sur le niveau brut
+        # à chaque bruit de mesure/prévision (18/09/2026, cf. `_ajustement_meteo_graines`).
+        _semis_ajustement = snapshot.get("semis_meteo_ajustement")
+        if isinstance(_semis_ajustement, str) and _semis_ajustement:
+            self._runtime_state["semis_meteo_ajustement"] = _semis_ajustement
         # LOT A — santé capteurs (calculé ici pour garantir la présence dans coordinator.data)
         snapshot["decision_cycle"] = self._tracer_cycle()
         snapshot["sensor_health"] = self._build_sensor_health(
@@ -1064,13 +1136,17 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             pluie_24h=pluie_24h,
             pluie_demain=pluie_demain,
             hour_of_day=current_dt.hour + current_dt.minute / 60.0,
+            wetness_duration_hours=_fungal_wetness_hours,
+            wetness_source=_fungal_wetness.get("source"),
         )
         snapshot.update(_fungal)
+        snapshot["fungal_wetness_status"] = _fungal_wetness.get("status")
         if runtime_context.get("active_irrigation_session") is None:
             await self._finalize_pending_irrigation_user_action(
                 execution=runtime_context.get("last_irrigation_execution"),
                 persist_only=True,
             )
+        await self._async_apply_mower_control(snapshot)
         self._latest_full_snapshot = dict(snapshot)
         _LOGGER.debug("Gazon Intelligent V2 observability: %s", self._build_observability_payload(snapshot))
         await self._async_save_state()
@@ -2747,7 +2823,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "jour": self._current_date().isoformat(),
             }
             self._runtime_state["mower_job_suivi"] = suivi
-            etat = "en_cours" if suivi["vu_inacheve"] else "repos"
+            etat = (
+                "en_pause"
+                if suivi["vu_inacheve"] and mower_context.get("mower_is_docked") is True
+                else "en_cours" if suivi["vu_inacheve"] else "repos"
+            )
             return {
                 "mower_job_completion_state": etat,
                 "mower_job_followed_id": tache,
@@ -2759,7 +2839,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             suivi["vu_inacheve"] = True
             self._runtime_state["mower_job_suivi"] = suivi
             return {
-                "mower_job_completion_state": "en_cours",
+                "mower_job_completion_state": (
+                    "en_pause" if mower_context.get("mower_is_docked") is True else "en_cours"
+                ),
                 "mower_job_followed_id": tache,
                 "mower_job_seen_incomplete": True,
                 "mower_job_minutes_total": self._cumuler_minutes_travail(suivi, mower_context),
@@ -3017,11 +3099,10 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 trace["mower_auto_declaration_state"] = "sans_mesure"
                 return trace
             if suivi["mower_job_completion_state"] != "termine":
-                trace["mower_auto_declaration_state"] = (
-                    "travail_au_repos"
-                    if suivi["mower_job_completion_state"] == "repos"
-                    else "travail_en_cours"
-                )
+                trace["mower_auto_declaration_state"] = {
+                    "repos": "travail_au_repos",
+                    "en_pause": "travail_en_pause",
+                }.get(suivi["mower_job_completion_state"], "travail_en_cours")
                 return trace
 
             # Plancher de durée : une COUPE DE BORDURE est aussi une tâche qui monte à 100.
@@ -3342,11 +3423,18 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_set_normal(self) -> None:
         """Réinitialise la phase active vers Normal (historique conservé)."""
         self.brain.set_normal()
-        # Lève le verrou de sécurité d'arrosage : « Retour au mode normal » (bouton ou
-        # service reset_mode) est l'action utilisateur explicite « j'ai vérifié les vannes,
-        # on peut reprendre ». Sans ça, un seul échec de fermeture de vanne bloquerait
-        # l'arrosage auto définitivement, sans aucun recours.
+        await self._async_save_state()
+        await self._rafraichir_apres_action_utilisateur()
+
+    async def async_clear_irrigation_safety_lock(self) -> None:
+        """Lève le verrou après vérification physique des vannes, sans changer le mode."""
         self._ensure_irrigation_runtime_bootstrap()
+        if self._watering_session_active():
+            raise HomeAssistantError(
+                "Impossible de lever le verrou : une zone d'arrosage est encore active."
+            )
+        if not self._runtime_state.get("auto_irrigation_safety_lock"):
+            return
         self._runtime_state["auto_irrigation_safety_lock"] = False
         await self._async_save_state()
         await self._rafraichir_apres_action_utilisateur()
@@ -3602,14 +3690,32 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             if not notifications.alertes_voulues(self.entry):
                 return
+            maintenant = self._current_datetime()
             memoire = self._runtime_state.get("alertes_gazon")
-            alertes, etat = notifications.evaluer_alertes(memoire, **self._contexte_des_alertes(snapshot))
+            alertes, etat = notifications.evaluer_alertes(
+                memoire,
+                **self._contexte_des_alertes(snapshot, maintenant=maintenant),
+            )
             if etat != memoire:
                 # Écrit AVANT l'envoi : un redémarrage entre les deux ne renverra rien.
                 self._runtime_state["alertes_gazon"] = etat
                 await self._persist_runtime_state()
             if alertes:
-                await notifications.async_publier(self.hass, self.entry, alertes)
+                try:
+                    contexte = self._resume_du_gazon()
+                except Exception:  # noqa: BLE001 - le message factuel doit quand même partir
+                    _LOGGER.debug(
+                        "Résumé du gazon indisponible pour les notifications",
+                        exc_info=True,
+                    )
+                    contexte = []
+                await notifications.async_publier(
+                    self.hass,
+                    self.entry,
+                    alertes,
+                    maintenant=maintenant,
+                    contexte=contexte,
+                )
         except Exception:  # noqa: BLE001 - une alerte ne doit jamais casser le tick d'arrosage
             _LOGGER.exception("Alertes du gazon non évaluées")
 
@@ -3622,12 +3728,129 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             or (scheduler is not None and not scheduler.done())
         )
 
-    def _contexte_des_alertes(self, snapshot: dict[str, Any]) -> dict[str, Any]:
-        maintenant = self._current_datetime()
+    async def _async_apply_mower_control(self, snapshot: dict[str, Any]) -> None:
+        """Évalue puis, uniquement en mode actif, exécute une commande de tondeuse.
+
+        Ce chemin ne doit jamais faire tomber le cycle principal : un service absent, une entité
+        indisponible ou un volet bloqué devient un état publié et journalisé, pas une exception du
+        coordinateur. Le premier cycle après chaque redémarrage reste toujours sans commande.
+        """
+        mode = str(self._get_conf(CONF_PILOTAGE_TONDEUSE) or DEFAULT_MOWER_CONTROL_MODE)
+        cover_entity_raw = self._get_conf(CONF_ENTITE_VOLET_GARAGE_TONDEUSE)
+        cover_entity = str(cover_entity_raw) if cover_entity_raw else None
+        cover_state = None
+        if cover_entity:
+            cover = self.hass.states.get(cover_entity)
+            cover_state = str(getattr(cover, "state", "unknown") or "unknown")
+
+        runtime = self._runtime_state.get("mower_control")
+        if not isinstance(runtime, dict):
+            runtime = {}
+            self._runtime_state["mower_control"] = runtime
+        settings = self._reglages_instance()
+        decision = evaluate_mower_control(
+            snapshot,
+            now=self._current_datetime(),
+            mode=mode,
+            settings={
+                "tondeuse_creneaux_depart": self._get_conf(CONF_TONDEUSE_CRENEAUX_DEPART)
+                or DEFAULT_MOWER_START_WINDOW_POLICY,
+                "tondeuse_pilotage_batterie_min": lire_reglage(
+                    settings, "tondeuse_pilotage_batterie_min", DEFAULT_MOWER_CONTROL_MIN_BATTERY
+                ),
+                "tondeuse_pilotage_delai_commandes": lire_reglage(
+                    settings,
+                    "tondeuse_pilotage_delai_commandes",
+                    DEFAULT_MOWER_CONTROL_COMMAND_COOLDOWN_MINUTES,
+                ),
+                "tondeuse_garage_ouvrir_avant_depart": lire_reglage(
+                    settings, "tondeuse_garage_ouvrir_avant_depart", DEFAULT_MOWER_GARAGE_OPEN_BEFORE_START
+                ),
+                "tondeuse_garage_ouvrir_pour_retour": lire_reglage(
+                    settings, "tondeuse_garage_ouvrir_pour_retour", DEFAULT_MOWER_GARAGE_OPEN_FOR_RETURN
+                ),
+                "tondeuse_garage_fermer_apres_retour": lire_reglage(
+                    settings, "tondeuse_garage_fermer_apres_retour", DEFAULT_MOWER_GARAGE_CLOSE_AFTER_DOCK
+                ),
+                "tondeuse_garage_avance_ouverture": lire_reglage(
+                    settings,
+                    "tondeuse_garage_avance_ouverture",
+                    DEFAULT_MOWER_GARAGE_OPEN_LEAD_MINUTES,
+                ),
+                "tondeuse_garage_delai_fermeture": lire_reglage(
+                    settings,
+                    "tondeuse_garage_delai_fermeture",
+                    DEFAULT_MOWER_GARAGE_CLOSE_DELAY_MINUTES,
+                ),
+            },
+            runtime=runtime,
+            irrigation_active=self.arrosage_en_cours(),
+            cover_entity=cover_entity,
+            cover_state=cover_state,
+            bootstrap_complete=getattr(self, "_mower_control_bootstrap_complete", False),
+        )
+        self._mower_control_bootstrap_complete = True
+        updates = decision.pop("mower_control_runtime_updates", {})
+        if isinstance(updates, Mapping):
+            runtime.update(updates)
+        action = decision.get("mower_control_pending_action")
+        decision["mower_garage_entity"] = cover_entity
+        decision["mower_garage_state"] = cover_state
+        decision["mower_control_last_action"] = runtime.get("last_action")
+        decision["mower_control_last_action_at"] = runtime.get("last_action_at")
+        decision["mower_control_last_error"] = runtime.get("last_error")
+
+        if mode == "observation" and action:
+            decision["mower_control_state"] = "observation"
+            decision["mower_control_reason"] = f"Observation : {decision['mower_control_reason']}"
+        elif mode == "actif" and isinstance(action, str):
+            mower_entity = str(snapshot.get("tondeuse_source_entity") or "")
+            domain, service, entity_id = {
+                "start_mowing": ("lawn_mower", "start_mowing", mower_entity),
+                "dock": ("lawn_mower", "dock", mower_entity),
+                "open_cover": ("cover", "open_cover", cover_entity or ""),
+                "close_cover": ("cover", "close_cover", cover_entity or ""),
+            }[action]
+            try:
+                await self.hass.services.async_call(
+                    domain,
+                    service,
+                    {"entity_id": entity_id},
+                    blocking=True,
+                )
+            except Exception as err:  # noqa: BLE001 - le calcul gazon doit continuer
+                runtime["last_error"] = str(err) or err.__class__.__name__
+                decision["mower_control_state"] = "erreur"
+                decision["mower_control_reason"] = f"Commande {action} refusée par Home Assistant."
+                decision["mower_control_last_error"] = runtime["last_error"]
+                _LOGGER.exception("Commande tondeuse impossible : %s", action)
+            else:
+                instant = self._current_datetime().isoformat()
+                runtime.update({"last_action": action, "last_action_at": instant, "last_error": None})
+                if action == "open_cover":
+                    runtime["garage_opened_at"] = None
+                elif action == "close_cover":
+                    runtime["garage_opened_at"] = None
+                    runtime["docked_since"] = None
+                decision["mower_control_pending_action"] = None
+                decision["mower_control_last_action"] = action
+                decision["mower_control_last_action_at"] = instant
+                decision["mower_control_last_error"] = None
+        snapshot.update(decision)
+
+    def _contexte_des_alertes(
+        self,
+        snapshot: dict[str, Any],
+        *,
+        maintenant: datetime | None = None,
+    ) -> dict[str, Any]:
+        maintenant = maintenant or self._current_datetime()
         derniere = self._runtime_state.get("last_auto_irrigation_reason")
         raison = derniere.get("reason") if isinstance(derniere, dict) else None
         execution = self._runtime_state.get("last_irrigation_execution")
         execution = execution if isinstance(execution, dict) else {}
+        session_active = self._runtime_state.get("active_irrigation_session")
+        session_active = session_active if isinstance(session_active, dict) else {}
         en_cours = self.arrosage_en_cours()
         try:
             vent_kmh: float | None = float(snapshot["vent"]) if snapshot.get("vent") is not None else None
@@ -3642,6 +3865,21 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except (TypeError, ValueError):
             fin_fenetre = None
         zone = execution.get("last_failed_zone")
+        plan_actif = session_active.get("plan")
+        plan_actif = plan_actif if isinstance(plan_actif, dict) else {}
+        zones_actives = plan_actif.get("zones")
+        zones_actives = zones_actives if isinstance(zones_actives, list) else []
+        reconciliation = execution.get("reconciliation")
+        reconciliation = reconciliation if isinstance(reconciliation, dict) else {}
+        zones_executees = execution.get("zones_done")
+        zones_executees = zones_executees if isinstance(zones_executees, list) else []
+        ids_zones_executees = {
+            str(item.get("zone") or item.get("entity_id"))
+            for item in zones_executees
+            if isinstance(item, dict) and (item.get("zone") or item.get("entity_id"))
+        }
+        action_tondeuse = snapshot.get("mower_control_pending_action")
+        erreur_controleur = snapshot.get("mower_control_last_error")
         return {
             "maintenant": maintenant,
             "progression": self._semis_cycle_progress(snapshot),
@@ -3666,6 +3904,38 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "mesures": self._mesures_des_sources(maintenant),
             "erreur_tondeuse": snapshot.get("tondeuse_erreur"),
             "libelle_erreur_tondeuse": snapshot.get("tondeuse_erreur_libelle"),
+            "activite_arrosage": {
+                "active_id": session_active.get("session_id") or session_active.get("run_id"),
+                "source": session_active.get("source"),
+                "target_mm": session_active.get("target_mm"),
+                "zone_count": len(zones_actives),
+                "started_at": session_active.get("started_at"),
+                "completed_id": execution.get("session_id") or execution.get("run_id") or execution.get("ended_at"),
+                "completion_status": execution.get("completion_status") or execution.get("status"),
+                "executed_mm": reconciliation.get("executed_mm"),
+                "zones_done": len(ids_zones_executees),
+                "ended_at": execution.get("ended_at"),
+            },
+            "activite_tondeuse": {
+                "operation": snapshot.get("mower_operation_state"),
+                "docked": snapshot.get("mower_is_docked"),
+                "mowing": snapshot.get("mower_is_mowing"),
+                "returning": snapshot.get("mower_is_returning"),
+                "error": (
+                    erreur_controleur
+                    if action_tondeuse in {"start_mowing", "dock"}
+                    else None
+                ),
+            },
+            "activite_garage": {
+                "configured": bool(snapshot.get("mower_garage_entity")),
+                "state": snapshot.get("mower_garage_state"),
+                "error": (
+                    erreur_controleur
+                    if action_tondeuse in {"open_cover", "close_cover"}
+                    else None
+                ),
+            },
             "sujets_actifs": notifications.sujets_voulus(self.entry),
         }
 
@@ -4236,6 +4506,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "mower_passes": self._serialize_runtime_value(
                 self._runtime_state.get("mower_passes")
             ),
+            # Anti-double-commande, temporisations du garage et dernière erreur du pilote.
+            # Le bootstrap, lui, reste volontairement hors disque et repart faux à chaque boot.
+            "mower_control": self._serialize_runtime_value(
+                self._runtime_state.get("mower_control")
+            ),
             # Même piège encore : sans persistance, un redémarrage efface la référence ET
             # l'horodatage de la dernière hausse. La garde « il pleut » repartirait alors
             # aveugle en pleine averse — précisément ce qu'elle vient de corriger.
@@ -4269,6 +4544,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # Non persistée, un redémarrage relancerait le risque sur le niveau brut — et les
             # redémarrages sont fréquents ici.
             "stress_palier_et0": self._runtime_state.get("stress_palier_et0"),
+            "semis_meteo_ajustement": self._runtime_state.get("semis_meteo_ajustement"),
             "risque_amortissement": self._serialize_runtime_value(
                 self._runtime_state.get("risque_amortissement")
             ),
@@ -4276,6 +4552,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # cycle en retard, et n'enverrait jamais son rattrapage. Jumelle dans la restauration.
             "alertes_gazon": self._serialize_runtime_value(
                 self._runtime_state.get("alertes_gazon")
+            ),
+            "fungal_wetness": self._serialize_runtime_value(
+                self._runtime_state.get("fungal_wetness")
             ),
             "persisted_watering_session": persisted_watering_session,
             "last_irrigation_execution_persisted": self._serialize_runtime_value(last_execution),
@@ -4324,6 +4603,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # sur le disque puis ignoré au rechargement — pire qu'absent, car invisible.
             "mower_health": runtime.get("mower_health"),
             "mower_passes": runtime.get("mower_passes"),
+            "mower_control": runtime.get("mower_control"),
             "pluie_mesuree": runtime.get("pluie_mesuree"),
             "pluie_cumul": runtime.get("pluie_cumul"),
             "mower_recommendation_ignored_since": runtime.get("mower_recommendation_ignored_since"),
@@ -4331,7 +4611,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "mower_travaux_termines": runtime.get("mower_travaux_termines"),
             "risque_amortissement": runtime.get("risque_amortissement"),
             "stress_palier_et0": runtime.get("stress_palier_et0"),
+            "semis_meteo_ajustement": runtime.get("semis_meteo_ajustement"),
             "alertes_gazon": runtime.get("alertes_gazon"),
+            "fungal_wetness": runtime.get("fungal_wetness"),
         }
 
     def _get_active_irrigation_session(self) -> dict[str, Any] | None:
@@ -4462,13 +4744,16 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         plan: WateringPlan | None = None,
         watering_cause: str | None = None,
     ) -> None:
+        # L'enregistrement de l'eau sauvegarde aussi le runtime. Le statut et l'erreur doivent
+        # donc être posés AVANT cette première écriture : si HA redémarre juste après, la session
+        # marquée comme enregistrée doit rester un échec, pas être restaurée comme « terminée ».
+        session["status"] = status
+        session["last_error"] = error
         recorded = await self._record_irrigation_session_progress(
             session,
             plan=plan,
             watering_cause=watering_cause,
         )
-        session["status"] = status
-        session["last_error"] = error
         self._persist_execution_snapshot(
             session,
             status=status,
@@ -6703,10 +6988,24 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
             )
             assert task is not None
+            finalization_pending = False
             try:
-                await task
+                await asyncio.wait_for(
+                    asyncio.shield(task),
+                    timeout=_STOP_FINALIZATION_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                finalization_pending = True
+                _LOGGER.warning(
+                    "Arrêt d'arrosage : la finalisation dépasse %.0f s et continue en arrière-plan",
+                    _STOP_FINALIZATION_TIMEOUT_SECONDS,
+                )
             except asyncio.CancelledError:
-                pass
+                # `shield` empêche l'annulation de l'appelant de tuer la finalisation. Si la
+                # tâche interne ne s'est pas elle-même annulée, l'annulation reçue appartient à
+                # l'appel Home Assistant et doit remonter.
+                if not task.cancelled():
+                    raise
             except Exception:  # pragma: no cover - la tâche a déjà journalisé son échec
                 _LOGGER.debug(
                     "Arrêt d'arrosage : finalisation terminée en erreur",
@@ -6723,6 +7022,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "applied_mm": applique_mm,
                 "zone_count": len(zones_finalisees),
                 "interrupted_zone": None,
+                "finalization_pending": finalization_pending,
             }
 
         session = self._get_active_irrigation_session()

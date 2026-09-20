@@ -58,10 +58,11 @@ const sorties = cas.map((c) => {
   const etats = {};
   if (c.actuel !== null) etats["select.gazon_mode"] = { state: c.actuel, attributes: { options: c.options } };
   etats["sensor.gazon_catalogue"] = { state: "ok", attributes: { products_summary: c.produits } };
+  etats["sensor.gazon_blocage"] = { state: c.verrou ? "Bloqué (sécurité)" : "Aucun besoin", attributes: { safety_lock_actif: c.verrou } };
   p._hass = { states: etats, user: { is_admin: c.admin }, config: { time_zone: "Europe/Paris" } };
   p._donnees = {
     registre,
-    entites: { mode: "select.gazon_mode", catalogue_produits: "sensor.gazon_catalogue" },
+    entites: { mode: "select.gazon_mode", catalogue_produits: "sensor.gazon_catalogue", blocage_arrosage: "sensor.gazon_blocage" },
     valeurs: c.valeurs,
     produits: c.admin ? c.produits : undefined,
   };
@@ -124,6 +125,7 @@ def _cas(**valeurs: Any) -> dict[str, Any]:
     cas: dict[str, Any] = {
         "actuel": "Normal", "options": list(MODES), "admin": True, "choisi": None,
         "valeurs": {}, "produits": PRODUITS, "semis": None,
+        "verrou": False,
     }
     cas.update(valeurs)
     return cas
@@ -289,6 +291,13 @@ class LesSituationsDeLOngletModesTests(unittest.TestCase):
         rendu = _rendre([_cas(actuel="Fertilisation", choisi="Normal"), _cas(actuel="Normal", choisi="Normal")])
         self.assertIn("efface le suivi en cours (Fertilisation)", _texte(_bloc(rendu["sorties"][0]["html"], "mode-action")))
         self.assertNotIn("efface", _texte(_bloc(rendu["sorties"][1]["html"], "mode-action")))
+
+    def test_revenir_au_mode_normal_conserve_le_verrou_de_securite(self) -> None:
+        rendu = _rendre([_cas(actuel="Sursemis", choisi="Normal", verrou=True)])
+        texte = _texte(_bloc(rendu["sorties"][0]["html"], "mode-action"))
+        self.assertIn("efface le suivi en cours (Sursemis)", texte)
+        self.assertIn("verrou de sécurité restera posé", texte)
+        self.assertIn("se lève séparément", texte)
 
 
 if __name__ == "__main__":

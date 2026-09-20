@@ -71,6 +71,8 @@ class LeRegistreEstCoherentTests(unittest.TestCase):
     def test_les_valeurs_par_defaut_sont_valides(self) -> None:
         self.assertEqual(reglages.valider({}), {})
         self.assertEqual(reglages.valider(reglages.valeurs_par_defaut()), {})
+        pluie = reglages.reglage("arrosage_sensibilite_pluie")
+        self.assertEqual((pluie.defaut, pluie.minimum, pluie.maximum, pluie.pas), (1.0, 0.75, 1.25, 0.25))
 
     def test_les_contraintes_portent_sur_des_reglages_existants(self) -> None:
         cles = {r.cle for r in reglages.REGLAGES}
@@ -153,12 +155,20 @@ class LeRegistreEstCoherentTests(unittest.TestCase):
                 "arrosage_delai_relance",
                 "arrosage_decoupage_seuil",
                 "arrosage_pause_duree",
+                "arrosage_sensibilite_pluie",
                 "rafraichissement_temperature",
                 "rafraichissement_dose",
                 "graines_germination_dose",
                 "graines_germination_cycles",
                 "graines_fenetre_fin",
                 "mode_scarification_temperature_min",
+                "tondeuse_pilotage_batterie_min",
+                "tondeuse_pilotage_delai_commandes",
+                "tondeuse_garage_ouvrir_avant_depart",
+                "tondeuse_garage_ouvrir_pour_retour",
+                "tondeuse_garage_fermer_apres_retour",
+                "tondeuse_garage_avance_ouverture",
+                "tondeuse_garage_delai_fermeture",
             },
         )
 
@@ -190,6 +200,10 @@ class LesValeursParDefautSontCellesDuMoteurTests(unittest.TestCase):
         for cle, valeur in attendu.items():
             with self.subTest(cle=cle):
                 self.assertEqual(self.defauts[cle], valeur)
+        self.assertEqual(
+            reglages.valider({"tondeuse_garage_ouvrir_avant_depart": "oui"}),
+            {"tondeuse_garage_ouvrir_avant_depart": "Choisis activé ou désactivé."},
+        )
 
     def test_le_rythme_du_mois_est_celui_qui_juge_le_retard(self) -> None:
         # `_mowing_overdue_state` lit la fréquence par ce chemin, hors semis et sursemis.
@@ -327,6 +341,27 @@ class LesValeursParDefautSontCellesDuMoteurTests(unittest.TestCase):
             wp.WATERING_POLICIES[wp.MODE_SCARIFICATION].conditions["temperature_min_c"],
         )
 
+    def test_pilotage_tondeuse(self) -> None:
+        mc = _module("mower_control_constants")
+        attendu = {
+            "tondeuse_pilotage_batterie_min": mc.DEFAULT_MOWER_CONTROL_MIN_BATTERY,
+            "tondeuse_pilotage_delai_commandes": mc.DEFAULT_MOWER_CONTROL_COMMAND_COOLDOWN_MINUTES,
+            "tondeuse_garage_avance_ouverture": mc.DEFAULT_MOWER_GARAGE_OPEN_LEAD_MINUTES,
+            "tondeuse_garage_delai_fermeture": mc.DEFAULT_MOWER_GARAGE_CLOSE_DELAY_MINUTES,
+            "tondeuse_garage_ouvrir_avant_depart": mc.DEFAULT_MOWER_GARAGE_OPEN_BEFORE_START,
+            "tondeuse_garage_ouvrir_pour_retour": mc.DEFAULT_MOWER_GARAGE_OPEN_FOR_RETURN,
+            "tondeuse_garage_fermer_apres_retour": mc.DEFAULT_MOWER_GARAGE_CLOSE_AFTER_DOCK,
+        }
+        for cle, valeur in attendu.items():
+            with self.subTest(cle=cle):
+                self.assertEqual(self.defauts[cle], valeur)
+        (choix,) = [c for c in reglages.CHOIX if c.cle == "pilotage_tondeuse"]
+        self.assertEqual(choix.defaut, mc.DEFAULT_MOWER_CONTROL_MODE)
+        self.assertEqual(tuple(o.valeur for o in choix.options), mc.MOWER_CONTROL_MODES)
+        (creneaux,) = [c for c in reglages.CHOIX if c.cle == "tondeuse_creneaux_depart"]
+        self.assertEqual(creneaux.defaut, mc.DEFAULT_MOWER_START_WINDOW_POLICY)
+        self.assertEqual(tuple(o.valeur for o in creneaux.options), mc.MOWER_START_WINDOW_POLICIES)
+
     def test_le_jour_de_la_declaration_compte_dans_la_duree(self) -> None:
         """« 2 jours » = le jour déclaré et le lendemain : c'est ce que la page écrit."""
         from datetime import date, timedelta
@@ -362,7 +397,8 @@ class LesValeursParDefautSontCellesDuMoteurTests(unittest.TestCase):
             {"type_sol": "Choisis parmi : sableuse, limoneuse, argileuse."},
         )
         self.assertEqual(reglages.valider_choix({"inconnu": "x"}), {"inconnu": "Choix inconnu."})
-        self.assertEqual(reglages.exporter()["choix"][0]["options"][1]["valeur"], "limoneux")
+        sol = next(c for c in reglages.exporter()["choix"] if c["cle"] == "type_sol")
+        self.assertEqual(sol["options"][1]["valeur"], "limoneux")
 
     def test_chaque_reglage_est_verifie_ici(self) -> None:
         """Un réglage ajouté au registre sans sa ligne de vérification ferait échouer ce test."""

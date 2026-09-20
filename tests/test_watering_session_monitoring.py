@@ -868,6 +868,50 @@ class WateringSessionMonitoringTests(unittest.TestCase):
         self.assertEqual(progress["last_cycle_at"], datetime(2026, 4, 27, 10, 0, tzinfo=timezone.utc))
         self.assertEqual(progress["next_due_at"], datetime(2026, 4, 27, 12, 0, tzinfo=timezone.utc))
 
+    def test_un_redemarrage_pendant_l_attente_garde_le_vrai_prochain_cycle(self) -> None:
+        """Le suivi est reconstruit depuis l'historique persisté, pas depuis un minuteur en RAM."""
+        snapshot = {
+            "watering_strategy": "semis_frequent",
+            "objective_scope": "surface_cycle",
+            "watering_stage": "germination",
+            "surface_cycle_mm": 1.5,
+            "daily_cycles_target": 4,
+            "cycle_spacing_minutes": 120,
+            "seeding_transition_ready": False,
+        }
+        historique = [{
+            "type": "arrosage",
+            "date": "2026-09-18",
+            "started_at": "2026-09-18T08:30:00+00:00",
+            "recorded_at": "2026-09-18T08:48:00+00:00",
+            "watering_strategy": "semis_frequent",
+            "objective_scope": "surface_cycle",
+            "surface_cycle_mm": 1.5,
+        }]
+        maintenant = datetime(2026, 9, 18, 9, 0, tzinfo=timezone.utc)
+
+        def progression_apres_demarrage():
+            coord = _build_coordinator()
+            coord.entry.options = {
+                "reglages": {"graines_fenetre_debut": 8 * 60 + 30, "graines_fenetre_fin": 16 * 60}
+            }
+            coord.history = [dict(evenement) for evenement in historique]
+            coord._current_datetime = lambda: maintenant
+            coord._current_utc_datetime = lambda: maintenant
+            coord._current_date = lambda: maintenant.date()
+            return coord._semis_cycle_progress(snapshot)
+
+        avant = progression_apres_demarrage()
+        apres = progression_apres_demarrage()
+        assert avant is not None and apres is not None
+        self.assertEqual(avant["state"], "waiting")
+        self.assertEqual(avant["next_due_at"], datetime(2026, 9, 18, 10, 40, tzinfo=timezone.utc))
+        self.assertEqual(avant["cycle_slots_minutes"], (510, 640, 770, 900))
+        self.assertEqual(
+            {cle: apres[cle] for cle in ("state", "next_due_at", "cycles_completed_today", "cycles_remaining_today")},
+            {cle: avant[cle] for cle in ("state", "next_due_at", "cycles_completed_today", "cycles_remaining_today")},
+        )
+
     def test_relaunch_cooldown_clears_after_delay(self) -> None:
         # Au-delà du cooldown (6 h), un nouveau cycle est de nouveau autorisé.
         coordinator = _build_coordinator()
@@ -1422,8 +1466,8 @@ class WateringSessionMonitoringTests(unittest.TestCase):
         _, reason = coordinator._should_launch_auto_irrigation(coordinator._latest_full_snapshot)
         self.assertEqual(reason, "startup_guard")
 
-    def test_async_set_normal_clears_safety_lock(self) -> None:
-        # « Retour au mode normal » (bouton/service) lève le verrou de sécurité.
+    def test_async_set_normal_preserves_safety_lock(self) -> None:
+        # Changer de mode n'est pas confirmer que les vannes ont ete verifiees.
         coordinator = _build_coordinator()
         coordinator._runtime_state["auto_irrigation_safety_lock"] = True
         coordinator.brain.set_normal = lambda: None
@@ -1433,7 +1477,51 @@ class WateringSessionMonitoringTests(unittest.TestCase):
 
         asyncio.run(coordinator.async_set_normal())
 
+        self.assertTrue(coordinator._runtime_state["auto_irrigation_safety_lock"])
+
+    def test_clear_irrigation_safety_lock_preserves_seed_mode(self) -> None:
+        coordinator = _build_coordinator()
+        maintenant = datetime(2026, 9, 19, 8, 0, tzinfo=timezone.utc)
+        coordinator.hass = types.SimpleNamespace(
+            states=_FakeStatesWithAll(
+                {
+                    "switch.zone_1": _FakeState("off", maintenant),
+                    "switch.zone_2": _FakeState("off", maintenant),
+                }
+            )
+        )
+        coordinator._runtime_state["auto_irrigation_safety_lock"] = True
+        coordinator.brain.set_normal = unittest.mock.Mock()
+        coordinator._async_save_state = AsyncMock()
+        coordinator.async_request_refresh = AsyncMock()
+        coordinator.async_refresh = AsyncMock()
+
+        asyncio.run(coordinator.async_clear_irrigation_safety_lock())
+
         self.assertFalse(coordinator._runtime_state["auto_irrigation_safety_lock"])
+        coordinator.brain.set_normal.assert_not_called()
+
+    def test_clear_irrigation_safety_lock_refuses_an_active_zone(self) -> None:
+        coordinator = _build_coordinator()
+        maintenant = datetime(2026, 9, 19, 8, 0, tzinfo=timezone.utc)
+        coordinator.hass = types.SimpleNamespace(
+            states=_FakeStatesWithAll(
+                {
+                    "switch.zone_1": _FakeState("on", maintenant),
+                    "switch.zone_2": _FakeState("off", maintenant),
+                }
+            )
+        )
+        coordinator._runtime_state["auto_irrigation_safety_lock"] = True
+        coordinator._async_save_state = AsyncMock()
+        coordinator.async_request_refresh = AsyncMock()
+        coordinator.async_refresh = AsyncMock()
+
+        with self.assertRaisesRegex(Exception, "zone d.arrosage est encore active"):
+            asyncio.run(coordinator.async_clear_irrigation_safety_lock())
+
+        self.assertTrue(coordinator._runtime_state["auto_irrigation_safety_lock"])
+        coordinator._async_save_state.assert_not_awaited()
 
     def test_update_data_exposes_startup_guard_block_reason(self) -> None:
         # Capteurs unavailable → non armé → la raison de blocage exposée est "startup_guard".
@@ -3223,19 +3311,23 @@ class WateringSessionMonitoringTests(unittest.TestCase):
         session["status"] = "paused"
         session["zones_done"] = [{"order": 1, "passage": 1, "zone": "switch.zone_1", "mm": 3.0}]
         coordinator._runtime_state["active_irrigation_session"] = session
-        marqueur_a_l_ecriture: list[bool] = []
+        etat_a_l_ecriture: list[tuple[bool, str | None, str | None]] = []
 
         async def _ecrire(*_args, **_kwargs) -> None:
             courante = coordinator._runtime_state.get("active_irrigation_session")
-            marqueur_a_l_ecriture.append(
-                isinstance(courante, dict) and bool(courante.get(coordinator_mod.WATERING_RECORDED_KEY))
+            etat_a_l_ecriture.append(
+                (
+                    isinstance(courante, dict) and bool(courante.get(coordinator_mod.WATERING_RECORDED_KEY)),
+                    courante.get("status") if isinstance(courante, dict) else None,
+                    courante.get("last_error") if isinstance(courante, dict) else None,
+                )
             )
 
         coordinator.async_record_watering = AsyncMock(side_effect=_ecrire)
 
         asyncio.run(coordinator._restore_active_irrigation_session())
 
-        self.assertEqual(marqueur_a_l_ecriture, [True])
+        self.assertEqual(etat_a_l_ecriture, [(True, "failed", "safety_lock_active")])
 
     def test_failed_shutdown_during_downtime_records_done_water_and_keeps_lock(self) -> None:
         """Vanne impossible à fermer pendant la reprise : l'eau des zones faites est inscrite (Y8).
@@ -5079,6 +5171,27 @@ class TestFinDeCycleEauEnregistreeUneFois(unittest.IsolatedAsyncioTestCase):
         coordinator._auto_irrigation_task = task
         return task
 
+    def _suspendre_une_finalisation_deja_enregistree(self, coordinator, plan):
+        session = coordinator._build_active_irrigation_session(
+            plan=plan,
+            source="auto_irrigation",
+            strategy="plan",
+            watering_cause="hydrique",
+        )
+        session[coordinator_mod.WATERING_RECORDED_KEY] = True
+        session["zones_done"] = [
+            {"passage": 1, "zone": "switch.zone_1", "mm": self.OBJECTIF_MM}
+        ]
+        session["zones_pending"] = []
+        session["current_zone"] = None
+        session["active_zones"] = {}
+        coordinator._set_active_irrigation_session(session)
+
+        attente = asyncio.Event()
+        task = asyncio.create_task(attente.wait())
+        coordinator._auto_irrigation_task = task
+        return task
+
     def _bloquer_la_sauvegarde_finale(self, coordinator):
         """Suspend la sauvegarde qui suit la dernière zone (fenêtre A) et photographie l'état persisté."""
         atteinte = asyncio.Event()
@@ -5193,6 +5306,41 @@ class TestFinDeCycleEauEnregistreeUneFois(unittest.IsolatedAsyncioTestCase):
         redemarre.async_record_watering.assert_not_awaited()
         self.assertIsNone(redemarre._runtime_state["active_irrigation_session"])
         self.assertEqual(redemarre._runtime_state["last_irrigation_execution"]["status"], "completed")
+
+    async def test_finalisation_bloquee_rend_la_main_sans_tuer_la_tache(self) -> None:
+        plan = self._plan()
+        coordinator = self._coordinateur(plan)
+        finalisation = self._suspendre_une_finalisation_deja_enregistree(coordinator, plan)
+
+        with patch.object(
+            coordinator_mod,
+            "_STOP_FINALIZATION_TIMEOUT_SECONDS",
+            0.01,
+            create=True,
+        ):
+            resultat = await asyncio.wait_for(coordinator.async_stop_irrigation(), timeout=0.2)
+
+        self.assertTrue(resultat["finalization_pending"])
+        self.assertFalse(finalisation.done(), "le délai maximal a annulé la finalisation en cours")
+        finalisation.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await finalisation
+
+    async def test_annuler_l_appel_n_est_pas_avale_et_ne_tue_pas_la_finalisation(self) -> None:
+        plan = self._plan()
+        coordinator = self._coordinateur(plan)
+        finalisation = self._suspendre_une_finalisation_deja_enregistree(coordinator, plan)
+
+        arret = asyncio.create_task(coordinator.async_stop_irrigation())
+        await asyncio.sleep(0)
+        arret.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await arret
+
+        self.assertFalse(finalisation.done(), "annuler l'appel a aussi annulé la finalisation")
+        finalisation.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await finalisation
 
     async def test_session_marquee_est_cloturee_comme_complete_meme_avec_erreur_reprise(self) -> None:
         plan = self._plan()
@@ -6318,6 +6466,51 @@ class LaBandeMorteDEt0SurvitAuRedemarrageTests(unittest.TestCase):
                          "un palier à zéro est traité comme une absence")
 
 
+class LAjustementMeteoDesGrainesSurvitAuRedemarrageTests(unittest.TestCase):
+    def _coord(self, ajustement: str):
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord._runtime_state = {
+            "active_irrigation_session": None,
+            "last_irrigation_execution": None,
+            "last_auto_irrigation_reason": None,
+            "last_auto_irrigation_completed_at": None,
+            "auto_irrigation_safety_lock": False,
+            "semis_meteo_ajustement": ajustement,
+        }
+        coord._ensure_irrigation_runtime_bootstrap = lambda: None
+        return coord
+
+    def test_aller_retour_disque_complet(self) -> None:
+        serialise = self._coord("chaud_sec")._serialized_runtime_state()
+        self.assertEqual(serialise["semis_meteo_ajustement"], "chaud_sec")
+
+        relu = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        relu._restore_runtime_state(serialise)
+        self.assertEqual(relu._runtime_state["semis_meteo_ajustement"], "chaud_sec")
+
+
+class LeCumulHumideFongiqueSurvitAuRedemarrageTests(unittest.TestCase):
+    ETAT = {
+        "status": "wet",
+        "source": "sensor",
+        "observed_at": "2026-09-18T06:00:00+00:00",
+        "wet_minutes": 420.0,
+        "dry_minutes": 0.0,
+    }
+
+    def test_aller_retour_disque_complet(self) -> None:
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord._runtime_state = {"fungal_wetness": dict(self.ETAT)}
+        coord._ensure_irrigation_runtime_bootstrap = lambda: None
+
+        serialise = coord._serialized_runtime_state()
+        self.assertEqual(serialise.get("fungal_wetness"), self.ETAT)
+
+        relu = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        relu._restore_runtime_state(serialise)
+        self.assertEqual(relu._runtime_state.get("fungal_wetness"), self.ETAT)
+
+
 class LeCumulTondeuseSurvitAuRedemarrageTests(unittest.TestCase):
     """Un cumul de la JOURNÉE qui ne survit pas au redémarrage ne vaut rien.
 
@@ -6987,6 +7180,35 @@ class AutoDeclarationTonteTests(unittest.TestCase):
         trace = self._declarer(coord, self._ctx(102.8, progression=49.0))
         self.assertEqual(trace["mower_auto_declaration_state"], "travail_en_cours")
         self.assertEqual(self._tontes(coord), [])
+
+    def test_un_travail_inacheve_a_quai_est_en_pause_sans_etre_declare(self) -> None:
+        """Le cloud peut garder une tâche à 0 % après le retour de la tondeuse à sa base.
+
+        Ce n'est ni une tonte terminée ni une machine encore en train de travailler. L'état
+        publié doit décrire la pause à quai sans consommer la tâche : elle peut encore reprendre.
+        """
+        coord = self._coord()
+        pause = coord._declarer_tonte_du_jour(
+            self._ctx(2.1, progression=0.0, tache="travail-pause")
+            | {"_vu_inacheve": None, "mower_is_docked": True}
+        )
+        self.assertEqual(pause["mower_job_completion_state"], "en_pause")
+        self.assertEqual(pause["mower_auto_declaration_state"], "travail_en_pause")
+        self.assertEqual(self._tontes(coord), [])
+
+        reprise = coord._declarer_tonte_du_jour(
+            self._ctx(45.0, progression=35.0, tache="travail-pause")
+            | {"_vu_inacheve": None, "mower_is_docked": False}
+        )
+        self.assertEqual(reprise["mower_job_completion_state"], "en_cours")
+        self.assertEqual(reprise["mower_auto_declaration_state"], "travail_en_cours")
+
+        fin = coord._declarer_tonte_du_jour(
+            self._ctx(120.0, progression=100.0, tache="travail-pause")
+            | {"_vu_inacheve": None, "mower_is_docked": True}
+        )
+        self.assertEqual(fin["mower_auto_declaration_state"], "declaree")
+        self.assertEqual(len(self._tontes(coord)), 1)
 
     def test_le_passage_a_100_dun_travail_suivi_declare(self) -> None:
         coord = self._coord()
@@ -9508,3 +9730,99 @@ class RafraichissementApresActionTests(unittest.TestCase):
         )
         self.assertIn("await self._calculer_donnees()", source)
         self.assertIn("finally:", source)
+
+
+class PilotageTondeuseCoordinateurTests(unittest.TestCase):
+    def _coord(
+        self,
+        mode: str,
+        *,
+        bootstrap: bool = True,
+        service_error: Exception | None = None,
+        start_window_policy: str | None = None,
+    ):
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        async_call = AsyncMock(side_effect=service_error)
+        coord.hass = types.SimpleNamespace(
+            states=types.SimpleNamespace(get=lambda _entity_id: None),
+            services=types.SimpleNamespace(async_call=async_call),
+        )
+        coord._runtime_state = {}
+        coord._mower_control_bootstrap_complete = bootstrap
+        coord._get_conf = lambda cle: (
+            mode
+            if cle == "pilotage_tondeuse"
+            else start_window_policy if cle == "tondeuse_creneaux_depart" else None
+        )
+        coord._reglages_instance = lambda: {}
+        coord.arrosage_en_cours = lambda: False
+        coord._current_datetime = lambda: datetime(2026, 9, 19, 10, 0, tzinfo=timezone.utc)
+        return coord, async_call
+
+    @staticmethod
+    def _snapshot() -> dict[str, object]:
+        return {
+            "tondeuse_source_entity": "lawn_mower.esperance_jr",
+            "tondeuse_connectee": True,
+            "tondeuse_prete": True,
+            "mower_is_docked": True,
+            "mower_is_outside": False,
+            "mower_is_mowing": False,
+            "mower_is_returning": False,
+            "mower_operation_state": "docked",
+            "mower_dock_signal_fort": True,
+            "mower_battery": 100,
+            "mower_pass_count_today": 0,
+            "mowing_daily_session_limit": 2,
+            "mowing_window_state": "ideal",
+            "gazon_permet_tonte": True,
+            "action_possible": True,
+        }
+
+    def test_observation_publie_le_depart_sans_appeler_de_service(self) -> None:
+        coord, service = self._coord("observation")
+        snapshot = self._snapshot()
+        asyncio.run(coord._async_apply_mower_control(snapshot))
+        self.assertEqual(snapshot["mower_control_state"], "observation")
+        self.assertEqual(snapshot["mower_control_pending_action"], "start_mowing")
+        service.assert_not_awaited()
+
+    def test_actif_envoie_une_unique_commande_complete(self) -> None:
+        coord, service = self._coord("actif")
+        snapshot = self._snapshot()
+        asyncio.run(coord._async_apply_mower_control(snapshot))
+        service.assert_awaited_once_with(
+            "lawn_mower", "start_mowing", {"entity_id": "lawn_mower.esperance_jr"}, blocking=True
+        )
+        self.assertIsNone(snapshot["mower_control_pending_action"])
+        self.assertEqual(snapshot["mower_control_last_action"], "start_mowing")
+
+    def test_le_choix_de_creneau_arrive_jusqu_a_la_commande_reelle(self) -> None:
+        snapshot = self._snapshot()
+        snapshot["mowing_window_state"] = "acceptable"
+
+        strict, service_strict = self._coord("actif")
+        asyncio.run(strict._async_apply_mower_control(dict(snapshot)))
+        service_strict.assert_not_awaited()
+
+        souple, service_souple = self._coord("actif", start_window_policy="ideal_acceptable")
+        asyncio.run(souple._async_apply_mower_control(dict(snapshot)))
+        service_souple.assert_awaited_once_with(
+            "lawn_mower", "start_mowing", {"entity_id": "lawn_mower.esperance_jr"}, blocking=True
+        )
+
+    def test_premier_cycle_et_mode_desactive_n_appellent_jamais_de_service(self) -> None:
+        for mode, bootstrap in (("actif", False), ("desactive", True)):
+            with self.subTest(mode=mode, bootstrap=bootstrap):
+                coord, service = self._coord(mode, bootstrap=bootstrap)
+                snapshot = self._snapshot()
+                asyncio.run(coord._async_apply_mower_control(snapshot))
+                service.assert_not_awaited()
+
+    def test_erreur_de_service_est_publiee_sans_remonter(self) -> None:
+        coord, service = self._coord("actif", service_error=RuntimeError("service indisponible"))
+        snapshot = self._snapshot()
+        asyncio.run(coord._async_apply_mower_control(snapshot))
+        service.assert_awaited_once()
+        self.assertEqual(snapshot["mower_control_state"], "erreur")
+        self.assertEqual(snapshot["mower_control_last_error"], "service indisponible")

@@ -1,5 +1,262 @@
 # Changelog
 
+## 0.97.9
+
+- **Une tâche inachevée à quai n'est plus présentée comme une tondeuse encore au travail.** Le
+  capteur constructeur peut conserver un `task_id` à 0 % après le retour du robot. Quand la
+  tondeuse est confirmée à sa base, Gazon Intelligent publie maintenant **Travail en pause à la
+  base** au lieu de **Travail pas fini**.
+- **Aucune tonte inventée** : cet état reste inachevé et ne peut rien inscrire dans l'historique.
+  Si le même travail repart, il repasse en cours ; s'il atteint ensuite réellement 100 %, le suivi
+  normal reprend et la durée minimale reste obligatoire.
+- **Vérifié** : scénario complet pause à quai → reprise → fin, 47 tests ciblés tondeuse verts,
+  mutation volontaire de la condition détectée, suite complète **2 089 tests et 3 144 sous-tests**,
+  Ruff, Mypy sur 53 fichiers, syntaxe JavaScript et `git diff --check` verts. Rendu contrôlé sur
+  téléphone HA 390 × 844 sans débordement.
+
+## 0.97.8
+
+- **Le créneau qui peut déclencher un départ est maintenant choisi explicitement** dans
+  `Réglages > Mon installation > Tondeuse` : `Idéal seulement`, `Idéal ou acceptable`, ou
+  `Tout créneau non bloqué`. Le choix conseillé et le repli de sécurité sont **Idéal seulement**
+  pour qu'un simple créneau déconseillé ne lance plus une tondeuse automatiquement.
+- **Profils cohérents** : appliquer le profil Ornement prépare `Idéal seulement`; les profils Jeu
+  et Rustique préparent `Idéal ou acceptable`. Le mode Désactivé/Observation/Actif reste un choix
+  séparé : modifier les créneaux n'active jamais le matériel.
+- **Retours toujours prioritaires** : le filtre ne concerne que les nouveaux départs. Une tondeuse
+  déjà dehors est toujours rappelée si le gazon retire son autorisation, quel que soit le créneau
+  choisi.
+- **Vérifié** : tests du moteur pur, du câblage coordinateur jusqu'à l'appel Home Assistant, de la
+  validation/enregistrement du panneau et des profils. Un créneau acceptable est refusé en mode
+  Ornement puis autorisé avec le choix correspondant ; un créneau bloqué ne déclenche jamais.
+  Suite complète : **2 088 tests et 3 144 sous-tests**, Ruff, Mypy sur 53 fichiers, JavaScript,
+  JSON et `git diff --check` verts. Rendu contrôlé sur ordinateur et téléphone HA 390 × 844.
+
+## 0.97.7
+
+- **Notifications d'activité au choix** : trois nouvelles catégories indépendantes dans
+  `Réglages > Mon installation > Alertes et conseils` annoncent le début et la fin d'un arrosage,
+  le départ/retour/rangement de la tondeuse et l'ouverture/fermeture confirmée de son garage.
+  Elles sont désactivées par défaut pour les installations existantes afin d'éviter des messages
+  inattendus après mise à jour.
+- **Quantités et erreurs utiles** : la fin d'arrosage indique la quantité réellement exécutée et
+  le nombre de segments de zone connus. Une interruption ou une commande tondeuse/garage refusée
+  devient une notification de niveau `action` ; les activités normales restent au niveau
+  `information` et respectent le niveau minimal et les heures calmes.
+- **Pas de doublons au redémarrage** : les derniers identifiants de session et états confirmés sont
+  conservés dans la mémoire persistante des alertes. La première observation sert de référence et
+  n'annonce jamais une ancienne activité.
+- **Vérifié** : tests rouges avant correction, preuve de non-répétition après sérialisation et
+  activation tardive, suite complète (**2 083 tests**), Ruff, Mypy sur 53 fichiers, syntaxe
+  JavaScript, JSON et `git diff --check` verts.
+
+## 0.97.6
+
+- **Barre “Enregistrer” vraiment masquée quand elle ne sert pas**. La barre du bas était déjà
+  descendue hors écran quand il n'y avait aucun changement, mais elle restait présente dans le DOM
+  avec son ancien contenu. Sur certains affichages HA/mobile, cela pouvait laisser une bande visible
+  ou une zone cliquable en bas de page. Maintenant elle devient aussi invisible, non cliquable et
+  masquée à l'accessibilité tant qu'il n'y a rien à enregistrer.
+- **Vérifié** : syntaxe JavaScript, test dédié de la barre d'enregistrement, Ruff et
+  `git diff --check` verts.
+
+## 0.97.5
+
+- **Garage de tondeuse plus clair dans Réglages**. La carte du volet reste dans
+  `Mon installation > Tondeuse`, mais si un volet `cover` est choisi elle affiche maintenant son
+  état réel : ouvert, fermé, ouverture/fermeture en cours, indisponible, inconnu ou introuvable.
+  Les automatismes sont séparés visuellement : ouverture avant départ, ouverture pour retour,
+  fermeture après rentrée, délai avant départ et délai avant fermeture. Sans volet choisi, cette
+  partie reste masquée et le garage reste entièrement inactif.
+- **Aperçu local** : l'exemple de développement simule un volet de garage fermé pour vérifier le
+  rendu complet avant que le matériel réel soit installé.
+- **Vérifié** : syntaxe JavaScript, tests panneau ciblés, tests serveur du panneau et tests du
+  contrôleur tondeuse/garage verts. La logique de commande n'a pas été modifiée.
+
+## 0.97.4
+
+- **Réglages : seules les valeurs se rafraîchissent**. Le correctif 0.97.3 figeait le bandeau du
+  haut, mais Kévin a confirmé que la page bougeait encore. Cause restante : en mode Réglages, chaque
+  mise à jour Home Assistant d'une entité suivie reconstruisait toute la page puis remettait le même
+  `scrollTop`. Si une carte au-dessus changeait un peu de hauteur, le contenu lu glissait quand même.
+  Maintenant, une mise à jour HA passive dans Réglages ne reconstruit plus la page : elle met à jour
+  seulement les valeurs visibles des lignes d'entités, la pompe et les entrées météo. La structure,
+  les cartes, les onglets, la recherche et la position restent en place. Un changement de thème garde
+  volontairement un rendu complet.
+- **Vérifié** : syntaxe JavaScript, 74 tests panneau ciblés puis suite complète
+  (**2 072 tests**), Ruff Python, Mypy (53 fichiers) et `git diff --check` verts.
+
+## 0.97.3
+
+- **La page de réglages bougeait toute seule** : Kévin — « pourquoi ma page bouge tout seul » puis
+  « la page descend petit à petit jusqu'au bas de la page », sur toutes les pages de réglages,
+  sans rien toucher. Cause : le bandeau en tête de page (mode, hauteur conseillée, fenêtre,
+  soleil...) est nourri par le moteur de décision, recalculé à chaque cycle du coordinateur
+  (~2 min) ; à chaque petit changement, sa hauteur bougeait, et comme il est au-dessus de tout le
+  reste, ça décalait la page pendant la lecture — cycle après cycle, sans interaction. Ce bandeau
+  reste maintenant figé tant que la pelouse chargée ne change pas (au chargement, en changeant de
+  pelouse, après une sauvegarde) ; il ne se recalcule plus au fil des rafraîchissements passifs.
+  Un test dédié prouve le comportement (et son absence sans le correctif, vérifié par mutation).
+- **Vérifié** : 2 070 tests (2 nouveaux), Ruff, Mypy (53 fichiers), syntaxe JavaScript et
+  `git diff --check` verts.
+
+## 0.97.2
+
+- **Trois profils de gazon** (au lieu d'un seul) : Kévin voulait plusieurs profils qui changent
+  la « Valeur conseillée ». Le raccourci « Gazon d'ornement » devient un choix entre trois profils
+  cohérents, chacun ajustant deux leviers agronomiques — la hauteur/fréquence de tonte et la
+  confiance dans la pluie annoncée (`arrosage_sensibilite_pluie`) — sans jamais toucher aux
+  réglages qui sont des limites physiques (vent, chaleur, humidité, fractionnement de
+  l'arrosage) plutôt qu'un style d'entretien :
+  - **Gazon d'ornement** (inchangé, toujours le profil conseillé par défaut) : tonte courte
+    (4 à 5 cm) et fréquente, sensibilité pluie équilibrée (×1,0).
+  - **Gazon de jeu** : tonte un peu plus haute (4,5 à 5,5 cm, densité = résistance au
+    piétinement), sensibilité pluie prudente (×1,25) pour ne jamais sous-arroser un gazon qui
+    doit encaisser.
+  - **Gazon rustique, économe en eau** : tonte nettement plus haute et espacée (5,5 à 7 cm,
+    racines profondes), sensibilité pluie économe (×0,75) et rafraîchissement du soir réduit
+    (35 °C au lieu de 32 °C, 2 mm au lieu de 3 mm).
+  - Chacune des 54 valeurs (18 réglages × 3 profils) est vérifiée par un test dédié contre les
+    bornes et le pas réels du registre (`reglages.py`) — pas seulement relue à l'œil.
+- **Vérifié** : 2 068 tests (54 nouvelles vérifications de bornes), Ruff, Mypy (53 fichiers),
+  syntaxe JavaScript et `git diff --check` verts. Contrôlé à l'écran : les trois profils
+  s'appliquent, se désactivent/s'activent correctement selon les valeurs en cours, et
+  « Annuler » revient proprement en arrière.
+
+## 0.97.1
+
+- **Mon installation, classée par thème** : Kévin — « range les par groupe, par exemple tondeuse,
+  arrosage ». Les cartes de l'onglet (arroseurs, tondeuse, pilotage automatique et son garage,
+  capteurs branchés, alertes et notifications) portaient déjà chacune un titre, mais se
+  suivaient sans repère commun. Un intitulé de groupe (Arrosage / Tondeuse / Capteurs branchés /
+  Alertes et notifications) précède désormais chaque paquet de cartes. La carte « Les
+  interrupteurs », qui mélangeait des réglages d'arrosage et de tondeuse, est scindée en deux :
+  une par groupe.
+- **Noms de zone tronqués sur téléphone** : Kévin — « vérifie l'affichage, le visuel peut être
+  mieux sur mobile ». Le graphique « Les 24 dernières heures » de l'accueil affichait « Zone 1
+  A… » à 375 px de large (colonne de 70 px face au nom complet de l'entité, ex. « Zone 1
+  Arrosage ») — trouvé en parcourant les six onglets de l'accueil sur téléphone. La colonne
+  affiche maintenant « Zone 1 », toujours lisible quelle que soit la largeur ; le nom complet
+  reste accessible au survol/appui long.
+- **Vérifié** : audit visuel complet des six onglets de l'accueil et des sept de Réglages sur
+  téléphone (375 × 812) et ordinateur. 2 067 tests, Ruff, Mypy (53 fichiers), syntaxe JavaScript
+  et `git diff --check` verts.
+
+## 0.97.0
+
+Nouveautés de l'étape 7 (Codex), revues et complétées par Claude.
+
+- **Pilotage natif de la tondeuse et garage optionnel** (`mower_control.py`) : un moteur pur décide
+  d'une unique action, le coordinateur l'exécute selon le mode choisi dans Réglages → Mon
+  installation — **Désactivé** (par défaut, aucune commande, comportement actuel strictement
+  inchangé), **Observation** (publie la décision sans appeler de service) et **Actif** (exécute une
+  seule commande à la fois : `lawn_mower.start_mowing`, `lawn_mower.dock`, `cover.open_cover`,
+  `cover.close_cover`). Un rappel n'est demandé que si le **gazon** retire son autorisation ; une
+  indisponibilité ou une incertitude machine ne suffit jamais. Un garage électrique facultatif
+  (entité `cover`) ajoute trois automatismes indépendants et modifiables séparément — ouvrir avant
+  le départ, ouvrir pour le retour, fermer après la rentrée — avec fermeture uniquement sur signal
+  fort de station (`docked`/charge), jamais sur un `idle` ou une estimation ; sans volet configuré,
+  ce sous-système reste entièrement inerte. Sept nouveaux réglages sensibles (batterie minimale,
+  délai anti-double-commande, délais d'ouverture/fermeture du garage).
+  **Revue Claude** : un défaut réel a été trouvé et corrigé avant tout déploiement — la fonction
+  plantait (`UnboundLocalError`) dès qu'un garage était configuré, la tondeuse fermement à quai, le
+  gazon n'autorisant plus de départ, et le garage ni ouvert ni en cours d'ouverture (typiquement un
+  garage déjà refermé) ; aucun test ne couvrait ce chemin. Un banc de mutations dédié a ensuite
+  trouvé 5 trous de couverture supplémentaires (entité tondeuse invalide, drapeaux
+  dehors/retour/tonte non testés indépendamment de l'état brut du cloud constructeur, attente sur
+  garage en cours d'ouverture) : les six comblés, **23 mutants sur 23** tués.
+  Migration prévue avec Kévin : déployer d'abord Désactivé, observer, puis désactiver les deux
+  pilotes Node-RED existants (« Tondeuse Gazon Intelligent », « Tondeuse New ») avant d'activer un
+  premier départ/retour surveillé.
+- **Profil Gazon d'ornement** : un raccourci prépare les valeurs recommandées pour une pelouse
+  soignée, puis attend un clic explicite sur « Enregistrer ». Il ne touche ni aux entités, ni aux
+  vannes, ni à la pompe, ni aux protections physiques.
+- **Notifications** : le niveau minimal et les heures calmes sont enregistrés ensemble. Les traces
+  restent visibles dans Home Assistant même quand le téléphone est filtré ; une urgence critique
+  traverse toujours les heures calmes. L'heure locale de Home Assistant (`dt_util.now()`) est
+  transmise jusqu'au filtre pour éviter un décalage lié au fuseau du serveur.
+- **Rédaction des notifications** : l'ancien choix ambigu « Veille intelligente / Choix manuel »
+  est remplacé par « Gazon Intelligent / Conseiller Gazon ». Le premier envoie le texte factuel de
+  l'intégration ; le second demande à l'IA de le personnaliser sans changer les faits, le niveau ni
+  l'action demandée. Une IA absente, en erreur ou trop lente (délai de 15 s) retombe
+  automatiquement sur le message factuel. Les catégories, le niveau minimal, les heures calmes et
+  la trace HA restent indépendants du rédacteur.
+- **Sensibilité à la pluie prévue** : les trois profils agissent sur les seuils réels du moteur,
+  dans `guidance` comme dans la décision directe. La pluie déjà mesurée n'est volontairement pas
+  atténuée : 5 mm tombés restent 5 mm quel que soit le profil.
+- **Besoins du mode actif** : vérifiés sur Arrosage, Tonte et Gazon pour tous les modes. Le panneau
+  réutilise le même état métier et n'ajoute pas de second réglage concurrent.
+- **Interface** : profil, sensibilité pluie, niveau de notifications, heures calmes et pilotage
+  tondeuse/garage contrôlés à 390 × 844 puis sur bureau, sans chevauchement ni doublon visible.
+- **Vérifié** : **2 067 tests** (63 réglages, 21 sensibles), Ruff, Mypy sur **53 fichiers**
+  (`mower_control.py`/`mower_control_constants.py` ajoutés au périmètre mypy, oubliés par la
+  passe initiale), syntaxe
+  JavaScript et `git diff --check`. Six mutations Codex détectées sur le profil d'ornement et la
+  rédaction des notifications (urgence masquée la nuit, sensibilité pluie neutralisée, pompe
+  introduite dans le profil d'ornement, source IA neutralisée, repli factuel supprimé, filtrage
+  exécuté après l'appel IA) + banc dédié de Claude sur `mower_control.py` (23 mutants sur 23,
+  après correction du plantage et ajout des 6 tests manquants).
+
+## 0.96.5
+
+2031 tests verts. **Six nouveautés de la même nuit (Codex), revues et complétées par Claude** : le risque fongique tient compte de la durée d'humectation du feuillage, le verrou de sécurité de l'arrosage se lève sans changer de mode, la pastille de tonte est plus claire, la projection de tonte ne recule plus quand une phase de graines est masquée, les notifications ont un niveau minimal et des heures calmes, et un nouveau réglage ajuste la confiance dans la pluie prévue.
+
+### Risque fongique cumulé (Codex)
+
+- Une nouvelle fonction pure (`update_fungal_wetness_state`) suit combien de temps le feuillage reste humide en continu, sans inventer les trous de mesure : un redémarrage de plusieurs heures ne compte pas comme du temps humide, et une lecture « inconnue » casse la continuité plutôt que de la deviner. Douze heures d'humidité continue relèvent la pression fongique, six heures la relèvent un peu.
+- Persisté et restauré au redémarrage, comme les deux autres hystérésis du même fichier (`amortir_niveau_risque`, `palier_et0_stress`).
+
+### Lever le verrou de sécurité, séparé du retour au mode Normal (Codex)
+
+- Nouveau bouton et service `clear_irrigation_safety_lock` : après vérification physique des vannes, le verrou se lève sans changer le mode du gazon. Refusé si une zone arrose encore. Avant, la seule façon documentée de lever le verrou était « Retour au mode normal » — un bouton qui change aussi le mode actif, pour un geste qui ne devrait concerner que la sécurité des vannes.
+- Deux correctifs de concurrence sur l'arrêt d'arrosage : le statut et l'erreur d'une session s'écrivent maintenant *avant* la première sauvegarde (sinon un redémarrage juste après aurait pu restaurer une session en échec comme terminée) ; l'attente de finalisation lors d'un arrêt est bornée à 30 s et protégée (`asyncio.shield`) — un stockage bloqué ne fait plus pendre l'arrêt, et ne tue jamais la finalisation en cours.
+
+### Tonte : une pastille plus claire, une projection qui ne recule plus (Codex)
+
+- Les deux badges « Gazon permet-il / Machine peut-elle » se lisaient parfois comme contradictoires ; une pastille unique (« pelouse prête / prête avec précaution / à surveiller / tonte à éviter / pas prête ») résume désormais le verdict du gazon, la disponibilité du robot restant un badge séparé.
+- Prochaine tonte projetée : quand un Semis ou Sursemis encore actif est temporairement masqué par une phase prioritaire (un Traitement, par exemple), la projection reculait puis avançait de nouveau quand la phase masquée redevenait dominante. Un plancher retient désormais la date que les graines encore actives imposent, même masquées.
+
+### Notifications : niveau minimal et heures calmes (Codex)
+
+- Un niveau minimal (Tout recevoir / Important / Urgences seulement) et des heures calmes filtrent ce qui arrive sur le téléphone, en plus de Veille intelligente / Choix manuel.
+
+### Sensibilité à la pluie prévue (Codex, complété par Claude)
+
+- Nouveau réglage `arrosage_sensibilite_pluie` (Prudente ×1,25 / Équilibrée ×1,0 / Économe ×0,75), qui ajuste les seuils de pluie prévue dans `guidance._rain_signals`. Prudente protège davantage le gazon (il faut plus de pluie annoncée pour reporter l'arrosage) ; Économe fait confiance à la prévision plus tôt, au prix d'un peu plus de risque.
+- **Complété** : le réglage était bien câblé mais sans preuve — ni listé dans le test des réglages sensibles, ni couvert par le test qui exige un scénario prouvant qu'il change vraiment la décision (la règle que ce projet impose à chaque réglage). Les deux sont comblés : un scénario à 3,5 mm de pluie montre Économe reporter l'arrosage (« pluie prévue suffisante ») là où le réglage par défaut et Prudente arrosent normalement.
+
+### Vérifié
+
+- 2031 tests (5 nouveaux : 2 côté réglages sensibles/scénario, 2 côté risque fongique, 1 déjà présent), ruff, mypy (51 fichiers), syntaxe JavaScript OK.
+- Banc de mutations sur le risque fongique et l'arrêt d'arrosage : 9 mutants sur 11 tués au premier passage ; les 2 survivants (source invalide non testée, palier à 6 h non testé) comblés par les tests ajoutés ci-dessus — 11 sur 11 au second passage.
+
+## 0.96.4
+
+2001 tests verts. **Une recherche pour retrouver un réglage, où qu'il vive.** Kévin, le 18/09 : « dans les réglages, range tout correctement, j'ai du mal à m'y retrouver et à savoir à quoi ça correspond, même si c'est déjà bien fait ».
+
+- **Nouvelle barre de recherche**, visible en haut de la page Réglages quel que soit l'onglet ouvert : tape un mot (« vent », « hauteur », « graines »…) et les réglages qui correspondent apparaissent, chacun avec son chemin complet (« Tonte › Le vent »). Un clic bascule sur le bon onglet, fait défiler jusqu'au réglage et le fait brièvement ressortir.
+- Chaque réglage réel de `reglages.py` (55 réglages + le type de sol) est cherchable, y compris ceux qui n'ont pas de section dédiée (le type de sol, propre à l'onglet « Mon installation »). Recherche insensible aux accents et aux majuscules, comme celle qui existait déjà pour brancher une entité météo — même principe, pas une nouvelle idée.
+- Le registre lui-même rangeait déjà chaque réglage dans un onglet et une section précise (vérifié : les 55 réglages ont tous leur place, aucun n'atterrit dans un fourre-tout) — c'est la NAVIGATION qui manquait, pas le rangement.
+- Vérifié : 2001 tests (11 nouveaux), ruff, mypy (51 fichiers), syntaxe JavaScript OK. Banc de mutations : 10 mutants sur 10 tués (recherche, câblage du clic jusqu'au changement d'onglet, chemin affiché).
+
+## 0.96.3
+
+1990 tests verts. **L'ajustement météo des cycles de graines (Semis et Sursemis) ne clignote plus.** Kévin, le 18/09 : « vérifie la météo avec l'arrosage du mode semis et sursemis, il faut que ça fonctionne comme une horloge, simule tous les scénarios ».
+
+- **Correctif** : `daily_cycles_target`, la dose du cycle et l'espacement entre cycles réagissaient à chaque seuil météo (température, ETP, vent, humidité, pluie de demain) sans aucune marge. Simulé : une prévision qui oscille de ±0,3 °C autour de 28 °C faisait basculer le nombre de cycles cible à chaque lecture, et sautait le prochain cycle annoncé de 75 minutes (12 h 15 ↔ 11 h 00) sans que rien n'ait vraiment changé dehors.
+- Même défaut, même remède que l'hystérésis du risque de germination et la bande morte du palier d'ET0 (0.96.1) : entrer dans un état chaud/sec ou humide/frais reste immédiat (un vrai coup de chaleur n'attend pas), mais en sortir demande une marge — sinon la sortie se ferait sur le seuil qui vient de faire entrer, et le clignotement reviendrait par la porte d'à côté.
+- Semis et Sursemis partagent le même moteur (`is_seeding_phase`) : le correctif couvre les deux d'un coup. La mémoire d'un cycle à l'autre est portée par le même canal que les deux hystérésis précédentes (`risk_context`), sauvegardée et restaurée aux redémarrages.
+- Vérifié : 1990 tests (8 nouveaux), ruff, mypy (51 fichiers) verts. Banc de mutations : 11 mutants sur 11 tués (logique de l'hystérésis, priorité chaud/humide, et chaque maillon du câblage jusqu'au coordinateur).
+
+## 0.96.2
+
+1982 tests verts. **La page dit les besoins du mode actif, pour tous les modes — pas seulement Semis et Sursemis.** Kévin, le 18/09 : « quand je suis en semis ou sursemis ou autre, il faudrait que la page bascule sur les besoins de chaque mode ».
+
+- Le bandeau « En ce moment » et l'intro des Réglages affichaient déjà l'étape, la dose et la fenêtre des graines en Semis/Sursemis. Les **modes produit** (Traitement, Fertilisation, Biostimulant, Agent Mouillant, Scarification) et l'**Hivernage** ont maintenant le même traitement : combien de jours il reste au mode, son besoin propre (« Le foliaire reste au sec », « La pluie prévue peut incorporer »…), et l'état de la tonte.
+- **Correctif préalable** : le nombre de jours écoulés et restants d'un mode (`phase_age_days`, `jours_restants`, `date_fin`) était calculé par le moteur mais n'était publié sur aucun capteur — seul l'équivalent pour les graines l'était. Publié sur « Phase dominante ».
+- L'Hivernage n'affiche pas de compte de jours (sa durée n'est pas bornée) ; corrigé pour que la fonction elle-même l'empêche, pas seulement son appelant.
+- Vérifié : 1982 tests, ruff, mypy (51 fichiers) et syntaxe JavaScript OK. Banc de mutations : 8 mutants sur 8 tués (après avoir couvert un premier survivant en simplifiant une garde redondante dans le code).
+
 ## 0.96.1
 
 1974 tests verts. **En Semis et Sursemis, le prochain arrosage est le prochain cycle de graines, ses cycles se répartissent sur toute la fenêtre, et les notifications ont une Veille intelligente.** Kévin, le 17/09 : « je suis en sursemis et il me dit des trucs comme ça : Prochain arrosage : dimanche 20 septembre ».

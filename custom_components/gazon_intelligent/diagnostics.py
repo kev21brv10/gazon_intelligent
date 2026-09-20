@@ -72,6 +72,15 @@ _SNAPSHOT_KEYS: tuple[str, ...] = (
     "gazon_permet_tonte",
     "machine_permet_tonte",
     "action_possible",
+    "mower_control_mode",
+    "mower_control_state",
+    "mower_control_reason",
+    "mower_control_pending_action",
+    "mower_control_last_action",
+    "mower_control_last_action_at",
+    "mower_control_last_error",
+    "mower_garage_entity",
+    "mower_garage_state",
     "mowing_blocked_by_watering",
     "mowing_blocked",
     "mowing_block_reason_code",
@@ -110,6 +119,9 @@ _SNAPSHOT_KEYS: tuple[str, ...] = (
     "fungal_risk_reasons",
     "fungal_risk_evening_block",
     "fungal_risk_reduce_watering",
+    "fungal_wetness_duration_hours",
+    "fungal_wetness_source",
+    "fungal_wetness_status",
 )
 
 _MEMORY_KEYS: tuple[str, ...] = (

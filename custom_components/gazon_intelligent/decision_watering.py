@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from math import ceil
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, cast
 
 from .const import (
     POST_APPLICATION_STATUS_TERMINE,
@@ -31,6 +31,7 @@ from .guidance import (
 )
 from .memory import compute_application_state
 from .phases import is_seeding_phase
+from .reglages import lire
 from .soil_balance import biais_etc_mesure
 from .scores import classify_stress_level
 from .water import (
@@ -225,6 +226,11 @@ def build_water_bundle(
         reglages=context.reglages,
         incorporation_terminee=_incorporation_terminee,
         points_etp_stress=points_etp_stress,
+        # ⚠️ MÊME DÉFAUT QUE `palier_et0_stress` : sans mémoire, l'ajustement météo des
+        # cycles de graines (Semis/Sursemis) rebasculait à chaque bruit de mesure/prévision
+        # (mesuré le 18/09/2026 : ±0,3 °C autour de 28 °C → 75 min de saut sur le prochain
+        # cycle annoncé). Cf. `_ajustement_meteo_graines` (guidance.py).
+        semis_ajustement_precedent=(context.risk_context or {}).get("semis_meteo_ajustement"),
         phase_dominante=phase_bundle["phase_dominante"],
         sous_phase=phase_bundle["sous_phase"],
         water_balance=balance_snapshot,
@@ -259,6 +265,8 @@ def build_water_bundle(
             pluie_24h=context.pluie_24h,
             pluie_demain=context.pluie_demain,
             hour_of_day=context.hour_of_day if context.hour_of_day is not None else 12,
+            wetness_duration_hours=(context.risk_context or {}).get("fungal_wetness_duration_hours"),
+            wetness_source=(context.risk_context or {}).get("fungal_wetness_source"),
         ).get("fungal_risk_level"),
     )
     # PLANCHER À DEMAIN — déplacé ici parce qu'il a besoin de la FENÊTRE, publiée par le profil.
@@ -385,6 +393,7 @@ def build_water_bundle(
         "sursemis_policy": watering_profile.get("sursemis_policy"),
         "sursemis_transition_ready": watering_profile.get("sursemis_transition_ready"),
         "sursemis_tonte_count": watering_profile.get("sursemis_tonte_count"),
+        "semis_meteo_ajustement": watering_profile.get("semis_meteo_ajustement"),
         "watering_strategy": watering_profile.get("watering_strategy") or WATERING_STRATEGY_ADULT_DEEP,
         "objective_scope": watering_profile.get("objective_scope") or OBJECTIVE_SCOPE_GLOBAL_SURFACE,
         "watering_stage": watering_profile.get("watering_stage") or WATERING_STAGE_NORMAL,
@@ -692,6 +701,7 @@ def _build_watering_bundle_base(
         "surface_cycle_mm": water_bundle.get("surface_cycle_mm"),
         "daily_cycles_target": water_bundle.get("daily_cycles_target"),
         "cycle_spacing_minutes": water_bundle.get("cycle_spacing_minutes"),
+        "semis_meteo_ajustement": water_bundle.get("semis_meteo_ajustement"),
         "surface_moisture_target": water_bundle.get("surface_moisture_target"),
         "surface_dryness_risk": water_bundle.get("surface_dryness_risk"),
         "runoff_risk": water_bundle.get("runoff_risk"),
@@ -745,6 +755,7 @@ def _reset_semis_fields_for_non_sursemis(bundle: dict[str, Any]) -> None:
             "surface_cycle_mm": None,
             "daily_cycles_target": None,
             "cycle_spacing_minutes": None,
+            "semis_meteo_ajustement": None,
             "surface_moisture_target": None,
             "surface_dryness_risk": None,
             "runoff_risk": None,
@@ -1292,7 +1303,7 @@ def _resolve_sursemis_override(state: dict[str, Any]) -> dict[str, Any] | None:
     semis_followup_state = str(runtime_context.get("semis_followup_state") or "").strip()
     semis_cycles_remaining_today_raw = runtime_context.get("semis_cycles_remaining_today")
     semis_cycles_remaining_today = (
-        int(semis_cycles_remaining_today_raw)
+        int(cast(Any, semis_cycles_remaining_today_raw))
         if semis_cycles_remaining_today_raw not in (None, "")
         else None
     )
@@ -1683,14 +1694,21 @@ def build_watering_bundle(
     )
     soil_style = context.type_sol
 
-    pluie_significative = pluie_24h >= 4 or pluie_demain >= 4
-    pluie_compensatrice = objectif_mm > 0 and pluie_demain >= max(2.0, objectif_mm * 0.8)
+    sensibilite_pluie = float(lire(context.reglages, "arrosage_sensibilite_pluie", 1.0))
+    pluie_significative = pluie_24h >= 4 or pluie_demain >= 4 * sensibilite_pluie
+    pluie_compensatrice = (
+        objectif_mm > 0
+        and pluie_demain >= max(2.0, objectif_mm * 0.8) * sensibilite_pluie
+    )
     pluie_proche = (
         pluie_24h >= 4.0
-        or pluie_demain >= 4.0
-        or pluie_j2 >= 4.0
-        or pluie_3j >= 6.0
-        or pluie_probabilite_max_3j >= 80.0
+        or pluie_demain >= 4.0 * sensibilite_pluie
+        or pluie_j2 >= 4.0 * sensibilite_pluie
+        or pluie_3j >= 6.0 * sensibilite_pluie
+        or (
+            pluie_probabilite_max_3j >= 80.0
+            and pluie_3j >= 4.0 * sensibilite_pluie
+        )
     )
     stress_thermique = temperature >= 30 and etp >= 4
     humidite_haute = humidite >= 85
@@ -1969,7 +1987,7 @@ def build_watering_bundle(
     rain_floor_block_reason: str | None = None
     if phase_dominante == "Normal":
         if not recommande:
-            if pluie_demain >= 2:
+            if pluie_demain >= 2 * sensibilite_pluie:
                 conseil_principal = "N'arrose pas aujourd'hui: la pluie prévue couvre le besoin court terme."
                 action_recommandee = "Laisse la pluie agir puis réévalue demain."
                 action_a_eviter = "Cumuler pluie et arrosage."
@@ -2025,7 +2043,11 @@ def build_watering_bundle(
                 mm_final = min(mm_final, objectif_mm)
                 mm_final_recommande = min(mm_final_recommande, objectif_mm)
                 action_a_eviter = "Lancer un cycle complet avant la pluie."
-            elif (pluie_demain >= 2.0 or pluie_j2 >= 4.0 or pluie_3j >= 4.0) and not _sol_reclame_de_l_eau:
+            elif (
+                pluie_demain >= 2.0 * sensibilite_pluie
+                or pluie_j2 >= 4.0 * sensibilite_pluie
+                or pluie_3j >= 4.0 * sensibilite_pluie
+            ) and not _sol_reclame_de_l_eau:
                 # On ne réduit l'arrosage que pour une pluie prévue SIGNIFICATIVE. Une
                 # averse de trace (ex. 0,8 mm à J+2) ne doit pas réduire/annuler l'arrosage
                 # d'un sol sec : sinon, quand l'objectif réduit passe sous la dose mini, on

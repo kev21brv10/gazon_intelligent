@@ -2147,6 +2147,25 @@ class TestObjectiveAndGuidance(unittest.TestCase):
         )
         self.assertTrue(compensatrice or proche)
 
+    def test_rain_sensitivity_profiles_move_the_real_threshold(self) -> None:
+        commun = {
+            "objective_reference_mm": 12.0,
+            "pluie_24h": 0.0,
+            "pluie_demain": 5.0,
+            "pluie_j2": 0.0,
+            "pluie_3j": 0.0,
+            "pluie_probabilite_max_3j": 0.0,
+        }
+        self.assertEqual(guidance_module._rain_signals(**commun), (False, False))
+        self.assertEqual(
+            guidance_module._rain_signals(**commun, reglages={"arrosage_sensibilite_pluie": 0.75}),
+            (False, True),
+        )
+        self.assertEqual(
+            guidance_module._rain_signals(**commun, reglages={"arrosage_sensibilite_pluie": 1.25}),
+            (False, False),
+        )
+
     def test_evening_cooling_allowed_in_extreme_heat_with_drying_margin(self) -> None:
         # Chaleur extrême + air sec + coucher du soleil dans 2 h → petit arrosage de
         # rafraîchissement du soir autorisé (l'herbe sèchera avant la nuit).
@@ -4207,3 +4226,193 @@ class AmortissementDuRisqueTests(unittest.TestCase):
         ))
         self.assertIn(libelle, raisons.lower())
         self.assertNotIn("hydrique", raisons.lower())
+
+
+class AjustementMeteoGrainesHysteresisTests(unittest.TestCase):
+    """⚠️ MÊME DÉFAUT QUE LES QUATORZE BASCULES DU 31/08, CÔTÉ GRAINES.
+
+    Demande de Kévin (18/09/2026) : « il faut que ça fonctionne comme une horloge ». Sans
+    marge, chacun des seuils météo de `_sursemis_micro_apport_decision` (température, ETP,
+    vent, humidité, pluie) bascule sur un simple bruit de mesure/prévision — mesuré en
+    simulation : une prévision qui oscille de ±0,3 °C autour de 28 °C fait sauter le prochain
+    cycle annoncé de 75 min (`watering_policy.repartir_creneaux_semis`). Semis et Sursemis
+    partagent ce même chemin (`is_seeding_phase`), le correctif couvre donc les deux.
+    """
+
+    def test_l_entree_est_immediate(self) -> None:
+        g = guidance_mod
+        self.assertEqual(
+            g._ajustement_meteo_graines(
+                temperature_sechage=28.0, etp=2.0, vent=5.0, humidite=55.0,
+                pluie_24h=0.0, pluie_demain=0.0, ajustement_precedent=None,
+            ),
+            "chaud_sec",
+            "un vrai coup de chaud n'attend pas plusieurs cycles",
+        )
+        self.assertEqual(
+            g._ajustement_meteo_graines(
+                temperature_sechage=20.0, etp=2.0, vent=5.0, humidite=70.0,
+                pluie_24h=0.0, pluie_demain=0.0, ajustement_precedent=None,
+            ),
+            "humide_frais",
+            "une vraie humidité n'attend pas plusieurs cycles",
+        )
+
+    def test_la_priorite_chaud_sur_humide_est_gardee(self) -> None:
+        """Le chaînage if/elif d'origine faisait gagner le chaud sur l'humide simultané —
+        cet ordre n'était PAS le défaut, seule l'absence de marge l'était."""
+        self.assertEqual(
+            guidance_mod._ajustement_meteo_graines(
+                temperature_sechage=30.0, etp=2.0, vent=5.0, humidite=75.0,
+                pluie_24h=0.0, pluie_demain=0.0, ajustement_precedent=None,
+            ),
+            "chaud_sec",
+        )
+
+    def test_la_sortie_ne_se_fait_QUE_franchement(self) -> None:
+        g = guidance_mod
+        # Entré en chaud_sec à 28°C : un retour à 27,5°C (sous le seuil d'entrée mais dans la
+        # marge de sortie 27,0) doit RESTER chaud_sec.
+        self.assertEqual(
+            g._ajustement_meteo_graines(
+                temperature_sechage=27.5, etp=2.0, vent=5.0, humidite=55.0,
+                pluie_24h=0.0, pluie_demain=0.0, ajustement_precedent="chaud_sec",
+            ),
+            "chaud_sec",
+            "la sortie s'est faite sur le même seuil que l'entrée",
+        )
+        # Franchement sorti (25°C, sous la marge de 27,0) : ça retombe.
+        self.assertEqual(
+            g._ajustement_meteo_graines(
+                temperature_sechage=25.0, etp=2.0, vent=5.0, humidite=55.0,
+                pluie_24h=0.0, pluie_demain=0.0, ajustement_precedent="chaud_sec",
+            ),
+            "neutre",
+            "sorti franchement de la zone chaude, l'ajustement doit enfin retomber",
+        )
+
+    def test_le_bruit_mesure_ne_fait_plus_clignoter(self) -> None:
+        """Rejoue la série mesurée en simulation le 18/09/2026 : ±0,3 °C autour de 28 °C."""
+        g = guidance_mod
+        previsions = [27.90, 28.05, 27.85, 28.15, 27.95, 28.02, 27.88, 27.91, 28.04]
+
+        def changements(avec_memoire: bool) -> int:
+            precedent, compte = None, 0
+            for temp in previsions:
+                ajustement = g._ajustement_meteo_graines(
+                    temperature_sechage=temp, etp=2.5, vent=5.0, humidite=55.0,
+                    pluie_24h=0.0, pluie_demain=0.0,
+                    ajustement_precedent=precedent if avec_memoire else None,
+                )
+                if precedent is not None and ajustement != precedent:
+                    compte += 1
+                precedent = ajustement
+            return compte
+
+        self.assertGreaterEqual(changements(False), 4,
+                                "prémisse : sans mémoire, la série mesurée doit bien clignoter")
+        # Une seule bascule reste légitime : l'ENTRÉE en chaud_sec dès le premier relevé qui
+        # franchit vraiment 28°C (28,05). Après quoi tous les relevés restent dans la marge
+        # de sortie (≥27,0) : plus aucune bascule ne doit suivre.
+        self.assertEqual(changements(True), 1,
+                         "la marge de sortie ne calme plus le bruit mesuré")
+
+    def test_sans_memoire_l_ajustement_ne_change_RIEN(self) -> None:
+        """Premier cycle, ou mémoire abîmée : on prend ce qu'on voit, sans inventer d'inertie."""
+        for memoire in (None, "", "pas_un_ajustement_connu"):
+            with self.subTest(memoire=memoire):
+                self.assertEqual(
+                    guidance_mod._ajustement_meteo_graines(
+                        temperature_sechage=27.5, etp=2.0, vent=5.0, humidite=55.0,
+                        pluie_24h=0.0, pluie_demain=0.0, ajustement_precedent=memoire,
+                    ),
+                    "neutre",
+                )
+
+    def test_le_bundle_arrosage_REINJECTE_bien_la_memoire(self) -> None:
+        """⚠️ CALCULER N'EST PAS APPLIQUER — même leçon que `amortir_niveau_risque`.
+
+        Contexte À LA LIMITE (27,5 °C : ni assez chaud pour ENTRER, ni assez frais pour
+        SORTIR) : sans mémoire, `chaud_sec` ne se déclenche pas ; avec une mémoire qui le
+        tenait, il doit rester tenu. Sinon la mémoire se calcule dans le vide.
+        """
+        def _water_bundle(memoire):
+            ctx = decision.DecisionContext.from_legacy_args(
+                history=[{"type": "Sursemis", "date": "2026-09-18"}],
+                today=date(2026, 9, 18), hour_of_day=8,
+                temperature=20.0, forecast_temperature_today=27.5,
+                pluie_24h=0.0, pluie_demain=0.0, humidite=55.0, vent=5.0,
+                type_sol="limoneux", etp_capteur=2.5,
+                risk_context={"semis_meteo_ajustement": memoire},
+            )
+            phase = decision.build_phase_bundle(ctx)
+            return decision.build_water_bundle(ctx, phase)
+
+        libre = _water_bundle(None)
+        self.assertEqual(
+            libre["semis_meteo_ajustement"], "neutre",
+            "prémisse : à 27,5 °C seul, l'entrée en chaud_sec ne doit pas se déclencher",
+        )
+
+        tenu = _water_bundle("chaud_sec")
+        self.assertEqual(
+            tenu["semis_meteo_ajustement"], "chaud_sec",
+            "la mémoire n'est pas transmise au profil d'arrosage : elle se calcule dans le vide",
+        )
+        self.assertGreater(
+            tenu["daily_cycles_target"], libre["daily_cycles_target"],
+            "l'ajustement tenu par la mémoire n'atteint pas la décision de cycles",
+        )
+
+    def test_est_REELLEMENT_cable_et_persiste(self) -> None:
+        """⚠️ UNE FONCTION CORRECTE MAIS NON BRANCHÉE N'EXISTE PAS (même leçon que
+        `amortir_niveau_risque`/`palier_et0_stress`) : ce test suit la mémoire jusqu'au
+        coordinateur, pas seulement le prédicat isolé."""
+        source_guidance = (PACKAGE_DIR / "guidance.py").read_text(encoding="utf-8")
+        self.assertIn("_ajustement_meteo_graines(", source_guidance,
+                      "le profil de semis n'appelle pas l'hystérésis météo")
+        self.assertIn("ajustement_precedent=ajustement_precedent", source_guidance,
+                      "la mémoire n'est pas transmise à l'hystérésis météo des graines")
+
+        source_watering = (PACKAGE_DIR / "decision_watering.py").read_text(encoding="utf-8")
+        self.assertIn("semis_ajustement_precedent=", source_watering,
+                      "la mémoire publiée n'est pas transmise au profil d'arrosage")
+        self.assertIn(
+            '"semis_meteo_ajustement": watering_profile.get("semis_meteo_ajustement")',
+            source_watering,
+            "le résultat n'est pas recopié vers le bundle — la mémoire ne pourra pas être rangée",
+        )
+
+        source_decision = (PACKAGE_DIR / "decision.py").read_text(encoding="utf-8")
+        self.assertIn(
+            '"semis_meteo_ajustement": watering_bundle.get("semis_meteo_ajustement")',
+            source_decision,
+            "la mémoire ne recopie pas jusqu'au snapshot de décision",
+        )
+
+        source_coord = (PACKAGE_DIR / "coordinator.py").read_text(encoding="utf-8")
+        sauvegarde = source_coord.split("def _serialized_runtime_state")[1].split("\n    def ")[0]
+        restauration = source_coord.split("def _restore_runtime_state")[1].split("\n    def ")[0]
+        self.assertIn("semis_meteo_ajustement", sauvegarde, "la mémoire n'est pas SAUVEGARDÉE")
+        self.assertIn("semis_meteo_ajustement", restauration, "la mémoire n'est pas RESTAURÉE")
+
+        # ⚠️ DEUX LISTES BLANCHES, PAS UNE (cf. `AmortissementDuRisqueTests`) : le snapshot de
+        # décision est filtré une SECONDE fois par le coordinateur.
+        coordinateur = importlib.import_module("custom_components.gazon_intelligent.coordinator")
+        self.assertIn(
+            "semis_meteo_ajustement", coordinateur._COORDINATOR_SNAPSHOT_KEYS,
+            "semis_meteo_ajustement est filtrée par la liste blanche du coordinateur",
+        )
+
+    def test_le_snapshot_de_decision_publie_bien_la_memoire(self) -> None:
+        """Bout en bout : `build_decision_result(...).to_snapshot()` doit porter la clé,
+        c'est elle que le coordinateur relit à chaque cycle (`snapshot.get(...)`)."""
+        ctx = decision.DecisionContext.from_legacy_args(
+            history=[{"type": "Sursemis", "date": "2026-09-18"}],
+            today=date(2026, 9, 18), hour_of_day=8,
+            temperature=20.0, forecast_temperature_today=28.0,
+            pluie_24h=0.0, pluie_demain=0.0, humidite=55.0, vent=5.0,
+            type_sol="limoneux", etp_capteur=2.5,
+        )
+        snapshot = decision.build_decision_result(ctx).to_snapshot()
+        self.assertEqual(snapshot.get("semis_meteo_ajustement"), "chaud_sec")

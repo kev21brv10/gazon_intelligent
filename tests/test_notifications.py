@@ -471,9 +471,8 @@ class VerrouDeSecuriteTests(unittest.TestCase):
         self.assertEqual(alerte.titre, "⚠️ Arrosage automatique verrouillé")
         self.assertIn("(Zone 1 Arrosage)", alerte.message)
         self.assertIn("la vanne n'a pas confirmé sa fermeture", alerte.message)
-        # Le seul déverrouillage efface le semis en cours : le message doit le dire.
-        self.assertIn("« Retour au mode normal »", alerte.message)
-        self.assertIn("efface aussi une phase Semis ou Sursemis", alerte.message)
+        self.assertIn("« Lever le verrou de sécurité »", alerte.message)
+        self.assertIn("sans effacer le mode Semis ou Sursemis", alerte.message)
 
         alertes, memoire = _evaluer(memoire, progression=None, verrou=True)
         self.assertEqual(alertes, [], "un verrou déjà signalé ne se répète pas")
@@ -514,6 +513,131 @@ class ErreurTondeuseTests(unittest.TestCase):
         self.assertEqual(len(alertes), 1)
         self.assertTrue(alertes[0].resolue)
         self.assertNotIn("tondeuse", memoire)
+
+
+class NotificationsActiviteTests(unittest.TestCase):
+    SUJETS = {
+        "graines", "verrou", "mesures", "tondeuse",
+        "activite_arrosage", "activite_tondeuse", "garage_tondeuse",
+    }
+
+    def test_un_arrosage_annonce_son_depart_et_sa_fin_une_seule_fois(self) -> None:
+        alertes, memoire = _evaluer(
+            progression=None,
+            sujets_actifs=self.SUJETS,
+            activite_arrosage={"active_id": None, "completed_id": None},
+        )
+        self.assertEqual(alertes, [], "la premiere observation sert de reference")
+
+        actif = {
+            "active_id": "sess-1", "source": "auto", "target_mm": 4.2,
+            "zone_count": 3, "started_at": _a("05:10"), "completed_id": None,
+        }
+        alertes, memoire = _evaluer(
+            memoire, progression=None, sujets_actifs=self.SUJETS, activite_arrosage=actif,
+        )
+        self.assertEqual([a.sujet for a in alertes], ["activite_arrosage"])
+        self.assertIn("4,2 mm", alertes[0].message)
+        self.assertIn("3 zones", alertes[0].message)
+        self.assertEqual(alertes[0].niveau, "information")
+        self.assertFalse(alertes[0].persistante)
+
+        import json
+
+        memoire_relue = json.loads(json.dumps(memoire))
+        alertes, memoire = _evaluer(
+            memoire_relue, progression=None, sujets_actifs=self.SUJETS, activite_arrosage=actif,
+        )
+        self.assertEqual(alertes, [])
+
+        termine = {
+            "active_id": None, "completed_id": "sess-1", "completion_status": "completed",
+            "executed_mm": 4.1, "zones_done": 3, "ended_at": _a("05:42"),
+        }
+        alertes, memoire = _evaluer(
+            memoire, progression=None, sujets_actifs=self.SUJETS, activite_arrosage=termine,
+        )
+        self.assertEqual([a.sujet for a in alertes], ["activite_arrosage"])
+        self.assertIn("terminé", alertes[0].titre.lower())
+        self.assertIn("4,1 mm", alertes[0].message)
+        alertes, _ = _evaluer(
+            memoire, progression=None, sujets_actifs=self.SUJETS, activite_arrosage=termine,
+        )
+        self.assertEqual(alertes, [])
+
+    def test_activer_une_categorie_ne_rejoue_pas_l_activite_deja_observee(self) -> None:
+        actif = {"active_id": "sess-deja-la", "target_mm": 2.0}
+        alertes, memoire = _evaluer(
+            progression=None,
+            sujets_actifs={"graines", "verrou", "mesures", "tondeuse"},
+            activite_arrosage=actif,
+        )
+        self.assertEqual(alertes, [])
+        alertes, _ = _evaluer(
+            memoire, progression=None, sujets_actifs=self.SUJETS, activite_arrosage=actif,
+        )
+        self.assertEqual(alertes, [])
+
+    def test_la_tondeuse_annonce_depart_retour_et_station(self) -> None:
+        alertes, memoire = _evaluer(
+            progression=None, sujets_actifs=self.SUJETS,
+            activite_tondeuse={"operation": "docked", "docked": True},
+        )
+        self.assertEqual(alertes, [])
+        for activite, texte in (
+            ({"operation": "mowing", "docked": False}, "démarré"),
+            ({"operation": "returning", "docked": False}, "retour"),
+            ({"operation": "docked", "docked": True}, "station"),
+        ):
+            alertes, memoire = _evaluer(
+                memoire, progression=None, sujets_actifs=self.SUJETS,
+                activite_tondeuse=activite,
+            )
+            self.assertEqual([a.sujet for a in alertes], ["activite_tondeuse"])
+            self.assertIn(texte, f"{alertes[0].titre} {alertes[0].message}".lower())
+
+    def test_une_erreur_de_commande_tondeuse_est_signalee_puis_resolue(self) -> None:
+        _, memoire = _evaluer(
+            progression=None, sujets_actifs=self.SUJETS,
+            activite_tondeuse={"operation": "docked", "docked": True, "error": None},
+        )
+        alertes, memoire = _evaluer(
+            memoire, progression=None, sujets_actifs=self.SUJETS,
+            activite_tondeuse={"operation": "docked", "docked": True, "error": "Service refusé"},
+        )
+        self.assertEqual([a.sujet for a in alertes], ["activite_tondeuse"])
+        self.assertEqual(alertes[0].niveau, "action")
+        self.assertTrue(alertes[0].persistante)
+        alertes, _ = _evaluer(
+            memoire, progression=None, sujets_actifs=self.SUJETS,
+            activite_tondeuse={"operation": "docked", "docked": True, "error": None},
+        )
+        self.assertEqual([(a.sujet, a.resolue) for a in alertes], [("activite_tondeuse", True)])
+
+    def test_le_garage_annonce_les_etats_confirmes_et_une_erreur_nouvelle(self) -> None:
+        alertes, memoire = _evaluer(
+            progression=None, sujets_actifs=self.SUJETS,
+            activite_garage={"configured": True, "state": "closed", "error": None},
+        )
+        self.assertEqual(alertes, [])
+        alertes, memoire = _evaluer(
+            memoire, progression=None, sujets_actifs=self.SUJETS,
+            activite_garage={"configured": True, "state": "open", "error": None},
+        )
+        self.assertEqual([a.sujet for a in alertes], ["garage_tondeuse"])
+        self.assertIn("ouvert", alertes[0].message.lower())
+        alertes, memoire = _evaluer(
+            memoire, progression=None, sujets_actifs=self.SUJETS,
+            activite_garage={"configured": True, "state": "open", "error": "Volet bloqué"},
+        )
+        self.assertEqual([a.sujet for a in alertes], ["garage_tondeuse"])
+        self.assertEqual(alertes[0].niveau, "action")
+        self.assertTrue(alertes[0].persistante)
+        alertes, _ = _evaluer(
+            memoire, progression=None, sujets_actifs=self.SUJETS,
+            activite_garage={"configured": True, "state": "open", "error": "Volet bloqué"},
+        )
+        self.assertEqual(alertes, [])
 
     def test_une_pause_pluie_n_est_pas_une_panne(self) -> None:
         """La Landroid publie `rain_delay` sur son capteur d'ERREUR : chaque averse aurait
@@ -692,16 +816,44 @@ class OptionsTests(unittest.TestCase):
         })
         self.assertEqual(notifications.sujets_voulus(entree), {"verrou", "tondeuse"})
 
-    def test_la_veille_intelligente_surveille_toutes_les_categories(self) -> None:
+    def test_les_notifications_d_activite_sont_au_choix_et_desactivees_par_defaut(self) -> None:
+        self.assertFalse({
+            "activite_arrosage", "activite_tondeuse", "garage_tondeuse",
+        } & notifications.sujets_voulus(_FakeEntry()))
+        entree = _FakeEntry(options={
+            "notifier_activite_arrosage": True,
+            "notifier_activite_tondeuse": True,
+            "notifier_garage_tondeuse": False,
+        })
+        self.assertTrue({"activite_arrosage", "activite_tondeuse"} <= notifications.sujets_voulus(entree))
+        self.assertNotIn("garage_tondeuse", notifications.sujets_voulus(entree))
+
+    def test_l_ancien_mode_ne_masque_plus_les_categories_choisies(self) -> None:
         entree = _FakeEntry(options={
             "mode_notifications": "veille_intelligente",
             "notifier_arrosage_graines": False,
             "notifier_tondeuse": False,
         })
         self.assertEqual(notifications.mode_notifications(entree), "veille_intelligente")
-        self.assertEqual(notifications.sujets_voulus(entree), {
-            "graines", "verrou", "mesures", "tondeuse",
+        self.assertEqual(notifications.sujets_voulus(entree), {"verrou", "mesures"})
+
+    def test_les_preferences_de_discretion_ont_des_defauts_compatibles(self) -> None:
+        entree = _FakeEntry()
+        self.assertEqual(notifications.source_notifications(entree), "integration")
+        self.assertEqual(notifications.niveau_minimal(entree), "information")
+        self.assertEqual(notifications.heures_calmes(entree), (False, 22 * 60, 7 * 60))
+
+    def test_les_preferences_de_discretion_sont_lues_dans_les_options(self) -> None:
+        entree = _FakeEntry(options={
+            "source_notifications": "conseiller_gazon",
+            "notification_niveau_minimal": "action",
+            "notification_heures_calmes": True,
+            "notification_heures_calmes_debut": 21 * 60 + 30,
+            "notification_heures_calmes_fin": 6 * 60 + 45,
         })
+        self.assertEqual(notifications.source_notifications(entree), "conseiller_gazon")
+        self.assertEqual(notifications.niveau_minimal(entree), "action")
+        self.assertEqual(notifications.heures_calmes(entree), (True, 21 * 60 + 30, 6 * 60 + 45))
 
 
 class _Services:
@@ -761,6 +913,38 @@ SNAPSHOT_VENT = {
 class CoordinateurAlertesTests(unittest.TestCase):
     """Le branchement dans le coordinateur : la valeur suit jusqu'au téléphone et au disque."""
 
+    def test_le_contexte_transmet_les_identifiants_et_resultats_d_activite(self) -> None:
+        coord = _coordinateur()
+        coord._runtime_state["active_irrigation_session"] = {
+            "session_id": "sess-active", "source": "auto", "target_mm": 3.5,
+            "started_at": _a("05:10"), "plan": {"zones": [{}, {}]},
+        }
+        coord._runtime_state["last_irrigation_execution"] = {
+            "session_id": "sess-done", "completion_status": "completed", "ended_at": _a("04:50"),
+            "zones_done": [
+                {"zone": "switch.zone_1"}, {"zone": "switch.zone_2"}, {"zone": "switch.zone_1"},
+            ],
+            "reconciliation": {"executed_mm": 2.9, "executed_zone_segments": 2},
+        }
+        contexte = coord._contexte_des_alertes({
+            **SNAPSHOT_VENT,
+            "mower_operation_state": "mowing",
+            "mower_is_docked": False,
+            "mower_is_mowing": True,
+            "mower_garage_entity": "cover.garage",
+            "mower_garage_state": "open",
+            "mower_control_pending_action": "open_cover",
+            "mower_control_last_error": "Service refusé",
+        })
+        self.assertEqual(contexte["activite_arrosage"]["active_id"], "sess-active")
+        self.assertEqual(contexte["activite_arrosage"]["zone_count"], 2)
+        self.assertEqual(contexte["activite_arrosage"]["completed_id"], "sess-done")
+        self.assertEqual(contexte["activite_arrosage"]["executed_mm"], 2.9)
+        self.assertEqual(contexte["activite_arrosage"]["zones_done"], 2)
+        self.assertTrue(contexte["activite_tondeuse"]["mowing"])
+        self.assertEqual(contexte["activite_garage"]["state"], "open")
+        self.assertEqual(contexte["activite_garage"]["error"], "Service refusé")
+
     def test_l_alerte_part_et_la_memoire_est_ecrite_une_fois(self) -> None:
         services = _Services()
         coord = _coordinateur(options={"notification_cibles": ["notify.iphone"]}, services=services)
@@ -787,6 +971,22 @@ class CoordinateurAlertesTests(unittest.TestCase):
         coord = _coordinateur(services=services)
         asyncio.run(coord._async_verifier_alertes(dict(SNAPSHOT_VENT)))
         self.assertEqual([(d, s) for d, s, _, _ in services.appels], [("persistent_notification", "create")])
+
+    def test_un_resume_indisponible_n_empeche_pas_le_message_factuel(self) -> None:
+        services = _Services()
+        coord = _coordinateur(options={"notification_cibles": ["notify.iphone"]}, services=services)
+
+        def _resume_indisponible() -> list[str]:
+            raise RuntimeError("résumé indisponible")
+
+        coord._resume_du_gazon = _resume_indisponible
+        asyncio.run(coord._async_verifier_alertes(dict(SNAPSHOT_VENT)))
+
+        self.assertEqual(
+            [(domaine, service) for domaine, service, _, _ in services.appels],
+            [("persistent_notification", "create"), ("notify", "send_message")],
+        )
+        self.assertIn("17 km/h", services.appels[-1][2]["message"])
 
     def test_alertes_decochees(self) -> None:
         services = _Services()
@@ -885,25 +1085,77 @@ class CoordinateurAlertesTests(unittest.TestCase):
         asyncio.run(notifications.async_publier(hass, entree, [alerte]))
         self.assertEqual([(d, s) for d, s, _, _ in services.appels], [("persistent_notification", "create")])
 
-    def test_la_veille_intelligente_ne_pousse_pas_les_informations_calmes(self) -> None:
-        services = _Services()
+    def test_conseiller_gazon_personnalise_le_telephone_et_garde_la_trace_factuelle(self) -> None:
+        services = _Services(ia={"data": "Message personnalisé pour Kevin."})
         hass = types.SimpleNamespace(services=services)
         entree = _FakeEntry(entry_id="e", options={
             "notification_cibles": ["notify.iphone"],
-            "mode_notifications": "veille_intelligente",
+            "source_notifications": "conseiller_gazon",
+            "entite_ia": "ai_task.openai",
         })
         asyncio.run(notifications.async_publier(hass, entree, [
             notifications.Alerte(
-                sujet="graines", titre="Cycle rattrapé", message="Tout va bien.",
-                persistante=False, niveau="information",
+                sujet="verrou", titre="Vanne bloquée", message="Vérifie la vanne Zone 1.",
             ),
+        ], maintenant=_a("13:20"), contexte=["Phase : Sursemis."]))
+        self.assertEqual(
+            [(d, s) for d, s, _, _ in services.appels],
+            [("persistent_notification", "create"), ("ai_task", "generate_data"), ("notify", "send_message")],
+        )
+        self.assertEqual(services.appels[0][2]["message"], "Vérifie la vanne Zone 1.")
+        self.assertEqual(services.appels[2][2]["title"], "Vanne bloquée")
+        self.assertEqual(services.appels[2][2]["message"], "Message personnalisé pour Kevin.")
+        self.assertIn("Phase : Sursemis.", services.appels[1][2]["instructions"])
+
+    def test_conseiller_gazon_retombe_sur_le_message_integration_si_l_ia_echoue(self) -> None:
+        services = _Services(ia=RuntimeError("IA hors ligne"))
+        hass = types.SimpleNamespace(services=services)
+        entree = _FakeEntry(entry_id="e", options={
+            "notification_cibles": ["notify.iphone"],
+            "source_notifications": "conseiller_gazon",
+            "entite_ia": "ai_task.openai",
+        })
+        with self.assertLogs(notifications._LOGGER, level="WARNING"):
+            asyncio.run(notifications.async_publier(hass, entree, [
+                notifications.Alerte(
+                    sujet="mesures", titre="Capteur", message="Le capteur ne répond plus.",
+                    persistante=False,
+                ),
+            ], maintenant=_a("13:20")))
+        self.assertEqual(services.appels[-1][2]["message"], "Le capteur ne répond plus.")
+
+    def test_conseiller_gazon_borne_une_reponse_anormalement_longue(self) -> None:
+        limite = notifications.ia.MESSAGE_NOTIFICATION_MAX_CARACTERES
+        services = _Services(ia={"data": "x" * (limite + 500)})
+        hass = types.SimpleNamespace(services=services)
+        entree = _FakeEntry(entry_id="e", options={
+            "notification_cibles": ["notify.iphone"],
+            "source_notifications": "conseiller_gazon",
+        })
+        asyncio.run(notifications.async_publier(hass, entree, [
             notifications.Alerte(
-                sujet="verrou", titre="Vanne bloquée", message="Vérifie la vanne.",
+                sujet="mesures", titre="Capteur", message="Le capteur ne répond plus.",
                 persistante=False,
             ),
-        ]))
-        self.assertEqual([(d, s) for d, s, _, _ in services.appels], [("notify", "send_message")])
-        self.assertEqual(services.appels[0][2]["title"], "Vanne bloquée")
+        ], maintenant=_a("13:20")))
+        self.assertEqual(
+            len(services.appels[-1][2]["message"]),
+            limite,
+        )
+
+    def test_un_message_filtre_n_appelle_pas_l_ia(self) -> None:
+        services = _Services(ia={"data": "Ne doit pas servir."})
+        hass = types.SimpleNamespace(services=services)
+        entree = _FakeEntry(entry_id="e", options={
+            "notification_cibles": ["notify.iphone"],
+            "source_notifications": "conseiller_gazon",
+            "entite_ia": "ai_task.openai",
+            "notification_niveau_minimal": "critique",
+        })
+        asyncio.run(notifications.async_publier(hass, entree, [
+            notifications.Alerte(sujet="mesures", titre="Capteur", message="À vérifier.", niveau="action"),
+        ], maintenant=_a("12:00")))
+        self.assertEqual([(d, s) for d, s, _, _ in services.appels], [("persistent_notification", "create")])
 
     def test_le_mode_manuel_conserve_les_informations_choisies(self) -> None:
         services = _Services()
@@ -916,6 +1168,57 @@ class CoordinateurAlertesTests(unittest.TestCase):
             ),
         ]))
         self.assertEqual([(d, s) for d, s, _, _ in services.appels], [("notify", "send_message")])
+
+    def test_le_niveau_minimal_filtre_le_telephone_mais_garde_la_trace(self) -> None:
+        services = _Services()
+        hass = types.SimpleNamespace(services=services)
+        entree = _FakeEntry(entry_id="e", options={
+            "notification_cibles": ["notify.iphone"],
+            "notification_niveau_minimal": "critique",
+        })
+        asyncio.run(notifications.async_publier(hass, entree, [
+            notifications.Alerte(sujet="mesures", titre="Capteur", message="À vérifier.", niveau="action"),
+        ], maintenant=_a("12:00")))
+        self.assertEqual([(d, s) for d, s, _, _ in services.appels], [("persistent_notification", "create")])
+
+    def test_les_heures_calmes_ne_masquent_jamais_une_urgence(self) -> None:
+        services = _Services()
+        hass = types.SimpleNamespace(services=services)
+        entree = _FakeEntry(entry_id="e", options={
+            "notification_cibles": ["notify.iphone"],
+            "notification_heures_calmes": True,
+            "notification_heures_calmes_debut": 22 * 60,
+            "notification_heures_calmes_fin": 7 * 60,
+        })
+        asyncio.run(notifications.async_publier(hass, entree, [
+            notifications.Alerte(sujet="mesures", titre="Capteur", message="À vérifier.", niveau="action"),
+            notifications.Alerte(sujet="verrou", titre="Vanne", message="Ferme la vanne.", niveau="critique"),
+        ], maintenant=_a("23:00")))
+        self.assertEqual(
+            [(d, s, appel.get("title")) for d, s, appel, _ in services.appels],
+            [
+                ("persistent_notification", "create", "Capteur"),
+                ("persistent_notification", "create", "Vanne"),
+                ("notify", "send_message", "Vanne"),
+            ],
+        )
+
+    def test_le_coordinateur_transmet_l_heure_locale_aux_heures_calmes(self) -> None:
+        services = _Services()
+        coord = _coordinateur(options={
+            "notification_cibles": ["notify.iphone"],
+            "notification_heures_calmes": True,
+            "notification_heures_calmes_debut": 22 * 60,
+            "notification_heures_calmes_fin": 7 * 60,
+        }, services=services)
+        coord._current_datetime = lambda: _a("23:00")
+
+        asyncio.run(coord._async_verifier_alertes(dict(SNAPSHOT_VENT)))
+
+        self.assertEqual(
+            [(domaine, service) for domaine, service, _, _ in services.appels],
+            [("persistent_notification", "create")],
+        )
 
     def test_une_panne_ne_remonte_jamais_dans_le_tick(self) -> None:
         coord = _coordinateur()

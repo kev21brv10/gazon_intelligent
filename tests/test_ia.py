@@ -40,6 +40,19 @@ class ConsigneTests(unittest.TestCase):
         texte = ia.consigne("a" * 5000, [], maintenant=MAINTENANT)
         self.assertTrue(texte.endswith("Question : " + "a" * ia.QUESTION_MAX_CARACTERES))
 
+    def test_notification_garde_les_faits_et_interdit_les_commandes(self) -> None:
+        texte = ia.consigne_notification(
+            "Vanne bloquée",
+            "La vanne Zone 1 ne s'est pas fermée à 13:20.",
+            "critique",
+            ["Phase : Sursemis.", "Vent : 12 km/h."],
+            maintenant=MAINTENANT,
+        )
+        self.assertIn("Vanne bloquée", texte)
+        self.assertIn("La vanne Zone 1 ne s'est pas fermée à 13:20.", texte)
+        self.assertIn("N'invente rien", texte)
+        self.assertIn("ne prétends commander aucun appareil", texte)
+
 
 class ReponseTests(unittest.TestCase):
     def test_formes_de_reponse(self) -> None:

@@ -32,20 +32,36 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
 
+from . import ia
 from .const import (
     CONF_ALERTES_ACTIVES,
     CONF_ENTITE_METEO,
     CONF_MODE_NOTIFICATIONS,
+    CONF_NOTIFICATION_HEURES_CALMES,
+    CONF_NOTIFICATION_HEURES_CALMES_DEBUT,
+    CONF_NOTIFICATION_HEURES_CALMES_FIN,
+    CONF_NOTIFICATION_NIVEAU_MINIMAL,
+    CONF_SOURCE_NOTIFICATIONS,
+    CONF_NOTIFIER_ACTIVITE_ARROSAGE,
+    CONF_NOTIFIER_ACTIVITE_TONDEUSE,
     CONF_NOTIFIER_ARROSAGE_GRAINES,
     CONF_NOTIFIER_CAPTEURS_METEO,
+    CONF_NOTIFIER_GARAGE_TONDEUSE,
     CONF_NOTIFIER_SECURITE_ARROSAGE,
     CONF_NOTIFIER_TONDEUSE,
     CONF_NOTIFICATION_CIBLES,
     DEFAULT_ALERTES_ACTIVES,
     DEFAULT_MODE_NOTIFICATIONS,
+    DEFAULT_NOTIFICATION_HEURES_CALMES,
+    DEFAULT_NOTIFICATION_HEURES_CALMES_DEBUT,
+    DEFAULT_NOTIFICATION_HEURES_CALMES_FIN,
+    DEFAULT_NOTIFICATION_NIVEAU_MINIMAL,
+    DEFAULT_SOURCE_NOTIFICATIONS,
     DEFAULT_NOTIFICATION_CATEGORIE_ACTIVE,
     DOMAIN,
     MODES_NOTIFICATIONS,
+    NIVEAUX_NOTIFICATIONS,
+    SOURCES_NOTIFICATIONS,
     block_reason_display_label,
 )
 from .mower_adapter import _RAIN_ERROR_VALUES  # source unique des codes « pause pluie »
@@ -70,12 +86,24 @@ SUJET_GRAINES = "graines"
 SUJET_VERROU = "verrou"
 SUJET_MESURES = "mesures"
 SUJET_TONDEUSE = "tondeuse"
+SUJET_ACTIVITE_ARROSAGE = "activite_arrosage"
+SUJET_ACTIVITE_TONDEUSE = "activite_tondeuse"
+SUJET_GARAGE_TONDEUSE = "garage_tondeuse"
+
+SUJETS_ACTIVITE = frozenset({
+    SUJET_ACTIVITE_ARROSAGE,
+    SUJET_ACTIVITE_TONDEUSE,
+    SUJET_GARAGE_TONDEUSE,
+})
 
 OPTIONS_PAR_SUJET = {
     SUJET_GRAINES: CONF_NOTIFIER_ARROSAGE_GRAINES,
     SUJET_VERROU: CONF_NOTIFIER_SECURITE_ARROSAGE,
     SUJET_MESURES: CONF_NOTIFIER_CAPTEURS_METEO,
     SUJET_TONDEUSE: CONF_NOTIFIER_TONDEUSE,
+    SUJET_ACTIVITE_ARROSAGE: CONF_NOTIFIER_ACTIVITE_ARROSAGE,
+    SUJET_ACTIVITE_TONDEUSE: CONF_NOTIFIER_ACTIVITE_TONDEUSE,
+    SUJET_GARAGE_TONDEUSE: CONF_NOTIFIER_GARAGE_TONDEUSE,
 }
 
 _LIBELLES_FENETRE = {
@@ -105,8 +133,7 @@ class Alerte:
     resolue: bool = False
     # Faux : seule la trace Home Assistant est mise à jour, rien ne part aux téléphones.
     pousser: bool = True
-    # La Veille intelligente garde les informations calmes dans Home Assistant et ne pousse que
-    # ce qui demande une action. Le mode manuel conserve le comportement historique.
+    # Importance déterminée par l'intégration, utilisée par le niveau minimal et les heures calmes.
     niveau: str = "action"
 
 
@@ -287,6 +314,190 @@ def pourquoi_le_cycle_attend(
     )
 
 
+def _identifiant_activite(source: Mapping[str, Any] | None, *cles: str) -> str | None:
+    if not isinstance(source, Mapping):
+        return None
+    for cle in cles:
+        valeur = source.get(cle)
+        if valeur not in (None, ""):
+            return str(valeur)
+    return None
+
+
+def _details_arrosage(source: Mapping[str, Any], *, fin: bool = False) -> str:
+    morceaux: list[str] = []
+    mm = _nombre(source.get("executed_mm" if fin else "target_mm"))
+    if mm is not None:
+        morceaux.append(f"{_decimal(mm)} mm {'appliqués' if fin else 'prévus'}")
+    zones = _entier(source.get("zones_done" if fin else "zone_count"))
+    if zones > 0:
+        morceaux.append(f"{zones} zone{'s' if zones > 1 else ''}")
+    heure = _heure_iso(source.get("ended_at" if fin else "started_at"), datetime.now().astimezone())
+    if heure:
+        morceaux.append(f"à {heure}")
+    return ", ".join(morceaux)
+
+
+def _phase_tondeuse(source: Mapping[str, Any] | None) -> str | None:
+    if not isinstance(source, Mapping):
+        return None
+    operation = str(source.get("operation") or "").strip().lower()
+    if source.get("docked") is True or operation in {"docked", "charging", "idle", "parked", "home"}:
+        return "station"
+    if source.get("returning") is True or operation in {"returning", "going_home", "homing", "retour_station"}:
+        return "retour"
+    if source.get("mowing") is True or operation in {
+        "mowing", "cutting", "edgecut", "in_operation", "working", "starting", "zoning", "tonte_en_cours",
+    }:
+        return "tonte"
+    return None
+
+
+def _evaluer_activites(
+    etat: dict[str, Any],
+    *,
+    sujets_actifs: set[str],
+    arrosage: Mapping[str, Any] | None,
+    tondeuse: Mapping[str, Any] | None,
+    garage: Mapping[str, Any] | None,
+) -> list[Alerte]:
+    """Transforme des changements d'état confirmés en messages dédupliqués et persistants."""
+    suivi = etat.get("activites")
+    if not isinstance(suivi, dict):
+        suivi = {}
+        etat["activites"] = suivi
+    alertes: list[Alerte] = []
+
+    actif_id = _identifiant_activite(arrosage, "active_id")
+    termine_id = _identifiant_activite(arrosage, "completed_id")
+    if not suivi.get("arrosage_initialise"):
+        suivi.update({
+            "arrosage_initialise": True,
+            "arrosage_actif": actif_id,
+            "arrosage_termine": termine_id,
+        })
+    else:
+        precedent_actif = suivi.get("arrosage_actif")
+        precedent_termine = suivi.get("arrosage_termine")
+        if (
+            SUJET_ACTIVITE_ARROSAGE in sujets_actifs
+            and actif_id
+            and actif_id != precedent_actif
+            and isinstance(arrosage, Mapping)
+        ):
+            details = _details_arrosage(arrosage)
+            alertes.append(Alerte(
+                sujet=SUJET_ACTIVITE_ARROSAGE,
+                titre="💧 Arrosage démarré",
+                message="Le cycle d'arrosage vient de démarrer" + (f" : {details}." if details else "."),
+                persistante=False,
+                niveau="information",
+            ))
+        if (
+            SUJET_ACTIVITE_ARROSAGE in sujets_actifs
+            and termine_id
+            and termine_id != precedent_termine
+            and isinstance(arrosage, Mapping)
+        ):
+            statut = str(arrosage.get("completion_status") or "completed")
+            succes = statut == "completed"
+            details = _details_arrosage(arrosage, fin=True)
+            alertes.append(Alerte(
+                sujet=SUJET_ACTIVITE_ARROSAGE,
+                titre="💧 Arrosage terminé" if succes else "⚠️ Arrosage interrompu",
+                message=(
+                    "Le cycle d'arrosage est terminé" if succes
+                    else "Le cycle d'arrosage ne s'est pas terminé normalement"
+                ) + (f" : {details}." if details else "."),
+                persistante=not succes,
+                niveau="information" if succes else "action",
+            ))
+        suivi["arrosage_actif"] = actif_id
+        suivi["arrosage_termine"] = termine_id
+
+    phase = _phase_tondeuse(tondeuse)
+    tondeuse_error = str(tondeuse.get("error") or "").strip() if isinstance(tondeuse, Mapping) else ""
+    if not suivi.get("tondeuse_initialisee"):
+        suivi.update({
+            "tondeuse_initialisee": True,
+            "tondeuse_phase": phase,
+            "tondeuse_error": tondeuse_error or None,
+        })
+    else:
+        precedente = suivi.get("tondeuse_phase")
+        erreur_precedente = str(suivi.get("tondeuse_error") or "")
+        if SUJET_ACTIVITE_TONDEUSE in sujets_actifs and tondeuse_error and tondeuse_error != erreur_precedente:
+            alertes.append(Alerte(
+                sujet=SUJET_ACTIVITE_TONDEUSE,
+                titre="⚠️ Tondeuse : commande impossible",
+                message=f"Le contrôleur de la tondeuse signale : {tondeuse_error}.",
+                niveau="action",
+            ))
+        elif SUJET_ACTIVITE_TONDEUSE in sujets_actifs and not tondeuse_error and erreur_precedente:
+            alertes.append(Alerte(
+                sujet=SUJET_ACTIVITE_TONDEUSE,
+                titre="",
+                message="",
+                resolue=True,
+            ))
+        elif SUJET_ACTIVITE_TONDEUSE in sujets_actifs and phase and phase != precedente:
+            titre, message = {
+                "tonte": ("🤖 Tonte démarrée", "La tondeuse a démarré sa tonte."),
+                "retour": ("🤖 Retour demandé", "La tondeuse retourne à sa station."),
+                "station": ("🤖 Tondeuse rentrée", "La tondeuse est revenue à sa station."),
+            }[phase]
+            alertes.append(Alerte(
+                sujet=SUJET_ACTIVITE_TONDEUSE,
+                titre=titre,
+                message=message,
+                persistante=False,
+                niveau="information",
+            ))
+        suivi["tondeuse_phase"] = phase
+        suivi["tondeuse_error"] = tondeuse_error or None
+
+    garage_data = garage if isinstance(garage, Mapping) else {}
+    garage_configure = garage_data.get("configured") is True
+    garage_state = str(garage_data.get("state") or "").lower() if garage_configure else None
+    garage_state = garage_state if garage_state in {"open", "closed"} else None
+    garage_error = str(garage_data.get("error") or "").strip() if garage_configure else ""
+    if not suivi.get("garage_initialise"):
+        suivi.update({
+            "garage_initialise": True,
+            "garage_state": garage_state,
+            "garage_error": garage_error or None,
+        })
+    else:
+        precedente = suivi.get("garage_state")
+        erreur_precedente = str(suivi.get("garage_error") or "")
+        if SUJET_GARAGE_TONDEUSE in sujets_actifs and garage_error and garage_error != erreur_precedente:
+            alertes.append(Alerte(
+                sujet=SUJET_GARAGE_TONDEUSE,
+                titre="⚠️ Garage de la tondeuse : commande impossible",
+                message=f"Le garage de la tondeuse signale : {garage_error}.",
+                niveau="action",
+            ))
+        elif SUJET_GARAGE_TONDEUSE in sujets_actifs and not garage_error and erreur_precedente:
+            alertes.append(Alerte(
+                sujet=SUJET_GARAGE_TONDEUSE,
+                titre="",
+                message="",
+                resolue=True,
+            ))
+        elif SUJET_GARAGE_TONDEUSE in sujets_actifs and garage_state and garage_state != precedente:
+            ouvert = garage_state == "open"
+            alertes.append(Alerte(
+                sujet=SUJET_GARAGE_TONDEUSE,
+                titre="🏠 Garage de la tondeuse",
+                message=f"Le garage de la tondeuse est maintenant {'ouvert' if ouvert else 'fermé'}.",
+                persistante=False,
+                niveau="information",
+            ))
+        suivi["garage_state"] = garage_state
+        suivi["garage_error"] = garage_error or None
+    return alertes
+
+
 def evaluer_alertes(
     memoire: Any,
     *,
@@ -307,6 +518,9 @@ def evaluer_alertes(
     mesures: Sequence[Mesure] = (),
     erreur_tondeuse: str | None = None,
     libelle_erreur_tondeuse: str | None = None,
+    activite_arrosage: Mapping[str, Any] | None = None,
+    activite_tondeuse: Mapping[str, Any] | None = None,
+    activite_garage: Mapping[str, Any] | None = None,
     sujets_actifs: Collection[str] | None = None,
 ) -> tuple[list[Alerte], dict[str, Any]]:
     """Les alertes à envoyer maintenant, et la mémoire à garder pour ne rien envoyer deux fois.
@@ -349,9 +563,10 @@ def evaluer_alertes(
                 message=(
                     f"Une vanne ne s'est pas fermée normalement{zone}. Plus aucun arrosage "
                     f"automatique ne partira tant que le verrou est posé.{erreur} Vérifie les "
-                    "vannes et la pompe. Le déverrouillage passe par « Retour au mode normal », "
-                    "qui efface aussi une phase Semis ou Sursemis en cours."
+                    "vannes et la pompe, puis utilise « Lever le verrou de sécurité ». Cette "
+                    "action rétablit l'automatisme sans effacer le mode Semis ou Sursemis."
                 ),
+                niveau="critique",
             )
         )
     elif not verrou and etat.get("verrou"):
@@ -388,6 +603,14 @@ def evaluer_alertes(
         alertes.extend(_alertes_mesures(etat, mesures, maintenant))
     elif etat.pop("mesures", None):
         alertes.append(Alerte(sujet=SUJET_MESURES, titre="", message="", resolue=True))
+
+    alertes.extend(_evaluer_activites(
+        etat,
+        sujets_actifs=actifs,
+        arrosage=activite_arrosage,
+        tondeuse=activite_tondeuse,
+        garage=activite_garage,
+    ))
 
     # Une catégorie désactivée oublie ses retards : si elle est réactivée pendant un problème,
     # le problème sera alors signalé au prochain contrôle au lieu d'être considéré comme déjà vu.
@@ -745,14 +968,62 @@ def mode_notifications(entry: Any) -> str:
     return DEFAULT_MODE_NOTIFICATIONS
 
 
+def source_notifications(entry: Any) -> str:
+    """Qui rédige le texte envoyé au téléphone ; le moteur reste seul juge des faits."""
+    for source in _options_puis_donnees(entry):
+        valeur = str(source.get(CONF_SOURCE_NOTIFICATIONS) or "").strip()
+        if valeur in SOURCES_NOTIFICATIONS:
+            return valeur
+    return DEFAULT_SOURCE_NOTIFICATIONS
+
+
+def niveau_minimal(entry: Any) -> str:
+    for source in _options_puis_donnees(entry):
+        valeur = str(source.get(CONF_NOTIFICATION_NIVEAU_MINIMAL) or "").strip()
+        if valeur in NIVEAUX_NOTIFICATIONS:
+            return valeur
+    return DEFAULT_NOTIFICATION_NIVEAU_MINIMAL
+
+
+def _minute_option(entry: Any, cle: str, defaut: int) -> int:
+    for source in _options_puis_donnees(entry):
+        if source.get(cle) is None:
+            continue
+        valeur = _entier(source.get(cle), defaut)
+        if 0 <= valeur < 24 * 60:
+            return valeur
+    return defaut
+
+
+def heures_calmes(entry: Any) -> tuple[bool, int, int]:
+    active = DEFAULT_NOTIFICATION_HEURES_CALMES
+    for source in _options_puis_donnees(entry):
+        if source.get(CONF_NOTIFICATION_HEURES_CALMES) is not None:
+            active = bool(source[CONF_NOTIFICATION_HEURES_CALMES])
+            break
+    return (
+        active,
+        _minute_option(entry, CONF_NOTIFICATION_HEURES_CALMES_DEBUT, DEFAULT_NOTIFICATION_HEURES_CALMES_DEBUT),
+        _minute_option(entry, CONF_NOTIFICATION_HEURES_CALMES_FIN, DEFAULT_NOTIFICATION_HEURES_CALMES_FIN),
+    )
+
+
+def _est_dans_heures_calmes(entry: Any, maintenant: datetime) -> bool:
+    active, debut, fin = heures_calmes(entry)
+    if not active or debut == fin:
+        return False
+    minute = maintenant.hour * 60 + maintenant.minute
+    if debut < fin:
+        return debut <= minute < fin
+    return minute >= debut or minute < fin
+
+
 def sujets_voulus(entry: Any) -> frozenset[str]:
-    """Les familles choisies, toutes actives pour une entrée créée avant ce réglage."""
-    if mode_notifications(entry) == "veille_intelligente":
-        return frozenset(OPTIONS_PAR_SUJET)
+    """Les familles choisies ; toutes sont actives par défaut pour les anciennes entrées."""
     actifs: set[str] = set()
     sources = _options_puis_donnees(entry)
     for sujet, cle in OPTIONS_PAR_SUJET.items():
-        valeur: Any = DEFAULT_NOTIFICATION_CATEGORIE_ACTIVE
+        valeur: Any = False if sujet in SUJETS_ACTIVITE else DEFAULT_NOTIFICATION_CATEGORIE_ACTIVE
         for source in sources:
             if source.get(cle) is not None:
                 valeur = source[cle]
@@ -800,13 +1071,50 @@ async def _async_trace(hass: Any, identifiant: str, alerte: Alerte) -> None:
         _LOGGER.debug("Trace %s (%s) impossible : %s", identifiant, service, err)
 
 
-async def async_publier(hass: Any, entry: Any, alertes: Sequence[Alerte]) -> None:
+async def async_publier(
+    hass: Any,
+    entry: Any,
+    alertes: Sequence[Alerte],
+    *,
+    maintenant: datetime | None = None,
+    contexte: Sequence[str] = (),
+) -> None:
     cibles = cibles_configurees(entry)
-    veille_intelligente = mode_notifications(entry) == "veille_intelligente"
+    minimum = niveau_minimal(entry)
+    rang = {niveau: index for index, niveau in enumerate(NIVEAUX_NOTIFICATIONS)}
+    instant = maintenant or datetime.now().astimezone()
+    calme = _est_dans_heures_calmes(entry, instant)
     for alerte in alertes:
         if alerte.resolue or alerte.persistante:
             await _async_trace(hass, identifiant_trace(entry.entry_id, alerte.sujet), alerte)
+        niveau = alerte.niveau if alerte.niveau in rang else "action"
+        retenue_par_niveau = rang[niveau] < rang[minimum]
+        retenue_par_calme = calme and niveau != "critique"
         if alerte.message and alerte.pousser and cibles and not (
-            veille_intelligente and alerte.niveau == "information"
+            retenue_par_niveau or retenue_par_calme
         ):
-            await async_envoyer(hass, cibles, alerte.titre, alerte.message)
+            message = alerte.message
+            if source_notifications(entry) == "conseiller_gazon":
+                instructions = ia.consigne_notification(
+                    alerte.titre,
+                    alerte.message,
+                    niveau,
+                    contexte,
+                    maintenant=instant,
+                )
+                try:
+                    message = await ia.async_demander(
+                        hass,
+                        instructions,
+                        entite=ia.entite_effective(hass, entry),
+                        delai_s=ia.DELAI_NOTIFICATION_S,
+                    )
+                    message = message[: ia.MESSAGE_NOTIFICATION_MAX_CARACTERES]
+                except ia.IaIndisponible as err:
+                    _LOGGER.warning(
+                        "Conseiller Gazon indisponible pour la notification %s : %s. "
+                        "Le message de l'intégration est envoyé.",
+                        alerte.sujet,
+                        err,
+                    )
+            await async_envoyer(hass, cibles, alerte.titre, message)

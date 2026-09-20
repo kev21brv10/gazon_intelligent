@@ -1735,6 +1735,42 @@ def _mowing_spacing_min_days(
     return int(lire(reglages, "tonte_ecart_min_jours", _ESPACEMENT_TONTE_JOURS))
 
 
+def _active_seeding_mowing_floor(context: DecisionContext) -> tuple[date | None, str | None]:
+    """Premiere date permise par des graines encore actives, meme masquees par une autre phase."""
+    floor: date | None = None
+    floor_hint: str | None = None
+    for item in context.history:
+        if not isinstance(item, dict):
+            continue
+        phase = str(item.get("type") or "")
+        if phase not in SEEDING_PHASES:
+            continue
+        try:
+            start = date.fromisoformat(str(item.get("date") or ""))
+        except ValueError:
+            continue
+        age_days = (context.today - start).days
+        if age_days < 0 or age_days >= phase_duration_days(phase, context.reglages):
+            continue
+        candidate: date | None = None
+        hint: str | None = None
+        if phase == "Sursemis" and age_days <= levee_sursemis_jours(context.reglages):
+            candidate = start + timedelta(days=levee_sursemis_jours(context.reglages) + 1)
+            hint = "sursemis=levee_masquee"
+        elif phase == "Semis":
+            fin_enracinement = dict(
+                (libelle, borne)
+                for borne, libelle in regles_des_sous_phases("Semis", context.reglages)
+            ).get("Enracinement", 24)
+            if age_days <= fin_enracinement:
+                candidate = start + timedelta(days=fin_enracinement + 1)
+                hint = "semis=enracinement_masque"
+        if candidate is not None and (floor is None or candidate > floor):
+            floor = candidate
+            floor_hint = hint
+    return floor, floor_hint
+
+
 def _project_next_mowing_date(
     context: DecisionContext,
     phase_bundle: dict[str, Any],
@@ -1875,6 +1911,11 @@ def _project_next_mowing_date(
     projected_date = projected.date()
     if projected_date < context.today:
         projected_date = context.today
+
+    seeding_floor, seeding_hint = _active_seeding_mowing_floor(context)
+    if seeding_floor is not None and projected_date < seeding_floor:
+        projected_date = seeding_floor
+        return projected_date.isoformat(), projected_date.strftime("%d/%m/%Y"), seeding_hint
 
     return projected_date.isoformat(), projected_date.strftime("%d/%m/%Y"), None
 

@@ -39,6 +39,12 @@ reset_mode:
     entity:
       integration: gazon_intelligent
 
+clear_irrigation_safety_lock:
+  description: "Lève le verrou de sécurité après vérification physique des vannes, sans changer le mode du gazon. Refusé si une zone est encore active."
+  target:
+    entity:
+      integration: gazon_intelligent
+
 start_manual_irrigation:
   description: "Déclenche un arrosage manuel et indique l'eau à apporter en mm sur le gazon ciblé."
   target:

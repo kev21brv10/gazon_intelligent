@@ -197,6 +197,10 @@
       "name": "Terug naar normale modus",
       "description": "Zet het systeem terug naar de normale modus."
     },
+    "clear_irrigation_safety_lock": {
+      "name": "Veiligheidsvergrendeling opheffen",
+      "description": "Herstelt automatische beregening nadat de kleppen zijn gecontroleerd, zonder de gazonmodus te wijzigen."
+    },
     "start_manual_irrigation": {
       "name": "Handmatige irrigatie",
       "description": "Start een handmatige irrigatie en geef aan hoeveel water in mm moet worden toegepast.",
@@ -551,6 +555,10 @@
           "temperature_trop_basse_germination": "Temperatuur te laag (kieming)",
           "semis_cycle_daily_target_reached": "Dagdoel bereikt (zaaien)",
           "semis_cycle_pending": "Zaaicyclus in afwachting",
+          "temp_extreme": "Extreme temperatuur",
+          "temperature_unknown": "Temperatuur onbekend",
+          "application_type_required": "Toepassingstype vereist",
+          "unsupported_application_type": "Niet-ondersteund toepassingstype",
           "machine_unavailable": "Robot niet beschikbaar",
           "mowing_window_blocked": "Buiten het maaivenster",
           "recent_watering": "Recent beregend",

@@ -540,6 +540,9 @@ def _build_decision_extra(
         "risque_gazon_brut": risk_bundle.get("risque_gazon_brut"),
         "stress_palier_et0": risk_bundle.get("stress_palier_et0"),
         "risque_amortissement": risk_bundle.get("risque_amortissement"),
+        # Même piège : mémoire de l'hystérésis météo des cycles de graines (Semis/Sursemis).
+        # Oubliée ici, elle n'atteint jamais le snapshot et le coordinateur ne peut rien ranger.
+        "semis_meteo_ajustement": watering_bundle.get("semis_meteo_ajustement"),
         "urgence": watering_bundle.get("urgence", risk_bundle.get("urgence")),
         "prochaine_reevaluation": watering_bundle.get("prochaine_reevaluation", risk_bundle.get("prochaine_reevaluation")),
         "decision_resume": watering_bundle.get("decision_resume"),

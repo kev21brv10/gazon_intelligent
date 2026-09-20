@@ -4098,6 +4098,28 @@ class FungalGuardWiringTests(unittest.TestCase):
             self.assertFalse(profil("high")["watering_evening_allowed"])
             self.assertTrue(profil("none")["watering_evening_allowed"])
 
+    def test_un_risque_cumule_ne_ferme_pas_la_fenetre_normale_de_laube(self):
+        moment = datetime(2026, 7, 15, 6, 0, tzinfo=timezone.utc)
+        base = dict(
+            phase_dominante="Normal", sous_phase="Normal",
+            water_balance=dict(
+                bilan_hydrique_mm=-14.0, deficit_3j=14.0, deficit_7j=18.0,
+                arrosage_recent_7j=0.0, reserve_from_soil_ledger=True,
+                reserve_utile_mm=12.0, reserve_actuelle_mm=2.0, reserve_stock_mm=2.0,
+                reserve_stock_max_mm=24.0, depletion_mm=10.0, depletion_ratio=0.83,
+                mad_ratio=0.5,
+            ),
+            today=date(2026, 7, 15), pluie_24h=0.0, pluie_demain=0.0, pluie_j2=0.0,
+            pluie_3j=0.0, pluie_probabilite_max_3j=0.0, humidite=90.0, temperature=18.0,
+            etp=3.0, type_sol="limoneux", weather_profile={"sunset_minute": 1290}, history=[],
+        )
+        with patch.object(guidance, "_current_datetime", return_value=moment):
+            sans_cumul = guidance.compute_watering_profile(**base, fungal_risk_level="none")
+            avec_cumul = guidance.compute_watering_profile(**base, fungal_risk_level="high")
+        self.assertEqual(avec_cumul["watering_window_start_minute"], sans_cumul["watering_window_start_minute"])
+        self.assertEqual(avec_cumul["watering_window_end_minute"], sans_cumul["watering_window_end_minute"])
+        self.assertEqual(avec_cumul["fenetre_optimale"], sans_cumul["fenetre_optimale"])
+
 
 class AgroPhaseEveningWindowTests(unittest.TestCase):
     """En phases produit (Fertilisation / Biostimulant / Agent Mouillant / Scarification), le test
@@ -4972,6 +4994,82 @@ class TestLHumiditeDeLAirNeBloquePlusLArrosage(unittest.TestCase):
                 self.assertIsNone(p["block_reason"], "l'air humide bloque encore l'arrosage")
                 self.assertEqual(p["mm_final_recommande"], reference["mm_final_recommande"])
 
+    def test_l_humidite_ne_reduit_pas_une_dose_legacy_deja_calculee_par_et0(self) -> None:
+        """Une ET0 fixee contient deja l'effet de l'humidite de l'air."""
+        sans_ledger = {
+            "bilan_hydrique_mm": -10.0,
+            "deficit_jour": 10.0,
+            "deficit_3j": 10.0,
+            "deficit_7j": 10.0,
+            "arrosage_recent_7j": 0.0,
+            "arrosage_recent_jour": 0.0,
+            "reserve_from_soil_ledger": False,
+            "etp_connue": True,
+        }
+        reference = self._profil(water_balance=sans_ledger, humidite=60.0, etp=3.0)
+        self.assertEqual(reference["mm_final_recommande"], 10.0)
+        for humidite in (80.0, 90.0):
+            with self.subTest(humidite=humidite):
+                profil = self._profil(
+                    water_balance=sans_ledger,
+                    humidite=humidite,
+                    etp=3.0,
+                )
+                self.assertEqual(profil["deficit_mm_ajuste"], reference["deficit_mm_ajuste"])
+                self.assertEqual(
+                    profil["mm_final_recommande"], reference["mm_final_recommande"]
+                )
+
+    def test_l_humidite_ne_declenche_pas_le_garde_fou_hebdomadaire(self) -> None:
+        """Le garde-fou ne doit pas recompter l'humidite deja integree a l'ET0."""
+        bilan = {
+            "bilan_hydrique_mm": -25.0,
+            "deficit_jour": 25.0,
+            "deficit_3j": 25.0,
+            "deficit_7j": 25.0,
+            "arrosage_recent_7j": 21.0,
+            "arrosage_recent_jour": 0.0,
+            "reserve_from_soil_ledger": True,
+            "reserve_utile_mm": 12.0,
+            "depletion_mm": 4.8,
+            "depletion_ratio": 0.4,
+            "mad_ratio": 0.5,
+            "reserve_actuelle_mm": 7.2,
+            "reserve_stock_mm": 7.2,
+            "reserve_stock_max_mm": 12.0,
+            "et0_mm": 4.0,
+            "etc_mm": 3.0,
+            "et_elapsed_fraction": 0.0,
+            "etp_connue": True,
+        }
+        historique = [
+            {
+                "type": "arrosage",
+                "date": f"2026-09-{jour:02d}",
+                "total_mm": 7.0,
+                "source": "auto",
+                "watering_cause": "hydrique",
+            }
+            for jour in (8, 10, 12)
+        ]
+        reference = self._profil(
+            water_balance=bilan,
+            history=historique,
+            humidite=60.0,
+            etp=4.0,
+        )
+        self.assertIsNone(reference["block_reason"])
+        self.assertEqual(reference["mm_final_recommande"], 4.8)
+        humide = self._profil(
+            water_balance=bilan,
+            history=historique,
+            humidite=90.0,
+            etp=4.0,
+        )
+        self.assertEqual(humide["deficit_mm_ajuste"], reference["deficit_mm_ajuste"])
+        self.assertEqual(humide["block_reason"], reference["block_reason"])
+        self.assertEqual(humide["mm_final_recommande"], reference["mm_final_recommande"])
+
     def test_les_phases_agronomiques_et_le_profil_generique_ne_bloquent_plus_sur_l_air(self) -> None:
         # « Fertilisation » passe par `_profile_for_agro_phases`, une phase inconnue par
         # `_profile_for_generic` : les deux portaient la même règle (`humidite_elevee`).
@@ -5198,14 +5296,26 @@ class LesQuatreAffichagesDeLAuditTests(unittest.TestCase):
         from pathlib import Path as _Path
         racine = _Path(__file__).resolve().parents[1] / "custom_components" / "gazon_intelligent"
         const = importlib.import_module("custom_components.gazon_intelligent.const")
+        guidance = importlib.import_module("custom_components.gazon_intelligent.guidance")
         emis: set[str] = set()
-        for nom in ("decision_mowing.py", "guidance.py", "decision_watering.py"):
+        for nom in (
+            "decision_mowing.py",
+            "guidance.py",
+            "decision_watering.py",
+            "watering_policy.py",
+        ):
             src = (racine / nom).read_text(encoding="utf-8")
             for motif in (r'reason_code\s*=\s*"([a-z_0-9]+)"',
                           r'block_reason\s*=\s*"([a-z_0-9]+)"',
-                          r'return True, "([a-z_0-9]+)"'):
+                          r'return\s+True,\s*"([a-z_0-9]+)"',
+                          r'return\s*\(\s*True,\s*"([a-z_0-9]+)"',
+                          r'BlockingEvaluation\(True,\s*"([a-z_0-9]+)"'):
                 emis |= set(_re.findall(motif, src))
-        orphelins = sorted(c for c in emis if c not in const.BLOCK_REASON_DISPLAY_LABELS)
+        # Les politiques emploient quelques codes internes normalisés avant publication
+        # (`heavy_rain_expected` -> `pluie_prevue_suffisante`, par exemple). L'invariant porte
+        # sur le contrat public, pas sur ces détails internes.
+        publies = {guidance._normalize_public_block_reason(code) for code in emis}
+        orphelins = sorted(c for c in publies if c not in const.BLOCK_REASON_DISPLAY_LABELS)
         self.assertEqual(orphelins, [], f"codes publiés sans libellé : {orphelins}")
 
 
@@ -6173,6 +6283,21 @@ class SursemisDansUnGazonEnPlaceTests(unittest.TestCase):
                 self.assertIn("levée", snap["tonte_reason"])
                 # Annoncée au lendemain de la levée, plus au semis + 25 jours.
                 self.assertEqual(snap["next_mowing_date"], "2026-09-24")
+
+    def test_un_traitement_dominant_ne_masque_pas_la_date_du_sursemis(self) -> None:
+        historique = [
+            {"type": "Sursemis", "date": self.D0.isoformat()},
+            {"type": "Traitement", "date": "2026-09-19", "application_type": "sol"},
+        ]
+        snap = self._snap(3, history=historique)
+        self.assertEqual(snap["phase_dominante"], "Traitement", "prémisse : le traitement domine")
+        self.assertFalse(snap["tonte_autorisee"])
+        self.assertEqual(snap["raison_blocage_code"], "phase_traitement")
+        self.assertEqual(
+            snap["next_mowing_date"],
+            "2026-09-24",
+            "la fin du traitement ne doit pas annoncer une tonte avant la fin de la levée",
+        )
 
     def test_la_tonte_reprend_des_le_lendemain_de_la_levee(self) -> None:
         snap = self._snap(8)

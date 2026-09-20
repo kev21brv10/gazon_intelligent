@@ -197,6 +197,10 @@
       "name": "Retour au mode normal",
       "description": "Réinitialise le système en mode Normal."
     },
+    "clear_irrigation_safety_lock": {
+      "name": "Lever le verrou de sécurité",
+      "description": "Rétablit l'arrosage automatique après vérification des vannes, sans changer le mode du gazon."
+    },
     "start_manual_irrigation": {
       "name": "Arrosage manuel",
       "description": "Déclenche un arrosage manuel et indique l'eau à apporter en mm.",
@@ -551,6 +555,10 @@
           "temperature_trop_basse_germination": "Température trop basse (germination)",
           "semis_cycle_daily_target_reached": "Objectif du jour atteint (semis)",
           "semis_cycle_pending": "Cycle de semis en attente",
+          "temp_extreme": "Température extrême",
+          "temperature_unknown": "Température inconnue",
+          "application_type_required": "Type d'application requis",
+          "unsupported_application_type": "Type d'application non pris en charge",
           "machine_unavailable": "Robot indisponible",
           "mowing_window_blocked": "Hors fenêtre de tonte",
           "recent_watering": "Arrosage récent",

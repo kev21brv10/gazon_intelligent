@@ -12,6 +12,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
         [
             ArroserMaintenantButton(coordinator),
             RetourModeNormalButton(coordinator),
+            LeverVerrouSecuriteButton(coordinator),
             DateActionAujourdhuiButton(coordinator),
             ArreterArrosageButton(coordinator),
         ]
@@ -42,6 +43,19 @@ class RetourModeNormalButton(GazonEntityBase, ButtonEntity):
 
     async def async_press(self):
         await self.coordinator.async_set_normal()
+
+
+class LeverVerrouSecuriteButton(GazonEntityBase, ButtonEntity):
+    _attr_name = "Lever le verrou de sécurité"
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:shield-check-outline"
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._set_entity_identity("button", "lever_verrou_securite")
+
+    async def async_press(self):
+        await self.coordinator.async_clear_irrigation_safety_lock()
 
 
 class DateActionAujourdhuiButton(GazonEntityBase, ButtonEntity):

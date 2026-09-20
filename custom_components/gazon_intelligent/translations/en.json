@@ -197,6 +197,10 @@
       "name": "Back to normal mode",
       "description": "Resets the system to Normal mode."
     },
+    "clear_irrigation_safety_lock": {
+      "name": "Clear irrigation safety lock",
+      "description": "Restores automatic irrigation after the valves have been checked, without changing the lawn mode."
+    },
     "start_manual_irrigation": {
       "name": "Manual watering",
       "description": "Starts a manual watering cycle and specifies how much water to apply in mm.",
@@ -551,6 +555,10 @@
           "temperature_trop_basse_germination": "Temperature too low (germination)",
           "semis_cycle_daily_target_reached": "Daily target reached (seeding)",
           "semis_cycle_pending": "Seeding cycle pending",
+          "temp_extreme": "Extreme temperature",
+          "temperature_unknown": "Temperature unknown",
+          "application_type_required": "Application type required",
+          "unsupported_application_type": "Unsupported application type",
           "machine_unavailable": "Robot unavailable",
           "mowing_window_blocked": "Outside mowing window",
           "recent_watering": "Recent watering",

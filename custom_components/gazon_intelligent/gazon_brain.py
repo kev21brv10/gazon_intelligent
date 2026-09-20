@@ -1129,6 +1129,8 @@ class GazonBrain:
             pluie_24h=pluie_24h,
             pluie_demain=pluie_demain,
             hour_of_day=hour_of_day if hour_of_day is not None else 12,
+            wetness_duration_hours=(risk_context or {}).get("fungal_wetness_duration_hours"),
+            wetness_source=(risk_context or {}).get("fungal_wetness_source"),
         )
         snapshot.update(fungal_risk)
         snapshot["assistant"] = build_assistant_decision(snapshot)

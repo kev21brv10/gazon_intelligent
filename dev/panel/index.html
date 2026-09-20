@@ -102,6 +102,7 @@
   const CLE_CHOIX = "gazon-apercu-choix";
   const CLE_ALERTES = "gazon-apercu-alertes";
   const CLE_POMPE = "gazon-apercu-pompe";
+  const CLE_GARAGE_TONDEUSE = "gazon-apercu-garage-tondeuse";
   const CLE_ENTREES = "gazon-apercu-entrees";
   const lireCle = (cle) => { try { return JSON.parse(localStorage.getItem(cle) || "{}"); } catch { return {}; } };
   const ecrireCle = (cle, v) => { try { localStorage.setItem(cle, JSON.stringify(v)); } catch { /* aperçu sans stockage */ } };
@@ -114,7 +115,9 @@
   const ecrire = (v) => ecrireCle(CLE_STOCKAGE, v);
 
   let maison;
+  const utiliserExemple = new URLSearchParams(location.search).get("example") === "1";
   try {
+    if (utiliserExemple) throw new Error("Maison d'exemple demandée");
     maison = (await import(`./maison.local.js?t=${Date.now()}`)).default;
   } catch {
     maison = (await import(`./maison.exemple.js?t=${Date.now()}`)).default;
@@ -195,6 +198,11 @@
       .sort((a, b) => (b.proposee - a.proposee) || a.nom.localeCompare(b.nom));
     return { choisie: pompeActuelle(), interrupteurs };
   };
+  const garageTondeuse = () => {
+    const gardee = lireCle(CLE_GARAGE_TONDEUSE);
+    const choisie = "garage_tondeuse" in gardee ? gardee.garage_tondeuse : maison.garage_tondeuse?.choisie || null;
+    return { choisie, volets: maison.garage_tondeuse?.volets || [] };
+  };
   // Prévisions datées d'aujourd'hui, toujours les mêmes pour des captures comparables.
   const previsionsApercu = () => {
     const base = maison.previsions || {};
@@ -227,7 +235,10 @@
   // Comme `panneau.notifications_de_l_instance` (0.93.0), avec ce que l'aperçu a enregistré.
   const notificationsApercu = () => {
     const base = {
-      cibles: [], alertes: true, ia_choisie: null, ia_disponible: true,
+      cibles: [], alertes: true, mode: "veille_intelligente", source: "conseiller_gazon",
+      ia_choisie: null, ia_disponible: true,
+      niveau_minimal: "action",
+      heures_calmes: { active: true, debut: 22 * 60, fin: 7 * 60 },
       categories: { arrosage_graines: true, securite_arrosage: true, capteurs_meteo: true, tondeuse: true },
       telephones: [{ entity_id: "notify.telephone", nom: "Téléphone" }, { entity_id: "notify.tablette", nom: "Tablette" }],
       ias: [{ entity_id: "ai_task.apercu", nom: "IA simulée" }],
@@ -242,6 +253,10 @@
       ...base,
       cibles: cibles.map((id) => ({ entity_id: id, nom: nomTel(id) })),
       alertes: gardees.alertes ?? base.alertes,
+      mode: gardees.mode ?? base.mode,
+      source: gardees.source ?? base.source,
+      niveau_minimal: gardees.niveau_minimal ?? base.niveau_minimal,
+      heures_calmes: { ...base.heures_calmes, ...(gardees.heures_calmes || {}) },
       categories: { ...base.categories, ...(gardees.categories || {}) },
       ia_choisie: choisie,
       ia: effective,
@@ -460,6 +475,7 @@
           sources: sourcesApercu(),
           appareils: appareilsApercu(sourcesApercu()),
           pompe_choix: pompeChoix(),
+          garage_tondeuse: garageTondeuse(),
         };
       }
       if (message.type === "call_service") {
@@ -535,6 +551,7 @@
           });
         }
         if ("pompe" in message) ecrireCle(CLE_POMPE, { pompe: message.pompe || null });
+        if ("garage_tondeuse" in message) ecrireCle(CLE_GARAGE_TONDEUSE, { garage_tondeuse: message.garage_tondeuse || null });
         if (entrees) {
           ecrireCle(CLE_ENTREES, { ...lireCle(CLE_ENTREES), ...Object.fromEntries(Object.entries(entrees).map(([c, v]) => [c, v || null])) });
           await new Promise((r) => setTimeout(r, 600));
@@ -547,6 +564,7 @@
         return {
           ok: true, valeurs: { ...defauts, ...gardees }, choix, notifications: notificationsApercu(),
           pompe: pompeActuelle(), pompe_choix: pompeChoix(),
+          garage_tondeuse: garageTondeuse(),
           ...(entrees ? {
             recharge: !Object.keys(entrees).every((c) => ["capteur_pluie_cumul", "capteur_pluie_actuelle"].includes(c)),
             meteo: branchementsActuels().entite_meteo || maison.meteo,
@@ -723,6 +741,7 @@
     ecrireCle(CLE_ALERTES, {});
     ecrireCle(CLE_ENTREES, {});
     ecrireCle(CLE_POMPE, {});
+    ecrireCle(CLE_GARAGE_TONDEUSE, {});
     location.reload();
   });
   window.addEventListener("hass-toggle-menu", () => console.info("Aperçu — le menu de Home Assistant s'ouvrirait ici."));

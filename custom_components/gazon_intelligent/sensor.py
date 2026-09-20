@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 import re
-from typing import Any
+from typing import Any, cast
 
 from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.helpers.entity import EntityCategory
@@ -867,13 +867,13 @@ def _objective_display_balance(attrs: dict[str, Any]) -> float | None:
     reserve = attrs.get("reserve_hydrique_sol_mm")
     if reserve not in (None, "", [], {}):
         try:
-            reserve_val = float(reserve)
+            reserve_val = float(cast(Any, reserve))
         except (TypeError, ValueError):
             reserve_val = None
         if reserve_val is not None:
             seuil = attrs.get("reserve_minimale_mm")
             try:
-                seuil_val = float(seuil) if seuil not in (None, "", [], {}) else None
+                seuil_val = float(cast(Any, seuil)) if seuil not in (None, "", [], {}) else None
             except (TypeError, ValueError):
                 seuil_val = None
             return reserve_val - seuil_val if seuil_val is not None else reserve_val
@@ -1215,7 +1215,8 @@ _AUTO_IRRIGATION_BLOCK_INFO: dict[str, tuple[str, bool, str, str]] = {
         "Une vanne ne s'est pas confirmée fermée lors d'un arrosage : par sécurité, "
         "l'arrosage automatique est suspendu (risque de vanne restée ouverte).",
         "Vérifie que tes vannes d'arrosage sont bien fermées, puis appuie sur le bouton "
-        "« Retour au mode normal » (ou appelle le service gazon_intelligent.reset_mode).",
+        "« Lever le verrou de sécurité » (ou appelle le service "
+        "gazon_intelligent.clear_irrigation_safety_lock).",
     ),
     "startup_guard": (
         "Démarrage en cours",
@@ -1666,7 +1667,11 @@ class GazonPhaseActiveSensor(GazonEntityBase, SensorEntity):
     @property
     def extra_state_attributes(self):
         attrs = {}
-        result_attrs = self._attrs_from_result("phase_dominante_source")
+        # Combien de jours dure le mode actif, et depuis quand : calculés par le moteur
+        # (`decision_phase.py`) mais jamais publiés avant (0.96.2) — la page ne pouvait donc pas
+        # dire « encore N jours » pour un mode produit ou l'hivernage, seulement pour les graines
+        # (`sous_phase_age_days`, propre au semis).
+        result_attrs = self._attrs_from_result("phase_dominante_source", "phase_age_days", "jours_restants", "date_fin")
         if result_attrs:
             attrs.update(result_attrs)
         possible_values = self._possible_values_attr("phase_dominante")
@@ -3920,6 +3925,19 @@ class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):
         )
         if mower_attrs:
             attrs.update(mower_attrs)
+        controller_attrs = self._attrs_from_data(
+            "mower_control_mode",
+            "mower_control_state",
+            "mower_control_reason",
+            "mower_control_pending_action",
+            "mower_control_last_action",
+            "mower_control_last_action_at",
+            "mower_control_last_error",
+            "mower_garage_entity",
+            "mower_garage_state",
+        )
+        if controller_attrs:
+            attrs.update(controller_attrs)
         attrs.update(_mowing_visibility_flags(self))
         possible_values = self._possible_values_attr("tonte_statut")
         if possible_values:
@@ -4942,6 +4960,11 @@ class GazonRisqueGazonSensor(GazonEntityBase, SensorEntity):
             attrs["fungal_risk_reasons"] = fungal_reasons
         attrs["fungal_risk_evening_block"] = bool(data.get("fungal_risk_evening_block") or False)
         attrs["fungal_risk_reduce_watering"] = bool(data.get("fungal_risk_reduce_watering") or False)
+        wetness_duration = data.get("fungal_wetness_duration_hours")
+        if wetness_duration is not None:
+            attrs["fungal_wetness_duration_hours"] = wetness_duration
+        attrs["fungal_wetness_source"] = data.get("fungal_wetness_source") or "unavailable"
+        attrs["fungal_wetness_status"] = data.get("fungal_wetness_status") or "unknown"
         # LOT A — santé capteurs
         sensor_health = data.get("sensor_health")
         if isinstance(sensor_health, dict):

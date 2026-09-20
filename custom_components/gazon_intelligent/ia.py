@@ -5,8 +5,9 @@ L'intégration ne parle à aucun fournisseur elle-même : elle passe par l'actio
 avec ses clés et sa facturation. L'entité choisie dans les options est utilisée ; sans choix, la
 seule entité `ai_task.*` de la maison s'il n'y en a qu'une, sinon celle que Home Assistant préfère.
 
-L'IA ne commande RIEN : elle reçoit l'état du gazon en texte et répond en texte. Aucun appel ne
-part tout seul — seulement quand quelqu'un le demande (action ou page), chaque appel ayant un coût.
+L'IA ne commande RIEN : elle reçoit l'état du gazon en texte et répond en texte. Un appel part
+soit quand quelqu'un demande un conseil, soit pour personnaliser une notification si cette source
+est choisie dans la page. Chaque appel peut avoir un coût chez le fournisseur configuré.
 """
 
 from __future__ import annotations
@@ -21,6 +22,8 @@ from .const import CONF_ENTITE_IA
 QUESTION_PAR_DEFAUT = "Fais le point sur mon gazon aujourd'hui : ce qui va, ce qui demande de l'attention."
 NOM_DE_LA_TACHE = "Conseil Gazon Intelligent"
 DELAI_REPONSE_S = 90
+DELAI_NOTIFICATION_S = 15
+MESSAGE_NOTIFICATION_MAX_CARACTERES = 1000
 # Au-delà, une question n'est plus une question : c'est un document collé par erreur.
 QUESTION_MAX_CARACTERES = 1000
 
@@ -73,6 +76,28 @@ def consigne(question: str | None, lignes: Sequence[str], *, maintenant: datetim
     )
 
 
+def consigne_notification(
+    titre: str,
+    message: str,
+    niveau: str,
+    lignes: Sequence[str],
+    *,
+    maintenant: datetime,
+) -> str:
+    """Demande une reformulation courte sans laisser l'IA redéfinir les faits ni l'urgence."""
+    contexte = "\n".join(f"- {ligne}" for ligne in lignes) or "- aucun contexte supplémentaire"
+    return (
+        "Tu rédiges une notification personnelle en français pour le propriétaire du gazon.\n"
+        "Réponds uniquement par le message final, sans titre, sans markdown, en 3 phrases au plus.\n"
+        "Conserve exactement les faits, nombres, horaires, noms d'appareils et action demandée. "
+        "N'invente rien, ne minimise jamais une urgence et ne prétends commander aucun appareil.\n"
+        f"Niveau fixé par l'intégration : {niveau}.\n"
+        f"Titre fixé par l'intégration : {titre}\n"
+        f"Message factuel : {message}\n"
+        f"Contexte du {maintenant.strftime('%d/%m/%Y à %H:%M')} :\n{contexte}"
+    )
+
+
 def texte_de_la_reponse(reponse: Any) -> str:
     """Le texte de `ai_task.generate_data` : `{"data": "…", "conversation_id": …}`."""
     donnees = reponse.get("data") if isinstance(reponse, Mapping) else reponse
@@ -86,7 +111,13 @@ def texte_de_la_reponse(reponse: Any) -> str:
     return ""
 
 
-async def async_demander(hass: Any, instructions: str, *, entite: str | None) -> str:
+async def async_demander(
+    hass: Any,
+    instructions: str,
+    *,
+    entite: str | None,
+    delai_s: float | None = None,
+) -> str:
     """Appelle l'IA de la maison et rend sa réponse, ou lève `IaIndisponible` avec une phrase claire."""
     services = getattr(hass, "services", None)
     if services is None or not services.has_service("ai_task", "generate_data"):
@@ -98,7 +129,8 @@ async def async_demander(hass: Any, instructions: str, *, entite: str | None) ->
     if entite:
         donnees["entity_id"] = entite
     try:
-        async with asyncio.timeout(DELAI_REPONSE_S):
+        delai = DELAI_REPONSE_S if delai_s is None else delai_s
+        async with asyncio.timeout(delai):
             reponse = await services.async_call(
                 "ai_task",
                 "generate_data",
@@ -107,7 +139,7 @@ async def async_demander(hass: Any, instructions: str, *, entite: str | None) ->
                 return_response=True,
             )
     except TimeoutError as err:
-        raise IaIndisponible(f"L'IA n'a pas répondu en {DELAI_REPONSE_S} secondes.") from err
+        raise IaIndisponible(f"L'IA n'a pas répondu en {delai:g} secondes.") from err
     except Exception as err:  # noqa: BLE001 - l'erreur du fournisseur est rendue en clair
         raise IaIndisponible(f"L'IA a refusé la demande : {err}") from err
     texte = texte_de_la_reponse(reponse)

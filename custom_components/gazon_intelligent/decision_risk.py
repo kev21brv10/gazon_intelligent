@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Logique pure de risque et de fenêtre optimale."""
 
+from datetime import datetime
 from typing import Any
 
 from .decision_models import DecisionContext
@@ -20,6 +21,79 @@ _URGENCE_LEVELS: dict[str, int] = {
     "moyenne": 1,
     "haute": 2,
 }
+
+_FUNGAL_WETNESS_MAX_GAP_MINUTES = 15.0
+_FUNGAL_WETNESS_DRY_RESET_MINUTES = 60.0
+
+
+def _fungal_state_number(value: Any) -> float:
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _fungal_state_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def update_fungal_wetness_state(
+    previous_state: dict[str, Any] | None,
+    *,
+    observed_at: datetime,
+    leaf_wetness: float | None,
+    source: str,
+) -> dict[str, Any]:
+    """Suit une période de feuillage humide sans inventer les trous de mesure."""
+    previous = previous_state if isinstance(previous_state, dict) else {}
+    previous_status = str(previous.get("status") or "unknown")
+    previous_at = _fungal_state_datetime(previous.get("observed_at"))
+    wet_minutes = _fungal_state_number(previous.get("wet_minutes"))
+    dry_minutes = _fungal_state_number(previous.get("dry_minutes"))
+
+    elapsed_minutes = 0.0
+    if previous_at is not None:
+        try:
+            elapsed_minutes = (observed_at - previous_at).total_seconds() / 60.0
+        except TypeError:
+            elapsed_minutes = 0.0
+    if not 0.0 <= elapsed_minutes <= _FUNGAL_WETNESS_MAX_GAP_MINUTES:
+        elapsed_minutes = 0.0
+
+    if leaf_wetness is None:
+        status = "unknown"
+    else:
+        status = "wet" if float(leaf_wetness) > 0.0 else "dry"
+
+    if status == "wet":
+        if previous_status == "wet":
+            wet_minutes += elapsed_minutes
+        elif previous_status == "unknown":
+            wet_minutes = 0.0
+        dry_minutes = 0.0
+    elif status == "dry":
+        if previous_status == "dry":
+            dry_minutes += elapsed_minutes
+        else:
+            dry_minutes = 0.0
+        if dry_minutes >= _FUNGAL_WETNESS_DRY_RESET_MINUTES:
+            wet_minutes = 0.0
+
+    normalized_source = source if source in {"sensor", "estimated"} else "unavailable"
+    return {
+        "status": status,
+        "source": normalized_source,
+        "observed_at": observed_at.isoformat(),
+        "wet_minutes": round(wet_minutes, 3),
+        "dry_minutes": round(dry_minutes, 3),
+    }
 
 
 def _normalize_urgence(value: Any) -> str:
@@ -83,6 +157,8 @@ def build_risk_bundle(
         pluie_24h=context.pluie_24h,
         pluie_demain=context.pluie_demain,
         hour_of_day=context.hour_of_day if context.hour_of_day is not None else 12,
+        wetness_duration_hours=(context.risk_context or {}).get("fungal_wetness_duration_hours"),
+        wetness_source=(context.risk_context or {}).get("fungal_wetness_source"),
     ).get("fungal_risk_level")
     _sunset_minute = context.weather_profile.get("sunset_minute") if isinstance(context.weather_profile, dict) else None
     _minutes_to_sunset = (
@@ -229,8 +305,10 @@ def compute_fungal_risk(
     pluie_24h: float | None,
     pluie_demain: float | None,
     hour_of_day: float = 12.0,
+    wetness_duration_hours: float | None = None,
+    wetness_source: str | None = None,
 ) -> dict[str, Any]:
-    """Évalue le risque fongique simplifié (oïdium, rouille, septoriose).
+    """Évalue une pression fongique générale, sans diagnostiquer une maladie.
 
     Conditions favorables aux maladies :
     - Température 12-24°C (optimum 15-22°C)
@@ -243,6 +321,7 @@ def compute_fungal_risk(
     r = float(rosee or 0.0)
     p24 = float(pluie_24h or 0.0)
     p_demain = float(pluie_demain or 0.0)
+    wet_hours = _fungal_state_number(wetness_duration_hours)
 
     score = 0
     reasons = []
@@ -283,6 +362,15 @@ def compute_fungal_risk(
     if p_demain >= 3.0:
         score += 1
 
+    # Une humectation continue renforce le risque instantané. Les seuils restent volontairement
+    # généraux : ils signalent une pression favorable aux maladies, pas une infection identifiée.
+    if wet_hours >= 12.0:
+        score += 2
+        reasons.append("feuillage humide depuis au moins 12 h")
+    elif wet_hours >= 6.0:
+        score += 1
+        reasons.append("feuillage humide depuis au moins 6 h")
+
     if score >= 7:
         level = "high"
     elif score >= 4:
@@ -298,4 +386,8 @@ def compute_fungal_risk(
         "fungal_risk_reasons": reasons,
         "fungal_risk_evening_block": level in {"moderate", "high"},
         "fungal_risk_reduce_watering": level == "high",
+        "fungal_wetness_duration_hours": round(wet_hours, 2),
+        "fungal_wetness_source": (
+            wetness_source if wetness_source in {"sensor", "estimated"} else "unavailable"
+        ),
     }

@@ -197,6 +197,10 @@
       "name": "Volver al modo normal",
       "description": "Restablece el sistema al modo Normal."
     },
+    "clear_irrigation_safety_lock": {
+      "name": "Quitar el bloqueo de seguridad",
+      "description": "Restablece el riego automático después de comprobar las válvulas, sin cambiar el modo del césped."
+    },
     "start_manual_irrigation": {
       "name": "Riego manual",
       "description": "Inicia un riego manual y especifica cuánta agua aplicar en mm.",
@@ -551,6 +555,10 @@
           "temperature_trop_basse_germination": "Temperatura demasiado baja (germinación)",
           "semis_cycle_daily_target_reached": "Objetivo diario alcanzado (siembra)",
           "semis_cycle_pending": "Ciclo de siembra pendiente",
+          "temp_extreme": "Temperatura extrema",
+          "temperature_unknown": "Temperatura desconocida",
+          "application_type_required": "Tipo de aplicación requerido",
+          "unsupported_application_type": "Tipo de aplicación no compatible",
           "machine_unavailable": "Robot no disponible",
           "mowing_window_blocked": "Fuera de la ventana de siega",
           "recent_watering": "Riego reciente",

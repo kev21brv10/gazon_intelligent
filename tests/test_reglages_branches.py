@@ -272,6 +272,25 @@ class LArrosageSuitSesReglagesTests(_Comparaison):
         self.compare({"arrosage_pause_duree": 40}, (),
                      {"watering_pause_minutes": 25}, {"watering_pause_minutes": 40})
 
+    def test_sensibilite_pluie_econome_reporte_plus_tot(self) -> None:
+        # 5 mm annoncés demain valent 3,5 mm après la confiance J+1 : sous le seuil conseillé
+        # (4 mm), le moteur réduit seulement la dose. Économe (×0,75) abaisse le seuil à 3 mm :
+        # la même prévision suffit alors à reporter. La pluie déjà mesurée ne dépend d'aucun profil.
+        self.compare({"arrosage_sensibilite_pluie": 0.75}, (),
+                     {"block_reason": None, "arrosage_recommande": True, "mm_final": 11.4},
+                     {"block_reason": "pluie_prevue_suffisante", "arrosage_recommande": False, "mm_final": 0.0},
+                     pluie_demain=5.0, etp_capteur=5.0)
+
+    def test_sensibilite_pluie_prudente_exige_plus_de_pluie(self) -> None:
+        # 6 mm annoncés demain suffisent au profil Équilibré. Prudente (×1,25) relève le seuil :
+        # cette prévision ne bloque plus et le moteur garde un apport réduit pour protéger le gazon.
+        equilibree = _snapshot({}, pluie_demain=6.0, etp_capteur=5.0)
+        self.assertEqual(equilibree.get("block_reason"), "pluie_prevue_suffisante")
+        snapshot = _snapshot({"arrosage_sensibilite_pluie": 1.25}, pluie_demain=6.0, etp_capteur=5.0)
+        self.assertIsNone(snapshot.get("block_reason"))
+        self.assertTrue(snapshot["arrosage_recommande"])
+        self.assertEqual(snapshot["mm_final"], 11.0)
+
     def _soir_de_canicule(self) -> dict:
         return dict(
             today=date(2026, 7, 10), hour_of_day=21.25, temperature=31.0, humidite=35.0, etp_capteur=6.5,
@@ -677,6 +696,14 @@ class ChaqueReglageEstBrancheTests(unittest.TestCase):
         "arrosage_delai_relance": "test_watering_session_monitoring.py",
         # Le délai de l'alerte des graines : une alerte, pas une décision (0.94.0).
         "graines_alerte_retard": "test_notifications.py",
+        # Le pilote pur vérifie chaque garde matérielle sans appeler Home Assistant.
+        "tondeuse_pilotage_batterie_min": "test_mower_control.py",
+        "tondeuse_pilotage_delai_commandes": "test_mower_control.py",
+        "tondeuse_garage_ouvrir_avant_depart": "test_mower_control.py",
+        "tondeuse_garage_ouvrir_pour_retour": "test_mower_control.py",
+        "tondeuse_garage_fermer_apres_retour": "test_mower_control.py",
+        "tondeuse_garage_avance_ouverture": "test_mower_control.py",
+        "tondeuse_garage_delai_fermeture": "test_mower_control.py",
     }
 
     def test_chaque_reglage_a_son_scenario(self) -> None:

@@ -2314,7 +2314,8 @@ class DecisionResultChainTests(unittest.TestCase):
         attrs = blocage_sensor.extra_state_attributes
         self.assertTrue(attrs["bloque"])
         self.assertEqual(attrs["code"], "safety_lock")
-        self.assertIn("Retour au mode normal", attrs["comment_debloquer"])
+        self.assertIn("Lever le verrou de sécurité", attrs["comment_debloquer"])
+        self.assertNotIn("reset_mode", attrs["comment_debloquer"])
         self.assertTrue(attrs["safety_lock_actif"])
 
     def test_arrosage_auto_blocage_sensor_soft_state_is_not_blocked(self) -> None:
@@ -3102,6 +3103,33 @@ class DecisionResultChainTests(unittest.TestCase):
             ).possible_values["niveau_action"],
             ("aucune_action", "surveiller", "a_faire", "critique"),
         )
+
+    def test_le_capteur_phase_publie_le_jour_et_les_jours_restants(self) -> None:
+        # 0.96.2 : `phase_age_days`/`jours_restants`/`date_fin` sont calculés par
+        # `decision_phase.py` mais n'atteignaient jamais un capteur — la page ne pouvait pas dire
+        # « encore N jours » pour un mode produit ou l'hivernage (seul `sous_phase_age_days`,
+        # propre au semis, était publié).
+        result = decision_models.DecisionResult(
+            phase_dominante="Traitement", sous_phase="Application", action_recommandee="",
+            action_a_eviter="", niveau_action="surveiller", fenetre_optimale="attendre",
+            risque_gazon="faible", objectif_arrosage=0.0, tonte_autorisee=False,
+            extra={"phase_age_days": 1, "jours_restants": 0, "date_fin": "2026-09-19"},
+        )
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=result, history=[], memory={})
+        attrs = sensor.GazonPhaseActiveSensor(coordinator).extra_state_attributes
+        self.assertEqual(attrs["phase_age_days"], 1)
+        self.assertEqual(attrs["jours_restants"], 0)
+        self.assertEqual(attrs["date_fin"], "2026-09-19")
+
+        # Sans décision (repli sur le snapshot), les mêmes clés doivent aussi ressortir.
+        coordinator_legacy = _FakeCoordinator(
+            entry=_FakeEntry(), data={"phase_age_days": 4, "jours_restants": 2, "date_fin": "2026-09-25"},
+            result=None, history=[], memory={},
+        )
+        attrs_legacy = sensor.GazonPhaseActiveSensor(coordinator_legacy).extra_state_attributes
+        self.assertEqual(attrs_legacy["phase_age_days"], 4)
+        self.assertEqual(attrs_legacy["jours_restants"], 2)
+        self.assertEqual(attrs_legacy["date_fin"], "2026-09-25")
 
     def test_sous_phase_is_not_recomputed_locally(self) -> None:
         coordinator = _FakeCoordinator(

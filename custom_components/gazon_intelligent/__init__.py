@@ -65,7 +65,7 @@ def _target_selector_value() -> vol.Any:
     )
 
 
-_SERVICE_TARGET_FIELD = {
+_SERVICE_TARGET_FIELD: dict[Any, Any] = {
     vol.Optional("entity_id"): _target_selector_value(),
     vol.Optional("device_id"): _target_selector_value(),
     vol.Optional("area_id"): _target_selector_value(),
@@ -74,6 +74,7 @@ _SERVICE_TARGET_FIELD = {
 SERVICE_SET_MODE = "set_mode"
 SERVICE_SET_DATE_ACTION = "set_date_action"
 SERVICE_RESET_MODE = "reset_mode"
+SERVICE_CLEAR_IRRIGATION_SAFETY_LOCK = "clear_irrigation_safety_lock"
 SERVICE_START_MANUAL_IRRIGATION = "start_manual_irrigation"
 SERVICE_START_AUTO_IRRIGATION = "start_auto_irrigation"
 SERVICE_START_APPLICATION_IRRIGATION = "start_application_irrigation"
@@ -95,6 +96,7 @@ _ALL_SERVICES = (
     SERVICE_SET_MODE,
     SERVICE_SET_DATE_ACTION,
     SERVICE_RESET_MODE,
+    SERVICE_CLEAR_IRRIGATION_SAFETY_LOCK,
     SERVICE_START_MANUAL_IRRIGATION,
     SERVICE_START_AUTO_IRRIGATION,
     SERVICE_START_APPLICATION_IRRIGATION,
@@ -313,6 +315,12 @@ def _async_register_services(hass: HomeAssistant) -> None:
         hass,
         SERVICE_RESET_MODE,
         _handle_reset_mode,
+        schema=vol.Schema(dict(_SERVICE_TARGET_FIELD)),
+    )
+    _register_service_if_missing(
+        hass,
+        SERVICE_CLEAR_IRRIGATION_SAFETY_LOCK,
+        _handle_clear_irrigation_safety_lock,
         schema=vol.Schema(dict(_SERVICE_TARGET_FIELD)),
     )
     _register_service_if_missing(
@@ -631,6 +639,12 @@ async def _handle_reset_mode(call: ServiceCall) -> None:
     _require_explicit_target_for_multi_instance(call)
     coordinator = await _coordinator_from_call(call)
     await coordinator.async_set_normal()
+
+
+async def _handle_clear_irrigation_safety_lock(call: ServiceCall) -> None:
+    _require_explicit_target_for_multi_instance(call)
+    coordinator = await _coordinator_from_call(call)
+    await coordinator.async_clear_irrigation_safety_lock()
 
 
 async def _handle_start_manual_irrigation(call: ServiceCall) -> None:

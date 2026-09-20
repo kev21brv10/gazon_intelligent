@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from importlib import util
 from pathlib import Path
 import sys
@@ -63,6 +63,9 @@ DecisionResult = _load_module(
     "custom_components.gazon_intelligent.decision_models",
     "decision_models.py",
 ).DecisionResult
+DecisionContext = sys.modules[
+    "custom_components.gazon_intelligent.decision_models"
+].DecisionContext
 _load_module("custom_components.gazon_intelligent.decision", "decision.py")
 gazon_brain_module = _load_module(
     "custom_components.gazon_intelligent.gazon_brain",
@@ -78,6 +81,7 @@ decision_watering_module = _load_module(
     "decision_watering.py",
 )
 compute_fungal_risk = decision_risk_module.compute_fungal_risk
+update_fungal_wetness_state = decision_risk_module.update_fungal_wetness_state
 compute_kc_gazon = decision_watering_module.compute_kc_gazon
 
 
@@ -1071,6 +1075,146 @@ class GazonBrainTests(unittest.TestCase):
 
 
 class FungalRiskTests(unittest.TestCase):
+    def _wetness_after(self, hours: float) -> dict:
+        state = None
+        start = datetime(2026, 9, 18, 0, 0, tzinfo=timezone.utc)
+        steps = int(hours * 6)
+        for step in range(steps + 1):
+            state = update_fungal_wetness_state(
+                state,
+                observed_at=start + timedelta(minutes=step * 10),
+                leaf_wetness=1.0,
+                source="sensor",
+            )
+        return state
+
+    def test_leaf_wetness_duration_accumulates_continuously(self) -> None:
+        state = self._wetness_after(6.0)
+        self.assertEqual(state["status"], "wet")
+        self.assertEqual(state["source"], "sensor")
+        self.assertAlmostEqual(state["wet_minutes"], 360.0)
+
+    def test_long_restart_does_not_invent_wet_hours(self) -> None:
+        start = datetime(2026, 9, 18, 0, 0, tzinfo=timezone.utc)
+        state = update_fungal_wetness_state(
+            None, observed_at=start, leaf_wetness=1.0, source="estimated"
+        )
+        state = update_fungal_wetness_state(
+            state,
+            observed_at=start + timedelta(hours=4),
+            leaf_wetness=1.0,
+            source="estimated",
+        )
+        self.assertEqual(state["wet_minutes"], 0.0)
+
+    def test_unknown_observation_breaks_continuity_when_measurement_returns(self) -> None:
+        state = self._wetness_after(8.0)
+        last = datetime.fromisoformat(state["observed_at"])
+        state = update_fungal_wetness_state(
+            state,
+            observed_at=last + timedelta(minutes=2),
+            leaf_wetness=None,
+            source="unavailable",
+        )
+        state = update_fungal_wetness_state(
+            state,
+            observed_at=last + timedelta(minutes=4),
+            leaf_wetness=1.0,
+            source="sensor",
+        )
+        self.assertEqual(state["status"], "wet")
+        self.assertEqual(state["wet_minutes"], 0.0)
+
+    def test_one_dry_hour_resets_the_wet_episode(self) -> None:
+        start = datetime(2026, 9, 18, 6, 0, tzinfo=timezone.utc)
+        state = self._wetness_after(8.0)
+        state = update_fungal_wetness_state(
+            state, observed_at=start + timedelta(hours=2, minutes=10), leaf_wetness=0.0, source="sensor"
+        )
+        for minute in range(10, 80, 10):
+            state = update_fungal_wetness_state(
+                state,
+                observed_at=start + timedelta(hours=2, minutes=minute),
+                leaf_wetness=0.0,
+                source="sensor",
+            )
+        self.assertEqual(state["status"], "dry")
+        self.assertEqual(state["wet_minutes"], 0.0)
+
+    def test_an_unrecognized_source_is_normalized_to_unavailable(self) -> None:
+        # Seuls "sensor" et "estimated" sont des sources connues : tout le reste (une faute de
+        # frappe, une future source jamais branchée ici) doit rester "unavailable", jamais
+        # recopié tel quel — un banc de mutations a montré que rien ne le prouvait avant ce test.
+        state = update_fungal_wetness_state(
+            None,
+            observed_at=datetime(2026, 9, 18, 6, 0, tzinfo=timezone.utc),
+            leaf_wetness=1.0,
+            source="ecowitt_capteur_bidule",
+        )
+        self.assertEqual(state["source"], "unavailable")
+
+    def test_six_to_twelve_wet_hours_add_a_single_point(self) -> None:
+        # Palier intermédiaire, jamais exercé avant ce test (seul le palier à 12h l'était) : entre
+        # 6h et 12h d'humidité continue, la pression ne monte que d'UN point, pas de deux.
+        commun = dict(temperature=25.0, humidite=0.0, rosee=0.0, pluie_24h=0.0, pluie_demain=0.0, hour_of_day=12)
+        sans_pression = compute_fungal_risk(wetness_duration_hours=0.0, wetness_source="sensor", **commun)
+        avec_six_heures = compute_fungal_risk(wetness_duration_hours=8.0, wetness_source="sensor", **commun)
+        self.assertEqual(sans_pression["fungal_risk_level"], "none")
+        self.assertEqual(avec_six_heures["fungal_risk_score"] - sans_pression["fungal_risk_score"], 1)
+        self.assertEqual(avec_six_heures["fungal_risk_level"], "low")
+        self.assertIn("feuillage humide depuis au moins 6 h", avec_six_heures["fungal_risk_reasons"])
+        self.assertNotIn("feuillage humide depuis au moins 12 h", avec_six_heures["fungal_risk_reasons"])
+
+    def test_twelve_wet_hours_raise_the_pressure_without_diagnosing_a_disease(self) -> None:
+        result = compute_fungal_risk(
+            temperature=18.0,
+            humidite=85.0,
+            rosee=0.2,
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            hour_of_day=14,
+            wetness_duration_hours=12.0,
+            wetness_source="estimated",
+        )
+        self.assertEqual(result["fungal_risk_level"], "high")
+        self.assertIn("feuillage humide depuis au moins 12 h", result["fungal_risk_reasons"])
+        self.assertEqual(result["fungal_wetness_source"], "estimated")
+
+    def test_wetness_duration_reaches_water_and_risk_decisions(self) -> None:
+        context = DecisionContext.from_legacy_args(
+            history=[],
+            today=date(2026, 9, 18),
+            hour_of_day=19,
+            temperature=18.0,
+            humidite=75.0,
+            rosee=0.2,
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            etp_capteur=2.0,
+            risk_context={
+                "fungal_wetness_duration_hours": 12.0,
+                "fungal_wetness_source": "sensor",
+            },
+        )
+        phase = {"phase_dominante": "Normal", "sous_phase": "Normal"}
+        with patch.object(
+            decision_watering_module,
+            "compute_fungal_risk",
+            wraps=compute_fungal_risk,
+        ) as water_risk:
+            water_bundle = decision_watering_module.build_water_bundle(context, phase)
+        self.assertEqual(water_risk.call_args.kwargs["wetness_duration_hours"], 12.0)
+        self.assertEqual(water_risk.call_args.kwargs["wetness_source"], "sensor")
+
+        with patch.object(
+            decision_risk_module,
+            "compute_fungal_risk",
+            wraps=compute_fungal_risk,
+        ) as final_risk:
+            decision_risk_module.build_risk_bundle(context, phase, water_bundle)
+        self.assertEqual(final_risk.call_args.kwargs["wetness_duration_hours"], 12.0)
+        self.assertEqual(final_risk.call_args.kwargs["wetness_source"], "sensor")
+
     def test_fungal_risk_high_conditions(self) -> None:
         result = compute_fungal_risk(
             temperature=18.0,
