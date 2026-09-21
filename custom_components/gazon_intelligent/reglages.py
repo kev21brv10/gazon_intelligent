@@ -93,10 +93,10 @@ GROUPES: tuple[Groupe, ...] = (
     Groupe("tonte", "Tonte", "Quand et comment la tondeuse a le droit de travailler.", "mdi:robot-mower"),
     Groupe("arrosage", "Arrosage", "L'arrosage de tous les jours, avant le lever du soleil.", "mdi:sprinkler-variant"),
     Groupe("graines", "Graines", "L'arrosage des graines, après un semis ou un sursemis.", "mdi:seed-outline"),
-    Groupe("sursemis", "Sursemis", "La tonte quand tu as semé dans un gazon qui pousse déjà.", "mdi:sprout"),
-    Groupe("semis", "Semis", "La tonte quand tu as semé sur un terrain nu.", "mdi:grass"),
+    Groupe("sursemis", "Sursemis", "La tonte après un semis dans un gazon qui pousse déjà.", "mdi:sprout"),
+    Groupe("semis", "Semis", "La tonte après un semis sur terrain nu.", "mdi:grass"),
     Groupe("modes", "Modes", "La durée de chaque mode et les fiches produit qui pilotent son comportement.", "mdi:swap-horizontal"),
-    Groupe("installation", "Mon installation", "Tes arroseurs, ta tondeuse, les interrupteurs et les alertes.", "mdi:tune-variant"),
+    Groupe("installation", "Installation", "Les arroseurs, la tondeuse, les interrupteurs et les alertes.", "mdi:tune-variant"),
 )
 
 _H = 60  # une heure, en minutes
@@ -243,6 +243,19 @@ REGLAGES: tuple[Reglage, ...] = (
         "nombre", 1.0, 0.75, 1.25, 0.25, "×",
         source="guidance._rain_signals (multiplicateur des seuils de pluie prévue)",
         avertissement="Réglage sensible : le profil Économe se fie davantage aux prévisions ; si la pluie annoncée ne tombe pas, le gazon peut attendre plus longtemps.",
+    ),
+    # Une zone ombragée évapore moins qu'une zone en plein soleil. La réduction reste explicite
+    # et indépendante par vanne : 0 % conserve exactement le plan historique.
+    *(
+        Reglage(
+            f"arrosage_reduction_ombre_zone_{numero}", "arrosage",
+            f"De combien réduire l'arrosage de la zone {numero} si elle est ombragée ?",
+            "La durée de cette zone sera réduite de ce pourcentage, sans changer les autres zones.",
+            "nombre", 0.0, 0.0, 50.0, 5.0, "%",
+            source="watering_plan.build_watering_plan (réduction propre à la zone)",
+            avertissement="Réglage sensible : une réduction trop forte peut laisser cette zone trop sèche, surtout si l'ombre ne dure qu'une partie de la journée.",
+        )
+        for numero in range(1, 6)
     ),
     # Découpage d'une grosse dose (mode Normal). Valeurs du 29/07/2026, tirées du régime manuel
     # éprouvé de Kévin : 8,8 à 10 mm d'un seul passage, sans ruissellement.
@@ -395,7 +408,7 @@ REGLAGES: tuple[Reglage, ...] = (
     Reglage(
         "graines_alerte_retard", "graines",
         "Au bout de combien de temps prévenir quand un arrosage des graines ne part pas ?",
-        "Un arrosage prévu part d'habitude dans les deux minutes. Plus court, tu es prévenu plus tôt, "
+        "Un arrosage prévu part d'habitude dans les deux minutes. Un délai plus court prévient plus tôt, "
         "parfois pour un simple retard.",
         "duree", 20, 10, 120, 5,
         source="notifications.DELAI_RETARD_GRAINES (alerte, pas une décision)",
@@ -427,7 +440,7 @@ REGLAGES: tuple[Reglage, ...] = (
         "À quelle hauteur remonter la lame ensuite ?",
         "Une fois les jeunes pousses coupées, on laisse le gazon un peu plus haut.",
         "nombre", 4.5, 3.0, 8.0, 0.5, "cm",
-        source="decision_mowing.SURSEMIS_HAUTEUR_FINALE_CM (choix de Kévin)",
+        source="decision_mowing.SURSEMIS_HAUTEUR_FINALE_CM (arbitrage produit)",
     ),
     Reglage(
         "sursemis_coupes_avant_remontee", "sursemis",
@@ -546,7 +559,7 @@ REGLAGES: tuple[Reglage, ...] = (
     Reglage(
         "tondeuse_garage_ouvrir_avant_depart", "installation",
         "Ouvrir automatiquement le garage avant un départ ?",
-        "Sinon, tu ouvres le volet toi-même ; la tondeuse attend toujours que son ouverture soit confirmée.",
+        "Sinon, le volet doit être ouvert manuellement ; la tondeuse attend toujours la confirmation de son ouverture.",
         "interrupteur", True, 0, 1, 1,
         source="mower_control_constants.DEFAULT_MOWER_GARAGE_OPEN_BEFORE_START",
         avertissement="Réglage sensible : désactivé, un volet fermé bloque le départ jusqu'à son ouverture manuelle.",
@@ -557,12 +570,12 @@ REGLAGES: tuple[Reglage, ...] = (
         "Sinon, l'intégration n'ordonne pas le retour tant que le volet n'est pas confirmé ouvert.",
         "interrupteur", True, 0, 1, 1,
         source="mower_control_constants.DEFAULT_MOWER_GARAGE_OPEN_FOR_RETURN",
-        avertissement="Réglage sensible : désactivé, ouvre le volet avant qu'une autre automatisation rappelle la tondeuse.",
+        avertissement="Réglage sensible : désactivé, le volet doit être ouvert avant qu'une autre automatisation rappelle la tondeuse.",
     ),
     Reglage(
         "tondeuse_garage_fermer_apres_retour", "installation",
         "Fermer automatiquement le garage après la rentrée ?",
-        "Sinon, le volet reste ouvert et tu choisis toi-même quand le fermer.",
+        "Sinon, le volet reste ouvert jusqu'à sa fermeture manuelle.",
         "interrupteur", True, 0, 1, 1,
         source="mower_control_constants.DEFAULT_MOWER_GARAGE_CLOSE_AFTER_DOCK",
         avertissement="Réglage sensible : la fermeture automatique exige toujours une rentrée fortement confirmée.",
@@ -571,15 +584,23 @@ REGLAGES: tuple[Reglage, ...] = (
         "tondeuse_garage_avance_ouverture", "installation",
         "Après l'ouverture du garage, combien de temps attendre avant le départ ?",
         "La tondeuse ne démarre qu'après l'ouverture confirmée puis ce délai de sécurité.",
-        "duree", 2, 0, 10, 1,
+        "duree", 2, 0, 10, 0.25,
         source="mower_control_constants.DEFAULT_MOWER_GARAGE_OPEN_LEAD_MINUTES",
         avertissement="Réglage sensible : zéro minute réduit la marge laissée au volet pour libérer complètement le passage.",
+    ),
+    Reglage(
+        "tondeuse_garage_ouverture_min", "installation",
+        "Quelle ouverture minimale confirme que le passage est libre ?",
+        "Si le volet publie sa position, la tondeuse attend que ce pourcentage soit atteint. Sans position publiée, l'état ouvert reste utilisé.",
+        "nombre", 95, 50, 100, 5, "%",
+        source="mower_control_constants.DEFAULT_MOWER_GARAGE_MIN_OPEN_POSITION",
+        avertissement="Réglage sensible : une valeur trop basse peut autoriser le passage sous un volet encore partiellement fermé.",
     ),
     Reglage(
         "tondeuse_garage_delai_fermeture", "installation",
         "Après la rentrée confirmée, combien de temps attendre avant de fermer ?",
         "Le volet reste ouvert après un signal fort de station ou de charge, puis se ferme.",
-        "duree", 2, 1, 15, 1,
+        "duree", 2, 1, 15, 0.25,
         source="mower_control_constants.DEFAULT_MOWER_GARAGE_CLOSE_DELAY_MINUTES",
         avertissement="Réglage sensible : un délai trop court peut fermer le volet alors que la tondeuse termine sa manœuvre.",
     ),
@@ -591,12 +612,16 @@ CHOIX: tuple[Choix, ...] = (
     Choix(
         "pilotage_tondeuse", "installation",
         "Qui commande les départs et les retours de la tondeuse ?",
-        "Commence par Observation. Actif envoie réellement les commandes à la tondeuse et au garage configuré.",
+        "Commencer par Observation. Actif envoie réellement les commandes à la tondeuse et au garage configuré.",
         "desactive",
         (
             Option("desactive", "Désactivé", "L'intégration observe la tondeuse mais ne décide ni départ ni retour."),
             Option("observation", "Observation", "Elle affiche ce qu'elle ferait, sans envoyer aucune commande."),
-            Option("actif", "Actif", "Elle devient l'unique pilote des départs, retours et du garage facultatif."),
+            Option(
+                "actif",
+                "Actif",
+                "Elle lance le cycle, laisse la tondeuse gérer ses recharges, puis la relance une fois si elle l'a rappelée.",
+            ),
         ),
         source="const.MOWER_CONTROL_MODES",
     ),
@@ -614,7 +639,7 @@ CHOIX: tuple[Choix, ...] = (
     ),
     Choix(
         "type_sol", "installation",
-        "Quelle est la terre de ton jardin ?",
+        "Quel est le type de terre du jardin ?",
         "Elle décide combien d'eau le sol garde pour le gazon, donc quand arroser et combien.",
         "limoneux",
         (
@@ -705,12 +730,12 @@ def _tombe_sur_le_pas(r: Reglage, v: float) -> bool:
 def _erreur_de_valeur(r: Reglage, valeur: Any) -> str | None:
     """Ce qui ne va pas dans une valeur prise seule (forme, bornes, pas), ou None."""
     if r.genre == "interrupteur":
-        return None if isinstance(valeur, bool) else "Choisis activé ou désactivé."
+        return None if isinstance(valeur, bool) else "Sélectionner activé ou désactivé."
     nombres = _valeurs_de(r, valeur)
     if nombres is None or not all(_est_un_nombre(v) for v in nombres):
         return "Il faut un nombre pour chaque mois." if r.genre == "table_mois" else "Il faut un nombre."
     if not all(r.minimum <= float(v) <= r.maximum for v in nombres):
-        return f"Choisis une valeur entre {_fr(r.minimum)} et {_fr(r.maximum)}."
+        return f"Sélectionner une valeur entre {_fr(r.minimum)} et {_fr(r.maximum)}."
     if not all(_tombe_sur_le_pas(r, float(v)) for v in nombres):
         return f"La valeur avance de {_fr(r.pas)} en {_fr(r.pas)}."
     return None
@@ -824,7 +849,7 @@ def valider_choix(valeurs: dict[str, Any]) -> dict[str, str]:
         if choix is None:
             erreurs[cle] = "Choix inconnu."
         elif valeur not in {o.valeur for o in choix.options}:
-            erreurs[cle] = "Choisis parmi : " + ", ".join(o.titre.lower() for o in choix.options) + "."
+            erreurs[cle] = "Sélectionner parmi : " + ", ".join(o.titre.lower() for o in choix.options) + "."
     return erreurs
 
 

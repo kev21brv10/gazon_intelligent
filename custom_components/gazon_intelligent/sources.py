@@ -26,6 +26,7 @@ from .const import (
     CONF_CAPTEUR_PLUIE_ACTUELLE,
     CONF_CAPTEUR_PLUIE_CUMUL,
     CONF_CAPTEUR_PLUIE_DEMAIN,
+    CONF_CAPTEUR_POINT_DE_ROSEE,
     CONF_CAPTEUR_PRESSION,
     CONF_CAPTEUR_RAYONNEMENT,
     CONF_CAPTEUR_RETOUR_ARROSAGE,
@@ -161,6 +162,25 @@ SOURCES: tuple[Source, ...] = (
         classes=("atmospheric_pressure", "pressure"),
     ),
     Source(
+        # Point de ROSÉE DE L'AIR (0.97.24) — pas la même chose que « Rosée sur l'herbe » juste
+        # au-dessous : ici une température (°C), là une humidité du feuillage (%). Sert de repli
+        # à `estimate_rosee` (l'herbe est jugée mouillée si l'air est à 2 °C ou moins de ce point)
+        # UNIQUEMENT quand « Rosée sur l'herbe » n'est pas branché ; sans lui, repli sur le point
+        # de rosée de l'entité météo, moins fidèle au jardin.
+        CONF_CAPTEUR_POINT_DE_ROSEE, "Point de rosée (air)", "le point de rosée", "air",
+        "Affine la détection de l'herbe mouillée quand aucune « Rosée sur l'herbe » n'est branchée.",
+        "Le point de rosée de l'entité météo.",
+        unites=UNITES_TEMPERATURE,
+        classes=("temperature",),
+        indices=("rosee", "dew"),
+        exige_indice=True,
+        refus_indice=(
+            "« Point de rosée (air) » attend un point de rosée, avec « rosée » ou « dew » dans "
+            "son nom : une température de l'air ordinaire fausserait la détection de l'herbe "
+            "mouillée."
+        ),
+    ),
+    Source(
         # ⚠️ PAS UN POINT DE ROSÉE (0.94.1). Le moteur lit « au-dessus de 0 = l'herbe est mouillée »
         # (`decision_mowing`, `scores`) ; sans capteur, `estimate_rosee` rend 1 ou 0,8 quand
         # l'herbe est mouillée. Un point de rosée à 11 °C bloquerait la tonte en permanence : la
@@ -264,6 +284,7 @@ SOURCES: tuple[Source, ...] = (
         unites=("%",),
         classes=("moisture",),
         indice_sans_classe=True,
+        noms_refuses=("foliaire", "feuillage", "leaf"),
     ),
     Source(
         CONF_CAPTEUR_HAUTEUR_GAZON, "Hauteur du gazon", "la hauteur du gazon", "sol",

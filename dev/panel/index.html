@@ -104,6 +104,7 @@
   const CLE_POMPE = "gazon-apercu-pompe";
   const CLE_GARAGE_TONDEUSE = "gazon-apercu-garage-tondeuse";
   const CLE_ENTREES = "gazon-apercu-entrees";
+  const CLE_LIAISONS = "gazon-apercu-liaisons-materiel";
   const lireCle = (cle) => { try { return JSON.parse(localStorage.getItem(cle) || "{}"); } catch { return {}; } };
   const ecrireCle = (cle, v) => { try { localStorage.setItem(cle, JSON.stringify(v)); } catch { /* aperçu sans stockage */ } };
   // Sans rien d'enregistré dans l'aperçu, les réglages sont ceux de la maison (relevé réel).
@@ -150,6 +151,39 @@
       };
     });
   };
+  const definitionsLiaisons = [
+    ...[1, 2, 3, 4, 5].map((numero) => ({
+      cle: `zone_${numero}`, titre: `Vanne de la zone ${numero}`, groupe: "arrosage",
+      apporte: `Ouvre et ferme la zone d'arrosage ${numero}.`, sans_elle: `La zone ${numero} reste inutilisée.`,
+      domaine: "switch", obligatoire: numero === 1,
+    })),
+    { cle: "entite_tondeuse", titre: "Tondeuse principale", groupe: "tondeuse", apporte: "Son état coordonne la tonte, l'arrosage et le garage.", sans_elle: "Découverte automatique si une seule tondeuse existe.", domaine: "lawn_mower", obligatoire: false },
+    { cle: "capteur_tondeuse_erreur", titre: "Erreur de la tondeuse", groupe: "tondeuse", apporte: "Donne le code exact de la panne.", sans_elle: "Les attributs de la tondeuse sont utilisés.", domaine: "sensor", obligatoire: false },
+    { cle: "capteur_tondeuse_batterie", titre: "Batterie de la tondeuse", groupe: "tondeuse", apporte: "Protège les départs avec une batterie insuffisante.", sans_elle: "Les attributs de la tondeuse sont utilisés.", domaine: "sensor", obligatoire: false },
+    { cle: "capteur_tondeuse_pluie", titre: "Détecteur de pluie de la tondeuse", groupe: "tondeuse", apporte: "Confirme la pluie détectée par le robot.", sans_elle: "La météo du jardin reste utilisée.", domaine: "binary_sensor", obligatoire: false },
+    { cle: "capteur_tondeuse_en_charge", titre: "Tondeuse en charge", groupe: "tondeuse", apporte: "Confirme que la tondeuse est rangée sur sa base.", sans_elle: "La charge est déduite de l'état principal.", domaine: "binary_sensor", obligatoire: false },
+    { cle: "capteur_tondeuse_hauteur_coupe", titre: "Hauteur de coupe de la tondeuse", groupe: "tondeuse", apporte: "Lit la hauteur publiée par le robot.", sans_elle: "La hauteur manuelle est utilisée.", domaine: "number", obligatoire: false },
+  ];
+  const liaisonsActuelles = () => ({
+    ...Object.fromEntries((maison.zones || []).map((zone) => [`zone_${zone.numero}`, zone.switch])),
+    ...(maison.liaisons_materiel || {}),
+    ...lireCle(CLE_LIAISONS),
+  });
+  const liaisonsApercu = () => {
+    const actuelles = liaisonsActuelles();
+    return definitionsLiaisons.map((ligne) => {
+      const id = actuelles[ligne.cle] || null;
+      const zones = new Set([1, 2, 3, 4, 5].map((numero) => actuelles[`zone_${numero}`]).filter(Boolean));
+      return { ...ligne, entity_id: id, nom: id ? nomDe(id) : null, choix: Object.keys(etats)
+        .filter((candidat) => candidat.startsWith(`${ligne.domaine}.`))
+        .filter((candidat) => !ligne.cle.startsWith("zone_") || candidat === id || (candidat !== pompeActuelle() && !zones.has(candidat)))
+        .map((candidat) => ({ entity_id: candidat, nom: nomDe(candidat) })) };
+    });
+  };
+  const zonesApercu = () => [1, 2, 3, 4, 5].flatMap((numero) => {
+    const id = liaisonsActuelles()[`zone_${numero}`];
+    return id ? [{ numero, nom: nomDe(id), switch: id, etat: null }] : [];
+  });
   // Les règles du changement d'entrée sont celles de la page elle-même (son bloc « Changer une
   // entrée »), sans troisième copie ; le serveur, lui, dit pourquoi en clair.
   const texteDeLaPage = await fetch("/custom_components/gazon_intelligent/frontend/gazon-intelligent-panel.js", { cache: "no-store" }).then((r) => r.text());
@@ -172,13 +206,27 @@
   const appareilsApercu = (lignes) => {
     const branchements = branchementsActuels();
     const branchees = Object.fromEntries(lignes.filter((l) => l.entity_id).map((l) => [l.entity_id, l.cle]));
-    const libres = sourcesRegistre.filter((s) => s.indices.length && !branchements[s.cle]);
-    return (maison.appareils || []).filter((a) => a.entites.some((id) => branchees[id])).map((a) => ({
+    const libres = sourcesRegistre.filter((s) => !branchements[s.cle]);
+    const suggestion = (s, id) => {
+      if (refusEntree(s, id)) return false;
+      const etat = etats[id] || {};
+      const a = etat.attributes || {};
+      const texte = `${id} ${a.friendly_name || ""}`.toLowerCase().replaceAll("-", "_").replaceAll(" ", "_");
+      const classe = String(a.device_class || "").toLowerCase();
+      const pluie = ["pluie", "rain", "precipitation"].some((mot) => texte.includes(mot));
+      const jour = ["jour", "today", "daily", "24h", "24_h"].some((mot) => texte.includes(mot));
+      if (s.cle === "capteur_pluie_24h") return jour && (classe === "precipitation" || pluie);
+      if (s.cle === "capteur_pluie_cumul") return !jour && (classe === "precipitation" || pluie);
+      if (s.cle === "capteur_pluie_actuelle") return ["precipitation", "precipitation_intensity"].includes(classe) || pluie;
+      return true;
+    };
+    return (maison.appareils || []).filter((a) => a.station_personnelle || a.entites.some((id) => branchees[id])).map((a) => ({
       id: a.id, nom: a.nom, fabricant: a.fabricant, modele: a.modele,
+      station_personnelle: Boolean(a.station_personnelle),
+      detectee: Boolean(a.station_personnelle && !a.entites.some((id) => branchees[id])),
       entites: a.entites.map((id) => ({
         entity_id: id, nom: nomDe(id), branchee: branchees[id] || null,
-        pourrait: branchees[id] ? [] : libres
-          .filter((s) => s.indices.some((i) => id.toLowerCase().includes(i)) && !refusEntree(s, id)).map((s) => s.cle),
+        pourrait: branchees[id] ? [] : libres.filter((s) => suggestion(s, id)).map((s) => s.cle),
       })).sort((x, y) => (x.branchee === null) - (y.branchee === null) || String(x.nom).localeCompare(String(y.nom))),
     }));
   };
@@ -186,7 +234,7 @@
     const gardee = lireCle(CLE_POMPE);
     return "pompe" in gardee ? gardee.pompe : maison.pompe || null;
   };
-  const vannesApercu = () => new Set((maison.zones || []).map((z) => z.switch));
+  const vannesApercu = () => new Set(zonesApercu().map((z) => z.switch));
   const pompeChoix = () => {
     const vannes = vannesApercu();
     const interrupteurs = Object.keys(etats)
@@ -468,11 +516,12 @@
           choix: { ...(maison.choix || {}), ...lireCle(CLE_CHOIX) },
           produits: structuredClone(produits),
           entites: maison.entites,
-          zones: maison.zones,
+          zones: zonesApercu(),
           pompe: pompeActuelle(),
           meteo: branchementsActuels().entite_meteo || maison.meteo,
           notifications: notificationsApercu(),
           sources: sourcesApercu(),
+          liaisons_materiel: liaisonsApercu(),
           appareils: appareilsApercu(sourcesApercu()),
           pompe_choix: pompeChoix(),
           garage_tondeuse: garageTondeuse(),
@@ -520,6 +569,7 @@
           }
         }
         const entrees = message.entrees || null;
+        const liaisons = message.liaisons_materiel || null;
         if (entrees) {
           for (const [cle, id] of Object.entries(entrees)) {
             const refus = refusEntree(sourcesRegistre.find((s) => s.cle === cle), id || null);
@@ -528,6 +578,16 @@
           // Une vanne ouverte : un arrosage est en cours (comme `arrosage_en_cours`).
           if ((maison.zones || []).some((z) => etats[z.switch]?.state === "on")) {
             return { ok: false, erreurs: { entrees: "Un arrosage est en cours : change les entrées quand il sera fini, le changement recharge l'intégration." } };
+          }
+        }
+        if (liaisons) {
+          for (const [cle, id] of Object.entries(liaisons)) {
+            const definition = definitionsLiaisons.find((ligne) => ligne.cle === cle);
+            if (!definition) return { ok: false, erreurs: { liaisons_materiel: `Cette liaison n'existe pas : ${cle}.` } };
+            if (!id && definition.obligatoire) return { ok: false, erreurs: { liaisons_materiel: `« ${definition.titre} » est obligatoire.` } };
+            if (id && (!String(id).startsWith(`${definition.domaine}.`) || !etats[id])) {
+              return { ok: false, erreurs: { liaisons_materiel: `Cette entité ${definition.domaine} n'existe pas : ${id}.` } };
+            }
           }
         }
         const alertes = message.notifications || {};
@@ -556,6 +616,10 @@
           ecrireCle(CLE_ENTREES, { ...lireCle(CLE_ENTREES), ...Object.fromEntries(Object.entries(entrees).map(([c, v]) => [c, v || null])) });
           await new Promise((r) => setTimeout(r, 600));
         }
+        if (liaisons) {
+          ecrireCle(CLE_LIAISONS, { ...lireCle(CLE_LIAISONS), ...Object.fromEntries(Object.entries(liaisons).map(([c, v]) => [c, v || null])) });
+          await new Promise((r) => setTimeout(r, 600));
+        }
         if (message.choix?.type_sol && E.phase) {
           attributs(E.phase, { type_sol: message.choix.type_sol });
           setTimeout(pousser, 250);
@@ -565,6 +629,7 @@
           ok: true, valeurs: { ...defauts, ...gardees }, choix, notifications: notificationsApercu(),
           pompe: pompeActuelle(), pompe_choix: pompeChoix(),
           garage_tondeuse: garageTondeuse(),
+          ...(liaisons ? { recharge: true, liaisons_materiel: liaisonsApercu(), zones: zonesApercu() } : {}),
           ...(entrees ? {
             recharge: !Object.keys(entrees).every((c) => ["capteur_pluie_cumul", "capteur_pluie_actuelle"].includes(c)),
             meteo: branchementsActuels().entite_meteo || maison.meteo,
@@ -596,6 +661,26 @@
       } else if (domaine === "select") {
         changer(ids[0], { state: donnees.option });
         changer(E.phase, { state: donnees.option });
+      } else if (service === "run_zone_for_duration") {
+        const zone = maison.zones.find((item) => item.switch === donnees.zone_entity_id);
+        if (!zone) throw { code: "invalid_zone", message: "Zone non configurée dans cet aperçu." };
+        arreterArrosage(false);
+        const debut = new Date().toISOString();
+        const minutes = Math.max(0.5, Number(donnees.duration_minutes) || 5);
+        const debit = Number(etats[E[`debit_zone_${zone.numero}`]]?.state) || 0;
+        const mm = Math.round((debit * minutes / 60) * 10) / 10;
+        if (pompeActuelle()) changer(pompeActuelle(), { state: "on" });
+        changer(zone.switch, { state: "on" });
+        attributs(E.arrosage_en_cours, {
+          active: true, started_at_utc: debut, active_zones: [zone.switch],
+          current_passage: 1, passage_count: 1, target_mm: mm,
+          planned_total_seconds: minutes * 60, elapsed_seconds: 0,
+          remaining_session_seconds: minutes * 60, progress_percent: 0,
+        });
+        changer(E.arrosage_en_cours, { state: "0.0" });
+        pousser();
+        // L'aperçu accélère les cinq minutes à quatre secondes. Le vrai minuteur vit dans HA.
+        simulation = setTimeout(() => arreterArrosage(true, mm, debut, [zone]), 4000);
       } else if (service === "start_manual_irrigation") {
         demarrerArrosage(Number(donnees.objectif_mm));
       } else if (service === "stop_irrigation") {
@@ -740,6 +825,7 @@
     ecrireCle(CLE_CHOIX, {});
     ecrireCle(CLE_ALERTES, {});
     ecrireCle(CLE_ENTREES, {});
+    ecrireCle(CLE_LIAISONS, {});
     ecrireCle(CLE_POMPE, {});
     ecrireCle(CLE_GARAGE_TONDEUSE, {});
     location.reload();

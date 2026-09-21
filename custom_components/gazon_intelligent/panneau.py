@@ -30,7 +30,13 @@ from . import reglages as registre
 from . import sources as sources_meteo
 from .const import (
     CONF_ALERTES_ACTIVES,
+    CONF_CAPTEUR_TONDEUSE_BATTERIE,
+    CONF_CAPTEUR_TONDEUSE_EN_CHARGE,
+    CONF_CAPTEUR_TONDEUSE_ERREUR,
+    CONF_CAPTEUR_TONDEUSE_HAUTEUR_COUPE,
+    CONF_CAPTEUR_TONDEUSE_PLUIE,
     CONF_ENTITE_IA,
+    CONF_ENTITE_TONDEUSE,
     CONF_ENTITE_VOLET_GARAGE_TONDEUSE,
     CONF_ENTITE_METEO,
     CONF_ENTITE_POMPE,
@@ -80,6 +86,51 @@ FICHIER_PANNEAU = "gazon-intelligent-panel.js"
 WS_LIRE = f"{DOMAIN}/reglages/get"
 WS_ECRIRE = f"{DOMAIN}/reglages/set"
 _CLE_ETAT = f"{DOMAIN}_panneau"
+
+LIAISONS_MATERIEL: tuple[dict[str, Any], ...] = (
+    {
+        "cle": CONF_ZONE_1, "titre": "Vanne de la zone 1", "groupe": "arrosage",
+        "apporte": "Ouvre et ferme la première zone d'arrosage.", "sans_elle": "La zone 1 ne peut pas arroser.",
+        "domaine": "switch", "obligatoire": True,
+    },
+    *tuple({
+        "cle": cle, "titre": f"Vanne de la zone {numero}", "groupe": "arrosage",
+        "apporte": f"Ouvre et ferme la zone d'arrosage {numero}.",
+        "sans_elle": f"La zone {numero} reste inutilisée.", "domaine": "switch", "obligatoire": False,
+    } for numero, cle in enumerate((CONF_ZONE_2, CONF_ZONE_3, CONF_ZONE_4, CONF_ZONE_5), start=2)),
+    {
+        "cle": CONF_ENTITE_TONDEUSE, "titre": "Tondeuse principale", "groupe": "tondeuse",
+        "apporte": "Son état permet de coordonner la tonte, l'arrosage et le garage.",
+        "sans_elle": "Découverte automatique seulement si Home Assistant ne trouve qu'une tondeuse.",
+        "domaine": "lawn_mower", "obligatoire": False,
+    },
+    {
+        "cle": CONF_CAPTEUR_TONDEUSE_ERREUR, "titre": "Erreur de la tondeuse", "groupe": "tondeuse",
+        "apporte": "Donne le code ou le texte exact de la panne.", "sans_elle": "Les attributs de la tondeuse sont utilisés.",
+        "domaine": "sensor", "obligatoire": False,
+    },
+    {
+        "cle": CONF_CAPTEUR_TONDEUSE_BATTERIE, "titre": "Batterie de la tondeuse", "groupe": "tondeuse",
+        "apporte": "Évite un départ automatique avec une batterie insuffisante.", "sans_elle": "Les attributs de la tondeuse sont utilisés.",
+        "domaine": "sensor", "obligatoire": False,
+    },
+    {
+        "cle": CONF_CAPTEUR_TONDEUSE_PLUIE, "titre": "Détecteur de pluie de la tondeuse", "groupe": "tondeuse",
+        "apporte": "Confirme directement que le robot détecte la pluie.", "sans_elle": "La météo du jardin reste utilisée.",
+        "domaine": "binary_sensor", "obligatoire": False,
+    },
+    {
+        "cle": CONF_CAPTEUR_TONDEUSE_EN_CHARGE, "titre": "Tondeuse en charge", "groupe": "tondeuse",
+        "apporte": "Renforce la détection de la tondeuse réellement rangée sur sa base.",
+        "sans_elle": "La charge est déduite de l'état principal.", "domaine": "binary_sensor", "obligatoire": False,
+    },
+    {
+        "cle": CONF_CAPTEUR_TONDEUSE_HAUTEUR_COUPE, "titre": "Hauteur de coupe de la tondeuse", "groupe": "tondeuse",
+        "apporte": "Lit la hauteur réglée sur une tondeuse qui la publie dans Home Assistant.",
+        "sans_elle": "La hauteur saisie manuellement dans Installation est utilisée.", "domaine": "number", "obligatoire": False,
+    },
+)
+_LIAISONS_PAR_CLE = {str(liaison["cle"]): liaison for liaison in LIAISONS_MATERIEL}
 
 # Clé que la page utilise → suffixe de l'identifiant unique de l'entité (`{entry_id}_{suffixe}`).
 ENTITES_DE_LA_PAGE: dict[str, str] = {
@@ -223,6 +274,30 @@ def zones_de_l_instance(hass: Any, coordinateur: Any) -> list[dict[str, Any]]:
     return zones
 
 
+def liaisons_materiel_de_l_instance(hass: Any, coordinateur: Any) -> list[dict[str, Any]]:
+    """Les vannes et signaux de tondeuse configurables depuis l'onglet Entités."""
+    resultat = []
+    zones = {str(coordinateur._get_conf(cle)) for cle in _ZONES if coordinateur._get_conf(cle)}
+    pompe = str(coordinateur._get_conf(CONF_ENTITE_POMPE) or "")
+    for definition in LIAISONS_MATERIEL:
+        cle = str(definition["cle"])
+        entity_id = coordinateur._get_conf(cle) or None
+        domaine = str(definition["domaine"])
+        candidats = _entites_du_domaine(hass, domaine)
+        if cle in _ZONES:
+            candidats = [
+                candidat for candidat in candidats
+                if candidat == entity_id or (candidat != pompe and candidat not in zones)
+            ]
+        resultat.append({
+            **definition,
+            "entity_id": str(entity_id) if entity_id else None,
+            "nom": (_nom_entite(hass, str(entity_id)) or str(entity_id)) if entity_id else None,
+            "choix": [_avec_nom(hass, candidat) for candidat in candidats],
+        })
+    return resultat
+
+
 def produits_complets(coordinateur: Any) -> list[dict[str, Any]]:
     """Les fiches ENTIÈRES : `register_product` remplace une fiche, la page doit tout renvoyer."""
     produits = getattr(getattr(coordinateur, "brain", None), "products", None)
@@ -325,17 +400,17 @@ def lire_notifications(hass: Any, envoi: Any) -> tuple[dict[str, Any], str | Non
     if "mode" in envoi:
         mode = envoi["mode"]
         if not isinstance(mode, str) or mode not in MODES_NOTIFICATIONS:
-            return {}, "Choisis Veille intelligente ou Choix manuel."
+            return {}, "Sélectionner Veille intelligente ou Choix manuel."
         mises_a_jour[CONF_MODE_NOTIFICATIONS] = mode
     if "source" in envoi:
         source = envoi["source"]
         if not isinstance(source, str) or source not in SOURCES_NOTIFICATIONS:
-            return {}, "Choisis les messages de Gazon Intelligent ou du Conseiller Gazon."
+            return {}, "Sélectionner les messages de Gazon Intelligent ou du Conseiller Gazon."
         mises_a_jour[CONF_SOURCE_NOTIFICATIONS] = source
     if "niveau_minimal" in envoi:
         niveau = envoi["niveau_minimal"]
         if not isinstance(niveau, str) or niveau not in NIVEAUX_NOTIFICATIONS:
-            return {}, "Choisis Tout recevoir, Important ou Urgences seulement."
+            return {}, "Sélectionner Tout recevoir, Important ou Urgences seulement."
         mises_a_jour[CONF_NOTIFICATION_NIVEAU_MINIMAL] = niveau
     if "heures_calmes" in envoi:
         calme = envoi["heures_calmes"]
@@ -346,7 +421,7 @@ def lire_notifications(hass: Any, envoi: Any) -> tuple[dict[str, Any], str | Non
         if not all(isinstance(calme[cle], int) and not isinstance(calme[cle], bool) for cle in ("debut", "fin")):
             return {}, "Les heures calmes doivent être des minutes entières."
         if not all(0 <= calme[cle] < 24 * 60 for cle in ("debut", "fin")):
-            return {}, "Choisis des heures calmes comprises dans la journée."
+            return {}, "Sélectionner des heures calmes comprises dans la journée."
         mises_a_jour.update({
             CONF_NOTIFICATION_HEURES_CALMES: calme["active"],
             CONF_NOTIFICATION_HEURES_CALMES_DEBUT: calme["debut"],
@@ -393,6 +468,14 @@ def lire_notifications(hass: Any, envoi: Any) -> tuple[dict[str, Any], str | Non
 _MOTS_DE_POSITION = ("latitude", "longitude", "gps", "position", "location", "coordonnee", "coordinate")
 _DOMAINES_DE_MESURE = ("sensor", "binary_sensor")
 VOISINES_MAX_PAR_APPAREIL = 40
+_ROLES_STATION_METEO = {
+    "capteur_temperature", "capteur_humidite", "capteur_vent", "capteur_rayonnement",
+    "capteur_pression", "capteur_pluie_cumul", "capteur_pluie_24h", "capteur_pluie_actuelle",
+}
+_SIGNATURES_STATION_METEO = {
+    "capteur_vent", "capteur_rayonnement", "capteur_pluie_cumul", "capteur_pluie_actuelle",
+}
+_INDICES_PLUIE_DU_JOUR = ("jour", "today", "daily", "24h", "24_h")
 
 
 def _registre_appareils(hass: Any) -> Any | None:
@@ -413,9 +496,54 @@ def _entites_de_l_appareil(hass: Any, registre_entites: Any, device_id: str) -> 
         return []
 
 
+def _entites_par_appareil(registre_entites: Any) -> dict[str, list[Any]]:
+    """Indexe une fois le registre pour découvrir les stations sans parcours quadratique."""
+    toutes = getattr(registre_entites, "entities", None)
+    if not isinstance(toutes, Mapping):
+        return {}
+    resultat: dict[str, list[Any]] = {}
+    for entree in toutes.values():
+        device_id = getattr(entree, "device_id", None)
+        if device_id:
+            resultat.setdefault(str(device_id), []).append(entree)
+    return resultat
+
+
 def _trahit_une_position(entity_id: str) -> bool:
     texte = entity_id.lower()
     return any(mot in texte for mot in _MOTS_DE_POSITION)
+
+
+def _suggestion_automatique(hass: Any, source: Any, entity_id: str) -> bool:
+    """Plus stricte que le choix manuel pour ne jamais conseiller une pluie au mauvais rôle."""
+    if _refus_de_l_etat(hass, source, entity_id) is not None:
+        return False
+    etat = hass.states.get(entity_id) if hass is not None else None
+    attributs = getattr(etat, "attributes", None) or {}
+    texte = f"{entity_id} {attributs.get('friendly_name') or ''}".casefold().replace("-", "_").replace(" ", "_")
+    classe = str(attributs.get("device_class") or "").casefold()
+    annonce_pluie = any(indice in texte for indice in ("pluie", "rain", "precipitation"))
+    pluie_du_jour = any(indice in texte for indice in _INDICES_PLUIE_DU_JOUR)
+    if source.cle == "capteur_pluie_24h":
+        return pluie_du_jour and (classe == "precipitation" or annonce_pluie)
+    if source.cle == "capteur_pluie_cumul":
+        return not pluie_du_jour and (classe == "precipitation" or annonce_pluie)
+    if source.cle == "capteur_pluie_actuelle":
+        return classe in {"precipitation", "precipitation_intensity"} or annonce_pluie
+    return True
+
+
+def _est_station_meteo_personnelle(hass: Any, entrees: list[Any]) -> bool:
+    """Reconnaît une station par ses mesures, sans liste de marques ni de modèles."""
+    roles = set()
+    for entree in entrees:
+        entity_id = str(getattr(entree, "entity_id", ""))
+        if not entity_id or getattr(entree, "disabled_by", None) is not None or _trahit_une_position(entity_id):
+            continue
+        for source in sources_meteo.SOURCES:
+            if source.cle in _ROLES_STATION_METEO and _suggestion_automatique(hass, source, entity_id):
+                roles.add(source.cle)
+    return len(roles) >= 3 and bool(roles & _SIGNATURES_STATION_METEO)
 
 
 def sources_de_l_instance(hass: Any, coordinateur: Any) -> list[dict[str, Any]]:
@@ -507,7 +635,7 @@ def lire_entrees(hass: Any, coordinateur: Any, envoi: Any) -> tuple[dict[str, st
             return {}, f"Cette entrée n'existe pas : {cle}."
         if valeur in (None, ""):
             if source.obligatoire:
-                return {}, f"« {source.titre} » est obligatoire : choisis-en une autre plutôt que de la retirer."
+                return {}, f"« {source.titre} » est obligatoire : sélectionner une autre entité plutôt que de la retirer."
             choisie = None
         elif not isinstance(valeur, str):
             return {}, "Le choix des entrées n'a pas la bonne forme."
@@ -526,26 +654,75 @@ def lire_entrees(hass: Any, coordinateur: Any, envoi: Any) -> tuple[dict[str, st
     return changements, None
 
 
+def lire_liaisons_materiel(
+    hass: Any, coordinateur: Any, envoi: Any
+) -> tuple[dict[str, str | None], str | None]:
+    """Valide les vannes et les entités de tondeuse comme les sélecteurs Home Assistant."""
+    if not isinstance(envoi, Mapping):
+        return {}, "Le choix des entités du matériel n'a pas la bonne forme."
+    changements: dict[str, str | None] = {}
+    for cle_brute, valeur in envoi.items():
+        cle = str(cle_brute)
+        definition = _LIAISONS_PAR_CLE.get(cle)
+        if definition is None:
+            return {}, f"Cette liaison n'existe pas : {cle}."
+        if valeur in (None, ""):
+            if definition["obligatoire"]:
+                return {}, f"« {definition['titre']} » est obligatoire : sélectionner une autre entité."
+            choisie = None
+        elif not isinstance(valeur, str):
+            return {}, "Le choix des entités du matériel n'a pas la bonne forme."
+        else:
+            domaine = str(definition["domaine"])
+            if not valeur.startswith(f"{domaine}.") or hass.states.get(valeur) is None:
+                return {}, f"Cette entité {domaine} n'existe pas dans Home Assistant : {valeur}."
+            if _vient_de_l_integration(hass, valeur):
+                return {}, f"« {valeur} » vient de Gazon Intelligent : l'intégration ne peut pas se lire elle-même."
+            choisie = valeur
+        if choisie != (coordinateur._get_conf(cle) or None):
+            changements[cle] = choisie
+    if any(cle in changements for cle in _ZONES):
+        futures_zones = {
+            cle: changements.get(cle, coordinateur._get_conf(cle) or None)
+            for cle in _ZONES
+        }
+        utilisees = [str(valeur) for valeur in futures_zones.values() if valeur]
+        if len(utilisees) != len(set(utilisees)):
+            return {}, "Une même vanne ne peut pas être utilisée par plusieurs zones."
+        pompe = coordinateur._get_conf(CONF_ENTITE_POMPE) or None
+        if pompe and str(pompe) in utilisees:
+            return {}, "L'interrupteur de la pompe ne peut pas aussi servir de vanne."
+    return changements, None
+
+
 def appareils_des_sources(hass: Any, lignes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Les appareils des entrées branchées, avec TOUTES leurs mesures : l'onglet Météo les montre.
+    """Les appareils branchés et les stations météo personnelles détectées, avec leurs mesures.
 
     Seuls les capteurs sont gardés (ni boutons, ni entités désactivées), et jamais ce qui trahit
-    une position. Pour chaque entrée non branchée qui a des `indices`, les mesures voisines qui
-    pourraient la tenir sont signalées.
+    une position. Les suggestions passent toutes les règles de lecture et un filtre plus strict
+    pour distinguer la pluie du jour d'un compteur cumulatif.
     """
     registre_entites = _registre_entites(hass)
     registre_appareils = _registre_appareils(hass)
     if registre_entites is None:
         return []
-    libres = [s for s in sources_meteo.SOURCES if s.indices and not any(
+    libres = [s for s in sources_meteo.SOURCES if not any(
         ligne["cle"] == s.cle and ligne["entity_id"] for ligne in lignes
     )]
     branchees = {ligne["entity_id"]: ligne["cle"] for ligne in lignes if ligne["entity_id"]}
+    appareils_branches = list(dict.fromkeys(ligne["appareil"] for ligne in lignes if ligne["appareil"]))
+    index = _entites_par_appareil(registre_entites)
+    stations_detectees = [
+        device_id for device_id, entrees in index.items()
+        if device_id not in appareils_branches and _est_station_meteo_personnelle(hass, entrees)
+    ]
     appareils: list[dict[str, Any]] = []
-    for device_id in dict.fromkeys(ligne["appareil"] for ligne in lignes if ligne["appareil"]):
+    for device_id in [*appareils_branches, *stations_detectees]:
         appareil = registre_appareils.async_get(device_id) if registre_appareils is not None else None
         entites = []
-        for entree in _entites_de_l_appareil(hass, registre_entites, device_id):
+        entrees_appareil = index.get(str(device_id)) or _entites_de_l_appareil(hass, registre_entites, device_id)
+        station_personnelle = _est_station_meteo_personnelle(hass, entrees_appareil)
+        for entree in entrees_appareil:
             entity_id = str(entree.entity_id)
             if entity_id.split(".", 1)[0] not in _DOMAINES_DE_MESURE:
                 continue
@@ -556,8 +733,7 @@ def appareils_des_sources(hass: Any, lignes: list[dict[str, Any]]) -> list[dict[
             pourrait = [
                 s.cle for s in libres
                 if entity_id not in branchees
-                and any(indice in entity_id.lower() for indice in s.indices)
-                and _refus_de_l_etat(hass, s, entity_id) is None
+                and _suggestion_automatique(hass, s, entity_id)
             ]
             entites.append({
                 "entity_id": entity_id,
@@ -573,6 +749,8 @@ def appareils_des_sources(hass: Any, lignes: list[dict[str, Any]]) -> list[dict[
             "nom": (getattr(appareil, "name_by_user", None) or getattr(appareil, "name", None)) if appareil else None,
             "fabricant": getattr(appareil, "manufacturer", None) if appareil else None,
             "modele": getattr(appareil, "model", None) if appareil else None,
+            "station_personnelle": station_personnelle,
+            "detectee": device_id not in appareils_branches,
             "entites": entites[:VOISINES_MAX_PAR_APPAREIL],
         })
     return appareils
@@ -650,6 +828,7 @@ def donnees_de_la_page(hass: Any, coordinateur: Any) -> dict[str, Any]:
         "meteo": coordinateur._get_conf(CONF_ENTITE_METEO) or None,
         "notifications": notifications_de_l_instance(hass, entry),
         "sources": (sources := sources_de_l_instance(hass, coordinateur)),
+        "liaisons_materiel": liaisons_materiel_de_l_instance(hass, coordinateur),
         "appareils": appareils_des_sources(hass, sources),
         "pompe_choix": pompe_de_l_instance(hass, coordinateur),
         "garage_tondeuse": garage_tondeuse_de_l_instance(hass, coordinateur),
@@ -669,6 +848,7 @@ async def ecrire_reglages(
     pompe: Any = ...,
     garage_tondeuse: Any = ...,
     entrees: Any = None,
+    liaisons_materiel: Any = None,
 ) -> dict[str, Any]:
     """Valide et enregistre les changements de la page ; rien n'est écrit si une valeur est refusée.
 
@@ -679,6 +859,7 @@ async def ecrire_reglages(
     (`...`), la pompe ne change pas.
     `entrees` (0.95.0) : les entrées météo et jardin à brancher ou retirer. Jamais pendant un
     arrosage : le changement recharge l'intégration.
+    `liaisons_materiel` : les vannes et les entrées de la tondeuse, soumises au même verrou.
     """
     if not isinstance(valeurs, Mapping) or not isinstance(choix, Mapping):
         return {"ok": False, "erreurs": {"_": "Ce qui a été envoyé n'a pas la bonne forme."}}
@@ -706,16 +887,25 @@ async def ecrire_reglages(
     changements_entrees: dict[str, str | None] = {}
     if entrees is not None:
         changements_entrees, refus = lire_entrees(hass, coordinateur, entrees)
-        if refus is None and changements_entrees and coordinateur.arrosage_en_cours():
-            refus = "Un arrosage est en cours : change les entrées quand il sera fini, le changement recharge l'intégration."
         if refus:
             erreurs["entrees"] = refus
+    changements_liaisons: dict[str, str | None] = {}
+    if liaisons_materiel is not None:
+        changements_liaisons, refus = lire_liaisons_materiel(hass, coordinateur, liaisons_materiel)
+        if refus:
+            erreurs["liaisons_materiel"] = refus
+    changements_sources = {**changements_entrees, **changements_liaisons}
+    if not erreurs and changements_sources and coordinateur.arrosage_en_cours():
+        erreurs["entrees"] = (
+            "Un arrosage est en cours : modifier les entrées après sa fin, "
+            "car le changement recharge l'intégration."
+        )
     if erreurs:
         return {"ok": False, "erreurs": erreurs}
     nouvelles = registre.nettoyer(ensemble)
     resultat: dict[str, Any] = {"ok": True, "valeurs": registre.valeurs_effectives(nouvelles)}
     # Seulement des entrées : rien d'autre à réécrire, ni de cycle à relancer en plus.
-    if valeurs or choix or options_alertes or entrees is None:
+    if valeurs or choix or options_alertes or (entrees is None and liaisons_materiel is None):
         mises_a_jour: dict[str, Any] = {CONF_REGLAGES: nouvelles, **options_alertes}
         if CONF_TYPE_SOL in choix:
             mises_a_jour[CONF_TYPE_SOL] = choix[CONF_TYPE_SOL]
@@ -725,8 +915,8 @@ async def ecrire_reglages(
             mises_a_jour[CONF_TONDEUSE_CRENEAUX_DEPART] = choix[CONF_TONDEUSE_CRENEAUX_DEPART]
         # Le chemin des autres réglages de l'entrée : options fusionnées, puis un cycle relancé.
         await coordinateur.async_update_config(mises_a_jour)
-    if changements_entrees:
-        resultat["recharge"] = await coordinateur.async_changer_entrees(changements_entrees)
+    if changements_sources:
+        resultat["recharge"] = await coordinateur.async_changer_entrees(changements_sources)
     resultat["choix"] = _choix(coordinateur)
     if hass is not None:
         resultat["notifications"] = notifications_de_l_instance(hass, coordinateur.entry)
@@ -737,6 +927,9 @@ async def ecrire_reglages(
             resultat["meteo"] = coordinateur._get_conf(CONF_ENTITE_METEO) or None
             resultat["sources"] = sources_de_l_instance(hass, coordinateur)
             resultat["appareils"] = appareils_des_sources(hass, resultat["sources"])
+        if liaisons_materiel is not None:
+            resultat["liaisons_materiel"] = liaisons_materiel_de_l_instance(hass, coordinateur)
+            resultat["zones"] = zones_de_l_instance(hass, coordinateur)
     return resultat
 
 
@@ -763,6 +956,7 @@ async def _ws_ecrire(hass: Any, connection: Any, msg: dict[str, Any]) -> None:
             pompe=msg["pompe"] if "pompe" in msg else ...,
             garage_tondeuse=msg["garage_tondeuse"] if "garage_tondeuse" in msg else ...,
             entrees=msg.get("entrees"),
+            liaisons_materiel=msg.get("liaisons_materiel"),
         )
     except Exception as err:  # noqa: BLE001 - l'erreur est rendue à la page, en clair
         _LOGGER.exception("Réglages de la page Gazon non enregistrés")
@@ -801,6 +995,7 @@ def async_enregistrer_commandes(hass: Any) -> None:
                 vol.Optional("garage_tondeuse"): object,
                 # Idem : `lire_entrees` juge chaque entrée (0.95.0).
                 vol.Optional("entrees"): object,
+                vol.Optional("liaisons_materiel"): object,
             }
         )(websocket_api.async_response(_ws_ecrire))
     )

@@ -1,5 +1,301 @@
 # Changelog
 
+## 1.0.0-rc.1
+
+- **Premiere candidate officielle a la version stable** : les fonctions validees des versions
+  0.97.10 a 0.97.24 sont regroupees sous un numero SemVer lisible. `rc.1` signifie que le contenu
+  vise la future 1.0.0, mais qu'il reste encore une validation reelle avant de le declarer stable.
+- **Aucun changement de comportement dans ce changement de numero** : calculs, seuils,
+  arrosage, tonte, garage, notifications, reglages et valeurs existantes restent identiques a la
+  0.97.24.
+- **Validation exigee avant 1.0.0** : tester le bouton reel `5 min` dans un creneau surveille,
+  puis observer cette candidate pendant au moins 24 heures sans erreur ni regression. Une
+  correction eventuelle produira `1.0.0-rc.2`; une observation propre permettra de publier
+  `1.0.0` apres accord explicite.
+- **Double verification de la candidate fonctionnelle** : 2 157 tests et 3 212 sous-tests sous
+  Pytest, Ruff vert et Mypy sans probleme sur 53 fichiers avant le changement de numero.
+
+## 0.97.24
+
+- **Nouveau rôle « Point de rosée (air) » dans Réglages > Entités** : le bandeau météo affiche
+  plusieurs valeurs (UV, point de rosée, condition) sans qu'on puisse toutes les remplacer par ses
+  propres capteurs. Vérifié une par une : UV et la plage du jour sont purement cosmétiques ou déjà
+  masqués par la couverture nuageuse mesurée — rien à gagner à les brancher. Le point de rosée,
+  lui, sert réellement de repli à la détection de l'herbe mouillée (`estimate_rosee`) quand aucune
+  « Rosée sur l'herbe » n'est branchée, et ne lisait jusqu'ici que la prévision générique de
+  l'entité météo au lieu d'une station personnelle.
+- **Rôle bien distinct de « Rosée sur l'herbe »**, volontairement voisin dans `sources.py` pour le
+  contraste : celui-ci attend une température (°C, avec « rosée » ou « dew » dans le nom d'entité,
+  jamais une température de l'air ordinaire) ; l'autre une humidité du feuillage (%) et refuse
+  justement toute température, seule protection qui évitait de reproduire le bug de 0.94.0. Repli
+  inchangé si le rôle n'est pas branché : le point de rosée de l'entité météo, comme avant.
+- **Vérifié** : suite complète (2157 tests, 3212 sous-tests), banc de mutations sur la priorité
+  capteur/entité météo (le mutant inversant l'ordre a bien fait échouer 3 tests), `git diff
+  --check` verts. Aucun changement pour une installation qui ne branche pas ce nouveau rôle.
+
+## 0.97.23
+
+- **Le panneau Semis/Sursemis laissait croire que les réglages « Commun Semis / Sursemis »
+  pilotaient aussi la tonte des deux modes de la même façon** : signalé — « pour réglage semis et
+  sursemis ils ne font pas la même chose ». Vérifié dans le code : le délai avant la reprise de la
+  tonte n'est PAS partagé. En Semis (terrain nu), il est fixé par la fin d'enracinement
+  (`graines_fin_enracinement`, un réglage de la page « Graines », 24 jours par défaut). En
+  Sursemis (gazon déjà en place), il est fixé par son propre réglage séparé (`sursemis_levee`,
+  7 jours par défaut). Seul l'arrosage des graines est réellement commun aux deux modes.
+- **Trois corrections de texte, aucun changement de comportement** : la phrase d'introduction des
+  onglets Semis et Sursemis précise maintenant que le libellé « Commun Semis / Sursemis » ne vaut
+  que pour l'arrosage. La carte « La hauteur conseillée à chaque étape » (onglet Semis) affiche en
+  plus une note dynamique donnant le jour exact où la tondeuse reprend, avec un renvoi explicite
+  vers le réglage séparé du Sursemis pour éviter de confondre les deux délais.
+- **Vérifié** : contrôle visuel dans l'aperçu local (fixture `?example=1`) sur les deux onglets, en
+  ordinateur ; la nouvelle note reprend la valeur réelle du réglage (« jour 24 ») sans débordement.
+  Aucun réglage, seuil ni calcul modifié — texte d'affichage seulement.
+
+## 0.97.22
+
+- **Les délais du garage de la tondeuse se règlent à la seconde près** : signalé — « pour le volet
+  ça serait bien qu'il y ait des secondes pour que ce soit plus précis ». Le délai avant départ
+  (après ouverture confirmée) et le délai avant fermeture (après rentrée confirmée) passaient
+  d'une minute à l'autre sans étape intermédiaire. Ils se règlent maintenant au quart de minute
+  (15 s) — l'affichage montre par exemple « 1 min 15 s » au lieu d'arrondir à « 1 min ». Les
+  valeurs par défaut ne changent pas (2 min chacune) ; aucun changement pour une installation qui
+  n'a pas encore de volet configuré.
+- **Vérifié** : 2148 tests (3 nouveaux, dont un qui prouve — par mutation volontaire — que
+  l'affichage des secondes est vraiment testé et pas juste présent), Ruff, Mypy (53 fichiers) et
+  `git diff --check` verts. Contrôlé dans l'aperçu local (fixture `?example=1`, volet configuré) :
+  le curseur avance par pas de 15 s, la bulle affiche « 1 min 15 s », « Revenir à 2 min » reste
+  correct, et le résumé du sous-menu replié aussi.
+
+## 0.97.21
+
+- **Le bandeau météo compact disait « rosée », pas « point de rosée »** : signalé dans l'audit du
+  20/09 comme dernier point avant la 1.0.0 (la page Météo détaillée avait déjà le bon libellé).
+  Le badge de la carte « En ce moment » affiche maintenant « Point de rosée » — évite la confusion
+  avec la rosée sur l'herbe (`capteur_rosee`, un concept différent, voir la note d'architecture).
+  Aucun seuil ni calcul touché, texte d'affichage seulement.
+- **Vérifié** : 2 145 tests, Ruff et `git diff --check` verts. Contrôlé à l'écran sur ordinateur
+  (le badge s'affiche sur sa propre ligne, sans débordement) et sur téléphone (déjà masqué par la
+  limite existante de 4 badges visibles sur petit écran — aucun changement visuel là).
+
+## 0.97.20
+
+- **Réduction par zone ombragée** : chaque vanne configurée dispose maintenant d'un réglage de
+  `0 à 50 %` dans `Réglages > Arrosage > Les zones ombragées`. Une réduction de 20 % raccourcit
+  uniquement la durée de cette zone de 20 %, sans modifier les autres zones.
+- **Compatibilité totale par défaut** : les cinq réductions valent `0 %` après mise à jour. Sans
+  personnalisation, les durées, doses, résumés, historiques et décisions restent identiques à la
+  version précédente.
+- **Plan et bilan cohérents** : le débit physique de l'arroseur reste inchangé. Le plan conserve
+  la dose générale comme référence, expose la réduction de chaque zone et enregistre dans le
+  bilan du sol la lame moyenne réellement délivrée. Un cycle ajusté terminé n'est pas signalé à
+  tort comme incomplet.
+- **Panneau adapté à l'installation** : seules les zones réellement configurées sont affichées,
+  avec leur nom Home Assistant. Le groupe est ouvert sur ordinateur, replié sur téléphone, et
+  chaque réduction porte un avertissement contre un réglage excessif.
+- **Double vérification locale** : rendu contrôlé sur ordinateur et au format app Home Assistant
+  390 × 844, y compris une modification à 20 %, la barre Enregistrer et son annulation. Les
+  suites complètes passent avec **2 145 tests et 3 198 sous-tests** sous Pytest, puis **2 117
+  tests** sous Unittest. Ruff et Mypy sur 53 fichiers sont verts.
+
+## 0.97.19
+
+- **Semis et Sursemis enfin complets** : chacun des deux onglets réunit désormais le programme
+  d'arrosage des graines et ses propres règles de tonte. Semis affiche 19 réglages réels dans 10
+  sous-menus ; Sursemis en affiche 22 dans 12 sous-menus.
+- **Réglages communs sans doublon** : durée du suivi, étapes, doses, nombres de cycles, fenêtre
+  horaire, météo et alerte restent stockés une seule fois et pilotent réellement les deux modes.
+  La mention `Commun Semis / Sursemis` évite de faire croire à deux valeurs indépendantes.
+- **Navigation simplifiée** : l'ancien onglet séparé `Graines` disparaît. Les sous-menus restent
+  repliés pour garder une page lisible, affichent leur valeur résumée et la recherche ouvre
+  directement le bon sous-menu dans Semis ou Sursemis.
+- **Même rangement dans tous les réglages** : Tonte, Arrosage, Semis, Sursemis, Modes,
+  Installation et Entités utilisent les mêmes groupes lisibles. Ils sont ouverts sur grand écran
+  et repliés sur téléphone ; un groupe modifié se rouvre automatiquement pour ne pas masquer une
+  valeur en attente. Les grilles stables évitent les grands espaces vides entre deux groupes.
+- **En-tête mobile compact** : `Réglages du gazon` remplace le grand cadre explicatif. Sur
+  téléphone, il mesure 102 px, masque le texte déjà connu et range les états sur une seule ligne
+  glissable ; sur ordinateur, l'explication complète reste visible.
+- **Restauration cohérente** : `Tout remettre comme conseillé` restaure à la fois les réglages
+  communs aux graines et ceux propres au programme consulté, sans toucher aux autres familles.
+- **Moteur inchangé** : aucun seuil agronomique, dose, adaptation météo, calendrier, décision
+  d'arrosage ou comportement de tonte n'est modifié par cette réorganisation du panneau.
+- **Double vérification locale** : les sept onglets ont été contrôlés sur ordinateur et au format
+  téléphone Home Assistant 390 × 844, groupes fermés puis ouverts, sans débordement. Les suites
+  complètes passent avec **2 140 tests et 3 178 sous-tests** sous Pytest, puis **2 112 tests** sous
+  Unittest. Ruff, Mypy sur 53 fichiers, compilation Python, JavaScript, JSON et diff sont verts.
+
+## 0.97.18
+
+- **Nouvel onglet Entités** : toutes les liaisons externes utilisées par l'intégration sont
+  regroupées dans Réglages, par famille : vannes, tondeuse et ses signaux, météo et capteurs,
+  pompe, volet du garage, appareils de notification et IA.
+- **Changement rapide et expliqué** : chaque liaison affiche son rôle, l'identifiant Home
+  Assistant, sa valeur ou son état actuel, son comportement de repli et un bouton pour la
+  remplacer ou la retirer lorsque c'est autorisé.
+- **Vannes et tondeuse enfin modifiables depuis la page** : les cinq zones, la tondeuse
+  principale, son erreur, sa batterie, sa pluie, sa charge et sa hauteur de coupe utilisent le
+  même chemin de rechargement surveillé que les capteurs météo. Le prochain départ constructeur
+  reste compatible en arrière-plan, mais n'est pas proposé ici : le pilotage natif décide lui-même
+  quand partir et ouvre le garage avant sa propre commande.
+- **Protections serveur** : mauvais domaine, entité absente, auto-référence, vanne dupliquée,
+  pompe utilisée comme vanne et changement pendant un arrosage sont refusés avant toute écriture.
+  La zone 1 reste obligatoire et les listes ne proposent pas les vannes déjà affectées.
+- **Rangement sans doublon** : Installation conserve les comportements et automatismes ; Entités
+  conserve les branchements. Les boutons d'annulation ne touchent qu'aux changements de leur
+  propre onglet.
+- **Stations météo personnelles détectées** : une station non encore branchée est reconnue à
+  partir de ses mesures compatibles, sans liste fermée de marques ou de modèles. Ses capteurs sont
+  proposés en priorité dans les fenêtres de choix, mais rien n'est relié automatiquement.
+- **Suggestions météo prudentes** : pluie cumulée, pluie du jour et intensité sont distinguées ;
+  les rafales, les lux, la batterie et le point de rosée ne sont pas proposés pour un mauvais rôle.
+  Une humidité foliaire ne peut plus être confondue avec une humidité du sol.
+- **WS90 réelle vérifiée** : l'installation Home Assistant a confirmé les entités Shelly WS90 de
+  température, humidité, pression, vent et pluie. Le rayonnement reste fourni par une source en
+  W/m², car la luminosité en lux de la WS90 n'est pas interchangeable.
+- **Rythme de tonte contextualisé** : en Semis et Sursemis, la page Tonte affiche désormais
+  `Rythme actuel` avec le mode concerné au lieu de présenter la fréquence adaptée aux jeunes
+  pousses comme une simple cible mensuelle. Le libellé `Ce mois-ci` reste utilisé en mode normal.
+- **Bandeau mobile réellement compact** : `En ce moment` utilise une tête resserrée, une seule
+  rangée de pastilles glissable et une météo sur une ligne. Les six scénarios de l'aperçu tiennent
+  entre 157 et 245 px de haut, y compris l'arrosage actif avec progression et bouton d'arrêt.
+  Semis et Sursemis ne répètent plus deux fois le mode et son étape.
+- **Typographie adaptée dans tout le panneau** : titres, descriptions, valeurs, onglets, boutons,
+  météo, réglages et fenêtres utilisent une hiérarchie plus compacte sur ordinateur, tablette et
+  téléphone. Les zones tactiles gardent leur taille et les champs restent à 16 px sur mobile pour
+  éviter le zoom automatique. Les identifiants d'entité longs peuvent revenir à la ligne.
+- **Profils du gazon plus directs** : les trois longues lignes sont remplacées par un sélecteur
+  segmenté compact. Ornement, Jeu et Rustique affichent leur objectif et leur état dans un seul
+  bloc ; le profil actif est immédiatement visible et les autres conservent l'action `Appliquer`.
+- **Garage de la tondeuse mieux rangé et plus sûr** : les automatismes sont regroupés dans deux
+  sous-menus compacts, `Avant le départ` et `Au retour`, avec un résumé permanent des choix. Un
+  nouveau seuil sensible, conseillé à 95 %, attend l'ouverture réelle du passage lorsqu'un volet
+  publie sa position ; les volets sans position conservent la vérification par état. La recherche
+  ouvre automatiquement le sous-menu qui contient le réglage demandé.
+- **Double verification locale** : l'onglet et ses fenetres ont ete controles sur ordinateur et
+  au format telephone Home Assistant 390 x 844. Les suites completes passent avec **2 132 tests
+  et 3 178 sous-tests** sous Pytest, puis **2 104 tests** avec Unittest. Ruff, Mypy sur 53
+  fichiers, compilation Python, syntaxe JavaScript, manifeste JSON et `git diff --check` sont
+  verts.
+
+## 0.97.17
+
+- **Publications meteo plafonnees sans ralentir le moteur** : les sept capteurs optimises en
+  0.97.16 continuent d'etre recalcules a chaque evenement, mais une variation de leurs seuls
+  attributs ne republie l'entite qu'une fois par minute, quelle que soit l'origine du recalcul.
+  Une modification de l'etat principal ou de la disponibilite reste immediate.
+- **Recorder et interface alignes** : l'historique conserve les changements utiles et les
+  statistiques, tandis que le panneau recoit au pire une minute plus tard les diagnostics qui ne
+  changent aucune decision visible. Les automatismes utilisent toujours le snapshot interne frais.
+
+## 0.97.16
+
+- **Recorder beaucoup moins sollicite sans ralentir les decisions** : les sept capteurs les plus
+  bavards conservent leurs attributs complets en direct, mais Home Assistant ne les recopie plus
+  dans l'historique a chaque evenement meteo. Leur etat principal et leurs statistiques restent
+  enregistres normalement.
+- **ETo horaire lisible et stable** : l'entite affiche maintenant le taux a deux decimales. Le
+  calcul interne FAO-56 et le bilan du sol conservent toute leur precision ; seule la valeur
+  d'affichage/historique est arrondie, avec une erreur maximale de 0,005 mm/h.
+- **Perimetre volontairement etroit** : aucun intervalle de calcul, seuil, garde, automatisme,
+  dose d'eau ou commande de tondeuse n'est modifie.
+
+## 0.97.15
+
+- **Un départ, puis autonomie constructeur** : après un `start_mowing` accepté, Gazon
+  Intelligent ne renvoie plus de commande à chaque recharge. La tondeuse gère seule ses retours
+  batterie et ses redéparts jusqu'à la fin du travail.
+- **Reprise unique après rappel** : si l'intégration rappelle ce cycle avec `dock` parce que les
+  conditions deviennent bloquantes, elle mémorise une reprise due. Quand les sécurités, la
+  station et la batterie sont de nouveau prêtes, elle envoie exactement un `start_mowing`, puis
+  rend immédiatement la main à l'autonomie de la tondeuse.
+- **Pas de fausse responsabilité** : un retour constructeur, une commande seulement observée ou
+  un service `dock` refusé ne créent aucune reprise. La dette et le cycle survivent aux
+  redémarrages, et la fin est reconnue même si l'inscription automatique des tontes est coupée.
+- **Garage compatible** : le volet reste disponible pendant les recharges autonomes. Après un
+  rappel de l'intégration, il peut être fermé pendant l'attente puis rouvert et confirmé avant
+  l'unique reprise.
+- **État visible et réglage expliqué** : la page Tonte distingue départ envoyé, cycle autonome et
+  reprise attendue. La page Réglages explique cette répartition des responsabilités dans la carte
+  du pilotage automatique.
+- **Double vérification** : 64 tests ciblés et 261 sous-tests, puis deux suites complètes de
+  **2 118 tests et 3 161 sous-tests**. Ruff, Mypy sur 53 fichiers, compilation Python, syntaxe
+  JavaScript, JSON et `git diff --check` sont verts. La carte Réglages a aussi été contrôlée dans
+  l'aperçu au format téléphone Home Assistant 390 × 844.
+
+## 0.97.14
+
+- **Ancien travail de tonte correctement rangé** : une tâche inachevée reste « en pause à la
+  base » pendant une heure. Au-delà, si la tondeuse est toujours à quai, inactive et sans passe
+  en cours, l'état courant redevient « au repos ».
+- **Reprise préservée** : la tâche, sa progression et ses minutes restent mémorisées. Le panneau
+  les présente séparément comme « Travail précédent · reprise possible », avec la date de mise en
+  pause, et une sortie ultérieure reprend le suivi sans créer ni perdre une tonte.
+- **Aucune fausse déclaration** : le délai ne transforme jamais une tâche inachevée en travail
+  terminé et n'écrit rien dans l'historique de tonte.
+- **Double vérification** : 51 tests ciblés et 42 sous-tests, puis deux suites complètes vertes
+  (jusqu'à **2 109 tests** et **3 159 sous-tests**), Ruff, Mypy sur 53 fichiers, compilation Python, syntaxe
+  JavaScript, JSON et `git diff --check` verts.
+
+## 0.97.13
+
+- **Motif exact en Semis et Sursemis** : le bilan hydrique journalier est désormais présenté
+  comme le signal de la surface du semis. Si la réserve profonde est connue, le texte précise
+  qu'elle n'est volontairement pas utilisée pour les graines au lieu d'annoncer qu'elle manque.
+- **Cause et contexte séparés** : lorsqu'un facteur météo fait réellement monter le niveau, la
+  première raison publiée est marquée `Déclencheur` et le bilan de surface devient `Contexte`.
+  La tuile affiche ainsi la cause réelle, tandis que le détail conserve l'information hydrique.
+- **Calcul inchangé** : aucun seuil, niveau de risque, programme d'arrosage ou automatisme n'est
+  modifié par cette correction de traçabilité.
+- **Double vérification** : tests ciblés avec cinq familles de risque, puis suite complète de
+  **2 085 tests**, Ruff, Mypy sur 53 fichiers, compilation Python, JSON et diff verts.
+
+## 0.97.12
+
+- **Les rafales isolées ne font plus clignoter le risque gazon** : une hausse du palier ET0 doit
+  maintenant rester présente pendant deux minutes avant d'entrer dans le score de stress. La
+  séquence réelle observée toutes les 10 à 60 secondes reste donc au niveau précédent.
+- **Les vraies alertes restent immédiates** : réserve épuisée, chaleur sévère, vent soutenu direct
+  et gazon très haut ne passent pas par cette temporisation. Les seuils agronomiques sont inchangés.
+- **Mémoire persistante** : le palier candidat et son heure de début survivent aux recalculs et aux
+  redémarrages Home Assistant. Une baisse sous le seuil annule immédiatement la candidature, tandis
+  que la bande morte de descente existante reste appliquée au palier déjà validé.
+- **Double vérification** : 10 scénarios ciblés puis suite complète de **2 081 tests**, Ruff, Mypy
+  sur 53 fichiers, compilation Python, JSON et `git diff --check` verts.
+
+## 0.97.11
+
+- **La zone « 5 min » ne dépend plus du navigateur** : le panneau appelle maintenant le service
+  persistant `gazon_intelligent.run_zone_for_duration`. Fermer la page ou l'app Home Assistant
+  n'annule plus la fermeture programmée de la vanne.
+- **Reprise sûre après redémarrage** : la zone temporisée utilise le moteur de sessions
+  d'arrosage existant. L'échéance, la zone active et l'eau réellement versée sont persistées ;
+  après une interruption, seule la durée restante est exécutée.
+- **Pompe facultative protégée** : si la séquence démarre la pompe configurée, elle en conserve la
+  responsabilité et l'arrête avec trois tentatives. Une pompe déjà en marche avant le cycle reste
+  intacte. Un échec de fermeture pose le verrou de sécurité existant.
+- **Arrêt manuel cohérent** : le bouton Arrêter passe aussi par `stop_irrigation`, ce qui annule la
+  reprise persistante avant de confirmer la fermeture directe de la vanne.
+- **Vérifié deux fois** : 6 tests ciblés dédiés, suite complète de **2 076 tests**, Ruff, Mypy sur
+  53 fichiers, syntaxe JavaScript et `git diff --check` verts.
+
+## 0.97.10
+
+- **Textes adaptés à toutes les installations** : la page Gazon, les réglages, les fenêtres,
+  les notifications, les erreurs et les conseils ne font plus référence à une personne ni à
+  « ton/ta/tes ». Les libellés décrivent désormais le gazon, la tondeuse et les appareils de
+  manière neutre. `Mon installation`, `Ma tondeuse`, `Mes arroseurs` et `Mes produits` deviennent
+  notamment `Installation`, `Tondeuse`, `Arroseurs` et `Produits enregistrés`.
+- **Conseiller Gazon neutre** : les consignes envoyées à l'IA interdisent désormais les noms, le
+  tutoiement et les détails personnels absents de l'état fourni. Le contenu factuel, les niveaux
+  d'urgence et les actions recommandées restent inchangés.
+- **Aucune logique métier modifiée** : cette version ne change ni les calculs d'arrosage et de
+  tonte, ni les sécurités, ni les commandes Home Assistant. Les noms d'entités et d'appareils
+  restent naturellement ceux définis par chaque installation.
+- **Vérifié deux fois** : 250 tests ciblés puis la suite complète de **2 069 tests**, Ruff, Mypy
+  sur 53 fichiers, syntaxe JavaScript, JSON et `git diff --check` sont verts. L'aperçu a été
+  régénéré et contrôlé sur téléphone Home Assistant 390 × 844 ainsi que sur bureau, sans
+  chevauchement ni débordement des nouveaux textes.
+
 ## 0.97.9
 
 - **Une tâche inachevée à quai n'est plus présentée comme une tondeuse encore au travail.** Le

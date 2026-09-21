@@ -61,6 +61,27 @@ start_manual_irrigation:
           step: 0.5
           unit_of_measurement: mm
 
+run_zone_for_duration:
+  description: "Ouvre une zone configurée pendant une durée bornée. L'intégration persiste l'échéance, referme la vanne même si la page est fermée et reprend proprement après un redémarrage de Home Assistant."
+  target:
+    entity:
+      integration: gazon_intelligent
+  fields:
+    zone_entity_id:
+      required: true
+      selector:
+        entity:
+          domain: switch
+    duration_minutes:
+      required: false
+      default: 5
+      selector:
+        number:
+          min: 0.5
+          max: 180
+          step: 0.5
+          unit_of_measurement: min
+
 start_auto_irrigation:
   description: "Lance chaque zone à la suite avec le débit configuré. Si l'eau à apporter est vide, l'intégration utilise la valeur calculée automatiquement."
   target:
@@ -381,8 +402,8 @@ recalibrate_reserve:
       required: false
       default: true
       description: >-
-        Activé (défaut) : la valeur est figée jusqu'à minuit — c'est ce qu'il faut quand tu
-        viens de sonder ton sol, sinon le recalcul du cycle suivant écraserait ta mesure.
+        Activé (défaut) : la valeur est figée jusqu'à minuit — ce réglage convient après une
+        mesure manuelle du sol, sinon le recalcul du cycle suivant écraserait la mesure.
         Désactivé : la valeur est posée mais la journée continue normalement (évapotranspiration
         débitée, pluie et arrosage crédités, jauge qui redescend). À utiliser pour corriger une
         comptabilité faussée en cours de journée sans perdre le reste de celle-ci.
@@ -412,7 +433,7 @@ send_notification:
 
 ask_ai:
   description: >-
-    Pose une question à l'IA de Home Assistant (action « Générer des données ») en lui
+    Permet de poser une question à l'IA de Home Assistant (action « Générer des données ») en lui
     donnant l'état du gazon. L'IA ne commande rien : elle répond en texte. Chaque appel
     compte auprès du fournisseur d'IA configuré. Rend la réponse ; peut aussi l'envoyer
     aux téléphones choisis.

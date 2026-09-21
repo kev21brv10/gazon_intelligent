@@ -69,7 +69,8 @@ class LaListeDesEntreesTests(unittest.TestCase):
         export = sources.exporter()
         json.dumps(export)
         self.assertEqual([e["cle"] for e in export], [s.cle for s in sources.SOURCES])
-        self.assertEqual(export[6]["indices"], ["foliaire", "feuillage", "leaf_wetness", "leaf_moisture"])
+        self.assertEqual(export[6]["indices"], ["rosee", "dew"])
+        self.assertEqual(export[7]["indices"], ["foliaire", "feuillage", "leaf_wetness", "leaf_moisture"])
         self.assertEqual(export[1]["noms_refuses"][:2], ["rosee", "dew"])
 
     def test_un_point_de_rosee_n_est_pas_propose_pour_la_rosee(self) -> None:
@@ -82,6 +83,17 @@ class LaListeDesEntreesTests(unittest.TestCase):
             with self.subTest(nom=nom):
                 self.assertFalse(any(indice in nom for indice in rosee.indices))
         self.assertTrue(any(indice in "sensor.jardin_humidite_foliaire" for indice in rosee.indices))
+
+    def test_le_point_de_rosee_air_est_distinct_de_la_rosee_sur_l_herbe(self) -> None:
+        # 0.97.24 : les deux rôles sont volontairement voisins dans le fichier (une température
+        # pour l'un, une humidité du feuillage pour l'autre) — jamais interchangeables.
+        point_de_rosee = sources.PAR_CLE["capteur_point_de_rosee"]
+        rosee = sources.PAR_CLE["capteur_rosee"]
+        self.assertIn("(air)", point_de_rosee.titre)
+        self.assertNotIn("herbe", point_de_rosee.titre.lower())
+        self.assertEqual(point_de_rosee.unites, sources.UNITES_TEMPERATURE)
+        self.assertEqual(point_de_rosee.classes, ("temperature",))
+        self.assertNotEqual(point_de_rosee.indices, rosee.indices)
 
 
 
@@ -200,6 +212,44 @@ class CeQueLaPageAccepteTests(unittest.TestCase):
         ):
             with self.subTest(entity_id=entity_id):
                 self.assertIsNone(self._refus("capteur_rosee", entity_id, "%", None, nom=nom))
+
+    def test_le_point_de_rosee_exige_un_nom_qui_dit_le_role(self) -> None:
+        """Sans indice dans le nom, une température de l'air ordinaire (même classe, même unité)
+        serait prise pour le point de rosée — exactement le piège que `capteur_rosee` évite déjà
+        dans l'autre sens."""
+        point_de_rosee = sources.PAR_CLE["capteur_point_de_rosee"]
+        for entity_id, nom in (
+            ("sensor.station_meteo_jardin_temperature", None),
+            ("sensor.exterieur", "Température extérieure"),
+        ):
+            with self.subTest(entity_id=entity_id):
+                self.assertEqual(
+                    self._refus("capteur_point_de_rosee", entity_id, "°C", "temperature", nom=nom),
+                    point_de_rosee.refus_indice,
+                )
+        for entity_id, nom in (
+            ("sensor.station_meteo_jardin_point_de_rosee", None),
+            ("sensor.dew_point", None),
+            ("sensor.capteur_10", "Point de rosée"),
+        ):
+            with self.subTest(entity_id=entity_id):
+                self.assertIsNone(self._refus("capteur_point_de_rosee", entity_id, "°C", "temperature", nom=nom))
+
+    def test_le_point_de_rosee_et_la_rosee_sur_l_herbe_ne_se_substituent_jamais(self) -> None:
+        # Le même capteur réel de station (un point de rosée en °C) est accepté pour l'un,
+        # refusé pour l'autre ; une humidité foliaire (%) fait l'inverse.
+        self.assertIsNone(
+            self._refus("capteur_point_de_rosee", "sensor.station_meteo_jardin_point_de_rosee", "°C", "temperature")
+        )
+        self.assertIsNotNone(
+            self._refus("capteur_rosee", "sensor.station_meteo_jardin_point_de_rosee", "°C", "temperature")
+        )
+        self.assertIsNotNone(
+            self._refus("capteur_point_de_rosee", "sensor.feuillage_humidite_foliaire", "%", "humidity")
+        )
+        self.assertIsNone(
+            self._refus("capteur_rosee", "sensor.feuillage_humidite_foliaire", "%", "humidity")
+        )
 
     def test_la_classe_de_l_appareil_doit_dire_la_meme_chose(self) -> None:
         self.assertEqual(

@@ -45,6 +45,13 @@ export default {
     { numero: 1, nom: "Devant", switch: "switch.vanne_1", etat: null },
     { numero: 2, nom: "Derrière", switch: "switch.vanne_2", etat: null },
   ],
+  liaisons_materiel: {
+    zone_1: "switch.vanne_1",
+    zone_2: "switch.vanne_2",
+    entite_tondeuse: "lawn_mower.robot",
+    capteur_tondeuse_batterie: "sensor.robot_batterie",
+    capteur_tondeuse_hauteur_coupe: "number.robot_hauteur_coupe",
+  },
   entites: {
     assistant: `sensor.${P}_assistant`,
     arrosage_en_cours: `sensor.${P}_arrosage_en_cours`,
@@ -99,9 +106,9 @@ export default {
   // du feuillage ne sont branchés : seule la seconde peut tenir « Rosée sur l'herbe ».
   appareils: [
     {
-      id: "station", nom: "Station du jardin", fabricant: "Exemple", modele: "Station météo",
+      id: "station", nom: "Station du jardin", fabricant: "Exemple", modele: "Station météo", station_personnelle: true,
       entites: [
-        "sensor.jardin_temperature", "sensor.jardin_humidite", "sensor.jardin_vent", "sensor.jardin_rafales",
+        "sensor.jardin_temperature", "sensor.jardin_humidite", "sensor.jardin_pression", "sensor.jardin_vent", "sensor.jardin_rafales",
         "sensor.jardin_direction_vent", "sensor.jardin_rayonnement", "sensor.jardin_pluie", "sensor.jardin_point_de_rosee",
         "sensor.jardin_uv", "sensor.jardin_batterie", "binary_sensor.jardin_pluie_en_cours",
         "sensor.jardin_humidite_foliaire",
@@ -168,6 +175,7 @@ export default {
     "switch.eclairage_terrasse": interrupteur("off", "Éclairage terrasse"),
     "sensor.jardin_temperature": mesure(21.4, "°C", "Station du jardin Température", "temperature"),
     "sensor.jardin_humidite": mesure(54, "%", "Station du jardin Humidité", "humidity"),
+    "sensor.jardin_pression": mesure(1013.2, "hPa", "Station du jardin Pression", "atmospheric_pressure"),
     "sensor.jardin_vent": mesure(6.8, "km/h", "Station du jardin Vent", "wind_speed"),
     "sensor.jardin_rafales": mesure(11.2, "km/h", "Station du jardin Rafales", "wind_speed"),
     "sensor.jardin_direction_vent": mesure(250, "°", "Station du jardin Direction du vent"),
@@ -279,5 +287,8 @@ export default {
     [`switch.${P}_coordination_tondeuse`]: interrupteur("on", "Coordination tondeuse"),
     [`switch.${P}_declaration_tonte_auto`]: interrupteur("on", "Déclaration auto de la tonte"),
     "cover.garage_tondeuse": volet("closed", "Garage tondeuse"),
+    "lawn_mower.robot": capteur("docked", { friendly_name: "Tondeuse du jardin" }),
+    "sensor.robot_batterie": mesure(96, "%", "Batterie tondeuse", "battery"),
+    "number.robot_hauteur_coupe": nombre(45, 30, 80, 5, "mm", "Hauteur de coupe du robot", "mdi:content-cut"),
   },
 };

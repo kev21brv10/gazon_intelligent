@@ -7,11 +7,11 @@ from typing import Any
 """Canonical watering-plan model.
 
 Contract:
-- ``objective_mm`` is the requested target depth on the lawn surface, applied
-  uniformly across the full irrigated surface.
+- ``objective_mm`` is the requested reference depth for a zone without a
+  shade reduction.
 - ``zones[].mm`` is the effective depth delivered by each zone for that same
-  surface target after duration rounding, not a per-zone target or a per-passage
-  target.
+  reference after its optional shade reduction and duration rounding, not a
+  per-passage target.
 - ``zones_total_mm`` is only a diagnostic sum of the zone outputs and must not
   be interpreted as the lawn objective.
 - ``plan_type`` only describes zone topology (single or multiple zones).
@@ -35,9 +35,10 @@ class ZonePlan:
     rate_mm_h: float
     duration_s: int
     mm: float
+    water_reduction_pct: float = 0.0
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "zone": self.zone,
             "entity_id": self.zone,
             "rate_mm_h": round(self.rate_mm_h, 1),
@@ -46,14 +47,20 @@ class ZonePlan:
             "duration_min": round(self.duration_s / 60.0, 1),
             "mm": round(self.mm, 1),
         }
+        if self.water_reduction_pct > 0:
+            payload["water_reduction_pct"] = round(self.water_reduction_pct, 1)
+        return payload
 
     def as_runtime_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "zone": self.zone,
             "rate_mm_h": round(self.rate_mm_h, 1),
             "duration_s": int(self.duration_s),
             "mm": round(self.mm, 1),
         }
+        if self.water_reduction_pct > 0:
+            payload["water_reduction_pct"] = round(self.water_reduction_pct, 1)
+        return payload
 
 
 @dataclass(frozen=True)
@@ -75,6 +82,21 @@ class WateringPlan:
     runoff_risk: str | None = None
     seeding_transition_ready: bool | None = None
     seeding_block_reason: str | None = None
+
+    @property
+    def has_zone_adjustments(self) -> bool:
+        return any(zone.water_reduction_pct > 0 for zone in self.zones)
+
+    @property
+    def planned_surface_mm(self) -> float:
+        """Average effective depth planned across all configured zones."""
+        if not self.zones:
+            return 0.0
+        if not self.has_zone_adjustments:
+            # Compatibilité historique : sans réduction par zone, le plan crédite l'objectif
+            # canonique exact malgré les petits écarts produits par l'arrondi à 30 secondes.
+            return round(self.objective_mm, 1)
+        return round(sum(zone.mm for zone in self.zones) / len(self.zones), 1)
 
     @property
     def watering_duration_s(self) -> int:
@@ -108,17 +130,21 @@ class WateringPlan:
             rate_mm_h=zone.rate_mm_h,
             duration_s=duration_s,
             mm=mm,
+            water_reduction_pct=zone.water_reduction_pct,
         )
 
     def as_dict(self) -> dict[str, Any]:
         zone_count = len(self.zones)
         zones_total_mm = round(sum(zone.mm for zone in self.zones), 1)
+        surface_mm = self.planned_surface_mm
+        adjusted = self.has_zone_adjustments
         return {
             "objective_mm": round(self.objective_mm, 1),
             "objectif_mm": round(self.objective_mm, 1),
-            "mm_scope": "global_surface",
-            "mm_interpretation": "surface_uniform",
-            "surface_mm": round(self.objective_mm, 1),
+            "reference_objective_mm": round(self.objective_mm, 1),
+            "mm_scope": "zone_adjusted_surface" if adjusted else "global_surface",
+            "mm_interpretation": "zone_adjusted" if adjusted else "surface_uniform",
+            "surface_mm": surface_mm,
             "surface_cycle_mm": round(self.surface_cycle_mm, 1)
             if self.surface_cycle_mm is not None
             else None,
@@ -145,7 +171,7 @@ class WateringPlan:
             "seeding_block_reason": self.seeding_block_reason,
             "summary": (
                 f"{zone_count} zone{'s' if zone_count != 1 else ''} • "
-                f"{round(self.objective_mm, 1):.1f} mm sur la surface • "
+                f"{surface_mm:.1f} mm {'moyens ' if adjusted else ''}sur la surface • "
                 f"{_duration_human(self.watering_duration_s)}"
             ),
         }
@@ -153,6 +179,8 @@ class WateringPlan:
     def as_runtime_dict(self) -> dict[str, Any]:
         return {
             "objective_mm": round(self.objective_mm, 1),
+            "reference_objective_mm": round(self.objective_mm, 1),
+            "surface_mm": self.planned_surface_mm,
             "passages": self.passage_count,
             "pause_between_passages_s": int(self.pause_between_passages_s),
             "zones": [zone.as_runtime_dict() for zone in self.zones],
@@ -214,6 +242,10 @@ def _normalize_zone_plan(zone: dict[str, Any]) -> ZonePlan | None:
         mm = float(zone.get("mm") or 0.0)
     except (TypeError, ValueError):
         mm = 0.0
+    try:
+        reduction_pct = max(0.0, min(100.0, float(zone.get("water_reduction_pct") or 0.0)))
+    except (TypeError, ValueError):
+        reduction_pct = 0.0
     if mm <= 0 and rate_mm_h > 0:
         mm = (rate_mm_h * normalized_duration_s) / 3600.0
     return ZonePlan(
@@ -221,12 +253,13 @@ def _normalize_zone_plan(zone: dict[str, Any]) -> ZonePlan | None:
         rate_mm_h=max(0.0, rate_mm_h),
         duration_s=normalized_duration_s,
         mm=max(0.0, mm),
+        water_reduction_pct=reduction_pct,
     )
 
 
 def build_watering_plan(
     objective_mm: float,
-    zones_cfg: Iterable[tuple[str, float]],
+    zones_cfg: Iterable[tuple[str, float] | tuple[str, float, float]],
     *,
     passages: int = 1,
     pause_minutes: int = 0,
@@ -251,14 +284,21 @@ def build_watering_plan(
         return None
 
     normalized_zones: list[ZonePlan] = []
-    for entity_id, rate_mm_h in zones_cfg:
+    for zone_cfg in zones_cfg:
+        if len(zone_cfg) == 2:
+            entity_id, rate_mm_h = zone_cfg
+            reduction_pct = 0.0
+        else:
+            entity_id, rate_mm_h, reduction_pct = zone_cfg
         try:
             rate = float(rate_mm_h)
+            reduction = max(0.0, min(100.0, float(reduction_pct)))
         except (TypeError, ValueError):
             continue
         if not entity_id or rate <= 0:
             continue
-        duration_minutes = (objective / rate) * 60.0
+        zone_objective = objective * (1.0 - reduction / 100.0)
+        duration_minutes = (zone_objective / rate) * 60.0
         if duration_minutes <= 0:
             continue
         rounded_duration_minutes = max(
@@ -275,6 +315,7 @@ def build_watering_plan(
                 rate_mm_h=rate,
                 duration_s=duration_seconds,
                 mm=(rate * duration_seconds) / 3600.0,
+                water_reduction_pct=reduction,
             )
         )
 

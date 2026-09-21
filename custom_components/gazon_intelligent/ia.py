@@ -19,7 +19,7 @@ from typing import Any
 
 from .const import CONF_ENTITE_IA
 
-QUESTION_PAR_DEFAUT = "Fais le point sur mon gazon aujourd'hui : ce qui va, ce qui demande de l'attention."
+QUESTION_PAR_DEFAUT = "Faire le point sur le gazon aujourd'hui : ce qui va et ce qui demande de l'attention."
 NOM_DE_LA_TACHE = "Conseil Gazon Intelligent"
 DELAI_REPONSE_S = 90
 DELAI_NOTIFICATION_S = 15
@@ -66,6 +66,8 @@ def consigne(question: str | None, lignes: Sequence[str], *, maintenant: datetim
         "Home Assistant qui décide seule de l'arrosage et de la tonte.\n"
         "Règles :\n"
         "- Réponds en français, simplement, en 6 phrases au plus : le lecteur n'est pas agronome.\n"
+        "- Utilise une formulation neutre et valable pour n'importe quel utilisateur, sans nom, "
+        "tutoiement ni détail personnel non présent dans l'état.\n"
         "- Appuie-toi uniquement sur l'état ci-dessous. S'il manque une information, dis-le "
         "au lieu de l'inventer.\n"
         "- Tu ne commandes rien : ne dis jamais qu'un arrosage ou une tonte a été lancé ou arrêté.\n"
@@ -87,8 +89,9 @@ def consigne_notification(
     """Demande une reformulation courte sans laisser l'IA redéfinir les faits ni l'urgence."""
     contexte = "\n".join(f"- {ligne}" for ligne in lignes) or "- aucun contexte supplémentaire"
     return (
-        "Tu rédiges une notification personnelle en français pour le propriétaire du gazon.\n"
+        "Tu rédiges une notification claire en français pour la personne qui suit le gazon.\n"
         "Réponds uniquement par le message final, sans titre, sans markdown, en 3 phrases au plus.\n"
+        "Utilise une formulation neutre, sans nom, tutoiement ni détail personnel non fourni.\n"
         "Conserve exactement les faits, nombres, horaires, noms d'appareils et action demandée. "
         "N'invente rien, ne minimise jamais une urgence et ne prétends commander aucun appareil.\n"
         f"Niveau fixé par l'intégration : {niveau}.\n"

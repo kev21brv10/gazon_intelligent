@@ -63,6 +63,7 @@
           "capteur_humidite_sol": "Humedad del suelo (%) (recomendado si está disponible)",
           "capteur_vent": "Viento local (opcional, se usa primero si existe)",
           "capteur_rosee": "Rocío / humedad foliar (opcional, cálculo automático si no se indica)",
+          "capteur_point_de_rosee": "Punto de rocío medido (aire) (opcional, cálculo automático desde la entidad meteorológica si no se indica)",
           "capteur_rayonnement": "Radiación global medida (opcional, W/m² — mejora mucho el cálculo de ET0)",
           "capteur_pression": "Presión atmosférica medida (opcional, hPa — afina el cálculo de ET0)",
           "entite_pompe": "Bomba de riego (opcional — se muestra y se controla en la página «Gazon»)",
@@ -110,6 +111,7 @@
           "capteur_humidite_sol": "Humedad del suelo (%) (recomendado si está disponible)",
           "capteur_vent": "Viento local (opcional, se usa primero si existe)",
           "capteur_rosee": "Rocío / humedad foliar (opcional, cálculo automático si no se indica)",
+          "capteur_point_de_rosee": "Punto de rocío medido (aire) (opcional, cálculo automático desde la entidad meteorológica si no se indica)",
           "capteur_rayonnement": "Radiación global medida (opcional, W/m² — mejora mucho el cálculo de ET0)",
           "capteur_pression": "Presión atmosférica medida (opcional, hPa — afina el cálculo de ET0)",
           "entite_pompe": "Bomba de riego (opcional — se muestra y se controla en la página «Gazon»)",
@@ -435,7 +437,7 @@
       "fields": {
         "question": {
           "name": "Pregunta",
-          "description": "Tu pregunta. Vacío: un repaso del césped del día."
+          "description": "Pregunta que se desea hacer. Vacío: un repaso del césped del día."
         },
         "notifier": {
           "name": "Enviar también a los teléfonos",

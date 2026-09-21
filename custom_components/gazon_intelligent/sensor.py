@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from datetime import date, datetime
 import re
+from time import monotonic
 from typing import Any, cast
 
 from homeassistant.components.sensor import SensorEntity, SensorStateClass
+from homeassistant.const import MATCH_ALL
+from homeassistant.core import callback
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.util import dt as dt_util
 
@@ -29,6 +32,34 @@ from .water import (
     _zone_session_total_mm,
     compute_live_session_water,
 )
+
+
+# Les calculs restent reactifs a chaque evenement, mais ces attributs volumineux n'ont pas besoin
+# d'etre recopies dans Recorder. Ils restent tous disponibles en direct dans HA et le panneau.
+_RECORDER_LIVE_ATTRIBUTES = frozenset({MATCH_ALL})
+_RECORDER_LIVE_PUBLISH_INTERVAL_SECONDS = 60.0
+
+
+class _RecorderLeanSensorMixin:
+    """Publie sans bruit les capteurs recalcules sur chaque evenement meteo."""
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        entity = cast(Any, self)
+        now = monotonic()
+        current_signature = (entity.native_value, getattr(entity, "available", True))
+        previous_signature = getattr(self, "_last_published_signature", object())
+        previous_at = getattr(self, "_last_published_monotonic", None)
+
+        state_changed = current_signature != previous_signature
+        interval_elapsed = (
+            previous_at is None
+            or now - float(previous_at) >= _RECORDER_LIVE_PUBLISH_INTERVAL_SECONDS
+        )
+        if state_changed or interval_elapsed:
+            self._last_published_signature = current_signature
+            self._last_published_monotonic = now
+            entity.async_write_ha_state()
 
 
 def _session_surface_mm(session: dict[str, Any]) -> float | None:
@@ -1214,7 +1245,7 @@ _AUTO_IRRIGATION_BLOCK_INFO: dict[str, tuple[str, bool, str, str]] = {
         True,
         "Une vanne ne s'est pas confirmée fermée lors d'un arrosage : par sécurité, "
         "l'arrosage automatique est suspendu (risque de vanne restée ouverte).",
-        "Vérifie que tes vannes d'arrosage sont bien fermées, puis appuie sur le bouton "
+        "Vérifier que les vannes d'arrosage sont bien fermées, puis utiliser le bouton "
         "« Lever le verrou de sécurité » (ou appelle le service "
         "gazon_intelligent.clear_irrigation_safety_lock).",
     ),
@@ -1240,7 +1271,7 @@ _AUTO_IRRIGATION_BLOCK_INFO: dict[str, tuple[str, bool, str, str]] = {
         "Plan indisponible",
         True,
         "Aucun plan d'arrosage exploitable n'a pu être construit (zones ou débits manquants ?).",
-        "Vérifie la configuration des zones et de leurs débits dans l'intégration.",
+        "Vérifier la configuration des zones et de leurs débits dans l'intégration.",
     ),
     "auto_not_allowed": (
         "Mode non automatique",
@@ -1814,11 +1845,12 @@ class GazonSousPhaseSensor(GazonEntityBase, SensorEntity):
         return attrs or None
 
 
-class GazonObjectifMmSensor(GazonEntityBase, SensorEntity):
+class GazonObjectifMmSensor(_RecorderLeanSensorMixin, GazonEntityBase, SensorEntity):
     _attr_name = "Objectif d'arrosage"
     _attr_native_unit_of_measurement = "mm"
     _attr_has_entity_name = True
     _attr_icon = "mdi:water"
+    _unrecorded_attributes = _RECORDER_LIVE_ATTRIBUTES
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -2012,7 +2044,7 @@ class GazonObjectifDepletionSensor(GazonEntityBase, SensorEntity):
         return attrs or None
 
 
-class GazonEt0Sensor(GazonEntityBase, SensorEntity):
+class GazonEt0Sensor(_RecorderLeanSensorMixin, GazonEntityBase, SensorEntity):
     _attr_name = "ET0"
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -2020,6 +2052,7 @@ class GazonEt0Sensor(GazonEntityBase, SensorEntity):
     _attr_native_unit_of_measurement = "mm"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:weather-sunny"
+    _unrecorded_attributes = _RECORDER_LIVE_ATTRIBUTES
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -2068,7 +2101,7 @@ class GazonEt0Sensor(GazonEntityBase, SensorEntity):
         )
 
 
-class GazonEtoHoraireSensor(GazonEntityBase, SensorEntity):
+class GazonEtoHoraireSensor(_RecorderLeanSensorMixin, GazonEntityBase, SensorEntity):
     """ET0 de référence horaire (FAO-56 Eq. 53), en mm/h.
 
     Calculée à partir du rayonnement et de la pression mesurés quand ils sont configurés
@@ -2087,6 +2120,7 @@ class GazonEtoHoraireSensor(GazonEntityBase, SensorEntity):
     _attr_native_unit_of_measurement = "mm/h"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:water-thermometer-outline"
+    _unrecorded_attributes = _RECORDER_LIVE_ATTRIBUTES
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -2096,7 +2130,9 @@ class GazonEtoHoraireSensor(GazonEntityBase, SensorEntity):
     def native_value(self):
         value = self._decision_value("eto_horaire_mm_h", None)
         try:
-            return round(float(value), 4) if value is not None else None
+            # Le bilan sol conserve la valeur interne a quatre decimales. Deux decimales
+            # suffisent pour l'affichage et bornent l'erreur a 0,005 mm/h.
+            return round(float(value), 2) if value is not None else None
         except (TypeError, ValueError):
             return None
 
@@ -2110,7 +2146,7 @@ class GazonEtoHoraireSensor(GazonEntityBase, SensorEntity):
         return attrs
 
 
-class GazonEtcSensor(GazonEntityBase, SensorEntity):
+class GazonEtcSensor(_RecorderLeanSensorMixin, GazonEntityBase, SensorEntity):
     _attr_name = "ETc"
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -2118,6 +2154,7 @@ class GazonEtcSensor(GazonEntityBase, SensorEntity):
     _attr_native_unit_of_measurement = "mm"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:grass"
+    _unrecorded_attributes = _RECORDER_LIVE_ATTRIBUTES
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -2163,7 +2200,7 @@ class GazonEtcSensor(GazonEntityBase, SensorEntity):
         return self._attrs_from_result("et0_mm", "kc_gazon", "phase_dominante", "sous_phase")
 
 
-class GazonReserveActuelleSensor(GazonEntityBase, SensorEntity):
+class GazonReserveActuelleSensor(_RecorderLeanSensorMixin, GazonEntityBase, SensorEntity):
     _attr_name = "Réserve utile actuelle"
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -2171,6 +2208,7 @@ class GazonReserveActuelleSensor(GazonEntityBase, SensorEntity):
     _attr_native_unit_of_measurement = "mm"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:cup-water"
+    _unrecorded_attributes = _RECORDER_LIVE_ATTRIBUTES
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -2974,14 +3012,14 @@ class GazonInterventionRecommendationSensor(GazonEntityBase, SensorEntity):
             "priority": "none",
             "score": 0,
             "reason": "Aucun produit enregistré",
-            "why_now": "Ajoute au moins un produit au catalogue pour obtenir une recommandation.",
+            "why_now": "Ajouter au moins un produit au catalogue pour obtenir une recommandation.",
             "reasons": [],
             "constraints": [
                 {
                     "code": "catalogue_empty",
                     "label": "Aucun produit enregistré",
                     "value": {"catalogue_count": 0},
-                    "hint": "Ajoute au moins un produit au catalogue pour obtenir une recommandation.",
+                    "hint": "Ajouter au moins un produit au catalogue pour obtenir une recommandation.",
                     "blocking": True,
                     "met": False,
                 }
@@ -2991,7 +3029,7 @@ class GazonInterventionRecommendationSensor(GazonEntityBase, SensorEntity):
                     "code": "catalogue_empty",
                     "label": "Ajouter un produit au catalogue",
                     "value": {"catalogue_count": 0},
-                    "hint": "Ajoute au moins un produit au catalogue pour obtenir une recommandation.",
+                    "hint": "Ajouter au moins un produit au catalogue pour obtenir une recommandation.",
                     "blocking": True,
                 }
             ],
@@ -3032,11 +3070,11 @@ class GazonInterventionRecommendationSensor(GazonEntityBase, SensorEntity):
                 "tone": "neutral",
                 "icon": "mdi:package-variant-closed",
                 "summary": "Non disponible",
-                "hint": "Ajoute au moins un produit au catalogue pour obtenir une recommandation.",
+                "hint": "Ajouter au moins un produit au catalogue pour obtenir une recommandation.",
                 "action_label": "Ajouter un produit",
                 "selection_summary": "Aucun produit disponible dans le catalogue.",
-                "selection_hint": "Ajoute au moins un produit avant de préparer une intervention.",
-                "declaration_summary": "Sélectionne un produit pour activer la déclaration.",
+                "selection_hint": "Ajouter au moins un produit avant de préparer une intervention.",
+                "declaration_summary": "Sélectionner un produit pour activer la déclaration.",
                 "declaration_hint": "Le bouton se débloque dès qu’un produit est prêt.",
                 "history_summary": "Dernière application",
                 "history_hint": "Historique local des applications enregistrées.",
@@ -3575,7 +3613,8 @@ class GazonPlanArrosageSensor(GazonEntityBase, SensorEntity):
                 return data.get(key)
             return None
 
-        zones_cfg: list[tuple[str, float]] = []
+        zones_cfg: list[tuple[str, float, float]] = []
+        reduction_getter = getattr(self.coordinator, "_zone_shade_reduction_pct", None)
         for idx in range(1, 6):
             entity_id = _conf(f"zone_{idx}")
             raw_rate = _conf(f"debit_zone_{idx}")
@@ -3587,7 +3626,8 @@ class GazonPlanArrosageSensor(GazonEntityBase, SensorEntity):
                 continue
             if rate_mm_h <= 0:
                 continue
-            zones_cfg.append((str(entity_id), rate_mm_h))
+            reduction_pct = reduction_getter(str(entity_id)) if callable(reduction_getter) else 0.0
+            zones_cfg.append((str(entity_id), rate_mm_h, reduction_pct))
 
         plan = build_watering_plan(
             objective,
@@ -3893,6 +3933,8 @@ class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):
             "mower_job_followed_id",
             "mower_job_seen_incomplete",
             "mower_job_minutes_total",
+            "mower_job_resume_possible",
+            "mower_job_paused_since",
             "mower_auto_declaration_state",
             "mower_auto_declaration_threshold_minutes",
             "mower_auto_declared_today",
@@ -3933,6 +3975,9 @@ class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):
             "mower_control_last_action",
             "mower_control_last_action_at",
             "mower_control_last_error",
+            "mower_control_cycle_state",
+            "mower_control_resume_required",
+            "mower_control_resume_reason",
             "mower_garage_entity",
             "mower_garage_state",
         )
@@ -4198,11 +4243,12 @@ class GazonNiveauActionSensor(GazonEntityBase, SensorEntity):
         return attrs or None
 
 
-class GazonFenetreOptimaleSensor(GazonEntityBase, SensorEntity):
+class GazonFenetreOptimaleSensor(_RecorderLeanSensorMixin, GazonEntityBase, SensorEntity):
     _attr_name = "Fenêtre optimale"
     _attr_translation_key = "fenetre_optimale"
     _attr_has_entity_name = True
     _attr_icon = "mdi:clock-outline"
+    _unrecorded_attributes = _RECORDER_LIVE_ATTRIBUTES
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -4894,11 +4940,12 @@ class GazonProchainArrosageSensor(GazonFenetreOptimaleSensor):
         return _clean_public_attrs(attrs) or {}
 
 
-class GazonRisqueGazonSensor(GazonEntityBase, SensorEntity):
+class GazonRisqueGazonSensor(_RecorderLeanSensorMixin, GazonEntityBase, SensorEntity):
     _attr_name = "Risque gazon"
     _attr_translation_key = "risque_gazon"
     _attr_has_entity_name = True
     _attr_icon = "mdi:shield-alert-outline"
+    _unrecorded_attributes = _RECORDER_LIVE_ATTRIBUTES
 
     def __init__(self, coordinator):
         super().__init__(coordinator)

@@ -63,6 +63,7 @@
           "capteur_humidite_sol": "Humidité sol (%) (recommandé si disponible)",
           "capteur_vent": "Vent local (optionnel, prioritaire si fourni)",
           "capteur_rosee": "Rosée sur l'herbe / humidité foliaire (ce n'est pas le point de rosée ; optionnel, calcul automatique si non renseigné)",
+          "capteur_point_de_rosee": "Point de rosée mesuré (air) (ce n'est pas la rosée sur l'herbe ; optionnel, calcul automatique via l'entité météo si non renseigné)",
           "capteur_rayonnement": "Rayonnement global mesuré (optionnel, W/m² — améliore nettement le calcul de l'ET0)",
           "capteur_pression": "Pression atmosphérique mesurée (optionnel, hPa — affine le calcul de l'ET0)",
           "entite_pompe": "Pompe de l'arrosage (optionnel — la page « Gazon » l'affiche et la commande)",
@@ -76,7 +77,7 @@
     "error": {
       "invalid_instance_slug": "Identifiant de pelouse invalide.",
       "entity_not_found": "Entité introuvable dans Home Assistant.",
-      "temperature_pour_rosee": "Cette entité donne une température (un point de rosée). « Rosée / humidité foliaire » attend une humidité du feuillage : au-dessus de 0, l'herbe est tenue pour mouillée et la tonte attend. Laisse le champ vide pour une rosée estimée."
+      "temperature_pour_rosee": "Cette entité donne une température (un point de rosée). « Rosée / humidité foliaire » attend une humidité du feuillage : au-dessus de 0, l'herbe est tenue pour mouillée et la tonte attend. Laisser le champ vide pour utiliser une rosée estimée."
     },
     "abort": {
       "already_configured": "Gazon Intelligent est déjà configuré."
@@ -110,6 +111,7 @@
           "capteur_humidite_sol": "Humidité sol (%) (recommandé si disponible)",
           "capteur_vent": "Vent local (optionnel, prioritaire si fourni)",
           "capteur_rosee": "Rosée sur l'herbe / humidité foliaire (ce n'est pas le point de rosée ; optionnel, calcul automatique si non renseigné)",
+          "capteur_point_de_rosee": "Point de rosée mesuré (air) (ce n'est pas la rosée sur l'herbe ; optionnel, calcul automatique via l'entité météo si non renseigné)",
           "capteur_rayonnement": "Rayonnement global mesuré (optionnel, W/m² — améliore nettement le calcul de l'ET0)",
           "capteur_pression": "Pression atmosphérique mesurée (optionnel, hPa — affine le calcul de l'ET0)",
           "entite_pompe": "Pompe de l'arrosage (optionnel — la page « Gazon » l'affiche et la commande)",
@@ -124,7 +126,7 @@
       "already_configured": "Gazon Intelligent est déjà configuré."
     },
     "error": {
-      "temperature_pour_rosee": "Cette entité donne une température (un point de rosée). « Rosée / humidité foliaire » attend une humidité du feuillage : au-dessus de 0, l'herbe est tenue pour mouillée et la tonte attend. Laisse le champ vide pour une rosée estimée."
+      "temperature_pour_rosee": "Cette entité donne une température (un point de rosée). « Rosée / humidité foliaire » attend une humidité du feuillage : au-dessus de 0, l'herbe est tenue pour mouillée et la tonte attend. Laisser le champ vide pour utiliser une rosée estimée."
     }
   },
   "selector": {
@@ -431,11 +433,11 @@
     },
     "ask_ai": {
       "name": "Demander conseil à l'IA",
-      "description": "Pose une question à l'IA de Home Assistant en lui donnant l'état du gazon. L'IA ne commande rien : elle répond en texte. Chaque appel compte auprès du fournisseur d'IA.",
+      "description": "Permet de poser une question à l'IA de Home Assistant en lui donnant l'état du gazon. L'IA ne commande rien : elle répond en texte. Chaque appel compte auprès du fournisseur d'IA.",
       "fields": {
         "question": {
           "name": "Question",
-          "description": "Ta question. Vide : un point sur le gazon du jour."
+          "description": "Question à poser. Vide : un point sur le gazon du jour."
         },
         "notifier": {
           "name": "Envoyer aussi aux téléphones",

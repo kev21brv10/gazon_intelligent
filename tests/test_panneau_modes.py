@@ -109,8 +109,8 @@ def _balises(fragment: str) -> list[dict[str, Any]]:
 
 
 def _bloc(fragment: str, classe: str) -> str:
-    """Le HTML de la première `<section>`/`<nav>` portant `classe` (sections non imbriquées)."""
-    debut = re.search(rf'<(section|nav) class="[^"]*\b{classe}\b[^"]*"', fragment)
+    """Le HTML du premier bloc portant ``classe`` (blocs non imbriqués de même type)."""
+    debut = re.search(rf'<(section|nav|details) class="[^"]*\b{classe}\b[^"]*"', fragment)
     if not debut:
         return ""
     fin = fragment.index(f"</{debut.group(1)}>", debut.start())

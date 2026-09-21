@@ -215,6 +215,7 @@ def _install_component_stubs() -> None:
             self.async_declare_intervention = AsyncMock()
             self.async_set_date_action = AsyncMock()
             self.async_start_manual_irrigation = AsyncMock()
+            self.async_run_zone_for_duration = AsyncMock()
             self.async_start_auto_irrigation = AsyncMock()
             self.async_start_application_irrigation = AsyncMock()
             self.async_remove_last_application = AsyncMock()
@@ -296,11 +297,29 @@ class InitModuleTests(unittest.TestCase):
     def test_async_setup_initializes_domain_data_and_registers_services_idempotently(self) -> None:
         self.assertTrue(asyncio.run(self.module.async_setup(self.hass, {})))
         self.assertIn(self.module.DOMAIN, self.hass.data)
-        # 18 avec l'acquittement du verrou de securite separe du changement de mode.
-        self.assertEqual(len(self.hass.services.register_calls), 18)
+        # 19 avec la zone temporisee, geree cote integration plutot que par le navigateur.
+        self.assertEqual(len(self.hass.services.register_calls), 19)
 
         self.assertTrue(asyncio.run(self.module.async_setup(self.hass, {})))
-        self.assertEqual(len(self.hass.services.register_calls), 18)
+        self.assertEqual(len(self.hass.services.register_calls), 19)
+
+    def test_la_zone_temporisee_transmet_la_zone_et_la_duree(self) -> None:
+        asyncio.run(self.module.async_setup_entry(self.hass, self.entry))
+        coordinator = self.hass.data[self.module.DOMAIN][self.entry.entry_id]
+        call_cls = sys.modules["homeassistant.core"].ServiceCall
+
+        asyncio.run(
+            self.module._handle_run_zone_for_duration(
+                call_cls(
+                    self.hass,
+                    {"zone_entity_id": "switch.zone_2", "duration_minutes": 7.5},
+                )
+            )
+        )
+
+        coordinator.async_run_zone_for_duration.assert_awaited_once_with(
+            "switch.zone_2", duration_minutes=7.5
+        )
 
     def test_notification_et_ia_rendent_leur_resultat(self) -> None:
         """Seules ces deux actions rendent un résultat ; les autres restent sans réponse."""

@@ -104,7 +104,11 @@ class _Registre:
         appareils: dict[str, _Appareil] | None = None,
     ):
         self._renommes = renommes or {}
-        self._noms = noms or {}
+        self._noms = {
+            entity_id: _EntreeRegistre(**{**vars(entree), "entity_id": entree.entity_id or entity_id})
+            for entity_id, entree in (noms or {}).items()
+        }
+        self.entities = self._noms
         self.appareils = appareils or {}
 
     def async_get_entity_id(self, domaine: str, plateforme: str, unique_id: str) -> str | None:
@@ -210,6 +214,21 @@ class AvertissementsDesReglagesTests(unittest.TestCase):
         self.assertIn("avertissement-reglage", source)
         self.assertIn('icon="mdi:alert-outline"', source)
 
+    def test_un_onglet_unique_regroupe_toutes_les_entites_configurables(self) -> None:
+        source = (PACKAGE_DIR / "frontend" / "gazon-intelligent-panel.js").read_text(encoding="utf-8")
+        self.assertIn('cle: "entites"', source)
+        self.assertIn("this._liaisonsMaterielHtml(\"arrosage\")", source)
+        self.assertIn("this._liaisonsMaterielHtml(\"tondeuse\")", source)
+        self.assertIn("this._meteoEntreesHtml(true)", source)
+        self.assertIn("this._pompeReglageHtml()", source)
+        self.assertIn("this._garageTondeuseHtml(true)", source)
+        self.assertIn('const sousMenu = visee.closest("details");', source)
+        self.assertIn("if (sousMenu) sousMenu.open = true;", source)
+        self.assertIn("this._notificationsEntitesHtml()", source)
+        installation = source[source.index("  _installationHtml()") : source.index("\n  _changerPompe(")]
+        self.assertNotIn("this._meteoEntreesHtml()", installation)
+        self.assertNotIn("this._pompeReglageHtml()", installation)
+
 
 class CeQueLaPageLitTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -239,7 +258,7 @@ class CeQueLaPageLitTests(unittest.TestCase):
             set(donnees),
             {"instances", "entry_id", "titre", "sous_titre", "registre", "valeurs", "choix", "produits",
              "entites", "zones", "pompe", "meteo", "notifications", "sources", "appareils", "pompe_choix",
-             "garage_tondeuse"},
+             "garage_tondeuse", "liaisons_materiel"},
         )
         self.assertEqual(donnees["entry_id"], "e1")
         self.assertEqual(donnees["instances"], [{"entry_id": "e1", "titre": "Gazon Intelligent"}])
@@ -414,11 +433,26 @@ class CeQueLaPageLitTests(unittest.TestCase):
 
     def test_le_bandeau_en_ce_moment_est_range_sur_mobile(self) -> None:
         page = (panneau.DOSSIER_FRONTEND / panneau.FICHIER_PANNEAU).read_text(encoding="utf-8")
-        self.assertIn(".en-ce-moment .puces {\n    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));", page)
-        self.assertIn(".meteo-ligne {\n    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));", page)
+        self.assertIn(".en-ce-moment { padding: 10px 12px; gap: 7px; border-radius: 14px; }", page)
+        self.assertIn("display: flex; flex-wrap: nowrap; gap: 5px; margin-top: 7px;", page)
+        self.assertIn("overflow-x: auto; scrollbar-width: none", page)
+        self.assertIn(".meteo {\n    display: grid; grid-template-columns: auto minmax(0, 1fr);", page)
         self.assertIn(".meteo-ligne span:nth-child(n + 5) { display: none; }", page)
-        self.assertIn("border-top: 1px solid rgba(255, 255, 255, .28)", page)
-        self.assertIn(".en-ce-moment .puce { max-width: 100%; min-height: 28px;", page)
+        self.assertIn(".meteo-heure { display: none; }", page)
+        self.assertIn(".meteo-haut > ha-icon { display: none; }", page)
+        self.assertIn("font-size: 16.5px; line-height: 1.15", page)
+        self.assertIn("font-size: 10.75px; line-height: 1.2", page)
+        self.assertIn("padding: 7px 10px; border-radius: 9px; font-size: 12.5px", page)
+
+    def test_la_typographie_est_adaptee_sur_toute_la_page_et_dans_les_fenetres(self) -> None:
+        page = (panneau.DOSSIER_FRONTEND / panneau.FICHIER_PANNEAU).read_text(encoding="utf-8")
+        self.assertIn("/* Typographie commune", page)
+        self.assertIn(".page { font-size: 13.5px; }", page)
+        self.assertIn(".section-tete h3, .mode-detail-tete h3 { font-size: 16px; }", page)
+        self.assertIn(".ligne-textes p { overflow-wrap: anywhere; }", page)
+        self.assertIn('@container page (max-width: 600px) {\n  .page { font-size: 13px; }', page)
+        self.assertIn(':host([narrow]) .dialogue-tete h2 { font-size: 17px; }', page)
+        self.assertIn('this.toggleAttribute("narrow", this._narrow);', page)
 
     def test_le_verrou_de_securite_a_sa_propre_action_dans_la_page(self) -> None:
         page = (panneau.DOSSIER_FRONTEND / panneau.FICHIER_PANNEAU).read_text(encoding="utf-8")
@@ -438,7 +472,7 @@ class CeQueLaPageLitTests(unittest.TestCase):
 
     def test_les_notifications_sont_choisies_par_categorie_dans_le_meme_panneau(self) -> None:
         page = (panneau.DOSSIER_FRONTEND / panneau.FICHIER_PANNEAU).read_text(encoding="utf-8")
-        self.assertIn("Que veux-tu recevoir ?", page)
+        self.assertIn("Quelles notifications recevoir ?", page)
         self.assertIn('data-action="alerte-categorie"', page)
         for categorie in (
             "arrosage_graines", "securite_arrosage", "capteurs_meteo", "tondeuse",
@@ -543,6 +577,8 @@ class LOngletMeteoTests(unittest.TestCase):
         self.assertEqual([a["id"] for a in appareils], ["station", "voisin"])
         station = appareils[0]
         self.assertEqual((station["nom"], station["fabricant"], station["modele"]), ("Station du jardin", "Shelly", "WS"))
+        self.assertFalse(station["station_personnelle"], "ce vieux jeu de test ne décrit pas assez de capacités")
+        self.assertFalse(station["detectee"], "elle est déjà reliée à des entrées")
         self.assertEqual(
             [(e["entity_id"], e["branchee"], e["pourrait"]) for e in station["entites"]],
             [
@@ -562,6 +598,60 @@ class LOngletMeteoTests(unittest.TestCase):
         self.assertNotIn("sensor.station_ancienne", entites, "une entité désactivée n'est pas une mesure")
         self.assertNotIn("button.station_identifier", entites, "un bouton n'est pas une mesure")
         self.assertNotIn("sensor.station_latitude", entites, "rien de ce qui situe la maison")
+
+    def test_une_ws90_non_branchee_est_detectee_et_proposee_sans_faux_capteurs(self) -> None:
+        self.entree.options = {"entite_meteo": "weather.maison"}
+        self.coordinateur._conf = {}
+        self.registre = _Registre(
+            noms={
+                "sensor.ws90_temperature": _EntreeRegistre(device_id="ws90"),
+                "sensor.ws90_humidite": _EntreeRegistre(device_id="ws90"),
+                "sensor.ws90_pression": _EntreeRegistre(device_id="ws90"),
+                "sensor.ws90_vent": _EntreeRegistre(device_id="ws90"),
+                "sensor.ws90_rafales": _EntreeRegistre(device_id="ws90"),
+                "sensor.ws90_precipitation": _EntreeRegistre(device_id="ws90"),
+                "sensor.pluie_du_jour_ws90": _EntreeRegistre(device_id="ws90"),
+                "sensor.ws90_pluie_intensite": _EntreeRegistre(device_id="ws90"),
+                "sensor.ws90_luminosite": _EntreeRegistre(device_id="ws90"),
+                "sensor.ws90_point_de_rosee": _EntreeRegistre(device_id="ws90"),
+                "sensor.ws90_batterie": _EntreeRegistre(device_id="ws90"),
+                "sensor.ws90_humidite_foliaire": _EntreeRegistre(device_id="ws90"),
+            },
+            appareils={"ws90": _Appareil(name="Station Météo - Jardin", manufacturer="Shelly", model="WS90")},
+        )
+        self.etats = _Etats({
+            "sensor.ws90_temperature": _Etat("18.4", {"unit_of_measurement": "°C", "device_class": "temperature", "friendly_name": "Température"}),
+            "sensor.ws90_humidite": _Etat("72", {"unit_of_measurement": "%", "device_class": "humidity", "friendly_name": "Humidité"}),
+            "sensor.ws90_pression": _Etat("1012", {"unit_of_measurement": "hPa", "device_class": "atmospheric_pressure", "friendly_name": "Pression atmosphérique"}),
+            "sensor.ws90_vent": _Etat("9.2", {"unit_of_measurement": "km/h", "device_class": "wind_speed", "friendly_name": "Vitesse du vent"}),
+            "sensor.ws90_rafales": _Etat("21", {"unit_of_measurement": "km/h", "device_class": "wind_speed", "friendly_name": "Rafales"}),
+            "sensor.ws90_precipitation": _Etat("41.6", {"unit_of_measurement": "mm", "device_class": "precipitation", "state_class": "total_increasing", "friendly_name": "Précipitation"}),
+            "sensor.pluie_du_jour_ws90": _Etat("0.8", {"unit_of_measurement": "mm", "device_class": "precipitation", "state_class": "total_increasing", "friendly_name": "Pluie du jour WS90"}),
+            "sensor.ws90_pluie_intensite": _Etat("0", {"unit_of_measurement": "mm/h", "device_class": "precipitation_intensity", "state_class": "measurement", "friendly_name": "Intensité de pluie"}),
+            "sensor.ws90_luminosite": _Etat("42000", {"unit_of_measurement": "lx", "device_class": "illuminance", "friendly_name": "Luminosité"}),
+            "sensor.ws90_point_de_rosee": _Etat("12", {"unit_of_measurement": "°C", "device_class": "temperature", "friendly_name": "Point de rosée"}),
+            "sensor.ws90_batterie": _Etat("86", {"unit_of_measurement": "%", "device_class": "battery", "friendly_name": "Batterie"}),
+            "sensor.ws90_humidite_foliaire": _Etat("12", {"unit_of_measurement": "%", "device_class": "moisture", "friendly_name": "Humidité foliaire"}),
+        })
+
+        station = self._donnees()["appareils"][0]
+        self.assertEqual(station["id"], "ws90")
+        self.assertTrue(station["station_personnelle"])
+        self.assertTrue(station["detectee"], "aucune entrée de cette station n'est encore branchée")
+        idees = {e["entity_id"]: set(e["pourrait"]) for e in station["entites"]}
+        self.assertIn("capteur_temperature", idees["sensor.ws90_temperature"])
+        self.assertIn("capteur_humidite", idees["sensor.ws90_humidite"])
+        self.assertIn("capteur_pression", idees["sensor.ws90_pression"])
+        self.assertEqual(idees["sensor.ws90_vent"], {"capteur_vent"})
+        self.assertEqual(idees["sensor.ws90_precipitation"], {"capteur_pluie_cumul"})
+        self.assertEqual(idees["sensor.pluie_du_jour_ws90"], {"capteur_pluie_24h"})
+        self.assertEqual(idees["sensor.ws90_pluie_intensite"], {"capteur_pluie_actuelle"})
+        for refusee in ("sensor.ws90_rafales", "sensor.ws90_luminosite", "sensor.ws90_batterie"):
+            self.assertEqual(idees[refusee], set(), refusee)
+        self.assertEqual(idees["sensor.ws90_humidite_foliaire"], {"capteur_rosee"})
+        # 0.97.24 : une température nommée « point de rosée » tient désormais un vrai rôle,
+        # bien distinct de « Rosée sur l'herbe » (humidité foliaire, juste au-dessus).
+        self.assertEqual(idees["sensor.ws90_point_de_rosee"], {"capteur_point_de_rosee"})
 
     def test_sans_registre_aucun_appareil(self) -> None:
         hass, _ = _hass(self.coordinateur, etats=self.etats)
@@ -724,7 +814,7 @@ class ChangerLesEntreesTests(unittest.TestCase):
             "entrée inconnue": ({"capteur_lune": "sensor.feuillage"}, "Cette entrée n'existe pas : capteur_lune."),
             "météo retirée": (
                 {"entite_meteo": None},
-                "« Entité météo » est obligatoire : choisis-en une autre plutôt que de la retirer.",
+                "« Entité météo » est obligatoire : sélectionner une autre entité plutôt que de la retirer.",
             ),
             "absente": ({"capteur_vent": "sensor.disparu"}, "Cette entité n'existe pas dans Home Assistant : sensor.disparu."),
             "mauvaise forme": ({"capteur_vent": ["sensor.station_vent"]}, "Le choix des entrées n'a pas la bonne forme."),
@@ -780,7 +870,7 @@ class ChangerLesEntreesTests(unittest.TestCase):
         self.coordinateur.arrose = True
         reponse = self._ecrire({"capteur_pression": "sensor.station_pression"}, valeurs={"tonte_max_par_jour": 3})
         self.assertEqual(reponse, {"ok": False, "erreurs": {"entrees": (
-            "Un arrosage est en cours : change les entrées quand il sera fini, le changement recharge l'intégration."
+            "Un arrosage est en cours : modifier les entrées après sa fin, car le changement recharge l'intégration."
         )}})
         self.assertEqual((self.coordinateur.entrees_changees, self.coordinateur.mises_a_jour), ([], []))
         # Rien à changer : l'arrosage n'empêche pas d'enregistrer le reste.
@@ -797,6 +887,81 @@ class ChangerLesEntreesTests(unittest.TestCase):
         self.assertNotIn("sources", premier, "sans entrées envoyées, la réponse ne change pas")
         self.assertTrue(second["recharge"])
         self.assertIn("sources", second)
+
+
+class ChangerLesLiaisonsMaterielTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.entree = _Entree("e1", options={"reglages": {}})
+        self.coordinateur = _Coordinateur(self.entree, conf={
+            "zone_1": "switch.vanne_1",
+            "zone_2": "switch.vanne_2",
+            "entite_pompe": "switch.pompe",
+        })
+        self.hass = types.SimpleNamespace(
+            data={DOMAIN: {"e1": self.coordinateur}},
+            states=_Etats({
+                "switch.vanne_1": _Etat("off", {"friendly_name": "Vanne 1"}),
+                "switch.vanne_2": _Etat("off", {"friendly_name": "Vanne 2"}),
+                "switch.vanne_3": _Etat("off", {"friendly_name": "Vanne 3"}),
+                "switch.pompe": _Etat("off", {"friendly_name": "Pompe"}),
+                "lawn_mower.robot": _Etat("docked", {"friendly_name": "Robot"}),
+                "sensor.batterie_robot": _Etat("95", {"friendly_name": "Batterie robot"}),
+                "number.hauteur_robot": _Etat("40", {"friendly_name": "Hauteur robot"}),
+            }),
+        )
+
+    def _ecrire(self, liaisons: Any) -> dict[str, Any]:
+        return asyncio.run(panneau.ecrire_reglages(
+            self.coordinateur, {}, {}, hass=self.hass, liaisons_materiel=liaisons,
+        ))
+
+    def test_toutes_les_liaisons_sont_servies_avec_leurs_choix(self) -> None:
+        donnees = panneau.donnees_de_la_page(self.hass, self.coordinateur)
+        lignes = {ligne["cle"]: ligne for ligne in donnees["liaisons_materiel"]}
+        self.assertEqual(set(lignes), {ligne["cle"] for ligne in panneau.LIAISONS_MATERIEL})
+        self.assertEqual(lignes["zone_1"]["entity_id"], "switch.vanne_1")
+        self.assertEqual(
+            [choix["entity_id"] for choix in lignes["zone_1"]["choix"]],
+            ["switch.vanne_1", "switch.vanne_3"],
+            "la pompe et la vanne déjà prise par une autre zone ne doivent pas être proposées",
+        )
+        self.assertIn(
+            {"entity_id": "lawn_mower.robot", "nom": "Robot"},
+            lignes["entite_tondeuse"]["choix"],
+        )
+
+    def test_changer_une_vanne_et_la_tondeuse_passe_par_le_rechargement_surveille(self) -> None:
+        reponse = self._ecrire({"zone_2": "switch.vanne_3", "entite_tondeuse": "lawn_mower.robot"})
+        self.assertTrue(reponse["ok"])
+        self.assertTrue(reponse["recharge"])
+        self.assertEqual(self.coordinateur.entrees_changees, [{
+            "zone_2": "switch.vanne_3", "entite_tondeuse": "lawn_mower.robot",
+        }])
+        self.assertEqual(self.coordinateur.mises_a_jour, [], "des liaisons seules ne réécrivent pas les réglages")
+        self.assertEqual(reponse["zones"][1]["switch"], "switch.vanne_3")
+
+    def test_les_liaisons_dangereuses_sont_refusees_sans_ecriture(self) -> None:
+        cas = (
+            ({"zone_1": None}, "obligatoire"),
+            ({"zone_2": "sensor.batterie_robot"}, "switch"),
+            ({"zone_2": "switch.vanne_1"}, "plusieurs zones"),
+            ({"zone_2": "switch.pompe"}, "pompe"),
+            ({"capteur_tondeuse_batterie": "switch.vanne_3"}, "sensor"),
+            ({"inconnue": "switch.vanne_3"}, "n'existe pas"),
+        )
+        for envoi, fragment in cas:
+            with self.subTest(envoi=envoi):
+                reponse = self._ecrire(envoi)
+                self.assertFalse(reponse["ok"])
+                self.assertIn(fragment, reponse["erreurs"]["liaisons_materiel"])
+        self.assertEqual(self.coordinateur.entrees_changees, [])
+
+    def test_un_arrosage_bloque_aussi_un_changement_de_materiel(self) -> None:
+        self.coordinateur.arrose = True
+        reponse = self._ecrire({"entite_tondeuse": "lawn_mower.robot"})
+        self.assertFalse(reponse["ok"])
+        self.assertIn("Un arrosage est en cours", reponse["erreurs"]["entrees"])
+        self.assertEqual(self.coordinateur.entrees_changees, [])
 
 
 class CeQueLaPageEcritTests(unittest.TestCase):
@@ -828,7 +993,7 @@ class CeQueLaPageEcritTests(unittest.TestCase):
 
     def test_une_valeur_refusee_n_ecrit_rien(self) -> None:
         reponse = self._ecrire({"tonte_vent_bloque": 200, "tonte_max_par_jour": 3})
-        self.assertEqual(reponse, {"ok": False, "erreurs": {"tonte_vent_bloque": "Choisis une valeur entre 20 et 60."}})
+        self.assertEqual(reponse, {"ok": False, "erreurs": {"tonte_vent_bloque": "Sélectionner une valeur entre 20 et 60."}})
         self.assertEqual(self.coordinateur.mises_a_jour, [])
 
     def test_une_contrainte_est_jugee_contre_ce_qui_est_enregistre(self) -> None:
@@ -849,7 +1014,7 @@ class CeQueLaPageEcritTests(unittest.TestCase):
             "tondeuse_creneaux_depart": "ideal_seulement",
         })
         refus = self._ecrire({}, {"type_sol": "tourbe"})
-        self.assertEqual(refus["erreurs"], {"type_sol": "Choisis parmi : sableuse, limoneuse, argileuse."})
+        self.assertEqual(refus["erreurs"], {"type_sol": "Sélectionner parmi : sableuse, limoneuse, argileuse."})
 
     def test_le_pilotage_tondeuse_est_un_choix_separe_des_autres_reglages(self) -> None:
         reponse = self._ecrire({}, {"pilotage_tondeuse": "observation"})
@@ -1023,11 +1188,11 @@ class LesAlertesSeReglentSurLaPageTests(unittest.TestCase):
             "catégories mal formées": ({"categories": []}, "Les catégories de notification n'ont pas la bonne forme."),
             "catégorie inconnue": ({"categories": {"pluie": True}}, "Catégorie de notification inconnue : pluie."),
             "valeur de catégorie mal formée": ({"categories": {"tondeuse": "oui"}}, "Chaque catégorie de notification doit être cochée ou décochée."),
-            "mode inconnu": ({"mode": "magique"}, "Choisis Veille intelligente ou Choix manuel."),
-            "source inconnue": ({"source": "magique"}, "Choisis les messages de Gazon Intelligent ou du Conseiller Gazon."),
-            "niveau inconnu": ({"niveau_minimal": "bruyant"}, "Choisis Tout recevoir, Important ou Urgences seulement."),
+            "mode inconnu": ({"mode": "magique"}, "Sélectionner Veille intelligente ou Choix manuel."),
+            "source inconnue": ({"source": "magique"}, "Sélectionner les messages de Gazon Intelligent ou du Conseiller Gazon."),
+            "niveau inconnu": ({"niveau_minimal": "bruyant"}, "Sélectionner Tout recevoir, Important ou Urgences seulement."),
             "heures calmes mal formées": ({"heures_calmes": {"active": True}}, "Les heures calmes n'ont pas la bonne forme."),
-            "heure hors journée": ({"heures_calmes": {"active": True, "debut": 1440, "fin": 420}}, "Choisis des heures calmes comprises dans la journée."),
+            "heure hors journée": ({"heures_calmes": {"active": True, "debut": 1440, "fin": 420}}, "Sélectionner des heures calmes comprises dans la journée."),
             "ia mal formée": ({"ia": 3}, "Cette IA n'existe pas dans Home Assistant : 3."),
             "clé inconnue": ({"sirene": True}, "Réglage d'alerte inconnu : sirene."),
         }
@@ -1184,6 +1349,7 @@ class LEnregistrementTests(unittest.TestCase):
         self.assertIn("notifications", noms)
         self.assertIn("pompe", noms)
         self.assertIn("entrees", noms)
+        self.assertIn("liaisons_materiel", noms)
 
     def test_le_panneau_suit_les_instances_qui_le_veulent(self) -> None:
         faux, journal = _faux_composants()

@@ -63,6 +63,7 @@
           "capteur_humidite_sol": "Soil humidity (%) (recommended if available)",
           "capteur_vent": "Local wind (optional, used first if provided)",
           "capteur_rosee": "Dew / leaf wetness (optional, automatic if not provided)",
+          "capteur_point_de_rosee": "Measured dew point (air) (optional, automatic from the weather entity if not provided)",
           "capteur_rayonnement": "Measured global solar radiation (optional, W/m² — greatly improves ET0 accuracy)",
           "capteur_pression": "Measured atmospheric pressure (optional, hPa — refines ET0 accuracy)",
           "entite_pompe": "Irrigation pump (optional — shown and controlled on the “Gazon” page)",
@@ -110,6 +111,7 @@
           "capteur_humidite_sol": "Soil humidity (%) (recommended if available)",
           "capteur_vent": "Local wind (optional, used first if provided)",
           "capteur_rosee": "Dew / leaf wetness (optional, automatic if not provided)",
+          "capteur_point_de_rosee": "Measured dew point (air) (optional, automatic from the weather entity if not provided)",
           "capteur_rayonnement": "Measured global solar radiation (optional, W/m² — greatly improves ET0 accuracy)",
           "capteur_pression": "Measured atmospheric pressure (optional, hPa — refines ET0 accuracy)",
           "entite_pompe": "Irrigation pump (optional — shown and controlled on the “Gazon” page)",
@@ -435,7 +437,7 @@
       "fields": {
         "question": {
           "name": "Question",
-          "description": "Your question. Empty: a daily lawn review."
+          "description": "Question to ask. Empty: a daily lawn review."
         },
         "notifier": {
           "name": "Also send to phones",

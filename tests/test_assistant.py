@@ -36,6 +36,12 @@ def _install_homeassistant_stubs() -> None:
     ensure_module("homeassistant")
     ensure_module("homeassistant.components")
     ensure_module("homeassistant.helpers")
+    core_mod = ensure_module("homeassistant.core")
+    if not hasattr(core_mod, "callback"):
+        core_mod.callback = lambda func: func
+    const_mod = ensure_module("homeassistant.const")
+    if not hasattr(const_mod, "MATCH_ALL"):
+        const_mod.MATCH_ALL = "*"
     util_mod = ensure_module("homeassistant.util")
     if not hasattr(util_mod, "__path__"):
         util_mod.__path__ = []  # type: ignore[attr-defined]

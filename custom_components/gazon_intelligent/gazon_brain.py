@@ -478,11 +478,11 @@ class GazonBrain:
             if normalize_product_id(product_record.get("id")) != selected_product_id:
                 raise ValueError(
                     "Le produit sélectionné dans l'UI ne correspond pas au produit explicitement fourni. "
-                    "Choisis une seule source de vérité."
+                    "Sélectionner une seule source de vérité."
                 )
         if product_query and product_record is None:
             raise ValueError(
-                "Produit introuvable ou ambigu. Utilise l'ID exact ou le nom exact d'un produit enregistré."
+                "Produit introuvable ou ambigu. Utiliser l'ID exact ou le nom exact d'un produit enregistré."
             )
         # Rattacher d'office le produit sélectionné (ou l'unique produit) n'a de sens que pour une
         # vraie APPLICATION. Un Sursemis ou un Hivernage recevait sinon le Floranid sélectionné,
@@ -496,7 +496,7 @@ class GazonBrain:
             product_record = self._single_product_record()
         if rattachement_auto and not product_query and product_record is None and len(self.products) > 1:
             raise ValueError(
-                "Plusieurs produits sont enregistrés. Sélectionne un produit enregistré par ID ou nom exact."
+                "Plusieurs produits sont enregistrés. Sélectionner un produit enregistré par ID ou nom exact."
             )
         if product_record:
             produit = produit or product_record.get("nom")

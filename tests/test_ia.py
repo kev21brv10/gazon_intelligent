@@ -62,6 +62,13 @@ class ReponseTests(unittest.TestCase):
         self.assertEqual(ia.texte_de_la_reponse(None), "")
         self.assertEqual(ia.texte_de_la_reponse("Direct"), "Direct")
 
+    def test_une_cle_vide_ne_masque_pas_une_cle_suivante_remplie(self) -> None:
+        # `text` avant `reponse` avant `answer` : une clé présente mais vide ne doit pas être
+        # prise pour LA réponse (elle serait rendue comme une IA "qui a répondu sans texte").
+        self.assertEqual(ia.texte_de_la_reponse({"data": {"text": "   ", "reponse": "Oui"}}), "Oui")
+        self.assertEqual(ia.texte_de_la_reponse({"data": {"text": "", "answer": "Oui"}}), "Oui")
+        self.assertEqual(ia.texte_de_la_reponse({"data": {"text": "  ", "reponse": "", "answer": ""}}), "")
+
 
 class EntiteTests(unittest.TestCase):
     def test_choix(self) -> None:
@@ -158,6 +165,19 @@ class DemanderTests(unittest.TestCase):
         finally:
             ia.DELAI_REPONSE_S = ancien
         self.assertIn("n'a pas répondu", str(erreur.exception))
+
+    def test_le_delai_personnalise_des_notifications_est_reellement_applique(self) -> None:
+        # `notifications.py` passe `delai_s=ia.DELAI_NOTIFICATION_S` (15 s) pour ne jamais retenir
+        # une alerte le temps du délai par défaut (90 s). Sans le paramètre honoré, une réponse
+        # plus lente que 15 s mais plus rapide que 90 s passerait à tort pour un succès.
+        hass = _Hass({"data": "réponse lente"}, attente=0.2)
+        with self.assertRaises(ia.IaIndisponible) as erreur:
+            asyncio.run(ia.async_demander(hass, "consigne", entite=None, delai_s=0.05))
+        self.assertIn("n'a pas répondu en 0.05", str(erreur.exception))
+        # La même réponse, avec un délai personnalisé assez large, aboutit normalement.
+        hass = _Hass({"data": "réponse lente"}, attente=0.05)
+        texte = asyncio.run(ia.async_demander(hass, "consigne", entite=None, delai_s=1))
+        self.assertEqual(texte, "réponse lente")
 
 
 if __name__ == "__main__":

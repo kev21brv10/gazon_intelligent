@@ -27,7 +27,7 @@ from .guidance import (
     _reference_hydric_balance_mm,
     compute_watering_profile,
     is_fertilization_window_open,
-    palier_et0_stress,
+    stabiliser_montee_palier_et0,
 )
 from .memory import compute_application_state
 from .phases import is_seeding_phase
@@ -208,8 +208,10 @@ def build_water_bundle(
     # `risque_gazon` quatorze fois le 31/08/2026. Il descend ensuite aux DEUX chaînes qui
     # calculent le stress — le profil d'arrosage ici, le risque dans `build_risk_bundle` —
     # via le bundle. Deux calculs séparés donneraient deux niveaux de stress pour un même fait.
-    points_etp_stress = palier_et0_stress(
-        etp, (context.risk_context or {}).get("palier_et0")
+    points_etp_stress, memoire_montee_et0 = stabiliser_montee_palier_et0(
+        etp,
+        (context.risk_context or {}).get("palier_et0"),
+        (context.risk_context or {}).get("palier_et0_montee"),
     )
     # ⚠️ LE PLANCHER D'ACTIVATION DOIT S'ÉTEINDRE UNE FOIS LE PRODUIT DISSOUS. Sans cette
     # information, `_apply_watering_floor_constraints` renvoie le plancher de la phase dès que le
@@ -320,6 +322,7 @@ def build_water_bundle(
     return {
         "etp": etp,
         "stress_palier_et0": points_etp_stress,
+        "stress_palier_et0_montee": memoire_montee_et0,
         "et0_mm": round(max(0.0, et0_mm), 1),
         "et0_source": context.et0_source,
         "kc_gazon": round(min(max(kc_gazon, 0.4), 1.1), 2),
@@ -968,7 +971,7 @@ def _resolve_unknown_application_override(state: dict[str, Any]) -> dict[str, An
         conseil_principal=(
             f"{state['application_inconnue_label']}: type d'application inconnu, aucun arrosage automatique ne doit être lancé."
         ),
-        action_recommandee="Vérifie l'étiquette ou renseigne le type d'application avant d'arroser.",
+        action_recommandee="Vérifier l'étiquette ou renseigner le type d'application avant d'arroser.",
         action_a_eviter="Lancer un arrosage sans type d'application confirmé.",
         raison_decision=(
             "Type d'application inconnu: sécurité renforcée, aucun arrosage automatique. "
@@ -1989,7 +1992,7 @@ def build_watering_bundle(
         if not recommande:
             if pluie_demain >= 2 * sensibilite_pluie:
                 conseil_principal = "N'arrose pas aujourd'hui: la pluie prévue couvre le besoin court terme."
-                action_recommandee = "Laisse la pluie agir puis réévalue demain."
+                action_recommandee = "Laisser la pluie agir puis réévaluer demain."
                 action_a_eviter = "Cumuler pluie et arrosage."
             else:
                 conseil_principal = "N'arrose pas pour le moment."

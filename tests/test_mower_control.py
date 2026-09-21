@@ -172,6 +172,110 @@ def test_mower_is_docked_only_when_lawn_permission_is_withdrawn():
     assert decide(outside)["mower_control_pending_action"] is None
 
 
+def test_normal_battery_return_is_left_entirely_to_mower_autonomy():
+    charging = ready(
+        mower_operation_state="charging",
+        mower_battery=100,
+        mower_job_progress_pct=42,
+        mower_job_completion_state="en_pause",
+    )
+    result = decide(
+        charging,
+        runtime={"managed_cycle_active": True, "resume_required": False},
+    )
+    assert result["mower_control_state"] == "cycle_autonome"
+    assert result["mower_control_pending_action"] is None
+    assert "recharges et ses redéparts" in result["mower_control_reason"]
+
+    garage = decide(
+        charging | {"action_possible": False},
+        runtime={"managed_cycle_active": True, "resume_required": False},
+        cover_entity="cover.garage_tondeuse",
+        cover_state="open",
+    )
+    assert garage["mower_control_state"] == "cycle_autonome"
+    assert garage["mower_control_pending_action"] is None
+
+
+def test_pending_start_becomes_autonomous_once_activity_is_observed():
+    result = decide(
+        ready(
+            mower_is_docked=False,
+            mower_is_outside=True,
+            mower_is_mowing=True,
+            mower_operation_state="mowing",
+            mower_job_progress_pct=3,
+            mower_job_completion_state="en_cours",
+        ),
+        runtime={"managed_start_pending": True},
+    )
+    assert result["mower_control_state"] == "cycle_autonome"
+    assert result["mower_control_runtime_updates"]["managed_start_pending"] is False
+    assert result["mower_control_runtime_updates"]["managed_cycle_active"] is True
+
+
+def test_resume_owed_bypasses_new_start_window_and_daily_quota_only():
+    interrupted = ready(
+        mowing_window_state="discouraged",
+        mower_pass_count_today=2,
+        mowing_daily_session_limit=2,
+        mower_job_progress_pct=42,
+        mower_job_completion_state="en_pause",
+    )
+    runtime = {"managed_cycle_active": True, "resume_required": True}
+    result = decide(interrupted, runtime=runtime)
+    assert result["mower_control_state"] == "reprise_demandee"
+    assert result["mower_control_pending_action"] == "start_mowing"
+
+    low_battery = decide(
+        interrupted | {"mower_battery": 79},
+        runtime=runtime,
+        settings={"tondeuse_pilotage_batterie_min": 80},
+    )
+    assert low_battery["mower_control_state"] == "reprise_attente_batterie"
+    assert low_battery["mower_control_pending_action"] is None
+
+
+def test_completed_managed_job_clears_all_resume_markers():
+    result = decide(
+        ready(mower_job_progress_pct=100, mower_job_completion_state="termine"),
+        runtime={
+            "managed_cycle_active": True,
+            "resume_required": True,
+            "resume_reason": "pluie",
+            "resume_requested_at": NOW.isoformat(),
+        },
+    )
+    assert result["mower_control_state"] == "cycle_termine"
+    assert result["mower_control_pending_action"] is None
+    assert result["mower_control_runtime_updates"] == {
+        "managed_start_pending": False,
+        "managed_cycle_active": False,
+        "resume_required": False,
+        "resume_reason": None,
+        "resume_requested_at": None,
+        "managed_job_seen_incomplete": False,
+        "managed_job_id": None,
+    }
+
+
+def test_raw_progress_can_finish_cycle_without_auto_declaration_state():
+    result = decide(
+        ready(
+            mower_job_id="travail-42",
+            mower_job_progress_pct=100,
+            mower_job_completion_state=None,
+        ),
+        runtime={
+            "managed_cycle_active": True,
+            "managed_job_seen_incomplete": True,
+            "managed_job_id": "travail-42",
+        },
+    )
+    assert result["mower_control_state"] == "cycle_termine"
+    assert result["mower_control_runtime_updates"]["managed_cycle_active"] is False
+
+
 def test_garage_is_optional_and_closed_garage_opens_before_start():
     assert decide()["mower_control_pending_action"] == "start_mowing"
     result = decide(cover_entity="cover.garage_tondeuse", cover_state="closed")
@@ -279,6 +383,37 @@ def test_open_garage_waits_then_allows_start():
     )
     assert longer["mower_control_state"] == "attente_garage"
     assert longer["mower_control_pending_action"] is None
+
+
+def test_partially_open_garage_must_reach_the_configured_safe_position():
+    partial = decide(
+        cover_entity="cover.garage_tondeuse",
+        cover_state="open",
+        cover_position=70,
+    )
+    assert partial["mower_control_pending_action"] == "open_cover"
+    assert "70 %" in partial["mower_control_reason"]
+    assert "95 %" in partial["mower_control_reason"]
+
+    accepted = decide(
+        cover_entity="cover.garage_tondeuse",
+        cover_state="open",
+        cover_position=70,
+        settings={"tondeuse_garage_ouverture_min": 65, "tondeuse_garage_avance_ouverture": 0},
+        runtime={"garage_opened_at": (NOW - timedelta(minutes=1)).isoformat()},
+    )
+    assert accepted["mower_control_pending_action"] == "start_mowing"
+
+
+def test_cover_without_position_keeps_using_its_open_state():
+    result = decide(
+        cover_entity="cover.garage_tondeuse",
+        cover_state="open",
+        cover_position=None,
+        settings={"tondeuse_garage_avance_ouverture": 0},
+        runtime={"garage_opened_at": (NOW - timedelta(minutes=1)).isoformat()},
+    )
+    assert result["mower_control_pending_action"] == "start_mowing"
 
 
 def test_unknown_garage_never_allows_start():

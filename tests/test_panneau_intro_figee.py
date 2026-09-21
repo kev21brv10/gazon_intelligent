@@ -117,8 +117,17 @@ function html(choisie) {
     },
   };
   panel._brouillonGarageTondeuse = undefined;
+  panel._brouillon = {};
   panel._reglage = (cle) => ({ cle, titre: cle });
   panel._ligneHtml = (reglage) => `<div data-reglage="${reglage.cle}"></div>`;
+  panel._valeur = (cle) => ({
+    tondeuse_garage_ouvrir_avant_depart: true,
+    tondeuse_garage_ouverture_min: 95,
+    tondeuse_garage_avance_ouverture: 2,
+    tondeuse_garage_ouvrir_pour_retour: true,
+    tondeuse_garage_fermer_apres_retour: true,
+    tondeuse_garage_delai_fermeture: 2,
+  })[cle];
   return panel._garageTondeuseHtml();
 }
 
@@ -256,12 +265,15 @@ class GarageTondeuseAffichageTests(unittest.TestCase):
     def test_un_volet_choisi_affiche_son_etat_et_ses_automatismes(self) -> None:
         self.assertIn("Garage tondeuse", self.rendu["avec"])
         self.assertIn("fermé", self.rendu["avec"])
-        self.assertIn("Automatismes du volet", self.rendu["avec"])
+        self.assertIn("Avant le départ", self.rendu["avec"])
+        self.assertIn("Au retour", self.rendu["avec"])
+        self.assertIn("passage à 95 %", self.rendu["avec"])
         self.assertIn('data-reglage="tondeuse_garage_ouvrir_avant_depart"', self.rendu["avec"])
+        self.assertIn('data-reglage="tondeuse_garage_ouverture_min"', self.rendu["avec"])
 
     def test_sans_volet_les_automatismes_restent_masques(self) -> None:
-        self.assertIn("Choisis un volet", self.rendu["sans"])
-        self.assertNotIn("Automatismes du volet", self.rendu["sans"])
+        self.assertIn("Sélectionner un volet", self.rendu["sans"])
+        self.assertNotIn("Avant le départ", self.rendu["sans"])
         self.assertNotIn("tondeuse_garage_ouvrir_avant_depart", self.rendu["sans"])
 
 

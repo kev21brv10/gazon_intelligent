@@ -264,7 +264,7 @@ def pourquoi_le_cycle_attend(
         return (
             "Le verrou de sécurité de l'arrosage est posé : une vanne ne s'est pas fermée "
             "normalement lors d'un arrosage.",
-            "Vérifie les vannes et la pompe avant tout.",
+            "Vérifier les vannes et la pompe avant toute intervention.",
         )
     if code == "startup_guard":
         return (
@@ -301,12 +301,12 @@ def pourquoi_le_cycle_attend(
         detail = f" : {echec_lancement}" if echec_lancement else "."
         return (
             f"Le cycle devait partir mais ne s'est pas lancé{detail}",
-            "Vérifie les vannes et le journal de Home Assistant.",
+            "Vérifier les vannes et le journal de Home Assistant.",
         )
     if not code:
         return (
             "Aucune évaluation récente du lancement.",
-            "Vérifie que l'intégration tourne (page « Gazon »).",
+            "Vérifier que l'intégration fonctionne depuis la page « Gazon ».",
         )
     return (
         f"Le cycle n'est pas parti (motif technique « {code} »).",
@@ -562,8 +562,8 @@ def evaluer_alertes(
                 titre="⚠️ Arrosage automatique verrouillé",
                 message=(
                     f"Une vanne ne s'est pas fermée normalement{zone}. Plus aucun arrosage "
-                    f"automatique ne partira tant que le verrou est posé.{erreur} Vérifie les "
-                    "vannes et la pompe, puis utilise « Lever le verrou de sécurité ». Cette "
+                    f"automatique ne partira tant que le verrou est posé.{erreur} Vérifier les "
+                    "vannes et la pompe, puis utiliser « Lever le verrou de sécurité ». Cette "
                     "action rétablit l'automatisme sans effacer le mode Semis ou Sursemis."
                 ),
                 niveau="critique",
@@ -590,7 +590,7 @@ def evaluer_alertes(
             sujet=SUJET_TONDEUSE,
             titre="Tondeuse : erreur détectée",
             message=(
-                f"La tondeuse signale : {libelle_robot}. Vérifie le robot et son application avant "
+                f"La tondeuse signale : {libelle_robot}. Vérifier le robot et son application avant "
                 "de relancer une tonte."
             ),
         ))
@@ -756,17 +756,17 @@ def _message_mesures(manquantes: Sequence[Mesure], maintenant: datetime) -> str:
     if all(m.cle == CONF_ENTITE_METEO for m in manquantes):
         suite = (
             "Sans elle, la pluie annoncée et la température du jour ne sont plus connues. "
-            "Vérifie l'intégration météo."
+            "Vérifier l'intégration météo."
         )
     elif any(m.cle == CONF_ENTITE_METEO for m in manquantes):
         suite = (
             "Les mesures manquantes n'ont même plus de prévision pour les remplacer. "
-            "Vérifie ces appareils et l'intégration météo."
+            "Vérifier ces appareils et l'intégration météo."
         )
     else:
         suite = (
             "En attendant, l'intégration se sert des prévisions de l'entité météo, moins justes "
-            "pour ton jardin. Vérifie ces appareils (piles, réseau)."
+            "pour le jardin. Vérifier ces appareils (piles, réseau)."
         )
     return f"Gazon Intelligent ne reçoit plus : {liste}. {suite}"
 

@@ -63,6 +63,7 @@
           "capteur_humidite_sol": "Bodemvocht (%) (aanbevolen als beschikbaar)",
           "capteur_vent": "Lokale wind (optioneel, wordt eerst gebruikt indien aanwezig)",
           "capteur_rosee": "Dauw / bladnat (optioneel, automatische berekening als niet ingevuld)",
+          "capteur_point_de_rosee": "Gemeten dauwpunt (lucht) (optioneel, automatische berekening via de weerentiteit als niet ingevuld)",
           "capteur_rayonnement": "Gemeten globale straling (optioneel, W/m² — verbetert de ET0-berekening sterk)",
           "capteur_pression": "Gemeten luchtdruk (optioneel, hPa — verfijnt de ET0-berekening)",
           "entite_pompe": "Beregeningspomp (optioneel — getoond en bediend op de pagina „Gazon”)",
@@ -110,6 +111,7 @@
           "capteur_humidite_sol": "Bodemvocht (%) (aanbevolen als beschikbaar)",
           "capteur_vent": "Lokale wind (optioneel, wordt eerst gebruikt indien aanwezig)",
           "capteur_rosee": "Dauw / bladnat (optioneel, automatische berekening als niet ingevuld)",
+          "capteur_point_de_rosee": "Gemeten dauwpunt (lucht) (optioneel, automatische berekening via de weerentiteit als niet ingevuld)",
           "capteur_rayonnement": "Gemeten globale straling (optioneel, W/m² — verbetert de ET0-berekening sterk)",
           "capteur_pression": "Gemeten luchtdruk (optioneel, hPa — verfijnt de ET0-berekening)",
           "entite_pompe": "Beregeningspomp (optioneel — getoond en bediend op de pagina „Gazon”)",
@@ -435,7 +437,7 @@
       "fields": {
         "question": {
           "name": "Vraag",
-          "description": "Je vraag. Leeg: een dagoverzicht van het gazon."
+          "description": "Te stellen vraag. Leeg: een dagoverzicht van het gazon."
         },
         "notifier": {
           "name": "Ook naar telefoons sturen",

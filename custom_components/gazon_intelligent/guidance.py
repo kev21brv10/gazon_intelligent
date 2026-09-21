@@ -1100,6 +1100,7 @@ def _semis_window_bounds(
 # qui attend d'être franc. L'inverse aurait retardé une alerte.
 _ET0_STRESS_PALIERS: tuple[tuple[float, int], ...] = ((5.0, 3), (4.0, 2), (3.0, 1))
 _ET0_STRESS_BANDE_MORTE = 0.4
+_ET0_STRESS_MONTEE_STABLE_SECONDS = 120.0
 
 
 def palier_et0_stress(etp: float | None, precedent: int | None) -> int:
@@ -1126,6 +1127,43 @@ def palier_et0_stress(etp: float | None, precedent: int | None) -> int:
     if seuil_tenu is None or valeur < seuil_tenu - _ET0_STRESS_BANDE_MORTE:
         return brut
     return precedent
+
+
+def stabiliser_montee_palier_et0(
+    etp: float | None,
+    precedent: int | None,
+    memoire: dict[str, Any] | None,
+    *,
+    observed_at: datetime | None = None,
+) -> tuple[int, dict[str, Any] | None]:
+    """Valide une hausse d'ET0 tenue deux minutes et ignore une rafale isolée.
+
+    La descente reste confiée à :func:`palier_et0_stress` et à sa bande morte. Les autres
+    signaux critiques du risque (réserve épuisée, chaleur sévère, vent soutenu direct) ne
+    passent pas par ce filtre et restent donc immédiats.
+    """
+    brut = palier_et0_stress(etp, None)
+    if not isinstance(precedent, int) or isinstance(precedent, bool):
+        return brut, None
+
+    if brut <= precedent:
+        return palier_et0_stress(etp, precedent), None
+
+    now = observed_at if isinstance(observed_at, datetime) else _current_datetime()
+    candidat = memoire if isinstance(memoire, dict) else {}
+    if candidat.get("palier") != brut:
+        return precedent, {"palier": brut, "depuis": now.isoformat()}
+
+    try:
+        depuis = datetime.fromisoformat(str(candidat.get("depuis") or "").replace("Z", "+00:00"))
+        duree = (now - depuis).total_seconds()
+    except (TypeError, ValueError):
+        duree = -1.0
+    if duree < 0:
+        return precedent, {"palier": brut, "depuis": now.isoformat()}
+    if duree < _ET0_STRESS_MONTEE_STABLE_SECONDS:
+        return precedent, {"palier": brut, "depuis": depuis.isoformat()}
+    return brut, None
 
 
 def _heat_stress_level(
@@ -1607,6 +1645,7 @@ def _evaluer_risque_gazon(
     bilan_hydrique_mm: float,
     pression_hydrique: float,
     utiliser_reserve: bool = True,
+    surface_semis: bool = False,
     plancher: str | None = None,
     vent: float | None = None,
     hauteur_gazon: float | None = None,
@@ -1658,34 +1697,55 @@ def _evaluer_risque_gazon(
         else:
             niveau = "faible"
     else:
+        if surface_semis:
+            reserve_connue = bool(wb.get("reserve_from_soil_ledger"))
+            raison_bilan = (
+                f"surface du semis : bilan du jour {bilan_hydrique_mm:.1f} mm ; "
+                + (
+                    "réserve profonde connue mais non utilisée pour les graines"
+                    if reserve_connue
+                    else "réserve profonde indisponible"
+                )
+            )
+        else:
+            raison_bilan = (
+                f"déficit du jour {bilan_hydrique_mm:.1f} mm (sans réserve sol connue)"
+            )
         if bilan_hydrique_mm <= seuil_eleve or pression_hydrique >= seuil_pression_eleve:
             niveau = "eleve"
-            raisons.append(f"déficit du jour {bilan_hydrique_mm:.1f} mm (sans réserve sol connue)")
+            raisons.append(raison_bilan)
         elif bilan_hydrique_mm <= seuil_modere or pression_hydrique >= seuil_pression_modere:
             niveau = "modere"
-            raisons.append(f"déficit du jour {bilan_hydrique_mm:.1f} mm (sans réserve sol connue)")
+            raisons.append(raison_bilan)
         else:
             niveau = "faible"
+
+    def _remplacer_par_declencheur(motif: str) -> None:
+        if surface_semis:
+            contexte = [f"Contexte : {raison}" for raison in raisons]
+            raisons[:] = [f"Déclencheur : {motif}", *contexte]
+        else:
+            raisons.append(motif)
 
     def _monter(motif: str) -> None:
         nonlocal niveau
         avant = niveau
         niveau = _risk_from_rank(min(_risk_rank(niveau) + 1, 2))
         if niveau != avant:
-            raisons.append(motif)
+            _remplacer_par_declencheur(motif)
 
     if vent is not None and vent >= 20:
         if niveau != "eleve":
-            raisons.append(f"vent soutenu ({vent:.0f} km/h)")
-        niveau = "eleve"
+            _remplacer_par_declencheur(f"vent soutenu ({vent:.0f} km/h)")
+            niveau = "eleve"
     if hauteur_gazon is not None and hauteur_gazon >= 12:
         if niveau != "eleve":
-            raisons.append(f"gazon très haut ({hauteur_gazon:.0f} cm)")
-        niveau = "eleve"
+            _remplacer_par_declencheur(f"gazon très haut ({hauteur_gazon:.0f} cm)")
+            niveau = "eleve"
     if heat_stress_level == "severe":
         if niveau != "eleve":
-            raisons.append(libelle_stress("sévères"))
-        niveau = "eleve"
+            _remplacer_par_declencheur(libelle_stress("sévères"))
+            niveau = "eleve"
     elif heat_stress_level in {"eleve", "vigilance"}:
         _monter(libelle_stress(heat_stress_level))
     if heat_stress_phase == "stress_prolonge":
@@ -1698,10 +1758,13 @@ def _evaluer_risque_gazon(
     # la réserve du sol est saine.
     if plancher and _risk_rank(niveau) < _risk_rank(plancher):
         niveau = plancher
-        raisons.append(f"plancher de phase ({plancher})")
+        motif = f"plancher de phase ({plancher})"
+        _remplacer_par_declencheur(motif)
 
     if not raisons:
         raisons.append("aucun facteur de risque")
+    elif surface_semis and not any(raison.startswith("Déclencheur :") for raison in raisons):
+        raisons[:] = [f"Déclencheur : {raison}" for raison in raisons]
     return niveau, raisons
 
 
@@ -3484,6 +3547,7 @@ def compute_action_guidance(
             bilan_hydrique_mm=bilan_hydrique_mm,
             pression_hydrique=pression_hydrique,
             utiliser_reserve=False,      # branche Sursemis (germination / reprise)
+            surface_semis=True,
             plancher=risque_gazon,       # la phase impose son minimum
             vent=vent,
             hauteur_gazon=hauteur_gazon,

@@ -249,6 +249,7 @@ def build_risk_bundle(
         # Mémoire de la bande morte d'ET0 : relue au cycle suivant, et visible de l'extérieur —
         # une bande morte muette est indiscernable d'un capteur figé.
         "stress_palier_et0": water_bundle.get("stress_palier_et0"),
+        "stress_palier_et0_montee": water_bundle.get("stress_palier_et0_montee"),
         "watering_window_start_minute": action_guidance.get("watering_window_start_minute"),
         "watering_window_end_minute": action_guidance.get("watering_window_end_minute"),
         "watering_window_optimal_start_minute": action_guidance.get("watering_window_optimal_start_minute"),

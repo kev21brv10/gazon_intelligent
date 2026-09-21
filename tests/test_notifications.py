@@ -183,7 +183,7 @@ class CycleDeGrainesEnRetardTests(unittest.TestCase):
     def test_lancement_rate(self) -> None:
         alertes, _ = _evaluer(raison="ready", vent_kmh=2.0, echec_lancement="Vanne zone 1 indisponible")
         self.assertIn("ne s'est pas lancé : Vanne zone 1 indisponible", alertes[0].message)
-        self.assertIn("Vérifie les vannes", alertes[0].message)
+        self.assertIn("Vérifier les vannes", alertes[0].message)
 
     def test_motif_inconnu_reste_lisible(self) -> None:
         alertes, _ = _evaluer(raison="code_futur", vent_kmh=2.0)
@@ -223,8 +223,8 @@ class MesuresManquantesTests(unittest.TestCase):
         self.assertEqual(
             alerte.message,
             "Gazon Intelligent ne reçoit plus : la température (Station Température, depuis 12:00). "
-            "En attendant, l'intégration se sert des prévisions de l'entité météo, moins justes pour ton "
-            "jardin. Vérifie ces appareils (piles, réseau).",
+            "En attendant, l'intégration se sert des prévisions de l'entité météo, moins justes pour le "
+            "jardin. Vérifier ces appareils (piles, réseau).",
         )
         alertes, memoire = _evaluer(memoire, progression=None, heure="14:00", mesures=[_mesure()])
         self.assertEqual(alertes, [], "la même panne ne se répète pas")
@@ -260,7 +260,7 @@ class MesuresManquantesTests(unittest.TestCase):
         meteo = _mesure("entite_meteo", "l'entité météo", "Prévisions")
         alertes, _ = _evaluer(progression=None, mesures=[meteo])
         self.assertTrue(alertes[0].message.endswith(
-            "Sans elle, la pluie annoncée et la température du jour ne sont plus connues. Vérifie l'intégration météo."
+            "Sans elle, la pluie annoncée et la température du jour ne sont plus connues. Vérifier l'intégration météo."
         ))
 
     def test_l_entite_meteo_avec_d_autres(self) -> None:
@@ -565,6 +565,34 @@ class NotificationsActiviteTests(unittest.TestCase):
         )
         self.assertEqual(alertes, [])
 
+    def test_un_arrosage_deja_en_cours_au_tout_premier_releve_n_est_pas_annonce(self) -> None:
+        # Contrairement au test ci-dessus (categorie pas encore active au premier releve), la
+        # categorie est active DES le depart ici : c'est le vrai scenario d'un redemarrage HA en
+        # plein cycle. Sans le garde d'initialisation, ce cas annoncerait un « demarrage » pour
+        # une session qui, en realite, a commence avant meme que l'integration ne redemarre.
+        actif = {"active_id": "sess-deja-en-cours", "target_mm": 4.0, "completed_id": None}
+        alertes, _ = _evaluer(
+            progression=None, sujets_actifs=self.SUJETS, activite_arrosage=actif,
+        )
+        self.assertEqual(alertes, [])
+
+    def test_un_arrosage_interrompu_est_distingue_d_une_fin_normale(self) -> None:
+        _, memoire = _evaluer(
+            progression=None, sujets_actifs=self.SUJETS,
+            activite_arrosage={"active_id": "sess-2", "completed_id": None},
+        )
+        interrompu = {
+            "active_id": None, "completed_id": "sess-2", "completion_status": "cancelled",
+            "executed_mm": 1.4, "zones_done": 1,
+        }
+        alertes, _ = _evaluer(
+            memoire, progression=None, sujets_actifs=self.SUJETS, activite_arrosage=interrompu,
+        )
+        self.assertEqual([a.sujet for a in alertes], ["activite_arrosage"])
+        self.assertIn("interrompu", alertes[0].titre.lower())
+        self.assertEqual(alertes[0].niveau, "action")
+        self.assertTrue(alertes[0].persistante, "une interruption reste visible, contrairement à une fin normale")
+
     def test_activer_une_categorie_ne_rejoue_pas_l_activite_deja_observee(self) -> None:
         actif = {"active_id": "sess-deja-la", "target_mm": 2.0}
         alertes, memoire = _evaluer(
@@ -638,6 +666,35 @@ class NotificationsActiviteTests(unittest.TestCase):
             activite_garage={"configured": True, "state": "open", "error": "Volet bloqué"},
         )
         self.assertEqual(alertes, [])
+        alertes, _ = _evaluer(
+            memoire, progression=None, sujets_actifs=self.SUJETS,
+            activite_garage={"configured": True, "state": "open", "error": None},
+        )
+        self.assertEqual([(a.sujet, a.resolue) for a in alertes], [("garage_tondeuse", True)])
+
+    def test_un_etat_de_garage_intermediaire_ne_declenche_rien_mais_ne_casse_pas_la_suite(self) -> None:
+        # « opening »/« unavailable » ne sont ni ouverts ni fermés : les annoncer casserait le
+        # message (`ouvert = garage_state == "open"` dirait « fermé » pour un volet en train de
+        # s'ouvrir). Ils doivent être ignorés, sans empêcher la vraie transition suivante.
+        alertes, memoire = _evaluer(
+            progression=None, sujets_actifs=self.SUJETS,
+            activite_garage={"configured": True, "state": "closed", "error": None},
+        )
+        self.assertEqual(alertes, [])
+        for etat_transitoire in ("opening", "unavailable", "unknown"):
+            with self.subTest(etat=etat_transitoire):
+                alertes, memoire = _evaluer(
+                    memoire, progression=None, sujets_actifs=self.SUJETS,
+                    activite_garage={"configured": True, "state": etat_transitoire, "error": None},
+                )
+                self.assertEqual(alertes, [])
+        alertes, _ = _evaluer(
+            memoire, progression=None, sujets_actifs=self.SUJETS,
+            activite_garage={"configured": True, "state": "open", "error": None},
+        )
+        self.assertEqual([a.sujet for a in alertes], ["garage_tondeuse"])
+        self.assertIn("ouvert", alertes[0].message.lower())
+        self.assertNotIn("fermé", alertes[0].message.lower())
 
     def test_une_pause_pluie_n_est_pas_une_panne(self) -> None:
         """La Landroid publie `rain_delay` sur son capteur d'ERREUR : chaque averse aurait
