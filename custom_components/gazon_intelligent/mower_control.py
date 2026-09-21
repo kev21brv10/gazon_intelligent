@@ -23,6 +23,7 @@ from .mower_control_constants import (
     DEFAULT_MOWER_GARAGE_OPEN_LEAD_MINUTES,
     DEFAULT_MOWER_GARAGE_MIN_OPEN_POSITION,
     MOWER_CONTROL_MODES,
+    MOWER_MANAGED_START_TIMEOUT_MINUTES,
     MOWER_START_WINDOW_POLICIES,
 )
 
@@ -145,14 +146,40 @@ def evaluate_mower_control(
     managed_job_seen_incomplete = runtime.get("managed_job_seen_incomplete") is True
     managed_job_id = runtime.get("managed_job_id")
     observed_job_id = snapshot.get("mower_job_followed_id") or snapshot.get("mower_job_id")
-    observed_activity = outside or mowing or completion_state in {"en_cours", "en_pause"}
-    if progress is not None and progress < 100.0:
-        observed_activity = True
+    # ⚠️ Un signal FRAIS est exigé (0.97.25, signalé en relecture de la PR #52). `mower_job_progress_pct`
+    # peut encore afficher le pourcentage d'un ANCIEN travail (interrompu, jamais remis à zéro)
+    # au moment même où la commande est envoyée : sans comparaison à une référence, n'importe
+    # quelle valeur sous 100 % suffisait à faire croire un départ confirmé alors que la tondeuse
+    # n'avait jamais quitté sa station — le cycle managed_cycle_active s'armait pour rien, et
+    # l'intégration ne relançait plus jamais la tondeuse.
+    start_baseline_job_id = runtime.get("managed_start_baseline_job_id")
+    start_baseline_progress = _number(runtime.get("managed_start_baseline_progress"))
+    fresh_job = observed_job_id not in (None, "") and str(observed_job_id) != str(
+        start_baseline_job_id or ""
+    )
+    fresh_progress = (
+        progress is not None
+        and start_baseline_progress is not None
+        and progress > start_baseline_progress
+    )
+    observed_activity = (
+        outside
+        or mowing
+        or completion_state in {"en_cours", "en_pause"}
+        or fresh_job
+        or fresh_progress
+    )
     if start_pending and observed_activity:
         start_pending = False
         cycle_active = True
         runtime_updates.update(
-            {"managed_start_pending": False, "managed_cycle_active": True}
+            {
+                "managed_start_pending": False,
+                "managed_cycle_active": True,
+                "managed_start_baseline_job_id": None,
+                "managed_start_baseline_progress": None,
+                "managed_start_requested_at": None,
+            }
         )
     if cycle_active and progress is not None and progress < 100.0:
         managed_job_seen_incomplete = True
@@ -193,6 +220,9 @@ def evaluate_mower_control(
                 "resume_requested_at": None,
                 "managed_job_seen_incomplete": False,
                 "managed_job_id": None,
+                "managed_start_baseline_job_id": None,
+                "managed_start_baseline_progress": None,
+                "managed_start_requested_at": None,
             }
         )
 
@@ -269,6 +299,12 @@ def evaluate_mower_control(
     # Le cas `resume_required` passe volontairement plus bas : l'intégration a alors interrompu
     # elle-même le cycle et reprend la responsabilité jusqu'à son unique commande de reprise.
     if start_pending:
+        if _elapsed(now, runtime.get("managed_start_requested_at"), MOWER_MANAGED_START_TIMEOUT_MINUTES):
+            return result(
+                "depart_non_confirme",
+                "Départ envoyé mais aucun signal de sortie confirmée après un long délai : "
+                "à vérifier sur la tondeuse.",
+            )
         return result(
             "depart_envoye",
             "Départ envoyé ; attente de la sortie effective de la tondeuse.",

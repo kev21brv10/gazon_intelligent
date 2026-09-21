@@ -6,6 +6,10 @@ MOWER_START_WINDOW_POLICIES = ("ideal_seulement", "ideal_acceptable", "tout_non_
 DEFAULT_MOWER_START_WINDOW_POLICY = "ideal_seulement"
 DEFAULT_MOWER_CONTROL_MIN_BATTERY = 100
 DEFAULT_MOWER_CONTROL_COMMAND_COOLDOWN_MINUTES = 10
+# Départ envoyé sans aucun signal frais après ce délai : purement diagnostique (le libellé
+# affiché change), ne relance rien et n'annule rien — la commande reste due tant qu'aucun
+# signal frais ne l'a confirmée.
+MOWER_MANAGED_START_TIMEOUT_MINUTES = 15
 DEFAULT_MOWER_GARAGE_OPEN_BEFORE_START = True
 DEFAULT_MOWER_GARAGE_OPEN_FOR_RETURN = True
 DEFAULT_MOWER_GARAGE_CLOSE_AFTER_DOCK = True

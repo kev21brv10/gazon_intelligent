@@ -28,6 +28,7 @@ htmlcov/
 # (choix de Kévin, 16/09/2026). La référence d'architecture vit dans l'artefact, voir CLAUDE.md.
 docs/claude-codex-shared-review.md
 docs/codex-handoff-notes.md
+docs/claude-codex-idees.md
 
 # Aperçu local de la page « Réglages du gazon » : registre régénéré à chaque lancement, et valeurs
 # relevées sur l'installation réelle (horaires du soleil = position approximative, jamais publiée).
