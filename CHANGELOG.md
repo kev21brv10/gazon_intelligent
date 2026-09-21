@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.0.0-rc.3
+
+- **Un départ jamais confirmé restait bloqué pour toujours** : signalé en relecture automatique
+  de la PR #52. Le diagnostic ajouté en rc.2 après un long silence changeait seulement le
+  libellé affiché, sans rien effacer : `managed_start_pending` restait vrai indéfiniment et plus
+  aucune nouvelle tentative de départ n'était jamais envoyée. L'état est désormais libéré après
+  ce délai, ce qui permet une vraie nouvelle tentative au cycle suivant — toujours protégée par
+  le délai habituel entre deux commandes.
+- **Un cycle sans télémétrie ne pouvait plus jamais se terminer** : pour un robot qui ne publie
+  ni progression ni état de travail, rien ne permettait de détecter la fin d'un cycle autonome.
+  Une fois le premier départ confirmé, l'intégration restait persuadée qu'un cycle était en
+  cours pour toujours — plus aucun nouveau départ, plus aucune fermeture de garage. Un signal de
+  quai fort sert désormais de repli, uniquement quand aucune télémétrie n'a jamais été observée
+  (une simple pause batterie mi-travail, avec télémétrie, n'est jamais concernée).
+- **Le nouveau rôle « Point de rosée (air) » (0.97.24) pouvait mal lire un capteur en °F ou K** :
+  la page l'acceptait, mais la valeur n'était jamais convertie avant d'être comparée à une
+  température en °C — 50 °F aurait été traité comme 50 °C, faisant croire l'herbe mouillée en
+  permanence et bloquant la tonte. Restreint au °C, comme le rôle Température existant.
+- **Vérifié** : 4 tests supplémentaires, chacun confirmé par mutation séparément (un seul test
+  échoue à chaque fois, le bon). Suite complète : 2170 tests, verte.
+
 ## 1.0.0-rc.2
 
 - **Un vieux pourcentage de tonte ne confirme plus un départ jamais observé** : signalé en
