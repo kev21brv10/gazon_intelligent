@@ -8,6 +8,7 @@ from .mower_control_constants import (
     DEFAULT_MOWER_GARAGE_OPEN_BEFORE_START as DEFAULT_MOWER_GARAGE_OPEN_BEFORE_START,
     DEFAULT_MOWER_GARAGE_OPEN_FOR_RETURN as DEFAULT_MOWER_GARAGE_OPEN_FOR_RETURN,
     DEFAULT_MOWER_GARAGE_OPEN_LEAD_MINUTES as DEFAULT_MOWER_GARAGE_OPEN_LEAD_MINUTES,
+    DEFAULT_MOWER_GARAGE_MIN_OPEN_POSITION as DEFAULT_MOWER_GARAGE_MIN_OPEN_POSITION,
     MOWER_CONTROL_MODES as MOWER_CONTROL_MODES,
     MOWER_START_WINDOW_POLICIES as MOWER_START_WINDOW_POLICIES,
 )
@@ -43,6 +44,11 @@ CONF_CAPTEUR_HUMIDITE = "capteur_humidite"
 CONF_CAPTEUR_HUMIDITE_SOL = "capteur_humidite_sol"
 CONF_CAPTEUR_VENT = "capteur_vent"
 CONF_CAPTEUR_ROSEE = "capteur_rosee"
+# ⚠️ PAS LE MÊME RÔLE QUE `CONF_CAPTEUR_ROSEE` (0.97.24). Celui-ci attend une TEMPÉRATURE (le
+# point de rosée de l'air, °C) ; `CONF_CAPTEUR_ROSEE` attend une humidité du feuillage (%) et
+# refuse justement toute température. Repli sur `weather_dew_point` de l'entité météo, utilisé
+# par `estimate_rosee` seulement quand `CONF_CAPTEUR_ROSEE` n'est pas branché.
+CONF_CAPTEUR_POINT_DE_ROSEE = "capteur_point_de_rosee"
 CONF_CAPTEUR_HAUTEUR_GAZON = "capteur_hauteur_gazon"
 CONF_CAPTEUR_RETOUR_ARROSAGE = "capteur_retour_arrosage"
 CONF_CAPTEUR_TEMPERATURE = "capteur_temperature"
@@ -107,6 +113,7 @@ SHARED_WEATHER_CONFIG_KEYS = frozenset(
         CONF_CAPTEUR_HUMIDITE,
         CONF_CAPTEUR_VENT,
         CONF_CAPTEUR_ROSEE,
+        CONF_CAPTEUR_POINT_DE_ROSEE,
         CONF_CAPTEUR_RAYONNEMENT,
         CONF_CAPTEUR_PRESSION,
     }

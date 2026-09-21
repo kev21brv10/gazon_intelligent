@@ -4322,6 +4322,95 @@ class TestRisqueGazonSurReserve(unittest.TestCase):
         self.assertEqual(niveau, "eleve")
         self.assertIn("sans réserve sol connue", " ".join(raisons))
 
+    def test_le_semis_explique_la_surface_sans_nier_la_reserve_profonde(self) -> None:
+        niveau, raisons = guidance._evaluer_risque_gazon(
+            water_balance={
+                "reserve_from_soil_ledger": True,
+                "depletion_ratio": 0.0,
+                "mad_ratio": 0.5,
+            },
+            bilan_hydrique_mm=-0.9,
+            pression_hydrique=1.3,
+            utiliser_reserve=False,
+            surface_semis=True,
+            plancher="modere",
+        )
+        texte = " ".join(raisons)
+        self.assertEqual(niveau, "modere")
+        self.assertIn("Déclencheur : surface du semis", texte)
+        self.assertIn("réserve profonde connue mais non utilisée", texte)
+        self.assertNotIn("sans réserve sol connue", texte)
+
+    def test_le_declencheur_meteo_passe_avant_le_contexte_du_semis(self) -> None:
+        niveau, raisons = guidance._evaluer_risque_gazon(
+            water_balance={"reserve_from_soil_ledger": True},
+            bilan_hydrique_mm=-0.9,
+            pression_hydrique=1.3,
+            utiliser_reserve=False,
+            surface_semis=True,
+            plancher="modere",
+            heat_stress_level="vigilance",
+        )
+        self.assertEqual(niveau, "eleve")
+        self.assertTrue(raisons[0].startswith("Déclencheur : conditions asséchantes"))
+        self.assertTrue(raisons[1].startswith("Contexte : surface du semis"))
+
+    def test_les_nouveaux_motifs_ne_changent_jamais_le_niveau(self) -> None:
+        base = {
+            "water_balance": {"reserve_from_soil_ledger": True},
+            "utiliser_reserve": False,
+        }
+        scenarios = (
+            {"bilan_hydrique_mm": -1.6, "pression_hydrique": 0.0},
+            {"bilan_hydrique_mm": 0.0, "pression_hydrique": 0.0, "plancher": "modere"},
+            {"bilan_hydrique_mm": -0.9, "pression_hydrique": 1.3, "vent": 20.0},
+            {
+                "bilan_hydrique_mm": -0.9,
+                "pression_hydrique": 1.3,
+                "plancher": "modere",
+                "heat_stress_level": "vigilance",
+            },
+            {
+                "bilan_hydrique_mm": 0.0,
+                "pression_hydrique": 0.0,
+                "heat_stress_level": "severe",
+            },
+        )
+        for scenario in scenarios:
+            with self.subTest(scenario=scenario):
+                ancien, _ = guidance._evaluer_risque_gazon(**base, **scenario)
+                explique, _ = guidance._evaluer_risque_gazon(
+                    **base, **scenario, surface_semis=True
+                )
+                self.assertEqual(explique, ancien)
+
+    def test_le_profil_sursemis_cable_reellement_les_motifs_de_surface(self) -> None:
+        resultat = guidance.compute_action_guidance(
+            phase_dominante="Sursemis",
+            sous_phase="Germination",
+            water_balance={
+                "reserve_from_soil_ledger": True,
+                "bilan_hydrique_mm": -0.9,
+                "deficit_3j": 0.0,
+                "deficit_7j": 0.0,
+                "depletion_ratio": 0.0,
+                "mad_ratio": 0.5,
+            },
+            advanced_context={"vent": 20.0},
+            pluie_24h=0.0,
+            pluie_demain=0.0,
+            humidite=55.0,
+            temperature=20.0,
+            etp=3.0,
+            objectif_mm=1.2,
+            hour_of_day=12.0,
+            sous_phase_age_days=2,
+        )
+        raisons = resultat["risque_gazon_raisons"]
+        self.assertEqual(resultat["risque_gazon"], "eleve")
+        self.assertTrue(raisons[0].startswith("Déclencheur : vent soutenu"))
+        self.assertTrue(raisons[1].startswith("Contexte : surface du semis"))
+
     def test_le_niveau_est_toujours_explique(self) -> None:
         """Le capteur n'exposait AUCUNE raison : un « élevé » était incompréhensible."""
         for wb in ({"reserve_from_soil_ledger": True, "depletion_ratio": 0.1, "mad_ratio": 0.5}, {}):

@@ -81,9 +81,10 @@ def _methode_page(nom: str) -> str:
 
 
 class RangementDesEntreesTests(unittest.TestCase):
-    def test_les_entrees_sont_dans_mon_installation_et_plus_dans_meteo(self) -> None:
+    def test_les_entrees_sont_dans_entites_et_plus_dans_meteo_ni_installation(self) -> None:
         self.assertNotIn("this._meteoEntreesHtml()", _methode_page("_ongletMeteoHtml"))
-        self.assertIn("this._meteoEntreesHtml()", _methode_page("_installationHtml"))
+        self.assertNotIn("this._meteoEntreesHtml()", _methode_page("_installationHtml"))
+        self.assertIn("this._meteoEntreesHtml(true)", _methode_page("_entitesHtml"))
 
 
 @unittest.skipUnless(NODE, "Node n'est pas installé")
@@ -177,6 +178,27 @@ console.log(JSON.stringify(candidatsEntree(ligne, etats, { propres: new Set(prop
             _node(script, [rosee, en_json, [], appareils]),
             [["sensor.jardin_humidite_foliaire", True, None]],
             "ni l'humidité de l'air, ni un point de rosée",
+        )
+
+    def test_une_station_personnelle_passe_avant_un_capteur_generique(self) -> None:
+        pression = next(ligne for ligne in _lignes_servies() if ligne["cle"] == "capteur_pression")
+        etats = {
+            "sensor.aa_pression_generique": _Etat("1011", {"unit_of_measurement": "hPa", "device_class": "atmospheric_pressure", "friendly_name": "Pression A"}),
+            "sensor.zz_ws90_pression": _Etat("1012", {"unit_of_measurement": "hPa", "device_class": "atmospheric_pressure", "friendly_name": "Pression Z"}),
+        }
+        script = _bloc_des_entrees() + """
+const [ligne, etats, appareils] = JSON.parse(require("fs").readFileSync(0, "utf8"));
+console.log(JSON.stringify(candidatsEntree(ligne, etats, { appareils: new Map(appareils) })
+  .map((c) => [c.id, c.appareil, c.stationPersonnelle])));
+"""
+        en_json = {k: {"state": v.state, "attributes": v.attributes} for k, v in etats.items()}
+        appareils = [["sensor.zz_ws90_pression", {"nom": "Station Météo - Jardin", "stationPersonnelle": True}]]
+        self.assertEqual(
+            _node(script, [pression, en_json, appareils]),
+            [
+                ["sensor.zz_ws90_pression", "Station Météo - Jardin", True],
+                ["sensor.aa_pression_generique", None, False],
+            ],
         )
 
 

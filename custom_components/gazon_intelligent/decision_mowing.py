@@ -2392,7 +2392,7 @@ def _select_mowing_block_reason(
                         _MOWING_BLOCK_PRIORITIES["regle_tiers"],
                         "regle_tiers",
                         (
-                            f"Règle du tiers: conserve au moins {min_height_after_cut:.1f} cm sur une hauteur actuelle de {current_height:.1f} cm."
+                            f"Règle du tiers : conserver au moins {min_height_after_cut:.1f} cm sur une hauteur actuelle de {current_height:.1f} cm."
                         ),
                         True,
                     )

@@ -31,6 +31,7 @@ from .const import (
     CONF_CAPTEUR_HUMIDITE_SOL,
     CONF_CAPTEUR_VENT,
     CONF_CAPTEUR_ROSEE,
+    CONF_CAPTEUR_POINT_DE_ROSEE,
     CONF_CAPTEUR_RAYONNEMENT,
     CONF_CAPTEUR_PRESSION,
     CONF_CAPTEUR_HAUTEUR_GAZON,
@@ -83,6 +84,7 @@ _OPTIONAL_CLEARABLE_KEYS = (
     CONF_CAPTEUR_HUMIDITE_SOL,
     CONF_CAPTEUR_VENT,
     CONF_CAPTEUR_ROSEE,
+    CONF_CAPTEUR_POINT_DE_ROSEE,
     CONF_CAPTEUR_RAYONNEMENT,
     CONF_CAPTEUR_PRESSION,
     CONF_CAPTEUR_HAUTEUR_GAZON,
@@ -116,6 +118,7 @@ _OPTIONAL_ENTITY_KEYS = (
     CONF_CAPTEUR_HUMIDITE_SOL,
     CONF_CAPTEUR_VENT,
     CONF_CAPTEUR_ROSEE,
+    CONF_CAPTEUR_POINT_DE_ROSEE,
     CONF_CAPTEUR_RAYONNEMENT,
     CONF_CAPTEUR_PRESSION,
     CONF_CAPTEUR_HAUTEUR_GAZON,
@@ -355,6 +358,9 @@ def build_advanced_schema(current: dict | None = None, *, shared_defaults: dict 
             vol.Optional(CONF_CAPTEUR_ROSEE, default=_d(current.get(CONF_CAPTEUR_ROSEE))): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="sensor")
             ),
+            vol.Optional(
+                CONF_CAPTEUR_POINT_DE_ROSEE, default=_d(current.get(CONF_CAPTEUR_POINT_DE_ROSEE))
+            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
             # `device_class` filtre la liste proposée : ces deux entrées pilotent le bilan sol,
             # et une unité inattendue le fausse massivement (rayonnement en kW/m² → ET0 −81 %,
             # donc un sol qui ne sèche plus et un arrosage qui ne part jamais).

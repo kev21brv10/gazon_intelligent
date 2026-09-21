@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 import sys
 import types
+from unittest.mock import Mock, patch
 from zoneinfo import ZoneInfo
 
 
@@ -40,6 +41,9 @@ def _install_homeassistant_stubs() -> None:
     ensure_module("homeassistant")
     ensure_module("homeassistant.components")
     ensure_module("homeassistant.helpers")
+    core_mod = ensure_module("homeassistant.core")
+    if not hasattr(core_mod, "callback"):
+        core_mod.callback = lambda func: func
     util_mod = ensure_module("homeassistant.util")
     if not hasattr(util_mod, "__path__"):
         util_mod.__path__ = []  # type: ignore[attr-defined]
@@ -98,6 +102,8 @@ def _install_homeassistant_stubs() -> None:
     const_mod = ensure_module("homeassistant.const")
     if not hasattr(const_mod, "EVENT_HOMEASSISTANT_STARTED"):
         const_mod.EVENT_HOMEASSISTANT_STARTED = "homeassistant_started"
+    if not hasattr(const_mod, "MATCH_ALL"):
+        const_mod.MATCH_ALL = "*"
 
     exceptions_mod = ensure_module("homeassistant.exceptions")
     if not hasattr(exceptions_mod, "HomeAssistantError"):
@@ -280,6 +286,51 @@ class EntityRegistryTests(unittest.TestCase):
         for entity in entities:
             self.assertFalse(entity._attr_entity_registry_enabled_default)  # noqa: SLF001
 
+    def test_les_sept_capteurs_bavards_gardent_leurs_attributs_hors_recorder(self) -> None:
+        classes = (
+            sensor.GazonObjectifMmSensor,
+            sensor.GazonEt0Sensor,
+            sensor.GazonEtoHoraireSensor,
+            sensor.GazonEtcSensor,
+            sensor.GazonReserveActuelleSensor,
+            sensor.GazonFenetreOptimaleSensor,
+            sensor.GazonRisqueGazonSensor,
+        )
+
+        for entity_class in classes:
+            with self.subTest(entity_class=entity_class.__name__):
+                self.assertEqual(entity_class._unrecorded_attributes, frozenset({"*"}))  # noqa: SLF001
+
+        self.assertNotIn(
+            "_unrecorded_attributes",
+            sensor.GazonTonteEtatSensor.__dict__,
+            "les evenements de tonte doivent conserver leur contexte historique",
+        )
+
+    def test_un_capteur_bavard_limite_les_publications_sans_retarder_son_etat(self) -> None:
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={
+                "risque_gazon": "modere",
+                "decision_cycle": {"cycle_origine": "capteur:sensor.vent"},
+            },
+        )
+        entity = sensor.GazonRisqueGazonSensor(coordinator)
+        entity.async_write_ha_state = Mock()
+        entity._attr_available = True  # noqa: SLF001
+
+        with patch.object(sensor, "monotonic", side_effect=(0.0, 10.0, 20.0, 80.0, 81.0, 140.0)):
+            entity._handle_coordinator_update()  # premiere publication
+            entity._handle_coordinator_update()  # attributs seuls, dix secondes plus tard
+            coordinator.data["risque_gazon"] = "eleve"
+            entity._handle_coordinator_update()  # etat principal : immediat
+            entity._handle_coordinator_update()  # une minute ecoulee : publication de suivi
+            coordinator.data["decision_cycle"] = {"cycle_origine": "intervalle"}
+            entity._handle_coordinator_update()  # attributs periodiques : encore sous la minute
+            entity._handle_coordinator_update()  # une minute ecoulee, quelle que soit l'origine
+
+        self.assertEqual(entity.async_write_ha_state.call_count, 4)
+
     def test_eto_horaire_sensor_lit_le_calcul_du_coordinator(self) -> None:
         # Câblage bout-en-bout : le coordinator publie `eto_horaire_mm_h` (+ son diagnostic),
         # le capteur doit les restituer tels quels. L'ENTITÉ est de catégorie diagnostic, mais la
@@ -298,10 +349,9 @@ class EntityRegistryTests(unittest.TestCase):
         )
         entity = sensor.GazonEtoHoraireSensor(coordinator)
 
-        # 0.6116 → 0.612 : l'exposition publique arrondit à 3 décimales (_round_precision_for_key).
-        # Effet d'AFFICHAGE seulement (≤ 0.024 mm/j cumulé) ; une future accumulation devra
-        # consommer la valeur brute du coordinator, jamais l'état arrondi du capteur.
-        self.assertEqual(entity.native_value, 0.612)
+        # 0.6116 → 0.61 : seul l'affichage/historique est arrondi. L'accumulation consomme la
+        # valeur brute du coordinateur, jamais l'état arrondi du capteur.
+        self.assertEqual(entity.native_value, 0.61)
         self.assertEqual(entity._attr_native_unit_of_measurement, "mm/h")  # noqa: SLF001
         attrs = entity.extra_state_attributes
         self.assertEqual(attrs["radiation_source"], "capteur")

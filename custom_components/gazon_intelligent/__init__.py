@@ -76,6 +76,7 @@ SERVICE_SET_DATE_ACTION = "set_date_action"
 SERVICE_RESET_MODE = "reset_mode"
 SERVICE_CLEAR_IRRIGATION_SAFETY_LOCK = "clear_irrigation_safety_lock"
 SERVICE_START_MANUAL_IRRIGATION = "start_manual_irrigation"
+SERVICE_RUN_ZONE_FOR_DURATION = "run_zone_for_duration"
 SERVICE_START_AUTO_IRRIGATION = "start_auto_irrigation"
 SERVICE_START_APPLICATION_IRRIGATION = "start_application_irrigation"
 SERVICE_STOP_IRRIGATION = "stop_irrigation"
@@ -98,6 +99,7 @@ _ALL_SERVICES = (
     SERVICE_RESET_MODE,
     SERVICE_CLEAR_IRRIGATION_SAFETY_LOCK,
     SERVICE_START_MANUAL_IRRIGATION,
+    SERVICE_RUN_ZONE_FOR_DURATION,
     SERVICE_START_AUTO_IRRIGATION,
     SERVICE_START_APPLICATION_IRRIGATION,
     SERVICE_STOP_IRRIGATION,
@@ -334,6 +336,21 @@ def _async_register_services(hass: HomeAssistant) -> None:
                     vol.Coerce(float),
                     vol.Range(min=0, max=30),
                 )
+            }
+        ),
+    )
+    _register_service_if_missing(
+        hass,
+        SERVICE_RUN_ZONE_FOR_DURATION,
+        _handle_run_zone_for_duration,
+        schema=vol.Schema(
+            {
+                **_SERVICE_TARGET_FIELD,
+                vol.Required("zone_entity_id"): vol.Coerce(str),
+                vol.Optional("duration_minutes", default=5): vol.All(
+                    vol.Coerce(float),
+                    vol.Range(min=0.5, max=180),
+                ),
             }
         ),
     )
@@ -651,6 +668,15 @@ async def _handle_start_manual_irrigation(call: ServiceCall) -> None:
     _require_explicit_target_for_multi_instance(call)
     coordinator = await _coordinator_from_call(call)
     await coordinator.async_start_manual_irrigation(call.data["objectif_mm"])
+
+
+async def _handle_run_zone_for_duration(call: ServiceCall) -> None:
+    _require_explicit_target_for_multi_instance(call)
+    coordinator = await _coordinator_from_call(call)
+    await coordinator.async_run_zone_for_duration(
+        call.data["zone_entity_id"],
+        duration_minutes=call.data.get("duration_minutes", 5),
+    )
 
 
 async def _handle_start_auto_irrigation(call: ServiceCall) -> None:

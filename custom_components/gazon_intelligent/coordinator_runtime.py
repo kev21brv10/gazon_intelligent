@@ -291,6 +291,7 @@ def build_active_irrigation_session(
     zones_pending: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Session runtime active prete pour l'execution d'un plan d'irrigation."""
+    planned_surface_mm = getattr(plan, "planned_surface_mm", plan.objective_mm)
     return {
         "session_id": session_id,
         "run_id": run_id,
@@ -309,7 +310,8 @@ def build_active_irrigation_session(
         "seeding_transition_ready": plan.seeding_transition_ready,
         "seeding_block_reason": plan.seeding_block_reason,
         "status": "running",
-        "target_mm": round(plan.objective_mm, 1),
+        "target_mm": round(planned_surface_mm, 1),
+        "reference_objective_mm": round(plan.objective_mm, 1),
         "plan": plan.as_runtime_dict(),
         "passage_count": plan.passage_count,
         "current_passage": 1,

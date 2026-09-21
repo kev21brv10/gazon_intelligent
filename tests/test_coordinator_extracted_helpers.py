@@ -992,6 +992,22 @@ class CoordinatorWeatherTests(unittest.TestCase):
             1.0,
         )
 
+    def test_estimate_rosee_le_capteur_dedie_passe_devant_l_entite_meteo(self) -> None:
+        # 0.97.24 : `CONF_CAPTEUR_POINT_DE_ROSEE`, quand branché, est plus fidèle au jardin que le
+        # point de rosée générique de la prévision — il doit donc décider seul, dans les deux sens.
+        self.assertEqual(
+            coordinator_weather.estimate_rosee({"weather_dew_point": 10.0}, 20.0, 50.0, 18.5),
+            1.0,
+        )
+        self.assertIsNone(
+            coordinator_weather.estimate_rosee({"weather_dew_point": 18.5}, 20.0, 50.0, 10.0)
+        )
+        # Capteur absent (None) : on retombe sur l'entité météo, comme avant 0.97.24.
+        self.assertEqual(
+            coordinator_weather.estimate_rosee({"weather_dew_point": 18.5}, 20.0, 50.0, None),
+            1.0,
+        )
+
     def test_estimate_rosee_verrouille_les_seuils_et_priorites(self) -> None:
         self.assertEqual(
             coordinator_weather.estimate_rosee({"weather_dew_point": 18.0}, 20.0, 50.0),

@@ -862,7 +862,7 @@ def _constraints_for_candidate(
                 code="catalogue_empty",
                 label="Aucun produit enregistré",
                 value={"catalogue_count": 0},
-                hint="Ajoute au moins un produit au catalogue pour obtenir une recommandation.",
+                hint="Ajouter au moins un produit au catalogue pour obtenir une recommandation.",
                 blocking=True,
                 met=False,
             )
@@ -874,11 +874,11 @@ def _constraints_for_candidate(
                     code="catalogue_empty",
                     label="Ajouter un produit au catalogue",
                     value={"catalogue_count": 0},
-                    hint="Ajoute au moins un produit au catalogue pour obtenir une recommandation.",
+                    hint="Ajouter au moins un produit au catalogue pour obtenir une recommandation.",
                     blocking=True,
                 )
             ],
-            "Ajoute au moins un produit au catalogue pour obtenir une recommandation.",
+            "Ajouter au moins un produit au catalogue pour obtenir une recommandation.",
         )
 
     # Pas de ré-annotation ici : `constraints` est déjà typée dans la branche « catalogue vide »
@@ -1171,9 +1171,9 @@ def _ui_for_state(
         else:
             summary = "Recommandé"
             hint = reason or (
-                f"Sélectionne {selected_display} pour lancer la déclaration."
+                f"Sélectionner {selected_display} pour lancer la déclaration."
                 if selected_display
-                else "Sélectionne ce produit pour préparer la déclaration."
+                else "Sélectionner ce produit pour préparer la déclaration."
             )
             action_label = "Choisir le produit"
     elif state == "preparation":
@@ -1190,7 +1190,7 @@ def _ui_for_state(
         action_label = "Attendre"
     else:
         summary = "Non disponible"
-        hint = reason or "Ajoute au moins un produit au catalogue pour obtenir une recommandation."
+        hint = reason or "Ajouter au moins un produit au catalogue pour obtenir une recommandation."
         action_label = "Ajouter un produit"
 
     return {
@@ -1218,7 +1218,7 @@ def _ui_for_state(
                         + (f" Phase idéale : {phase_id}." if phase_id else "")
                     )
                     if candidate and candidate.get("product_name") and state in {"recommended", "preparation"}
-                    else "Sélectionne un produit dans la liste pour préparer la déclaration."
+                    else "Sélectionner un produit dans la liste pour préparer la déclaration."
                 )
             )
         ),
@@ -1246,12 +1246,12 @@ def _ui_for_state(
                         + (f" Phase actuelle : {phase_now}." if phase_now else "")
                     )
                     if candidate and candidate.get("product_name")
-                    else "Sélectionne un produit pour activer la déclaration."
+                    else "Sélectionner un produit pour activer la déclaration."
                 )
             )
         ),
         "declaration_hint": (
-            "Tu peux déclarer l'intervention maintenant."
+            "L'intervention peut être déclarée maintenant."
             if selected_ready
             else (
                 ("Le produit choisi doit correspondre à l'intervention." + (f" Phase actuelle : {phase_now}." if phase_now else ""))
@@ -1294,7 +1294,7 @@ def public_intervention_ui(payload: dict[str, Any] | None) -> dict[str, str]:
     if ready_to_declare:
         public_hint = "Déclaration possible maintenant."
     elif status == "recommended":
-        public_hint = "Sélectionne le produit pour préparer la déclaration."
+        public_hint = "Sélectionner le produit pour préparer la déclaration."
     elif status == "preparation":
         public_hint = (
             "Pertinence limitée dans le contexte actuel."
@@ -1304,7 +1304,7 @@ def public_intervention_ui(payload: dict[str, Any] | None) -> dict[str, str]:
     elif status == "blocked":
         public_hint = "Intervention indisponible pour le moment."
     elif status == "unavailable":
-        public_hint = "Ajoute un produit au catalogue pour obtenir une recommandation."
+        public_hint = "Ajouter un produit au catalogue pour obtenir une recommandation."
 
     if ready_to_declare:
         ui["summary"] = f"Prêt à déclarer : {product_name}" if product_name else "Prêt à déclarer"
@@ -1391,7 +1391,7 @@ def build_intervention_recommendation(
             selected_ready=False,
             block_reason=None,
             reason="Aucun produit enregistré",
-            why_now="Ajoute au moins un produit au catalogue pour obtenir une recommandation.",
+            why_now="Ajouter au moins un produit au catalogue pour obtenir une recommandation.",
             today=today,
         )
         return {
@@ -1401,14 +1401,14 @@ def build_intervention_recommendation(
             "priority": _priority_from_state("unavailable", 0),
             "score": 0,
             "reason": "Aucun produit enregistré",
-            "why_now": "Ajoute au moins un produit au catalogue pour obtenir une recommandation.",
+            "why_now": "Ajouter au moins un produit au catalogue pour obtenir une recommandation.",
             "reasons": [],
             "constraints": [
                 {
                     "code": "catalogue_empty",
                     "label": "Aucun produit enregistré",
                     "value": {"catalogue_count": 0},
-                    "hint": "Ajoute au moins un produit au catalogue pour obtenir une recommandation.",
+                    "hint": "Ajouter au moins un produit au catalogue pour obtenir une recommandation.",
                     "blocking": True,
                     "met": False,
                 }
@@ -1418,7 +1418,7 @@ def build_intervention_recommendation(
                     code="catalogue_empty",
                     label="Ajouter un produit au catalogue",
                     value={"catalogue_count": 0},
-                    hint="Ajoute au moins un produit au catalogue pour obtenir une recommandation.",
+                    hint="Ajouter au moins un produit au catalogue pour obtenir une recommandation.",
                     blocking=True,
                 )
             ],
@@ -1567,7 +1567,7 @@ def build_intervention_recommendation(
             selected_ready=False,
             block_reason=None,
             reason="Aucun produit enregistré",
-            why_now="Ajoute au moins un produit au catalogue pour obtenir une recommandation.",
+            why_now="Ajouter au moins un produit au catalogue pour obtenir une recommandation.",
             today=today,
         )
         return {
@@ -1577,14 +1577,14 @@ def build_intervention_recommendation(
             "priority": _priority_from_state("unavailable", 0),
             "score": 0,
             "reason": "Aucun produit enregistré",
-            "why_now": "Ajoute au moins un produit au catalogue pour obtenir une recommandation.",
+            "why_now": "Ajouter au moins un produit au catalogue pour obtenir une recommandation.",
             "reasons": [],
             "constraints": [
                 {
                     "code": "catalogue_empty",
                     "label": "Aucun produit enregistré",
                     "value": {"catalogue_count": 0},
-                    "hint": "Ajoute au moins un produit au catalogue pour obtenir une recommandation.",
+                    "hint": "Ajouter au moins un produit au catalogue pour obtenir une recommandation.",
                     "blocking": True,
                     "met": False,
                 }
@@ -1594,7 +1594,7 @@ def build_intervention_recommendation(
                     code="catalogue_empty",
                     label="Ajouter un produit au catalogue",
                     value={"catalogue_count": 0},
-                    hint="Ajoute au moins un produit au catalogue pour obtenir une recommandation.",
+                    hint="Ajouter au moins un produit au catalogue pour obtenir une recommandation.",
                     blocking=True,
                 )
             ],
@@ -1636,7 +1636,7 @@ def build_intervention_recommendation(
     reason = _format_reasons(best["reasons"]) or (
         "Le produit sélectionné est prêt à être déclaré."
         if selected_ready
-        else "Sélectionne ce produit pour préparer la déclaration."
+        else "Sélectionner ce produit pour préparer la déclaration."
         if state == "recommended"
         else "Le produit est disponible, mais certains critères restent moins favorables."
         if state == "preparation"

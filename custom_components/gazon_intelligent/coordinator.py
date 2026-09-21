@@ -34,6 +34,7 @@ from .const import (
     DEFAULT_MOWER_GARAGE_CLOSE_DELAY_MINUTES,
     DEFAULT_MOWER_GARAGE_OPEN_BEFORE_START,
     DEFAULT_MOWER_GARAGE_OPEN_FOR_RETURN,
+    DEFAULT_MOWER_GARAGE_MIN_OPEN_POSITION,
     DEFAULT_MOWING_COOLDOWN_AFTER_WATERING_MINUTES,
     CONF_CAPTEUR_ETP,
     CONF_CAPTEUR_PLUIE_24H,
@@ -46,10 +47,12 @@ from .const import (
     CONF_CAPTEUR_HUMIDITE_SOL,
     CONF_CAPTEUR_VENT,
     CONF_CAPTEUR_ROSEE,
+    CONF_CAPTEUR_POINT_DE_ROSEE,
     CONF_CAPTEUR_RAYONNEMENT,
     CONF_CAPTEUR_PRESSION,
     CONF_CAPTEUR_HAUTEUR_GAZON,
     CONF_CAPTEUR_RETOUR_ARROSAGE,
+    CONF_ENTITE_POMPE,
     CONF_ENTITE_TONDEUSE,
     CONF_ENTITE_VOLET_GARAGE_TONDEUSE,
     CONF_CAPTEUR_TONDEUSE_ERREUR,
@@ -180,10 +183,12 @@ from .water import (
     surface_mm_depuis_segments,
 )
 from .weather_adapter import WeatherAdapter
-from .watering_plan import WateringPlan, build_watering_plan, normalize_existing_plan
+from .watering_plan import ZonePlan, WateringPlan, build_watering_plan, normalize_existing_plan
 from .watering_policy import repartir_creneaux_semis, resolve_semis_stage_program
 
 _LOGGER = logging.getLogger(__name__)
+
+_MOWER_JOB_DOCKED_GRACE_MINUTES = 60
 
 # Un arrêt demandé pendant les toutes dernières écritures ne doit pas rester suspendu si le
 # stockage Home Assistant se bloque. La tâche continue sous shield : elle porte l'événement de fin,
@@ -215,6 +220,7 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "risque_gazon_brut",
     "risque_amortissement",
     "stress_palier_et0",
+    "stress_palier_et0_montee",
     "semis_meteo_ajustement",
     "phase_dominante",
     "phase_dominante_source",
@@ -277,6 +283,9 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "mower_control_last_action",
     "mower_control_last_action_at",
     "mower_control_last_error",
+    "mower_control_cycle_state",
+    "mower_control_resume_required",
+    "mower_control_resume_reason",
     "mower_garage_entity",
     "mower_garage_state",
     "mower_resolution_state",
@@ -297,6 +306,8 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "mower_job_followed_id",
     "mower_job_seen_incomplete",
     "mower_job_minutes_total",
+    "mower_job_resume_possible",
+    "mower_job_paused_since",
     "mower_auto_declaration_state",
     "mower_auto_declaration_threshold_minutes",
     "mower_auto_declared_today",
@@ -983,13 +994,20 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         current_dt = self._current_datetime()
         rosee = self._lire_rosee()
         rosee_mesuree = rosee
+        # Repli de repli : un point de rosée MESURÉ dans le jardin (0.97.24), prioritaire sur
+        # celui de l'entité météo — seulement lu quand « Rosée sur l'herbe » n'est pas branché,
+        # juste au-dessus.
+        point_de_rosee_capteur = self._validate_sensor_value(
+            self._get_float_state(self._get_conf(CONF_CAPTEUR_POINT_DE_ROSEE)), "temperature"
+        )
         if rosee is None:
-            rosee = self._estimate_rosee(weather_profile, temperature, humidite)
+            rosee = self._estimate_rosee(weather_profile, temperature, humidite, point_de_rosee_capteur)
         if rosee_mesuree is not None:
             _wetness_source = "sensor"
             _wetness_observation = rosee_mesuree
         elif (
             (temperature is not None and humidite is not None)
+            or point_de_rosee_capteur is not None
             or weather_profile.get("weather_dew_point") is not None
             or weather_profile.get("weather_condition") is not None
         ):
@@ -1092,6 +1110,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             risk_context={
                 "amortissement": self._runtime_state.get("risque_amortissement"),
                 "palier_et0": self._runtime_state.get("stress_palier_et0"),
+                "palier_et0_montee": self._runtime_state.get("stress_palier_et0_montee"),
                 "semis_meteo_ajustement": self._runtime_state.get("semis_meteo_ajustement"),
                 "fungal_wetness_duration_hours": _fungal_wetness_hours,
                 "fungal_wetness_source": _fungal_wetness.get("source"),
@@ -1105,6 +1124,10 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         _palier_et0 = snapshot.get("stress_palier_et0")
         if isinstance(_palier_et0, int) and not isinstance(_palier_et0, bool):
             self._runtime_state["stress_palier_et0"] = _palier_et0
+        _montee_et0 = snapshot.get("stress_palier_et0_montee")
+        self._runtime_state["stress_palier_et0_montee"] = (
+            _montee_et0 if isinstance(_montee_et0, dict) else None
+        )
         _memoire_risque = snapshot.get("risque_amortissement")
         if isinstance(_memoire_risque, dict):
             self._runtime_state["risque_amortissement"] = _memoire_risque
@@ -1942,7 +1965,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 _LOGGER.warning(
                     "« Rosée sur l'herbe » : %s donne une température (un point de rosée), pas une "
                     "humidité du feuillage. Ignoré : la rosée est estimée. À retirer sur la page "
-                    "« Gazon » (Réglages → Mon installation → Tes entrées → Rosée sur l'herbe "
+                    "« Gazon » (Réglages → Installation → Entrées de l'intégration → Rosée sur l'herbe "
                     "→ Changer → Aucune).",
                     entity_id,
                 )
@@ -1954,8 +1977,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         weather_profile: dict[str, Any],
         temperature: float | None,
         humidite: float | None,
+        point_de_rosee: float | None = None,
     ) -> float | None:
-        return estimate_rosee(weather_profile, temperature, humidite)
+        return estimate_rosee(weather_profile, temperature, humidite, point_de_rosee)
 
     def _minutes_creditables(self, precedent_iso: Any, maintenant: datetime) -> float:
         """Minutes à créditer entre deux échantillons — 0.0 si le trou est trop grand.
@@ -2788,6 +2812,8 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "mower_job_followed_id": None,
             "mower_job_seen_incomplete": None,
             "mower_job_minutes_total": None,
+            "mower_job_resume_possible": None,
+            "mower_job_paused_since": None,
         }
         progression = mower_context.get("mower_job_progress_pct")
         tache = mower_context.get("mower_job_id")
@@ -2823,37 +2849,74 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "jour": self._current_date().isoformat(),
             }
             self._runtime_state["mower_job_suivi"] = suivi
-            etat = (
-                "en_pause"
-                if suivi["vu_inacheve"] and mower_context.get("mower_is_docked") is True
-                else "en_cours" if suivi["vu_inacheve"] else "repos"
+            etat, reprise_possible, pause_depuis = self._etat_travail_tondeuse(
+                suivi, mower_context
             )
             return {
                 "mower_job_completion_state": etat,
                 "mower_job_followed_id": tache,
                 "mower_job_seen_incomplete": bool(suivi["vu_inacheve"]),
                 "mower_job_minutes_total": self._cumuler_minutes_travail(suivi, mower_context),
+                "mower_job_resume_possible": reprise_possible,
+                "mower_job_paused_since": pause_depuis,
             }
 
         if float(progression) < 100.0:
             suivi["vu_inacheve"] = True
             self._runtime_state["mower_job_suivi"] = suivi
+            etat, reprise_possible, pause_depuis = self._etat_travail_tondeuse(
+                suivi, mower_context
+            )
             return {
-                "mower_job_completion_state": (
-                    "en_pause" if mower_context.get("mower_is_docked") is True else "en_cours"
-                ),
+                "mower_job_completion_state": etat,
                 "mower_job_followed_id": tache,
                 "mower_job_seen_incomplete": True,
                 "mower_job_minutes_total": self._cumuler_minutes_travail(suivi, mower_context),
+                "mower_job_resume_possible": reprise_possible,
+                "mower_job_paused_since": pause_depuis,
             }
 
         vu_inacheve = bool(suivi.get("vu_inacheve"))
+        suivi.pop("pause_a_quai_depuis", None)
+        self._runtime_state["mower_job_suivi"] = suivi
         return {
             "mower_job_completion_state": "termine" if vu_inacheve else "repos",
             "mower_job_followed_id": tache,
             "mower_job_seen_incomplete": vu_inacheve,
             "mower_job_minutes_total": self._cumuler_minutes_travail(suivi, mower_context),
+            "mower_job_resume_possible": False,
+            "mower_job_paused_since": None,
         }
+
+    def _etat_travail_tondeuse(
+        self, suivi: dict[str, Any], mower_context: dict[str, Any]
+    ) -> tuple[str, bool, str | None]:
+        """Distingue une recharge récente d'un ancien travail resté mémorisé."""
+        if not suivi.get("vu_inacheve"):
+            suivi.pop("pause_a_quai_depuis", None)
+            return "repos", False, None
+
+        inactive_a_quai = (
+            mower_context.get("mower_is_docked") is True
+            and mower_context.get("mower_is_mowing") is not True
+            and mower_context.get("mower_pass_in_progress") is not True
+        )
+        if not inactive_a_quai:
+            suivi.pop("pause_a_quai_depuis", None)
+            return "en_cours", False, None
+
+        maintenant = self._current_datetime()
+        pause_depuis = self._parse_datetime_value(suivi.get("pause_a_quai_depuis"))
+        if pause_depuis is None:
+            pause_depuis = maintenant
+            suivi["pause_a_quai_depuis"] = maintenant.isoformat()
+        ecoule = max(0.0, (maintenant - pause_depuis).total_seconds() / 60.0)
+        ancien = ecoule >= _MOWER_JOB_DOCKED_GRACE_MINUTES
+        return (
+            "repos" if ancien else "en_pause",
+            ancien,
+            suivi.get("pause_a_quai_depuis"),
+        )
 
     def _cumuler_minutes_travail(
         self, suivi: dict[str, Any], mower_context: dict[str, Any]
@@ -3592,6 +3655,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             CONF_CAPTEUR_HUMIDITE_SOL,
             CONF_CAPTEUR_VENT,
             CONF_CAPTEUR_ROSEE,
+            CONF_CAPTEUR_POINT_DE_ROSEE,
             CONF_CAPTEUR_RAYONNEMENT,
             CONF_CAPTEUR_PRESSION,
             CONF_CAPTEUR_HAUTEUR_GAZON,
@@ -3739,9 +3803,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         cover_entity_raw = self._get_conf(CONF_ENTITE_VOLET_GARAGE_TONDEUSE)
         cover_entity = str(cover_entity_raw) if cover_entity_raw else None
         cover_state = None
+        cover_position = None
         if cover_entity:
             cover = self.hass.states.get(cover_entity)
             cover_state = str(getattr(cover, "state", "unknown") or "unknown")
+            cover_position = getattr(cover, "attributes", {}).get("current_position") if cover else None
 
         runtime = self._runtime_state.get("mower_control")
         if not isinstance(runtime, dict):
@@ -3777,6 +3843,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "tondeuse_garage_avance_ouverture",
                     DEFAULT_MOWER_GARAGE_OPEN_LEAD_MINUTES,
                 ),
+                "tondeuse_garage_ouverture_min": lire_reglage(
+                    settings,
+                    "tondeuse_garage_ouverture_min",
+                    DEFAULT_MOWER_GARAGE_MIN_OPEN_POSITION,
+                ),
                 "tondeuse_garage_delai_fermeture": lire_reglage(
                     settings,
                     "tondeuse_garage_delai_fermeture",
@@ -3787,6 +3858,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             irrigation_active=self.arrosage_en_cours(),
             cover_entity=cover_entity,
             cover_state=cover_state,
+            cover_position=cover_position,
             bootstrap_complete=getattr(self, "_mower_control_bootstrap_complete", False),
         )
         self._mower_control_bootstrap_complete = True
@@ -3796,6 +3868,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         action = decision.get("mower_control_pending_action")
         decision["mower_garage_entity"] = cover_entity
         decision["mower_garage_state"] = cover_state
+        decision["mower_garage_position"] = cover_position
         decision["mower_control_last_action"] = runtime.get("last_action")
         decision["mower_control_last_action_at"] = runtime.get("last_action_at")
         decision["mower_control_last_error"] = runtime.get("last_error")
@@ -3827,7 +3900,35 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             else:
                 instant = self._current_datetime().isoformat()
                 runtime.update({"last_action": action, "last_action_at": instant, "last_error": None})
-                if action == "open_cover":
+                if action == "start_mowing":
+                    # Un départ réussi n'est envoyé qu'une fois. Après une reprise due, la dette
+                    # est acquittée immédiatement puis le constructeur reprend ses cycles de
+                    # recharge/redépart sans autre commande de l'intégration.
+                    reprise = runtime.get("resume_required") is True
+                    runtime["managed_start_pending"] = True
+                    if not reprise and runtime.get("managed_cycle_active") is not True:
+                        runtime["managed_job_seen_incomplete"] = False
+                        runtime["managed_job_id"] = None
+                    if reprise:
+                        runtime["resume_required"] = False
+                        runtime["resume_reason"] = None
+                        runtime["resume_requested_at"] = None
+                elif action == "dock":
+                    # Seul un cycle effectivement lancé par ce pilote crée une reprise due.
+                    # Un travail manuel ou constructeur rappelé par sécurité n'est jamais relancé
+                    # silencieusement par l'intégration.
+                    if (
+                        runtime.get("managed_cycle_active") is True
+                        or runtime.get("managed_start_pending") is True
+                    ):
+                        runtime["resume_required"] = True
+                        runtime["resume_reason"] = (
+                            snapshot.get("mowing_block_reason_label")
+                            or snapshot.get("mowing_block_reason")
+                            or decision.get("mower_control_reason")
+                        )
+                        runtime["resume_requested_at"] = instant
+                elif action == "open_cover":
                     runtime["garage_opened_at"] = None
                 elif action == "close_cover":
                     runtime["garage_opened_at"] = None
@@ -3836,6 +3937,17 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 decision["mower_control_last_action"] = action
                 decision["mower_control_last_action_at"] = instant
                 decision["mower_control_last_error"] = None
+        decision["mower_control_cycle_state"] = (
+            "reprise_attendue"
+            if runtime.get("resume_required") is True
+            else "depart_envoye"
+            if runtime.get("managed_start_pending") is True
+            else "cycle_autonome"
+            if runtime.get("managed_cycle_active") is True
+            else "inactif"
+        )
+        decision["mower_control_resume_required"] = runtime.get("resume_required") is True
+        decision["mower_control_resume_reason"] = runtime.get("resume_reason")
         snapshot.update(decision)
 
     def _contexte_des_alertes(
@@ -4035,7 +4147,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         cibles = notifications.cibles_configurees(self.entry)
         if not cibles:
             raise HomeAssistantError(
-                "Aucun téléphone à prévenir : choisis-en un dans les options de Gazon Intelligent "
+                "Aucun appareil à prévenir : sélectionner une cible dans les options de Gazon Intelligent "
                 "(Paramètres → Appareils et services → Gazon Intelligent → Configurer)."
             )
         texte = str(message or "").strip()
@@ -4046,7 +4158,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         jointes = await notifications.async_envoyer(self.hass, cibles, entete, texte)
         if not jointes:
             raise HomeAssistantError(
-                "Aucun téléphone n'a pu être joint : vérifie les entités choisies dans les options."
+                "Aucun appareil n'a pu être joint : vérifier les entités choisies dans les options."
             )
         return {"envoye_a": jointes, "titre": entete, "message": texte}
 
@@ -4544,6 +4656,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # Non persistée, un redémarrage relancerait le risque sur le niveau brut — et les
             # redémarrages sont fréquents ici.
             "stress_palier_et0": self._runtime_state.get("stress_palier_et0"),
+            "stress_palier_et0_montee": self._serialize_runtime_value(
+                self._runtime_state.get("stress_palier_et0_montee")
+            ),
             "semis_meteo_ajustement": self._runtime_state.get("semis_meteo_ajustement"),
             "risque_amortissement": self._serialize_runtime_value(
                 self._runtime_state.get("risque_amortissement")
@@ -4611,6 +4726,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "mower_travaux_termines": runtime.get("mower_travaux_termines"),
             "risque_amortissement": runtime.get("risque_amortissement"),
             "stress_palier_et0": runtime.get("stress_palier_et0"),
+            "stress_palier_et0_montee": runtime.get("stress_palier_et0_montee"),
             "semis_meteo_ajustement": runtime.get("semis_meteo_ajustement"),
             "alertes_gazon": runtime.get("alertes_gazon"),
             "fungal_wetness": runtime.get("fungal_wetness"),
@@ -4829,7 +4945,15 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             objective = 0.0
         if objective <= 0:
             return None
-        zones_cfg = [(entity_id, rate_mm_min * 60.0) for entity_id, rate_mm_min in self._iter_zones_with_rate()]
+        reduction_getter = getattr(self, "_zone_shade_reduction_pct", None)
+        zones_cfg = [
+            (
+                entity_id,
+                rate_mm_min * 60.0,
+                reduction_getter(entity_id) if callable(reduction_getter) else 0.0,
+            )
+            for entity_id, rate_mm_min in self._iter_zones_with_rate()
+        ]
         if not zones_cfg:
             return None
         # LE SNAPSHOT D'ABORD, `self.data` seulement en repli.
@@ -5104,7 +5228,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if mower_distress_override:
             _LOGGER.warning(
                 "Arrosage de détresse : le blocage tondeuse (%s, depuis %d min) est contourné car "
-                "le sol est en déficit critique (%s). Vérifie l'état du robot — il est probablement "
+                "le sol est en déficit critique (%s). Vérifier l'état du robot — il est probablement "
                 "bloqué dehors.",
                 mower_reason,
                 int(mower_block_age_minutes),
@@ -5781,6 +5905,114 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._async_save_state()
         await self._rafraichir_apres_action_utilisateur()
 
+    async def async_run_zone_for_duration(
+        self,
+        zone_entity_id: str,
+        *,
+        duration_minutes: float = 5.0,
+    ) -> None:
+        """Ouvre une zone configurée pendant une durée bornée, sous contrôle du moteur.
+
+        Cette voie sert notamment le bouton « 5 min » du panneau. Elle utilise le même
+        exécuteur persistant que les cycles complets : la fermeture ne dépend donc plus du
+        navigateur et une interruption de Home Assistant reprend le temps restant au démarrage.
+        """
+        zone_entity_id = str(zone_entity_id or "").strip()
+        try:
+            duration = float(duration_minutes)
+        except (TypeError, ValueError) as err:
+            raise HomeAssistantError("La durée d'arrosage de la zone est invalide.") from err
+        if not 0.5 <= duration <= 180.0:
+            raise HomeAssistantError("La durée d'arrosage doit être comprise entre 30 secondes et 3 heures.")
+
+        zones = {entity_id: rate_mm_min for entity_id, rate_mm_min in self._iter_zones_with_rate()}
+        rate_mm_min = zones.get(zone_entity_id)
+        if rate_mm_min is None:
+            raise HomeAssistantError(
+                "Cette vanne n'est pas une zone active de cette instance de Gazon Intelligent."
+            )
+
+        GazonIntelligentCoordinator._ensure_irrigation_runtime_bootstrap(self)
+        if self._irrigation_launch_lock is None:
+            self._irrigation_launch_lock = asyncio.Lock()
+        if self._irrigation_launch_lock.locked():
+            raise HomeAssistantError("Un lancement d'arrosage est déjà en préparation.")
+
+        async with self._irrigation_launch_lock:
+            if self._auto_irrigation_safety_lock_active():
+                raise HomeAssistantError(
+                    "L'arrosage est verrouillé après une fermeture non confirmée."
+                )
+            if self._watering_session_active() or self._shared_valve_busy_elsewhere():
+                raise HomeAssistantError("Un arrosage est déjà en cours.")
+            auto_task = getattr(self, "_auto_irrigation_task", None)
+            if auto_task is not None and not auto_task.done():
+                raise HomeAssistantError("Un arrosage est déjà en cours.")
+
+            duration_seconds = max(30, int(round(duration * 60.0)))
+            objective_mm = float(rate_mm_min) * (duration_seconds / 60.0)
+            plan = WateringPlan(
+                objective_mm=objective_mm,
+                plan_type="single_zone",
+                passage_count=1,
+                pause_between_passages_s=0,
+                zones=(
+                    ZonePlan(
+                        zone=zone_entity_id,
+                        rate_mm_h=float(rate_mm_min) * 60.0,
+                        duration_s=duration_seconds,
+                        mm=objective_mm,
+                    ),
+                ),
+                source="manual_timed_zone",
+            )
+            session = self._build_active_irrigation_session(
+                plan=plan,
+                source="manual_timed_zone",
+                strategy="timed_zone",
+                watering_cause="hydrique",
+            )
+            pump_entity_id = self._get_conf(CONF_ENTITE_POMPE)
+            if isinstance(pump_entity_id, str) and pump_entity_id.strip():
+                session["managed_pump_entity_id"] = pump_entity_id.strip()
+                session["managed_pump_started_by_integration"] = False
+
+            await self.async_record_user_action(
+                action="Arrosage temporisé d'une zone",
+                state="en_attente",
+                reason=f"Zone ouverte pour {duration:g} min, fermeture gérée par Home Assistant.",
+                plan_type="single_zone",
+                zone_count=1,
+                passages=1,
+            )
+            self._auto_irrigation_task = self.hass.async_create_task(
+                self._execute_canonical_watering_plan(
+                    plan=plan,
+                    source="manual_timed_zone",
+                    strategy="timed_zone",
+                    watering_cause="hydrique",
+                    user_action_context={
+                        "action": "Arrosage temporisé d'une zone",
+                        "success_reason": "La zone a été refermée automatiquement.",
+                        "plan_type": "single_zone",
+                        "zone_count": 1,
+                        "passages": 1,
+                    },
+                    session=session,
+                ),
+                "gazon_intelligent_timed_zone",
+            )
+
+        self.hass.bus.async_fire(
+            "gazon_intelligent_manual_irrigation_requested",
+            {
+                "objectif_mm": round(objective_mm, 1),
+                "zone": zone_entity_id,
+                "duration_seconds": duration_seconds,
+                "source": "manual_timed_zone",
+            },
+        )
+
     async def async_start_manual_irrigation(self, objectif_mm: float) -> None:
         """Déclenche un arrosage manuel réel sur l'objectif fourni."""
         try:
@@ -6055,6 +6287,21 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             rate_mm_min = self._get_zone_rate_mm_min(entity_id, rate_h)
             if entity_id and rate_mm_min > 0:
                 yield entity_id, rate_mm_min
+
+    def _zone_shade_reduction_pct(self, entity_id: str | None) -> float:
+        """Return the configured water reduction for this shaded zone."""
+        if not entity_id:
+            return 0.0
+        settings = self._reglages_instance()
+        for idx in range(1, 6):
+            if entity_id != self._get_conf(f"zone_{idx}"):
+                continue
+            value = lire_reglage(settings, f"arrosage_reduction_ombre_zone_{idx}", 0.0)
+            try:
+                return max(0.0, min(50.0, float(value)))
+            except (TypeError, ValueError):
+                return 0.0
+        return 0.0
 
     def _get_zone_rate_mm_min(self, entity_id: str | None, rate_h: Any | None = None) -> float:
         if rate_h is None:
@@ -6400,6 +6647,73 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         raise HomeAssistantError(message)
 
+    async def _ensure_managed_irrigation_pump(self, session: dict[str, Any]) -> None:
+        """Démarre la pompe facultative et mémorise si ce cycle en est propriétaire."""
+        pump_entity_id = str(session.get("managed_pump_entity_id") or "").strip()
+        if not pump_entity_id:
+            return
+        state = self.hass.states.get(pump_entity_id)
+        current_state = str(getattr(state, "state", "") or "").strip().lower()
+        already_owned = bool(session.get("managed_pump_started_by_integration"))
+        if current_state == "on":
+            return
+        if current_state in {"", "unknown", "unavailable"}:
+            if not await self._wait_for_zones_available([pump_entity_id], timeout_s=30.0):
+                raise HomeAssistantError("La pompe configurée ne répond pas.")
+            state = self.hass.states.get(pump_entity_id)
+            current_state = str(getattr(state, "state", "") or "").strip().lower()
+            if current_state == "on":
+                return
+        if not already_owned:
+            # Persisté AVANT la commande : une coupure juste après l'ouverture ne doit jamais
+            # faire oublier que cette séquence devra aussi arrêter la pompe.
+            session["managed_pump_started_by_integration"] = True
+            await self._persist_runtime_state()
+        try:
+            await self.hass.services.async_call(
+                "switch", "turn_on", {"entity_id": pump_entity_id}, blocking=True
+            )
+        except Exception as err:
+            raise HomeAssistantError(f"Echec démarrage pompe {pump_entity_id}: {err}") from err
+
+    async def _safe_turn_off_managed_irrigation_pump(self, session: dict[str, Any]) -> bool:
+        """Arrête uniquement une pompe démarrée par ce cycle, avec verrou en cas d'échec."""
+        pump_entity_id = str(session.get("managed_pump_entity_id") or "").strip()
+        if not pump_entity_id or not bool(session.get("managed_pump_started_by_integration")):
+            return True
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                await asyncio.shield(
+                    self.hass.services.async_call(
+                        "switch", "turn_off", {"entity_id": pump_entity_id}, blocking=True
+                    )
+                )
+                session["managed_pump_started_by_integration"] = False
+                await self._persist_runtime_state()
+                return True
+            except Exception as err:  # pragma: no cover - safety path
+                last_error = err
+                if attempt < 2:
+                    await asyncio.sleep(0.2)
+        message = f"Echec arrêt pompe {pump_entity_id}: {last_error}"
+        session["status"] = "failed"
+        session["last_error"] = message
+        session["last_update"] = self._current_utc_datetime()
+        session["last_activity_at"] = session["last_update"]
+        self._persist_execution_snapshot(session, status="failed", error=message)
+        await self._set_irrigation_safety_lock(message, pump_entity_id)
+        self._emit_irrigation_event(
+            "gazon_intelligent_auto_irrigation_failed",
+            self._build_runtime_payload_for_event(
+                session,
+                failed_zone=pump_entity_id,
+                error=message,
+                shutdown_uncertain=True,
+            ),
+        )
+        return False
+
     async def _execute_canonical_watering_plan(
         self,
         *,
@@ -6445,10 +6759,15 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._persist_runtime_state()
         self._emit_irrigation_event(
             "gazon_intelligent_auto_irrigation_started",
-            self._build_runtime_payload_for_event(runtime_session, target_mm=plan.objective_mm),
+            self._build_runtime_payload_for_event(
+                runtime_session,
+                target_mm=plan.planned_surface_mm,
+                reference_objective_mm=plan.objective_mm,
+            ),
         )
         error_reason: str | None = None
         cancelled = False
+        execution_completed = False
         executed_zones: list[dict[str, Any]] = list(runtime_session.get("zones_done") or [])
         # Suspend le moniteur passif de sessions pendant tout le cycle piloté (passages ET
         # pauses) : c'est ce cycle qui enregistre l'arrosage (source auto/manuel). Sans ça,
@@ -6456,7 +6775,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # (la garde _zone_tracking_suspended était déclarée mais jamais armée → l'arrosage
         # était compté plusieurs fois, sur-créditant la réserve et le budget hebdo).
         self._zone_tracking_suspended += 1
+        managed_pump_closed = True
         try:
+            await GazonIntelligentCoordinator._ensure_managed_irrigation_pump(
+                self, runtime_session
+            )
             start_passage = max(1, int(runtime_session.get("current_passage") or 1))
             start_zone_index = max(0, int(runtime_session.get("current_zone_index") or 0))
             # Reprise après redémarrage : temps restant à appliquer à la 1ʳᵉ zone reprise
@@ -6587,7 +6910,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     await self._persist_runtime_state()
 
             zones_total_mm = round(sum(float(zone.get("mm") or 0.0) for zone in executed_zones), 1)
-            surface_mm = round(float(plan.objective_mm), 1)
+            surface_mm = plan.planned_surface_mm
             # ⚠️ LE PLAN N'EST PAS L'EXÉCUTION. La proratisation posée sur `zones_done` quand
             # un relais retombe (`_build_zone_execution_record`) ne servait à rien ici : on
             # enregistrait quand même l'objectif PRÉVU. L'historique, le bilan du sol et le
@@ -6616,8 +6939,16 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "total_mm": float(surface_mm),
                 "session_total_mm": float(surface_mm),
                 "zones_total_mm": float(zones_total_mm),
-                "mm_scope": "surface_cycle" if semis_strategy else "global_surface",
-                "mm_interpretation": "surface_cycle" if semis_strategy else "surface_uniform",
+                "mm_scope": (
+                    "surface_cycle" if semis_strategy
+                    else "zone_adjusted_surface" if plan.has_zone_adjustments
+                    else "global_surface"
+                ),
+                "mm_interpretation": (
+                    "surface_cycle" if semis_strategy
+                    else "zone_adjusted" if plan.has_zone_adjustments
+                    else "surface_uniform"
+                ),
                 "zones": list(executed_zones),
                 "source": source,
                 "watering_cause": runtime_session.get("watering_cause"),
@@ -6682,15 +7013,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     completion_status="completed",
                 ),
             )
-            if user_action_context:
-                await self.async_record_user_action(
-                    action=str(user_action_context.get("action")),
-                    state="ok",
-                    reason=str(user_action_context.get("success_reason") or "Arrosage terminé avec succès."),
-                    plan_type=user_action_context.get("plan_type"),
-                    zone_count=user_action_context.get("zone_count"),
-                    passages=user_action_context.get("passages"),
-                )
+            execution_completed = True
         except asyncio.CancelledError:
             cancelled = True
             raise
@@ -6748,6 +7071,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     passages=user_action_context.get("passages"),
                 )
         finally:
+            managed_pump_closed = (
+                await GazonIntelligentCoordinator._safe_turn_off_managed_irrigation_pump(
+                    self, runtime_session
+                )
+            )
             # La garde compteur (armée avant la boucle, donc avant toute ouverture de vanne
             # du cycle) suffit à empêcher le moniteur passif de doublonner ce cycle. On NE
             # purge PAS la session passive ici : une session externe/manuelle légitime en
@@ -6760,12 +7088,36 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # piloter (cf. _handle_zone_state_change) et ne doit pas être recompté.
                 self._zone_tracking_resumed_at = self._current_utc_datetime()
             self._auto_irrigation_task = None
-            if not cancelled:
+            if not cancelled and managed_pump_closed:
                 if str(source or "") == "auto_irrigation":
                     # Arme le cooldown anti-relance : un cycle auto vient de se terminer.
                     self._runtime_state["last_auto_irrigation_completed_at"] = self._current_utc_datetime()
                 self._set_active_irrigation_session(None)
                 await self._persist_runtime_state()
+                if execution_completed and user_action_context:
+                    await self.async_record_user_action(
+                        action=str(user_action_context.get("action")),
+                        state="ok",
+                        reason=str(
+                            user_action_context.get("success_reason")
+                            or "Arrosage terminé avec succès."
+                        ),
+                        plan_type=user_action_context.get("plan_type"),
+                        zone_count=user_action_context.get("zone_count"),
+                        passages=user_action_context.get("passages"),
+                    )
+            elif not cancelled and execution_completed and user_action_context:
+                await self.async_record_user_action(
+                    action=str(user_action_context.get("action")),
+                    state="refuse",
+                    reason=str(
+                        runtime_session.get("last_error")
+                        or "La pompe n'a pas pu être arrêtée."
+                    ),
+                    plan_type=user_action_context.get("plan_type"),
+                    zone_count=user_action_context.get("zone_count"),
+                    passages=user_action_context.get("passages"),
+                )
 
     async def _wait_for_zones_available(
         self, zone_ids: list[str | None], timeout_s: float = 60.0, poll_s: float = 1.0
@@ -6898,6 +7250,19 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         session = self._runtime_state.get("active_irrigation_session")
         if not isinstance(session, dict):
             return
+        if bool(session.get("managed_pump_started_by_integration")) and (
+            self._is_finished_irrigation_session(session)
+            or self._auto_irrigation_safety_lock_active()
+        ):
+            # Une coupure peut tomber après la dernière vanne mais avant l'arrêt de la pompe.
+            # La pompe est donc traitée AVANT qu'une session terminée soit purgée.
+            pump_closed = (
+                await GazonIntelligentCoordinator._safe_turn_off_managed_irrigation_pump(
+                    self, session
+                )
+            )
+            if not pump_closed:
+                return
         if self._is_finished_irrigation_session(session):
             status = (
                 "completed"
@@ -7346,7 +7711,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             pass
         options = getattr(entry, "options", None)
         brut = options.get(CONF_REGLAGES) if isinstance(options, Mapping) else None
-        cache = self._reglages_cache
+        cache = getattr(self, "_reglages_cache", None)
         if cache is not None and cache[0] == brut:
             return cache[1]
         propres = nettoyer_reglages(brut)

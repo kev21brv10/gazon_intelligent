@@ -63,6 +63,7 @@
           "capteur_humidite_sol": "Bodenfeuchte (%) (empfohlen, wenn verfügbar)",
           "capteur_vent": "Lokaler Wind (optional, wird zuerst genutzt, wenn vorhanden)",
           "capteur_rosee": "Tau / Blattnässe (optional, automatische Berechnung wenn nicht angegeben)",
+          "capteur_point_de_rosee": "Gemessener Taupunkt (Luft) (optional, automatische Berechnung über die Wetter-Entität, wenn nicht angegeben)",
           "capteur_rayonnement": "Gemessene Globalstrahlung (optional, W/m² — verbessert die ET0-Berechnung deutlich)",
           "capteur_pression": "Gemessener Luftdruck (optional, hPa — verfeinert die ET0-Berechnung)",
           "entite_pompe": "Bewässerungspumpe (optional — auf der Seite „Gazon“ angezeigt und steuerbar)",
@@ -110,6 +111,7 @@
           "capteur_humidite_sol": "Bodenfeuchte (%) (empfohlen, wenn verfügbar)",
           "capteur_vent": "Lokaler Wind (optional, wird zuerst genutzt, wenn vorhanden)",
           "capteur_rosee": "Tau / Blattnässe (optional, automatische Berechnung wenn nicht angegeben)",
+          "capteur_point_de_rosee": "Gemessener Taupunkt (Luft) (optional, automatische Berechnung über die Wetter-Entität, wenn nicht angegeben)",
           "capteur_rayonnement": "Gemessene Globalstrahlung (optional, W/m² — verbessert die ET0-Berechnung deutlich)",
           "capteur_pression": "Gemessener Luftdruck (optional, hPa — verfeinert die ET0-Berechnung)",
           "entite_pompe": "Bewässerungspumpe (optional — auf der Seite „Gazon“ angezeigt und steuerbar)",
@@ -435,7 +437,7 @@
       "fields": {
         "question": {
           "name": "Frage",
-          "description": "Deine Frage. Leer: ein Tagesüberblick über den Rasen."
+          "description": "Zu stellende Frage. Leer: ein Tagesüberblick über den Rasen."
         },
         "notifier": {
           "name": "Auch an Telefone senden",

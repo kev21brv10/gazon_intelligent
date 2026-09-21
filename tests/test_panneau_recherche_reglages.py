@@ -60,7 +60,12 @@ const sansBalises = (t) => String(t).replace(/<[^>]+>/g, " ").replace(/\s+/g, " 
 const p = Object.create(ctx.Classe.prototype);
 p._donnees = { registre };
 
-const index = p._indexReglages().map((it) => ({ cle: it.cle, ongletCle: it.ongletCle, section: it.section }));
+const index = p._indexReglages().map((it) => ({
+  cle: it.cle, ongletCle: it.ongletCle, ongletTitre: it.ongletTitre, section: it.section,
+}));
+p._onglet = "sursemis";
+const indexSursemis = p._indexReglages().map((it) => ({ cle: it.cle, ongletCle: it.ongletCle }));
+p._onglet = undefined;
 
 const REGEX_RESULTAT = /data-cle="([^"]*)" data-cible-onglet="([^"]*)">\s*<span class="resultat-titre">([^<]*)<\/span>\s*<span class="resultat-chemin">([\s\S]*?)<\/span>/g;
 const resultats = requetes.map((q) => {
@@ -87,7 +92,7 @@ const apresAller = {
   moisChoisiVide: Object.keys(p._moisChoisi).length === 0,
 };
 
-process.stdout.write(JSON.stringify({ index, resultats, apresAller }));
+process.stdout.write(JSON.stringify({ index, indexSursemis, resultats, apresAller }));
 """
 
 
@@ -126,6 +131,18 @@ class RechercheReglagesTests(unittest.TestCase):
         par_cle = {it["cle"]: it for it in rendu["index"]}
         self.assertEqual(par_cle["type_sol"]["ongletCle"], "installation")
         self.assertEqual(par_cle["type_sol"]["section"], "")
+
+    def test_un_reglage_graines_ouvre_le_programme_semis(self) -> None:
+        """Les réglages communs ne vivent plus dans un troisième onglet « Graines »."""
+        rendu = _rendre([""])
+        par_cle = {it["cle"]: it for it in rendu["index"]}
+        self.assertEqual(par_cle["graines_germination_dose"]["ongletCle"], "semis")
+        self.assertEqual(par_cle["graines_germination_dose"]["ongletTitre"], "Semis et Sursemis")
+
+    def test_un_reglage_graines_reste_dans_le_programme_sursemis_consulte(self) -> None:
+        rendu = _rendre([""])
+        par_cle = {it["cle"]: it for it in rendu["indexSursemis"]}
+        self.assertEqual(par_cle["graines_germination_dose"]["ongletCle"], "sursemis")
 
     def test_une_recherche_par_cle_trouve_le_bon_reglage_et_son_chemin(self) -> None:
         [rendu] = _rendre(["tonte_vent_bloque"])["resultats"]

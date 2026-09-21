@@ -33,11 +33,11 @@ const INITIALES_MOIS = ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "
 const TABLES_MOIS = {
   tonte_hauteur_par_mois: {
     groupe: "Hauteur par mois", moins: "Plus court", plus: "Plus haut",
-    note: "Le point vert montre le mois en cours ; un trait pointillé, la hauteur conseillée d'un mois que tu as changé. Ce n'est qu'un point de départ : la chaleur, un semis ou la règle du tiers peuvent faire monter la hauteur conseillée.",
+    note: "Le point vert montre le mois en cours ; un trait pointillé, la hauteur personnalisée d'un mois. Ce n'est qu'un point de départ : la chaleur, un semis ou la règle du tiers peuvent faire monter la hauteur conseillée.",
   },
   tonte_frequence_par_mois: {
     groupe: "Tontes par semaine, mois par mois", moins: "Moins souvent", plus: "Plus souvent",
-    note: "Le point vert montre le mois en cours ; un trait pointillé, le rythme conseillé d'un mois que tu as changé. C'est un rythme visé, pas un ordre : la tondeuse ne sort que si le gazon et la météo le permettent.",
+    note: "Le point vert montre le mois en cours ; un trait pointillé, le rythme personnalisé d'un mois. C'est un rythme visé, pas un ordre : la tondeuse ne sort que si le gazon et la météo le permettent.",
   },
 };
 
@@ -49,8 +49,8 @@ const TABLES_MOIS = {
 // Questions proposées dans la fenêtre « Demander conseil à l'IA ».
 const QUESTIONS_IA = [
   "Les graines ont-elles eu assez d'eau aujourd'hui ?",
-  "Que dois-je surveiller cette semaine ?",
-  "Quand pourrai-je tondre ?",
+  "Quels points surveiller cette semaine ?",
+  "Quelle est la prochaine période favorable à la tonte ?",
 ];
 
 const COULOIRS = {
@@ -73,7 +73,7 @@ const DISPOSITION = {
   tonte: [
     {
       titre: "Quand la tondeuse peut-elle travailler ?",
-      phrase: "Le dessin montre ta journée d'aujourd'hui, avec le vrai lever et le vrai coucher du soleil.",
+      phrase: "Le dessin montre la journée en cours, avec le lever et le coucher du soleil réels.",
       dessin: "journee_tonte",
       cles: ["tonte_fenetre_ideale_debut", "tonte_fenetre_ideale_fin"],
       place: ["gauche", "large"],
@@ -115,13 +115,13 @@ const DISPOSITION = {
     },
     {
       titre: "Le rythme de la saison",
-      phrase: "Combien de tontes par semaine on vise, mois par mois. Appuie sur un mois pour le changer.",
+      phrase: "Nombre de tontes visé chaque semaine, mois par mois. Sélectionner un mois pour le modifier.",
       cles: ["tonte_frequence_par_mois"],
       place: ["milieu", "etroit"],
     },
     {
       titre: "La hauteur de l'herbe",
-      phrase: "Appuie sur un mois pour changer sa hauteur.",
+      phrase: "Sélectionner un mois pour modifier sa hauteur.",
       cles: ["tonte_hauteur_par_mois"],
       place: ["milieu", "large"],
     },
@@ -155,9 +155,15 @@ const DISPOSITION = {
     },
     {
       titre: "La pluie annoncée",
-      phrase: "Choisis combien les prévisions peuvent faire reporter un arrosage. La pluie réellement mesurée garde toujours la priorité.",
+      phrase: "Définit combien les prévisions peuvent faire reporter un arrosage. La pluie réellement mesurée garde toujours la priorité.",
       cles: ["arrosage_sensibilite_pluie"],
       place: ["gauche", "etroit"],
+    },
+    {
+      titre: "Les zones ombragées",
+      phrase: "Chaque zone peut recevoir moins d'eau que la dose générale. Une zone à 0 % garde la durée normale.",
+      cles: [1, 2, 3, 4, 5].map((numero) => `arrosage_reduction_ombre_zone_${numero}`),
+      place: ["milieu", "large"],
     },
     {
       titre: "Les soirs de forte chaleur",
@@ -177,7 +183,7 @@ const DISPOSITION = {
     },
     {
       titre: "Les étapes",
-      phrase: "Chaque étape dure jusqu'au jour que tu choisis, ce jour compris.",
+      phrase: "Chaque étape dure jusqu'au jour sélectionné, ce jour compris.",
       cles: ["graines_fin_germination", "graines_fin_enracinement", "graines_fin_reprise"],
       place: ["droite", "etroit"],
     },
@@ -218,7 +224,7 @@ const DISPOSITION = {
     },
     {
       titre: "L'alerte",
-      phrase: "Quand un arrosage des graines ne part pas, tu es prévenu. Les téléphones se choisissent dans Mon installation.",
+      phrase: "Une notification est envoyée lorsqu'un arrosage des graines ne part pas. Les appareils destinataires se configurent dans Entités.",
       cles: ["graines_alerte_retard"],
       place: ["gauche", "etroit"],
     },
@@ -226,7 +232,7 @@ const DISPOSITION = {
   sursemis: [
     {
       titre: "La tondeuse et les jeunes pousses",
-      phrase: "Tu as semé dans un gazon qui pousse déjà : la tondeuse continue, mais doucement.",
+      phrase: "Le sursemis concerne un gazon déjà en pousse : la tondeuse continue avec des précautions adaptées.",
       dessin: "voyage_sursemis",
       cles: ["sursemis_levee", "sursemis_ecart_tontes"],
       place: ["gauche", "large"],
@@ -333,7 +339,7 @@ const CHAMPS_PRODUIT = [
 const TYPES_PRODUIT = ["Fertilisation", "Biostimulant", "Agent Mouillant", "Traitement", "Scarification", "Hivernage"];
 const USAGES_PRODUIT = { preventif: "Pour prévenir", curatif: "Pour soigner", entretien: "Pour entretenir", rattrapage: "Pour rattraper" };
 const PHASES_PRODUIT = { Semis: "Semis", Sursemis: "Sursemis", Croissance: "Croissance", Entretien: "Entretien" };
-const MODES_ARROSAGE_PRODUIT = { auto: "Tout seul", manuel: "Par toi", suggestion: "Proposé seulement" };
+const MODES_ARROSAGE_PRODUIT = { auto: "Automatique", manuel: "Manuel", suggestion: "Proposé seulement" };
 
 // `memory.normalize_product_id`, sans les accents : un identifiant lisible et stable.
 function idProduit(nom) {
@@ -401,8 +407,8 @@ const REGLES_MODES = {
 // Les modes dont les réglages vivent dans d'autres onglets.
 const LIENS_MODES = {
   Normal: [["tonte", "Tonte"], ["arrosage", "Arrosage"]],
-  Semis: [["graines", "Graines"], ["semis", "Semis"]],
-  Sursemis: [["graines", "Graines"], ["sursemis", "Sursemis"]],
+  Semis: [["semis", "Semis"]],
+  Sursemis: [["sursemis", "Sursemis"]],
 };
 
 // Un produit se déclare plutôt qu'un mode : il est noté, et sa fiche fixe la dose.
@@ -421,20 +427,20 @@ const BESOIN_MODES = {
   Hivernage: "Arrosage bloqué sauf sécheresse prolongée",
 };
 
-// ─── Onglet « Mon installation » : des entités existantes, pas le registre ──────────────
+// ─── Onglet « Installation » : des entités existantes, pas le registre ─────────────────
 // Les identifiants d'entité arrivent du serveur (`entites`), jamais écrits en dur ici.
 
 const INSTALLATION = [
   {
     groupe: "arrosage",
-    titre: "Mes arroseurs",
+    titre: "Arroseurs",
     phrase: "Combien d'eau chaque zone reçoit en une heure. C'est ce qui donne la durée d'arrosage.",
     place: ["gauche", "large"],
     lignes: [
       {
         cle: "debit_zone_1", icone: "mdi:numeric-1-circle-outline",
         titre: "Zone 1 : combien de millimètres d'eau en une heure ?",
-        aide: "Pose un verre à fond plat dans la zone, arrose une heure et mesure la hauteur d'eau. 0 = zone pas utilisée.",
+        aide: "Placer un verre à fond plat dans la zone, arroser une heure et mesurer la hauteur d'eau. 0 = zone non utilisée.",
       },
       { cle: "debit_zone_2", icone: "mdi:numeric-2-circle-outline", titre: "Zone 2 : combien en une heure ?", aide: "Même mesure, dans la zone 2." },
       { cle: "debit_zone_3", icone: "mdi:numeric-3-circle-outline", titre: "Zone 3 : combien en une heure ?", aide: "Même mesure, dans la zone 3." },
@@ -443,7 +449,7 @@ const INSTALLATION = [
   {
     groupe: "arrosage",
     titre: "Les zones en plus",
-    phrase: "Si tu n'as pas de zone 4 ou 5, laisse 0.",
+    phrase: "Laisser 0 lorsque les zones 4 ou 5 ne sont pas utilisées.",
     place: ["droite", "etroit"],
     lignes: [
       { cle: "debit_zone_4", icone: "mdi:numeric-4-circle-outline", titre: "Zone 4 : combien en une heure ?", aide: "0 = zone pas utilisée." },
@@ -453,13 +459,13 @@ const INSTALLATION = [
   {
     groupe: "arrosage",
     titre: "Les interrupteurs de l'arrosage",
-    phrase: "Allumé ou éteint, c'est toi qui choisis.",
+    phrase: "Activation ou désactivation selon le fonctionnement souhaité.",
     place: ["gauche", "etroit"],
     lignes: [
       {
         cle: "arrosage_automatique", icone: "mdi:sprinkler", genre: "interrupteur",
         titre: "Arroser tout seul ?",
-        aide: "Éteint : Gazon Intelligent te dit quand arroser, mais n'ouvre jamais les vannes lui-même.",
+        aide: "Éteint : Gazon Intelligent indique quand arroser, mais n'ouvre jamais les vannes lui-même.",
       },
       {
         cle: "rafraichissement_soir", icone: "mdi:weather-sunset-down", genre: "interrupteur",
@@ -470,32 +476,32 @@ const INSTALLATION = [
   },
   {
     groupe: "tondeuse",
-    titre: "Ma tondeuse",
-    phrase: "Ce que ta tondeuse sait faire, et comment elle est réglée aujourd'hui.",
+    titre: "Tondeuse",
+    phrase: "Les capacités de la tondeuse et ses réglages actuels.",
     place: ["milieu", "large"],
     lignes: [
       {
         cle: "hauteur_coupe_tondeuse", icone: "mdi:content-cut",
         titre: "À quelle hauteur la lame est-elle réglée en ce moment ?",
-        aide: "Tourne d'abord la molette de la tondeuse, puis mets la même valeur ici : Home Assistant ne peut pas lire la molette.",
+        aide: "Régler d'abord la molette de la tondeuse, puis reporter la même valeur ici : Home Assistant ne peut pas lire la molette.",
       },
     ],
   },
   {
     groupe: "tondeuse",
-    titre: "Les limites de ta tondeuse",
+    titre: "Les limites de la tondeuse",
     phrase: "Le plus petit et le plus grand cran de la molette.",
     place: ["milieu", "large"],
     lignes: [
       {
         cle: "hauteur_min_tondeuse_cm", icone: "mdi:arrow-collapse-down",
-        titre: "Quelle est la hauteur la plus basse de ta tondeuse ?",
+        titre: "Quelle est la hauteur la plus basse de la tondeuse ?",
         aide: "Le plus petit cran de la molette.",
       },
       {
         cle: "hauteur_max_tondeuse_cm", icone: "mdi:arrow-collapse-up",
         titre: "Et la plus haute ?",
-        aide: "Le plus grand cran. C'est une limite de la machine, pas la hauteur que tu veux.",
+        aide: "Le plus grand cran. C'est une limite de la machine, pas la hauteur souhaitée.",
       },
     ],
   },
@@ -520,7 +526,7 @@ const INSTALLATION = [
   {
     groupe: "tondeuse",
     titre: "Les interrupteurs de la tondeuse",
-    phrase: "Allumé ou éteint, c'est toi qui choisis.",
+    phrase: "Activation ou désactivation selon le fonctionnement souhaité.",
     place: ["gauche", "etroit"],
     lignes: [
       {
@@ -537,13 +543,12 @@ const INSTALLATION = [
   },
 ];
 
-// Ordre d'affichage des groupes de l'onglet « Mon installation » : un titre visible avant
+// Ordre d'affichage des groupes de l'onglet « Installation » : un titre visible avant
 // chaque paquet de cartes, pour qu'on les reconnaisse d'un coup d'œil au lieu d'une suite de
 // cartes individuelles sans repère commun.
 const GROUPES_INSTALLATION = [
   { cle: "arrosage", titre: "Arrosage", icone: "mdi:sprinkler-variant" },
   { cle: "tondeuse", titre: "Tondeuse", icone: "mdi:robot-mower" },
-  { cle: "capteurs", titre: "Capteurs branchés", icone: "mdi:access-point" },
   { cle: "notifications", titre: "Alertes et notifications", icone: "mdi:bell-outline" },
 ];
 
@@ -552,9 +557,16 @@ const ORDRE_ECRITURE = ["hauteur_min_tondeuse_cm", "hauteur_max_tondeuse_cm"];
 
 const ONGLET_INSTALLATION = {
   cle: "installation",
-  titre: "Mon installation",
-  phrase: "Tes capteurs, tes arroseurs, ta tondeuse, les interrupteurs et les alertes.",
+  titre: "Installation",
+  phrase: "Les arroseurs, la tondeuse, les automatismes et les alertes.",
   icone: "mdi:tune-variant",
+};
+
+const ONGLET_ENTITES = {
+  cle: "entites",
+  titre: "Entités",
+  phrase: "Tous les appareils et capteurs lus par l'intégration, réunis au même endroit.",
+  icone: "mdi:connection",
 };
 
 // Valeurs communes aux trois profils : des repères de confort/sécurité de la tonte (vent,
@@ -579,7 +591,7 @@ const PROFIL_GAZON_COMMUN = {
 // pas. Chaque valeur est dans les bornes du réglage correspondant (reglages.py).
 const PROFILS_GAZON = [
   {
-    cle: "ornement", titre: "Gazon d'ornement", icone: "mdi:grass",
+    cle: "ornement", titre: "Gazon d'ornement", titreCourt: "Ornement", resume: "Dense et régulier", icone: "mdi:grass",
     phrase: "Dense, court et régulier : tonte fréquente, arrosage suivi. Le profil déjà conseillé par défaut.",
     choix: { tondeuse_creneaux_depart: "ideal_seulement" },
     valeurs: {
@@ -592,7 +604,7 @@ const PROFILS_GAZON = [
     },
   },
   {
-    cle: "jeu", titre: "Gazon de jeu", icone: "mdi:soccer",
+    cle: "jeu", titre: "Gazon de jeu", titreCourt: "Jeu", resume: "Résiste au passage", icone: "mdi:soccer",
     phrase: "Un peu plus haut pour encaisser le piétinement, arrosage plus prudent pour rester dense et résistant.",
     choix: { tondeuse_creneaux_depart: "ideal_acceptable" },
     valeurs: {
@@ -605,7 +617,7 @@ const PROFILS_GAZON = [
     },
   },
   {
-    cle: "rustique", titre: "Gazon rustique, économe en eau", icone: "mdi:cactus",
+    cle: "rustique", titre: "Gazon rustique, économe en eau", titreCourt: "Rustique", resume: "Économe en eau", icone: "mdi:cactus",
     phrase: "Tonte plus haute et plus espacée, arrosage réduit : un gazon robuste qui se contente de peu.",
     choix: { tondeuse_creneaux_depart: "ideal_acceptable" },
     valeurs: {
@@ -665,7 +677,7 @@ const ONGLETS_ACCUEIL = [
 const GROUPES_METEO = { meteo: "Prévisions", air: "L'air du jardin", pluie: "La pluie", sol: "Le sol et l'arrosage" };
 
 const SOURCES_ET0 = {
-  capteur: "lue sur ton capteur d'évaporation",
+  capteur: "lue sur le capteur d'évaporation",
   fallback_pm_location: "calculée par l'intégration (Penman-Monteith, position de la maison)",
   fallback_pm: "calculée par l'intégration (Penman-Monteith)",
 };
@@ -759,7 +771,7 @@ const ACTIONS = {
   aucune_action: { titre: "Rien à faire pour l'instant", icone: "mdi:check-circle-outline" },
   attente_conditions: { titre: "On attend de meilleures conditions", icone: "mdi:timer-sand" },
   arrosage: { titre: "Il faut arroser", attente: "L'arrosage attend", icone: "mdi:water" },
-  traitement: { titre: "Un traitement demande ton attention", attente: "Le traitement attend", icone: "mdi:flask-outline" },
+  traitement: { titre: "Un traitement demande une attention", attente: "Le traitement attend", icone: "mdi:flask-outline" },
   tonte: { titre: "La tonte est possible", attente: "La tonte attend", icone: "mdi:robot-mower" },
 };
 
@@ -838,13 +850,13 @@ const METEOS = {
 // Volontairement sobres : le détail de chaque mode vit dans le moteur, pas ici.
 const MODES = {
   Normal: "L'entretien de tous les jours.",
-  Semis: "Tu as semé sur un terrain nu : les graines sont arrosées plusieurs fois par jour et la tondeuse attend.",
-  Sursemis: "Tu as semé dans un gazon en place : les graines sont arrosées souvent, la tonte reprend doucement après la levée.",
-  Traitement: "Tu viens de traiter le gazon.",
-  Fertilisation: "Tu viens de mettre un engrais.",
-  Biostimulant: "Tu viens de mettre un biostimulant.",
-  "Agent Mouillant": "Tu viens de mettre un agent mouillant.",
-  Scarification: "Tu viens de scarifier le gazon.",
+  Semis: "Semis sur terrain nu : les graines sont arrosées plusieurs fois par jour et la tondeuse attend.",
+  Sursemis: "Sursemis dans un gazon en place : les graines sont arrosées souvent, puis la tonte reprend progressivement après la levée.",
+  Traitement: "Un traitement vient d'être appliqué au gazon.",
+  Fertilisation: "Un engrais vient d'être appliqué.",
+  Biostimulant: "Un biostimulant vient d'être appliqué.",
+  "Agent Mouillant": "Un agent mouillant vient d'être appliqué.",
+  Scarification: "Le gazon vient d'être scarifié.",
   Hivernage: "Le gazon se repose pour l'hiver.",
 };
 
@@ -899,8 +911,15 @@ function minuteDepuisChamp(texte) {
 }
 
 function dureeFr(minutes) {
-  const m = Math.round(minutes);
-  if (m < 60) return `${m}\u00a0min`;
+  // Certains d\u00e9lais (garage de la tondeuse) se r\u00e8glent au quart de minute : arrondir \u00e0 la
+  // minute effacerait ces secondes plut\u00f4t que de les afficher.
+  const secondesTotales = Math.round(minutes * 60);
+  const m = Math.floor(secondesTotales / 60);
+  const s = secondesTotales % 60;
+  if (m < 60) {
+    if (!s) return `${m}\u00a0min`;
+    return m ? `${m}\u00a0min\u00a0${s}\u00a0s` : `${s}\u00a0s`;
+  }
   const h = Math.floor(m / 60);
   const reste = m % 60;
   return reste ? `${h}\u00a0h\u00a0${deuxChiffres(reste)}` : `${h}\u00a0h`;
@@ -1234,14 +1253,17 @@ function candidatsEntree(source, etats, { propres = new Set(), appareils = new M
   for (const [id, etat] of Object.entries(etats || {})) {
     if (propres.has(id) || id.split(".")[1]?.startsWith("gazon_intelligent_")) continue;
     if (!entreeAcceptee(source, id, etat?.attributes || {}, etat?.state)) continue;
+    const appareilBrut = appareils.get(id);
+    const appareil = typeof appareilBrut === "string" ? appareilBrut : appareilBrut?.nom || null;
     liste.push({
       id,
       nom: String(etat?.attributes?.friendly_name || id),
-      appareil: appareils.get(id) || null,
-      indice: (source.indices || []).some((i) => id.toLowerCase().includes(i)),
+      appareil,
+      stationPersonnelle: Boolean(appareilBrut && typeof appareilBrut === "object" && appareilBrut.stationPersonnelle),
+      indice: (source.indices || []).some((i) => `${id} ${etat?.attributes?.friendly_name || ""}`.toLowerCase().includes(i)),
     });
   }
-  const rang = (c) => (c.appareil ? 0 : 2) + (c.indice ? 0 : 1);
+  const rang = (c) => (c.stationPersonnelle ? 0 : c.appareil ? 2 : 4) + (c.indice ? 0 : 1);
   return liste.sort((a, b) => rang(a) - rang(b) || a.nom.localeCompare(b.nom, "fr"));
 }
 
@@ -1263,14 +1285,14 @@ function valider(registre, valeurs) {
   for (const r of registre.reglages) {
     const v = valeurs[r.cle];
     if (r.genre === "interrupteur") {
-      if (typeof v !== "boolean") erreurs[r.cle] = "Choisis activé ou désactivé.";
+      if (typeof v !== "boolean") erreurs[r.cle] = "Sélectionner activé ou désactivé.";
       continue;
     }
     const nombres = r.genre === "table_mois" ? (Array.isArray(v) && v.length === 12 ? v : null) : [v];
     if (!nombres || !nombres.every((x) => typeof x === "number" && Number.isFinite(x))) {
       erreurs[r.cle] = r.genre === "table_mois" ? "Il faut un nombre pour chaque mois." : "Il faut un nombre.";
     } else if (!nombres.every((x) => x >= r.minimum && x <= r.maximum)) {
-      erreurs[r.cle] = `Choisis une valeur entre ${fr(r.minimum)} et ${fr(r.maximum)}.`;
+      erreurs[r.cle] = `Sélectionner une valeur entre ${fr(r.minimum)} et ${fr(r.maximum)}.`;
     } else if (!nombres.every((x) => surLePas(r, x))) {
       erreurs[r.cle] = `La valeur avance de ${fr(r.pas)} en ${fr(r.pas)}.`;
     }
@@ -1474,7 +1496,7 @@ ha-icon { --mdc-icon-size: 20px; display: inline-flex; width: var(--mdc-icon-siz
 .section-tete h3 { margin: 0; font-size: 18px; font-weight: 600; text-wrap: balance; }
 .section-tete p { margin: 4px 0 0; color: var(--gz-doux); font-size: 14px; line-height: 1.45; max-width: 64ch; }
 
-/* ── Groupes de l'onglet « Mon installation » : un repère avant chaque paquet de cartes ── */
+/* ── Groupes de l'onglet « Installation » : un repère avant chaque paquet de cartes ── */
 .groupe-installation { display: flex; align-items: center; gap: 8px; padding: 10px 4px 0; --mdc-icon-size: 18px; color: var(--gz-accent-fort); }
 .groupe-installation h2 { margin: 0; font: inherit; font-size: 13px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
 :host([sombre]) .groupe-installation { color: var(--gz-accent); }
@@ -1846,29 +1868,29 @@ input[type="range"][disabled] { cursor: default; opacity: .5; }
   width: 58px; height: 58px; border-radius: 18px; flex: none;
   background: rgba(255, 255, 255, .18); display: flex; align-items: center; justify-content: center; --mdc-icon-size: 34px;
 }
-.maintenant-sur { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; opacity: .85; }
-.en-ce-moment h2 { margin: 2px 0 4px; font-size: 25px; font-weight: 700; line-height: 1.2; text-wrap: balance; }
-.en-ce-moment p { margin: 0; font-size: 15px; line-height: 1.45; opacity: .95; max-width: 60ch; }
+.maintenant-sur { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; opacity: .85; }
+.en-ce-moment h2 { margin: 2px 0 4px; font-size: 22px; font-weight: 700; line-height: 1.2; text-wrap: balance; }
+.en-ce-moment p { margin: 0; font-size: 14px; line-height: 1.4; opacity: .95; max-width: 60ch; }
 .en-ce-moment .puces { margin-top: 12px; }
 .en-ce-moment .puce { background: rgba(255, 255, 255, .18); color: #fff; }
 .en-ce-moment .progression { background: rgba(255, 255, 255, .28); margin-top: 12px; }
 .en-ce-moment .progression i { background: #fff; }
 .maintenant-session { display: flex; align-items: center; gap: 12px; margin-top: 10px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
 .bouton-blanc {
-  border: none; border-radius: 12px; padding: 10px 16px; cursor: pointer;
-  background: #fff; color: #b91c1c; font-weight: 700; font-size: 15px;
-  display: inline-flex; align-items: center; gap: 6px; --mdc-icon-size: 20px;
+  border: none; border-radius: 11px; padding: 9px 14px; cursor: pointer;
+  background: #fff; color: #b91c1c; font-weight: 700; font-size: 14px;
+  display: inline-flex; align-items: center; gap: 6px; --mdc-icon-size: 19px;
 }
 .bouton-blanc:hover { background: #fee2e2; }
 .bouton-blanc:active { background: #fecaca; }
 .bouton-blanc[disabled] { opacity: .6; cursor: default; }
 .meteo { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; text-align: right; }
-.meteo-haut { display: flex; align-items: center; gap: 10px; --mdc-icon-size: 42px; }
-.meteo-temp { font-size: 30px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
-.meteo-libelle { font-size: 13px; opacity: .9; margin-top: 2px; }
-.meteo-ligne { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 12px; font-size: 13px; opacity: .95; --mdc-icon-size: 15px; }
+.meteo-haut { display: flex; align-items: center; gap: 9px; --mdc-icon-size: 36px; }
+.meteo-temp { font-size: 26px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+.meteo-libelle { font-size: 12px; opacity: .9; margin-top: 2px; }
+.meteo-ligne { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 11px; font-size: 12px; opacity: .95; --mdc-icon-size: 14px; }
 .meteo-ligne span { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.meteo-heure { font-size: 13px; opacity: .85; }
+.meteo-heure { font-size: 12px; opacity: .85; }
 
 /* ── Bulletin ── */
 .bulletin {
@@ -2347,7 +2369,70 @@ dialog.dialogue > form { display: flex; flex-direction: column; min-height: 0; m
 }
 .etat-garage .statut { flex: none; }
 .garage-reglages {
-  margin-top: 10px; border-top: 1px solid var(--gz-trait);
+  margin: 10px 20px 18px; border: 1px solid var(--gz-trait); border-radius: 12px; overflow: hidden;
+}
+.garage-groupe + .garage-groupe { border-top: 1px solid var(--gz-trait); }
+.garage-groupe > summary {
+  list-style: none; padding: 12px 14px; cursor: pointer;
+  display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 10px; align-items: center;
+}
+.garage-groupe > summary::-webkit-details-marker { display: none; }
+.garage-groupe > summary:hover { background: var(--gz-surface); }
+.garage-groupe > summary:focus-visible { outline: 2px solid var(--gz-accent); outline-offset: -3px; }
+.garage-scenario-icone {
+  width: 34px; height: 34px; border-radius: 10px; background: var(--gz-accent-doux);
+  color: var(--gz-accent-fort); display: inline-flex; align-items: center; justify-content: center;
+  --mdc-icon-size: 19px;
+}
+:host([sombre]) .garage-scenario-icone { color: var(--gz-accent); }
+.garage-scenario-texte { min-width: 0; }
+.garage-scenario-texte b { display: block; font-size: 14px; }
+.garage-scenario-texte small { display: block; margin-top: 2px; color: var(--gz-doux); font-size: 12px; line-height: 1.35; }
+.garage-chevron { color: var(--gz-doux); transition: transform .16s; --mdc-icon-size: 18px; }
+.garage-groupe[open] .garage-chevron { transform: rotate(180deg); }
+.garage-groupe[open] > summary { background: var(--gz-surface); }
+.garage-groupe > .lignes { border-top: 1px solid var(--gz-trait); }
+.garage-groupe > .lignes .ligne:first-child { border-top: 0; }
+.garage-groupe .avertissement-reglage { margin-right: 0; }
+.programme-reglages {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;
+}
+.programme-reglages > .reglage-tout { grid-column: 1 / -1; }
+.mode-reglages {
+  display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 16px;
+  align-items: start;
+}
+.programme-groupe {
+  min-width: 0; align-self: start; border: 1px solid var(--gz-trait); border-radius: 8px;
+  overflow: hidden; background: var(--gz-carte);
+}
+.programme-groupe > summary {
+  list-style: none; padding: 12px 14px; cursor: pointer;
+  display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 10px; align-items: center;
+}
+.programme-groupe > summary::-webkit-details-marker { display: none; }
+.programme-groupe > summary:hover,
+.programme-groupe[open] > summary { background: var(--gz-surface); }
+.programme-groupe > summary:focus-visible { outline: 2px solid var(--gz-accent); outline-offset: -3px; }
+.programme-groupe[open] .garage-chevron { transform: rotate(180deg); }
+.programme-groupe > .dessin,
+.programme-groupe > .lignes { border-top: 1px solid var(--gz-trait); }
+.programme-groupe > .dessin + .lignes { border-top: 0; }
+.programme-groupe > .lignes .ligne:first-child { border-top: 0; }
+.programme-groupe .avertissement-reglage { margin-right: 0; }
+.programme-commun { color: var(--gz-accent-fort); }
+:host([sombre]) .programme-commun { color: var(--gz-accent); }
+.reglage-groupe-corps > .dessin { border-top: 1px solid var(--gz-trait); }
+.reglage-groupe-corps > .lignes { border-top: 1px solid var(--gz-trait); }
+.reglage-groupe-corps > .dessin + .lignes { border-top: 0; }
+.reglage-groupe-corps > .lignes .ligne:first-child { border-top: 0; }
+@container (max-width: 460px) {
+  .garage-reglages { margin-left: 16px; margin-right: 16px; }
+  .garage-groupe > summary { padding: 10px 12px; }
+  .programme-reglages { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .programme-reglages > .reglage-tout { grid-column: auto; }
+  .mode-reglages { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .programme-groupe > summary { padding: 10px 12px; }
 }
 @media (max-width: 600px) { .champ-pompe { margin-left: 0; } }
 @media (max-width: 600px) {
@@ -2370,7 +2455,30 @@ dialog.dialogue > form { display: flex; flex-direction: column; min-height: 0; m
 .heures-calmes-champs { display: flex; align-items: end; gap: 10px; margin-top: 12px; }
 .heures-calmes-champs label { display: grid; gap: 5px; min-width: 0; color: var(--gz-doux); font-size: 12px; }
 .heures-calmes-champs input { width: 126px; max-width: 100%; box-sizing: border-box; border: 1px solid var(--gz-trait); border-radius: 6px; padding: 8px; color: var(--gz-texte); background: var(--gz-carte); font: inherit; }
-.profil-gazon { margin-bottom: 16px; }
+.profil-gazon { margin-bottom: 12px; }
+.profil-gazon .section-tete { padding-bottom: 12px; }
+.profils-selecteur {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0 20px 16px; border: 1px solid var(--gz-trait); border-radius: 12px; overflow: hidden;
+}
+.profil-option {
+  min-width: 0; min-height: 96px; padding: 10px 8px; border: 0; background: transparent;
+  cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px; text-align: center; --mdc-icon-size: 22px;
+}
+.profil-option + .profil-option { border-left: 1px solid var(--gz-trait); }
+.profil-option:hover:not([disabled]) { background: var(--gz-surface); }
+.profil-option:focus-visible { outline: 2px solid var(--gz-accent); outline-offset: -3px; }
+.profil-option[disabled] { cursor: default; opacity: 1; }
+.profil-option.actif { background: var(--gz-accent-doux); color: var(--gz-accent-fort); }
+:host([sombre]) .profil-option.actif { color: var(--gz-accent); }
+.profil-option b { font-size: 14px; line-height: 1.25; }
+.profil-option small { color: var(--gz-doux); font-size: 11.5px; line-height: 1.25; }
+.profil-option-etat {
+  display: inline-flex; align-items: center; gap: 3px; margin-top: 2px;
+  color: var(--gz-doux); font-size: 11px; font-weight: 600; --mdc-icon-size: 13px;
+}
+.profil-option.actif .profil-option-etat { color: inherit; }
 @container (max-width: 420px) {
   .heures-calmes-champs { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: end; }
   .heures-calmes-champs input { width: 100%; }
@@ -2535,6 +2643,9 @@ dialog.dialogue > form { display: flex; flex-direction: column; min-height: 0; m
 
 @container page (max-width: 900px) {
   .en-ce-moment { grid-template-columns: minmax(0, 1fr); }
+  .en-ce-moment h2 { font-size: 19px; }
+  .en-ce-moment p { font-size: 13px; line-height: 1.35; }
+  .meteo-temp { font-size: 22px; }
   .meteo { align-items: flex-start; text-align: left; }
   .meteo-ligne { justify-content: flex-start; }
 }
@@ -2556,10 +2667,27 @@ dialog.dialogue > form { display: flex; flex-direction: column; min-height: 0; m
   .mosaique { column-gap: 12px; }
   .mosaique > .tesselle { gap: 12px; }
   .onglets { margin: 0 -12px; padding: 8px 12px; }
+  .profils-selecteur { margin: 0 16px 14px; }
+  .profil-option { min-height: 88px; padding: 8px 4px; }
+  .profil-option b { font-size: 13px; }
+  .profil-option small { font-size: 10.5px; }
+  .profil-option-etat { font-size: 10.5px; }
   .mode-raccourci { min-height: 0; }
   .mode-detail-tete { padding: 16px 16px 4px; }
   .mode-detail .regles-mode, .mode-liens, .mode-action-corps { padding-left: 16px; padding-right: 16px; }
   .accueil { padding: 16px; }
+  .intro-reglages {
+    padding: 12px; grid-template-columns: 38px minmax(0, 1fr); gap: 0 10px; align-items: center;
+  }
+  .intro-reglages .accueil-icone { width: 38px; height: 38px; border-radius: 11px; --mdc-icon-size: 22px; }
+  .intro-reglages h2 { margin: 0; font-size: 16px; }
+  .intro-reglages p { display: none; }
+  .intro-reglages > .puces {
+    grid-column: 1 / -1; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
+    margin: 9px -2px 0; padding: 0 2px 2px;
+  }
+  .intro-reglages > .puces::-webkit-scrollbar { display: none; }
+  .intro-reglages .puce { flex: none; padding: 4px 8px; font-size: 12px; }
   .section-tete { padding: 16px 16px 2px; }
   .dessin { padding: 10px 16px 2px; }
   .ligne { padding: 14px 16px 12px; }
@@ -2585,34 +2713,47 @@ dialog.dialogue > form { display: flex; flex-direction: column; min-height: 0; m
   .lame-fleche { transform: rotate(90deg); }
   .onglet { padding: 9px 12px; font-size: 14px; }
   /* Base de contrôle */
-  .en-ce-moment { padding: 14px; gap: 10px; }
-  .maintenant-principal { gap: 10px; }
-  .maintenant-sur { line-height: 1.35; overflow-wrap: anywhere; }
-  .en-ce-moment h2 { font-size: 20px; }
-  .en-ce-moment p { font-size: 13.5px; line-height: 1.35; }
-  .maintenant-icone { width: 40px; height: 40px; border-radius: 13px; --mdc-icon-size: 23px; }
+  .en-ce-moment { padding: 10px 12px; gap: 7px; border-radius: 14px; }
+  .maintenant-principal { gap: 8px; }
+  .maintenant-sur {
+    font-size: 9.5px; line-height: 1.2; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  .en-ce-moment h2 { margin: 1px 0 2px; font-size: 16.5px; line-height: 1.15; }
+  .en-ce-moment p { font-size: 11.75px; line-height: 1.3; }
+  .maintenant-icone { width: 34px; height: 34px; border-radius: 10px; --mdc-icon-size: 20px; }
   .en-ce-moment .puces {
-    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 5px; margin-top: 8px;
+    display: flex; flex-wrap: nowrap; gap: 5px; margin-top: 7px;
+    max-width: 100%; overflow-x: auto; scrollbar-width: none; overscroll-behavior-inline: contain;
   }
-  .en-ce-moment .puce { max-width: 100%; min-height: 28px; padding: 4px 7px; border-radius: 8px; font-size: 12px; line-height: 1.25; white-space: normal; }
+  .en-ce-moment .puces::-webkit-scrollbar, .meteo-ligne::-webkit-scrollbar { display: none; }
+  .en-ce-moment .puce {
+    flex: 0 0 auto; max-width: 260px; min-height: 24px; padding: 3px 7px;
+    border-radius: 7px; font-size: 10.75px; line-height: 1.2; white-space: nowrap;
+  }
   .meteo {
-    display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px;
-    padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, .28);
-    align-items: stretch; text-align: left;
+    display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 10px;
+    padding-top: 7px; border-top: 1px solid rgba(255, 255, 255, .24);
+    align-items: center; text-align: left;
   }
-  .meteo-haut { gap: 8px; --mdc-icon-size: 30px; }
-  .meteo-temp { font-size: 24px; }
+  .meteo-haut { grid-row: 1 / span 2; gap: 0; --mdc-icon-size: 0; }
+  .meteo-haut > ha-icon { display: none; }
+  .meteo-temp { font-size: 17.5px; }
+  .meteo-libelle { font-size: 10px; margin-top: 1px; }
   .meteo-ligne {
-    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 4px 8px; width: 100%; justify-content: stretch;
+    display: flex; flex-wrap: nowrap; gap: 5px 10px; width: 100%;
+    min-width: 0; overflow-x: auto; scrollbar-width: none; justify-content: flex-start;
   }
   .meteo-ligne span {
-    min-width: 0; min-height: 24px; padding: 3px 6px; border-radius: 7px; font-size: 12px;
-    background: rgba(255, 255, 255, .12); white-space: normal;
+    flex: 0 0 auto; min-width: 0; min-height: 0; padding: 0; border-radius: 0;
+    font-size: 10.75px; background: none; white-space: nowrap;
   }
   .meteo-ligne span:nth-child(n + 5) { display: none; }
-  .meteo-heure { padding-top: 1px; font-size: 12px; }
+  .meteo-heure { display: none; }
+  .en-ce-moment .bouton-blanc {
+    padding: 7px 10px; border-radius: 9px; font-size: 12.5px; --mdc-icon-size: 17px;
+  }
+  .en-ce-moment .maintenant-session { gap: 8px; margin-top: 7px; }
   .tuile-valeur { font-size: 19px; }
   .actions-grille { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 10px 16px 16px; }
   .action { min-height: 100px; padding: 12px; }
@@ -2640,6 +2781,107 @@ dialog.dialogue > form { display: flex; flex-direction: column; min-height: 0; m
   }
   .barre:has(.bascule-vues) .bascule-vues { margin-left: auto; }
 }
+
+/* Typographie commune : la hiérarchie reste la même dans toutes les pages, mais elle s'adapte à
+   la largeur réellement disponible dans Home Assistant. Les dimensions tactiles ne changent pas. */
+.page { font-size: 13.5px; }
+.barre h1 { font-size: 18px; }
+.choix-instance, .bascule-vues button, .onglet { font-size: 13px; }
+.recherche-reglages input { font-size: 14px; }
+.resultat-titre, .intro-onglet p, .bouton-texte { font-size: 13.5px; }
+.resultat-chemin, .puce, .groupe-installation h2 { font-size: 12px; }
+.accueil h2, .produit-bandeau h2 { font-size: 17px; }
+.en-ce-moment h2 { font-size: 20px; }
+.en-ce-moment p { font-size: 13.5px; }
+.accueil p, .section-tete p, .mode-detail-tete p, .mode-liens,
+.mode-action-corps > p, .liste-simple li, details.pourquoi, .vide { font-size: 13px; }
+.section-tete h3, .mode-detail-tete h3 { font-size: 16px; }
+.ligne-textes h4, .historique b, .catalogue li b, .session-quand { font-size: 14.5px; }
+.ligne-textes p, .legende li, .note, .erreur, .avertissement-reglage,
+.lecture-seule, .frise-vide, .budget-chiffres { font-size: 12.5px; }
+.ligne-textes p { overflow-wrap: anywhere; }
+.bulle, .budget-chiffres b, .session-mm { font-size: 16px; }
+.tuile-valeur, .etat-bandeau b, .machine-texte b { font-size: 19px; }
+.tuile-valeur.petite { font-size: 16px; }
+.pousse-texte b { font-size: 24px; }
+.pousse-texte p, .etat-bandeau p, .machine-texte small { font-size: 13px; }
+.lame-carte strong { font-size: 22px; }
+.dose output { font-size: 26px; }
+.meteo-temp { font-size: 24px; }
+.meteo-grande { font-size: 38px; }
+.meteo-etat { font-size: 15px; }
+.mesure-meteo > b { font-size: 15px; }
+.jours-meteo li, .lignes-meteo li > span, .entrees-meteo { font-size: 13px; }
+.lignes-meteo li > b { font-size: 14.5px; }
+.action b { font-size: 14px; }
+.action small, .session-quoi, .historique time, .historique .meta,
+.catalogue li, .note-produit, .totaux, .reservoir-legende { font-size: 12px; }
+.bouton-plein, .bouton-contour { font-size: 14px; }
+.petit-bouton, .bouton-blanc { font-size: 13px; }
+.barre-enregistrer .resume, .toast { font-size: 13.5px; }
+.barre-enregistrer .resume small { font-size: 12px; }
+.dialogue-tete h2 { font-size: 18px; }
+.dialogue-corps > p { font-size: 13.5px; }
+.champ > label, .champ > span, .case, .choix-mode b { font-size: 14px; }
+.champ small, .case small, .choix-mode small { font-size: 12.5px; }
+.mode-raccourci-texte b { font-size: 14px; }
+.mode-raccourci-texte small { font-size: 12px; }
+
+@container page (max-width: 900px) {
+  .page { font-size: 13.25px; }
+  .barre h1 { font-size: 17.5px; }
+  .accueil h2, .produit-bandeau h2 { font-size: 16.5px; }
+  .en-ce-moment h2 { font-size: 18px; }
+  .en-ce-moment p { font-size: 12.75px; }
+  .section-tete h3, .mode-detail-tete h3 { font-size: 15.5px; }
+  .ligne-textes h4, .historique b, .catalogue li b, .session-quand { font-size: 14px; }
+  .tuile-valeur, .etat-bandeau b, .machine-texte b { font-size: 18px; }
+  .pousse-texte b { font-size: 22px; }
+  .lame-carte strong { font-size: 21px; }
+  .dose output { font-size: 25px; }
+  .meteo-temp { font-size: 21px; }
+  .meteo-grande { font-size: 34px; }
+}
+
+@container page (max-width: 600px) {
+  .page { font-size: 13px; }
+  .barre h1 { font-size: 17px; }
+  .choix-instance, .bascule-vues button, .onglet { font-size: 12.5px; }
+  /* 16 px empêche le navigateur mobile de zoomer au focus d'un champ. */
+  .recherche-reglages input,
+  .champ input:not([type="checkbox"]):not([type="radio"]), .champ select, .champ textarea { font-size: 16px; }
+  .resultat-titre, .intro-onglet p, .bouton-texte { font-size: 13px; }
+  .accueil h2, .produit-bandeau h2 { font-size: 16px; }
+  .en-ce-moment h2 { font-size: 16.5px; }
+  .en-ce-moment p { font-size: 11.75px; }
+  .accueil p, .section-tete p, .mode-detail-tete p, .mode-liens,
+  .mode-action-corps > p, .liste-simple li, details.pourquoi, .vide { font-size: 12.5px; }
+  .section-tete h3, .mode-detail-tete h3 { font-size: 15px; }
+  .ligne-textes h4, .historique b, .catalogue li b, .session-quand { font-size: 14px; }
+  .ligne-textes p, .legende li, .note, .erreur, .avertissement-reglage,
+  .lecture-seule, .frise-vide, .budget-chiffres { font-size: 12px; }
+  .bulle, .budget-chiffres b, .session-mm { font-size: 15px; }
+  .tuile-valeur, .etat-bandeau b, .machine-texte b { font-size: 17px; }
+  .tuile-valeur.petite { font-size: 15px; }
+  .pousse-texte b { font-size: 20px; }
+  .pousse-texte p, .etat-bandeau p, .machine-texte small { font-size: 12.5px; }
+  .lame-carte strong { font-size: 20px; }
+  .dose output { font-size: 24px; }
+  .meteo-temp { font-size: 17.5px; }
+  .meteo-grande { font-size: 30px; }
+  .meteo-etat { font-size: 14px; }
+  .mesure-meteo > b { font-size: 14px; }
+  .jours-meteo li, .lignes-meteo li > span, .entrees-meteo { font-size: 12.5px; }
+  .lignes-meteo li > b { font-size: 14px; }
+  .action b { font-size: 13.5px; }
+  .bouton-plein, .bouton-contour { font-size: 13.5px; }
+}
+:host([narrow]) .dialogue-tete h2 { font-size: 17px; }
+:host([narrow]) .dialogue-corps > p { font-size: 12.5px; }
+:host([narrow]) .champ > label, :host([narrow]) .champ > span,
+:host([narrow]) .case, :host([narrow]) .choix-mode b { font-size: 13.5px; }
+:host([narrow]) .champ small, :host([narrow]) .case small,
+:host([narrow]) .choix-mode small { font-size: 12px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
 }
@@ -2809,6 +3051,7 @@ class GazonIntelligentPanel extends HTMLElement {
   set narrow(valeur) {
     const avant = this._narrow;
     this._narrow = Boolean(valeur);
+    this.toggleAttribute("narrow", this._narrow);
     if (avant !== this._narrow && this._hass) this._rendre();
   }
 
@@ -2970,6 +3213,12 @@ class GazonIntelligentPanel extends HTMLElement {
     }
     if (this._donnees?.pompe) ids.add(this._donnees.pompe);
     if (this._donnees?.meteo) ids.add(this._donnees.meteo);
+    if (this._vue === "reglages" && this._onglet === ONGLET_ENTITES.cle) {
+      for (const source of [...(this._donnees?.sources || []), ...(this._donnees?.liaisons_materiel || [])]) {
+        if (source.entity_id) ids.add(source.entity_id);
+      }
+      if (this._donnees?.garage_tondeuse?.choisie) ids.add(this._donnees.garage_tondeuse.choisie);
+    }
     // Onglet Météo ouvert : ses entrées aussi (le vent bouge toutes les minutes, pas besoin de
     // redessiner les autres onglets pour autant). Leurs voisines se relisent au même moment.
     if (this._vue === "accueil" && this._ongletAccueil === "meteo") {
@@ -3173,7 +3422,7 @@ class GazonIntelligentPanel extends HTMLElement {
 
   _corpsHtml() {
     if (this._etat === "chargement") {
-      return `<div class="etat-page"><ha-icon icon="mdi:sprout" style="--mdc-icon-size:40px"></ha-icon><h2>Un instant…</h2><p>Je lis les réglages de ton gazon.</p></div>`;
+      return `<div class="etat-page"><ha-icon icon="mdi:sprout" style="--mdc-icon-size:40px"></ha-icon><h2>Un instant…</h2><p>Lecture des réglages du gazon.</p></div>`;
     }
     if (this._etat === "erreur") {
       return `<div class="etat-page">
@@ -3187,19 +3436,25 @@ class GazonIntelligentPanel extends HTMLElement {
   }
 
   _corpsReglagesHtml() {
-    const groupes = [...this._registre.groupes];
+    // Les réglages « graines » sont communs aux deux programmes. Les laisser dans un troisième
+    // onglet rendait Semis et Sursemis artificiellement incomplets ; ils sont désormais affichés
+    // dans chacun de ces deux onglets, avec une seule valeur réellement enregistrée.
+    const groupes = this._registre.groupes.filter((g) => g.cle !== "graines");
     if (!groupes.some((g) => g.cle === ONGLET_INSTALLATION.cle)) groupes.push(ONGLET_INSTALLATION);
+    if (!groupes.some((g) => g.cle === ONGLET_ENTITES.cle)) groupes.push(ONGLET_ENTITES);
     const courant = groupes.find((g) => g.cle === this._onglet) || groupes[0];
     return `
       ${this._introReglagesHtml()}
-      ${this._estAdmin() ? "" : `<div class="lecture-seule">Seul un administrateur de Home Assistant peut changer ces réglages. Tu peux les regarder.</div>`}
+      ${this._estAdmin() ? "" : `<div class="lecture-seule">Seul un administrateur de Home Assistant peut modifier ces réglages. La consultation reste disponible.</div>`}
       ${this._rechercheReglagesHtml()}
       ${this._profilGazonHtml()}
       <nav class="onglets" role="tablist" aria-label="Familles de réglages">
         ${groupes.map((g) => this._ongletHtml(g, g.cle === courant.cle)).join("")}
       </nav>
       <div role="tabpanel" aria-label="${esc(courant.titre)}" style="display:flex;flex-direction:column;gap:16px">
-        ${courant.cle === ONGLET_INSTALLATION.cle ? this._installationHtml() : this._groupeHtml(courant)}
+        ${courant.cle === ONGLET_INSTALLATION.cle ? this._installationHtml()
+          : courant.cle === ONGLET_ENTITES.cle ? this._entitesHtml()
+          : this._groupeHtml(courant)}
       </div>`;
   }
 
@@ -3225,15 +3480,15 @@ class GazonIntelligentPanel extends HTMLElement {
     puces.push(...this._pucesProgrammeMode(c));
     if (c.soleil) puces.push(`<span class="puce"><ha-icon icon="mdi:weather-sunny"></ha-icon>Soleil <b>${heureFr(c.soleil.lever)} → ${heureFr(c.soleil.coucher)}</b></span>`);
     const perso = this._registre.reglages.filter((r) => !egal(this._enregistree(r.cle), r.defaut)).length;
-    puces.push(`<span class="puce"><ha-icon icon="mdi:tune-variant"></ha-icon>${perso === 0 ? "Tout est sur les valeurs conseillées" : `<b>${perso}</b> réglage${perso > 1 ? "s" : ""} à ta façon`}</span>`);
+    puces.push(`<span class="puce"><ha-icon icon="mdi:tune-variant"></ha-icon>${perso === 0 ? "Tout est sur les valeurs conseillées" : `<b>${perso}</b> réglage${perso > 1 ? "s" : ""} personnalisé${perso > 1 ? "s" : ""}`}</span>`);
     const titre = this._donnees.titre
       ? `<span class="accueil-titre-integration"> · ${esc(this._donnees.titre)}</span>`
       : "";
-    return `<section class="accueil">
+    return `<section class="accueil intro-reglages">
       <div class="accueil-icone"><ha-icon icon="mdi:sprout"></ha-icon></div>
       <div>
-        <h2>Ton gazon, tes règles${titre}</h2>
-        <p>Chaque réglage est une question. Bouge le curseur, regarde le dessin changer, puis appuie sur « Enregistrer ». Un doute ? « Revenir » remet la valeur conseillée.</p>
+        <h2>Réglages du gazon${titre}</h2>
+        <p>Chaque réglage répond à une question. Déplacer le curseur permet de voir le résultat avant d'utiliser « Enregistrer ». Le bouton « Revenir » restaure la valeur conseillée.</p>
       </div>
       <div class="puces">${puces.join("")}</div>
     </section>`;
@@ -3241,7 +3496,7 @@ class GazonIntelligentPanel extends HTMLElement {
 
   _profilGazonHtml() {
     const admin = this._estAdmin();
-    const lignes = PROFILS_GAZON.map((profil) => {
+    const profils = PROFILS_GAZON.map((profil) => {
       const cles = Object.keys(profil.valeurs).filter((cle) => this._reglage(cle));
       if (!cles.length) return "";
       const choix = Object.entries(profil.choix || {}).filter(([cle]) => (this._registre.choix || []).some((c) => c.cle === cle));
@@ -3249,20 +3504,22 @@ class GazonIntelligentPanel extends HTMLElement {
         && choix.every(([cle, valeur]) => this._valeurChoix(cle) === valeur);
       const modifie = cles.filter((cle) => !egal(this._valeur(cle), profil.valeurs[cle])).length
         + choix.filter(([cle, valeur]) => this._valeurChoix(cle) !== valeur).length;
-      const etat = actif ? "Ce profil est actif." : `${modifie} valeur${modifie > 1 ? "s" : ""} ${modifie > 1 ? "diffèrent" : "diffère"} de ce profil.`;
-      return `<div class="ligne compacte">
-        <div class="ligne-tete">
-          <span class="ligne-icone"><ha-icon icon="${profil.icone}"></ha-icon></span>
-          <div class="ligne-textes"><h4>${esc(profil.titre)}</h4><p>${esc(profil.phrase)} ${etat}</p></div>
-          <button class="bouton-texte" data-action="profil-gazon" data-profil="${esc(profil.cle)}" ${actif || !admin ? "disabled" : ""}><ha-icon icon="mdi:check-decagram-outline"></ha-icon>Appliquer</button>
-        </div>
-      </div>`;
+      const etat = actif
+        ? `<ha-icon icon="mdi:check-circle"></ha-icon>Actif`
+        : `<ha-icon icon="mdi:arrow-right-circle-outline"></ha-icon>Appliquer · ${modifie}`;
+      return `<button class="profil-option${actif ? " actif" : ""}" data-action="profil-gazon"
+        data-profil="${esc(profil.cle)}" ${actif || !admin ? "disabled" : ""}
+        aria-label="${actif ? "Profil actif" : "Appliquer"} : ${esc(profil.titre)}" title="${esc(profil.phrase)}">
+        <ha-icon icon="${profil.icone}"></ha-icon>
+        <b>${esc(profil.titreCourt)}</b>
+        <small>${esc(profil.resume)}</small>
+        <span class="profil-option-etat">${etat}</span>
+      </button>`;
     }).join("");
-    if (!lignes) return "";
+    if (!profils) return "";
     return `<section class="section profil-gazon" data-profil-gazon="1">
-      <div class="section-tete"><h3>Profil du gazon</h3><p>Trois façons cohérentes de régler la tonte et l'arrosage selon l'usage voulu, sans jamais désactiver les économies d'eau ni les sécurités.</p></div>
-      ${lignes}
-      <p class="note"><ha-icon icon="mdi:shield-check-outline"></ha-icon><span>Un profil ajuste la hauteur et la fréquence de tonte, ainsi que la confiance dans la pluie annoncée. Il ne modifie jamais les protections des vannes, de la pompe ou des zones.</span></p>
+      <div class="section-tete"><h3>Profil du gazon</h3><p>Ajuste la hauteur, le rythme et la confiance dans la pluie. Il ne modifie jamais les protections des vannes, de la pompe ou des zones.</p></div>
+      <div class="profils-selecteur" role="group" aria-label="Profils du gazon">${profils}</div>
     </section>`;
   }
 
@@ -3276,6 +3533,18 @@ class GazonIntelligentPanel extends HTMLElement {
       for (const s of dispositionGroupe) for (const cle of s.cles) sections.set(cle, s.titre);
     }
     const versEntree = (r) => {
+      if (r.groupe === "graines") {
+        const modeActuel = this._hass && this._donnees?.entites ? this._s("mode") : null;
+        const ongletCle = ["semis", "sursemis"].includes(this._onglet)
+          ? this._onglet
+          : modeActuel === "Sursemis" ? "sursemis" : "semis";
+        const cible = groupes.get(ongletCle);
+        return {
+          cle: r.cle, titre: r.titre, aide: r.aide, ongletCle,
+          ongletTitre: "Semis et Sursemis", ongletIcone: cible?.icone || "mdi:sprout",
+          section: sections.get(r.cle) || "Arrosage commun",
+        };
+      }
       const g = groupes.get(r.groupe);
       if (!g) return null;
       return { cle: r.cle, titre: r.titre, aide: r.aide, ongletCle: g.cle, ongletTitre: g.titre, ongletIcone: g.icone, section: sections.get(r.cle) || "" };
@@ -3297,7 +3566,7 @@ class GazonIntelligentPanel extends HTMLElement {
     if (!cherche) return "";
     const trouves = this._indexReglages().filter((it) =>
       sansAccents(`${it.titre} ${it.aide} ${it.cle} ${it.ongletTitre} ${it.section}`).includes(cherche));
-    if (!trouves.length) return `<p class="vide">Aucun réglage ne correspond à ta recherche.</p>`;
+    if (!trouves.length) return `<p class="vide">Aucun réglage ne correspond à la recherche.</p>`;
     const MONTRES = 8;
     const montres = trouves.slice(0, MONTRES);
     const reste = trouves.length - montres.length;
@@ -3306,7 +3575,7 @@ class GazonIntelligentPanel extends HTMLElement {
         <span class="resultat-titre">${esc(it.titre)}</span>
         <span class="resultat-chemin"><ha-icon icon="${esc(it.ongletIcone)}"></ha-icon>${esc(it.ongletTitre)}${it.section ? ` › ${esc(it.section)}` : ""}</span>
       </button>`).join("")}
-      ${reste > 0 ? `<p class="vide">Et ${reste} autre${reste > 1 ? "s" : ""} : précise ta recherche.</p>` : ""}`;
+      ${reste > 0 ? `<p class="vide">Et ${reste} autre${reste > 1 ? "s" : ""} : préciser la recherche.</p>` : ""}`;
   }
 
   _allerAuReglage(cle, ongletCible) {
@@ -3316,6 +3585,8 @@ class GazonIntelligentPanel extends HTMLElement {
     this._rendre();
     const visee = this.shadowRoot.querySelector(`[data-cle="${cle}"]`);
     if (!visee) return;
+    const sousMenu = visee.closest("details");
+    if (sousMenu) sousMenu.open = true;
     const reduireMouvement = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
     visee.scrollIntoView({ behavior: reduireMouvement ? "auto" : "smooth", block: "center" });
     visee.classList.add("reglage-vise");
@@ -3323,18 +3594,30 @@ class GazonIntelligentPanel extends HTMLElement {
   }
 
   _ongletHtml(g, actif) {
+    const alertesEntites = ["cibles", "ia"].filter((cle) => cle in this._brouillonAlertes).length;
+    const groupesReglages = [g.cle, ...(["semis", "sursemis"].includes(g.cle) ? ["graines"] : [])];
     const n = g.cle === ONGLET_INSTALLATION.cle
       ? Object.keys(this._brouillonEntites).length + Object.keys(this._brouillonChoix).length
-        + Object.keys(this._brouillonAlertes).length + (this._brouillonPompe !== undefined ? 1 : 0)
-        + (this._brouillonGarageTondeuse !== undefined ? 1 : 0)
-      : Object.keys(this._brouillon).filter((cle) => this._reglage(cle)?.groupe === g.cle).length;
+        + Object.keys(this._brouillonAlertes).length - alertesEntites
+      : g.cle === ONGLET_ENTITES.cle
+        ? alertesEntites + (this._brouillonPompe !== undefined ? 1 : 0)
+          + (this._brouillonGarageTondeuse !== undefined ? 1 : 0)
+      : Object.keys(this._brouillon).filter((cle) => groupesReglages.includes(this._reglage(cle)?.groupe)).length;
     return `<button class="onglet" role="tab" data-onglet="${esc(g.cle)}" aria-selected="${actif}">
       <ha-icon icon="${esc(g.icone)}"></ha-icon>${esc(g.titre)}${n ? `<span class="compteur" aria-label="${n} à enregistrer">${n}</span>` : ""}
     </button>`;
   }
 
   _groupeHtml(g) {
-    const cles = this._registre.reglages.filter((r) => r.groupe === g.cle).map((r) => r.cle);
+    if (g.cle === "semis" || g.cle === "sursemis") return this._programmeSemisHtml(g);
+    const zonesConnues = Array.isArray(this._donnees?.zones) ? new Set(this._donnees.zones.map((z) => Number(z.numero))) : null;
+    const cles = this._registre.reglages
+      .filter((r) => r.groupe === g.cle)
+      .map((r) => r.cle)
+      .filter((cle) => {
+        const ombre = /^arrosage_reduction_ombre_zone_(\d)$/.exec(cle);
+        return !ombre || zonesConnues === null || zonesConnues.has(Number(ombre[1]));
+      });
     const places = new Set();
     const sections = (DISPOSITION[g.cle] || []).map((s) => {
       const presentes = s.cles.filter((cle) => cles.includes(cle));
@@ -3352,7 +3635,61 @@ class GazonIntelligentPanel extends HTMLElement {
           <ha-icon icon="mdi:backup-restore"></ha-icon>Tout remettre comme conseillé
         </button>
       </div>
-      ${this._mosaique(sections.map((s) => [this._sectionHtml(s), ...(s.place || ["gauche", "large"])]))}`;
+      <div class="programme-reglages">${sections.map((s) => this._sectionHtml(s)).join("")}</div>`;
+  }
+
+  _resumeProgrammeSection(s) {
+    const valeur = (cle) => valeurFr(this._reglage(cle), this._valeur(cle));
+    const a = s.cles;
+    if (a.includes("graines_duree")) return `${valeur("graines_duree")} · quatre étapes`;
+    if (a.includes("graines_fin_germination")) {
+      return `Germination J${this._valeur("graines_fin_germination")} · racines J${this._valeur("graines_fin_enracinement")} · reprise J${this._valeur("graines_fin_reprise")}`;
+    }
+    if (a.includes("graines_germination_dose")) return `${valeur("graines_germination_dose")} × ${valeur("graines_germination_cycles")}`;
+    if (a.includes("graines_enracinement_dose")) return `${valeur("graines_enracinement_dose")} × ${valeur("graines_enracinement_cycles")}`;
+    if (a.includes("graines_reprise_dose")) return `${valeur("graines_reprise_dose")} × ${valeur("graines_reprise_cycles")}`;
+    if (a.includes("graines_fenetre_debut")) return `${valeur("graines_fenetre_debut")} → ${valeur("graines_fenetre_fin")}`;
+    if (a.includes("graines_vent_max")) return `minimum ${valeur("graines_temperature_min")} · vent maximal ${valeur("graines_vent_max")}`;
+    if (a.includes("graines_alerte_retard")) return `prévenir après ${valeur("graines_alerte_retard")}`;
+    if (a.includes("semis_hauteur_germination")) return `${valeur("semis_hauteur_germination")} → ${valeur("semis_hauteur_enracinement")}`;
+    if (a.includes("semis_hauteur_reprise")) return `${valeur("semis_hauteur_reprise")} → ${valeur("semis_hauteur_stabilisation")}`;
+    if (a.includes("sursemis_levee")) return `attente ${valeur("sursemis_levee")} · écart ${valeur("sursemis_ecart_tontes")}`;
+    if (a.includes("sursemis_pousse_plantules")) return `${valeur("sursemis_pousse_plantules")} · première coupe à ${valeur("sursemis_premiere_coupe")}`;
+    if (a.includes("sursemis_lame")) return `${valeur("sursemis_lame")} → ${valeur("sursemis_lame_finale")}`;
+    if (a.includes("sursemis_coupes_avant_remontee")) return `après ${valeur("sursemis_coupes_avant_remontee")}`;
+    return `${a.length} réglage${a.length > 1 ? "s" : ""}`;
+  }
+
+  _programmeSemisHtml(g) {
+    const commun = DISPOSITION.graines || [];
+    const propre = DISPOSITION[g.cle] || [];
+    const cles = [...new Set([...commun, ...propre].flatMap((s) => s.cles))];
+    const aRevenir = cles.some((cle) => !egal(this._valeur(cle), this._defaut(cle)));
+    const section = (s, estCommune) => {
+      const ouverte = s.cles.some((cle) => Object.hasOwn(this._brouillon, cle));
+      const dessin = s.dessin ? `<div class="dessin" data-dessin="${s.dessin}">${this._dessinHtml(s.dessin)}</div>` : "";
+      return `<details class="programme-groupe" data-programme-groupe="${esc(s.titre)}" ${!this._narrow || ouverte ? "open" : ""}>
+        <summary>
+          <span class="garage-scenario-icone ${estCommune ? "programme-commun" : ""}"><ha-icon icon="${estCommune ? "mdi:water-outline" : g.icone}"></ha-icon></span>
+          <span class="garage-scenario-texte"><b>${esc(s.titre)}</b><small>${estCommune ? "Commun Semis / Sursemis · " : ""}${esc(this._resumeProgrammeSection(s))}</small></span>
+          <ha-icon class="garage-chevron" icon="mdi:chevron-down"></ha-icon>
+        </summary>
+        ${dessin}${s.cles.length ? `<div class="lignes">${s.cles.map((cle) => this._ligneHtml(this._reglage(cle))).join("")}</div>` : ""}
+      </details>`;
+    };
+    const phrase = g.cle === "semis"
+      ? "Terrain nu : le programme complet réunit ici l'arrosage des graines et la tonte progressive du jeune gazon."
+      : "Gazon déjà en place : le programme complet réunit ici l'arrosage des graines et les précautions de tonte du sursemis.";
+    return `<div class="intro-onglet">
+        <p>${esc(phrase)} Les réglages marqués « Commun Semis / Sursemis » pilotent l'arrosage des deux modes de la même façon ; leur effet sur la tonte peut différer d'un mode à l'autre (voir la case correspondante).</p>
+        <button class="bouton-texte" data-action="tout-revenir" data-groupes="graines,${esc(g.cle)}" ${aRevenir && this._estAdmin() ? "" : "disabled"}>
+          <ha-icon icon="mdi:backup-restore"></ha-icon>Tout remettre comme conseillé
+        </button>
+      </div>
+      <div class="programme-reglages">
+        ${commun.map((s) => section(s, true)).join("")}
+        ${propre.map((s) => section(s, false)).join("")}
+      </div>`;
   }
 
   // ── Réglages → Modes : une seule liste de modes, puis le mode regardé ──
@@ -3379,10 +3716,10 @@ class GazonIntelligentPanel extends HTMLElement {
         </button>` : ""}
       </div>
       ${this._choixModesHtml(mode)}
-      ${this._mosaique([
-        [this._detailModeHtml(mode, section), "large", "large"],
-        [this._actionModeHtml(mode), "etroit", "etroit"],
-      ])}
+      <div class="mode-reglages">
+        ${this._detailModeHtml(mode, section)}
+        ${this._actionModeHtml(mode)}
+      </div>
       ${MODES_PRODUIT.includes(mode) ? this._catalogueHtml(mode) : ""}`;
   }
 
@@ -3405,16 +3742,20 @@ class GazonIntelligentPanel extends HTMLElement {
     const cles = section?.cles || [];
     const liens = LIENS_MODES[mode] || [];
     const phrase = section?.phrase || "";
-    return `<section class="section mode-detail">
-      <div class="mode-detail-tete">
-        <span class="action-icone"><ha-icon icon="${esc(ICONES_MODES[mode] || "mdi:grass")}"></ha-icon></span>
-        <div><h3>${esc(section?.titre || `Mode ${mode}`)}</h3><p>${esc(MODES[mode])}${phrase ? ` ${esc(phrase)}` : ""}</p></div>
-      </div>
+    const titre = section?.titre || `Mode ${mode}`;
+    const corps = `
       ${regles.length ? `<ul class="liste-simple regles-mode">${regles.map((r) => `<li><ha-icon icon="mdi:check-circle-outline"></ha-icon><span>${esc(r)}</span></li>`).join("")}</ul>` : ""}
       ${dessin}
       ${cles.length ? `<div class="lignes">${cles.map((cle) => this._ligneHtml(this._reglage(cle))).join("")}</div>` : ""}
-      ${liens.length ? `<div class="mode-liens"><span>Ses réglages :</span>${liens.map(([onglet, titre]) => `<button type="button" class="petit-bouton" data-onglet="${esc(onglet)}"><ha-icon icon="mdi:arrow-right"></ha-icon>${esc(titre)}</button>`).join("")}</div>` : ""}
-    </section>`;
+      ${liens.length ? `<div class="mode-liens"><span>Ses réglages :</span>${liens.map(([onglet, titreLien]) => `<button type="button" class="petit-bouton" data-onglet="${esc(onglet)}"><ha-icon icon="mdi:arrow-right"></ha-icon>${esc(titreLien)}</button>`).join("")}</div>` : ""}`;
+    return this._sectionReglageHtml({
+      titre,
+      phrase: `${MODES[mode]}${phrase ? ` ${phrase}` : ""}`,
+      icone: ICONES_MODES[mode] || "mdi:grass",
+      cles,
+      corps,
+      classes: "mode-detail",
+    });
   }
 
   _actionModeHtml(mode) {
@@ -3443,8 +3784,8 @@ class GazonIntelligentPanel extends HTMLElement {
       if (MODES_PRODUIT.includes(mode)) {
         const produit = (this._a("catalogue_produits", "products_summary") || [])
           .find((p) => String(p.type || "").trim().toLocaleLowerCase("fr") === mode.toLocaleLowerCase("fr"));
-        lignes.push(`<p>Tu as mis un produit ? Déclare-le : le mode change, le produit est noté, et sa fiche fixe la dose et les délais.</p>`);
-        lignes.push(`<button class="bouton-plein" data-dialogue="produit" ${produit ? `data-produit="${esc(produit.id)}"` : ""} ${admin ? "" : "disabled"}><ha-icon icon="mdi:flask-outline"></ha-icon>J'ai mis un produit</button>`);
+        lignes.push(`<p>Après l'application d'un produit, le déclarer permet d'adapter le mode, de conserver une trace et d'appliquer la dose et les délais de sa fiche.</p>`);
+        lignes.push(`<button class="bouton-plein" data-dialogue="produit" ${produit ? `data-produit="${esc(produit.id)}"` : ""} ${admin ? "" : "disabled"}><ha-icon icon="mdi:flask-outline"></ha-icon>Déclarer un produit</button>`);
         lignes.push(`<button class="bouton-contour" data-dialogue="mode" data-mode="${esc(mode)}" ${admin ? "" : "disabled"}>Passer en ${esc(mode)} sans produit</button>`);
       } else {
         lignes.push(`<button class="bouton-plein" data-dialogue="mode" data-mode="${esc(mode)}" ${admin ? "" : "disabled"}><ha-icon icon="${esc(ICONES_MODES[mode] || "mdi:swap-horizontal")}"></ha-icon>Passer en mode ${esc(mode)}</button>`);
@@ -3467,16 +3808,42 @@ class GazonIntelligentPanel extends HTMLElement {
     </section>`;
   }
 
+  _sectionReglageHtml({ titre, phrase = "", icone = "mdi:tune-variant", cles = [], corps = "", classes = "", attributs = "", ouverte = false }) {
+    const modifiee = cles.some((cle) => Object.hasOwn(this._brouillon || {}, cle)
+      || Object.hasOwn(this._brouillonEntites || {}, cle)
+      || Object.hasOwn(this._brouillonChoix || {}, cle)
+      || Object.hasOwn(this._brouillonAlertes || {}, cle));
+    return `<details class="section programme-groupe reglage-groupe ${esc(classes)}" ${attributs} ${!this._narrow || modifiee || ouverte ? "open" : ""}>
+      <summary>
+        <span class="garage-scenario-icone"><ha-icon icon="${esc(icone)}"></ha-icon></span>
+        <span class="garage-scenario-texte"><b>${esc(titre)}</b>${phrase ? `<small>${esc(phrase)}</small>` : ""}</span>
+        <ha-icon class="garage-chevron" icon="mdi:chevron-down"></ha-icon>
+      </summary>
+      <div class="reglage-groupe-corps">${corps}</div>
+    </details>`;
+  }
+
   _sectionHtml(s) {
     const dessin = s.dessin ? `<div class="dessin" data-dessin="${s.dessin}">${this._dessinHtml(s.dessin)}</div>` : "";
-    return `<section class="section">
-      <div class="section-tete"><h3>${esc(s.titre)}</h3>${s.phrase ? `<p>${esc(s.phrase)}</p>` : ""}</div>
-      ${dessin}
-      ${s.cles.length ? `<div class="lignes">${s.cles.map((cle) => this._ligneHtml(this._reglage(cle))).join("")}</div>` : ""}
-    </section>`;
+    const corps = `${dessin}${s.cles.length ? `<div class="lignes">${s.cles.map((cle) => this._ligneHtml(this._reglage(cle))).join("")}</div>` : ""}`;
+    const premier = s.cles.map((cle) => this._reglage(cle)).find(Boolean);
+    return this._sectionReglageHtml({
+      titre: s.titre,
+      phrase: s.phrase || "",
+      icone: premier ? iconeDe(premier) : "mdi:tune-variant",
+      cles: s.cles,
+      corps,
+    });
   }
 
   _ligneHtml(r) {
+    const ombre = /^arrosage_reduction_ombre_zone_(\d)$/.exec(r.cle);
+    if (ombre) {
+      const numero = Number(ombre[1]);
+      const zone = (this._donnees?.zones || []).find((z) => Number(z.numero) === numero);
+      const nomZone = zone?.nom || `Zone ${numero}`;
+      r = { ...r, titre: `${nomZone} · réduction pour l'ombre` };
+    }
     if (r.genre === "table_mois") return this._moisHtml(r);
     if (r.genre === "interrupteur") return this._interrupteurReglageHtml(r);
     if (r.cle === "arrosage_sensibilite_pluie") return this._sensibilitePluieHtml(r);
@@ -3823,7 +4190,7 @@ class GazonIntelligentPanel extends HTMLElement {
       precisions: "Il faut aussi que le gazon souffre de la chaleur, que l'air soit sec et qu'aucune pluie ne s'annonce. L'arrosage se fait avant le coucher du soleil.",
     });
     const etat = eteint
-      ? `<p class="note alerte"><ha-icon icon="mdi:toggle-switch-off-outline"></ha-icon><span>Le rafraîchissement du soir est <b>éteint</b> : ces deux réglages ne servent pas pour l'instant. Il s'allume dans « Mon installation ».</span></p>`
+      ? `<p class="note alerte"><ha-icon icon="mdi:toggle-switch-off-outline"></ha-icon><span>Le rafraîchissement du soir est <b>éteint</b> : ces deux réglages ne servent pas pour l'instant. Il s'allume dans « Installation ».</span></p>`
       : "";
     return feu + etat;
   }
@@ -3840,7 +4207,7 @@ class GazonIntelligentPanel extends HTMLElement {
       return `<div class="seg t-${e.teinte}" style="left:${pct(e.de)}%;width:${largeur}%">${largeur > 18 ? `<span>${esc(e.nom)}</span>` : ""}</div>`;
     }).join("");
     const ici = age !== null && age < v.graines_duree
-      ? this._rangeesHtml([{ p: pct(age + 0.5), texte: `tu es ici · jour ${age}`, icone: "mdi:flag-variant", genre: "maintenant" }], "bas")
+      ? this._rangeesHtml([{ p: pct(age + 0.5), texte: `aujourd'hui · jour ${age}`, icone: "mdi:flag-variant", genre: "maintenant" }], "bas")
       : "";
     const aiguille = age !== null && age < v.graines_duree ? `<span class="aiguille" style="left:${pct(age + 0.5)}%"></span>` : "";
     const graduations = [0, ...etapes.slice(1).map((e) => e.de), v.graines_duree]
@@ -3854,8 +4221,8 @@ class GazonIntelligentPanel extends HTMLElement {
       </div>`;
     }).join("");
     const intro = age === null
-      ? `<p class="note"><ha-icon icon="mdi:calendar-start"></ha-icon><span>Les dates montrent ce qui se passerait si tu semais <b>aujourd'hui</b>.</span></p>`
-      : `<p class="note"><ha-icon icon="mdi:calendar-check"></ha-icon><span>${esc(c.semis.mode)} du ${jourPlus(base, -age, { day: "numeric", month: "long" })} : ton gazon en est au jour ${age}.</span></p>`;
+      ? `<p class="note"><ha-icon icon="mdi:calendar-start"></ha-icon><span>Les dates montrent le déroulement d'un semis commencé <b>aujourd'hui</b>.</span></p>`
+      : `<p class="note"><ha-icon icon="mdi:calendar-check"></ha-icon><span>${esc(c.semis.mode)} du ${jourPlus(base, -age, { day: "numeric", month: "long" })} : le gazon en est au jour ${age}.</span></p>`;
     return `<div class="frise">
       <div class="frise-piste">${segs}${aiguille}</div>
       ${ici}
@@ -3870,7 +4237,7 @@ class GazonIntelligentPanel extends HTMLElement {
   _dessinDecoupage(v) {
     const zones = this._zonesAvecDebit();
     if (!zones.length) {
-      return `<p class="note"><ha-icon icon="mdi:information-outline"></ha-icon><span>Règle le débit de tes arroseurs dans « Mon installation » pour voir la durée de tes arrosages.</span></p>`;
+      return `<p class="note"><ha-icon icon="mdi:information-outline"></ha-icon><span>Régler le débit des arroseurs dans « Installation » pour afficher la durée des arrosages.</span></p>`;
     }
     // La borne haute du seuil EST la plus grosse séance du mode Normal (vérifié par les tests).
     const seance = this._reglage("arrosage_decoupage_seuil")?.maximum ?? 15;
@@ -3907,7 +4274,7 @@ class GazonIntelligentPanel extends HTMLElement {
       const coupes = doses.filter((x) => x > v.arrosage_decoupage_seuil).length;
       const verdict = coupes === 0 ? "tous seraient partis d'une traite"
         : coupes === doses.length ? "tous seraient coupés en deux" : `${coupes} sur ${doses.length} seraient coupés en deux`;
-      bilan = `Tes ${doses.length} derniers arrosages allaient de ${mmFr(Math.min(...doses))} à ${mmFr(Math.max(...doses))} : ${verdict}.`;
+      bilan = `Les ${doses.length} derniers arrosages allaient de ${mmFr(Math.min(...doses))} à ${mmFr(Math.max(...doses))} : ${verdict}.`;
     }
     return `<div class="decoupes">${lignes}</div>
       ${bilan ? `<p class="note"><ha-icon icon="mdi:history"></ha-icon><span>${esc(bilan)}</span></p>` : ""}`;
@@ -4021,7 +4388,7 @@ class GazonIntelligentPanel extends HTMLElement {
         : `<li><span class="pastille t-vert"></span><span><b>Lame à ${cmFr(v.sursemis_lame_finale)}</b> — pas avant la fin du suivi (jour ${duree})</span></li>`,
     ];
     const intro = age === null
-      ? `<p class="note"><ha-icon icon="mdi:calendar-start"></ha-icon><span>Les dates montrent ce qui se passerait si tu sursemais <b>aujourd'hui</b>. Pousse estimée : ${nombreFr(v.sursemis_pousse_plantules)} cm par jour après la levée, une tonte tous les ${v.sursemis_ecart_tontes} jours au plus.</span></p>`
+      ? `<p class="note"><ha-icon icon="mdi:calendar-start"></ha-icon><span>Les dates montrent le déroulement d'un sursemis commencé <b>aujourd'hui</b>. Pousse estimée : ${nombreFr(v.sursemis_pousse_plantules)} cm par jour après la levée, une tonte tous les ${v.sursemis_ecart_tontes} jours au plus.</span></p>`
       : `<p class="note"><ha-icon icon="mdi:calendar-check"></ha-icon><span>Sursemis en cours : jour ${age}, ${c.semis.coupes} coupe${c.semis.coupes > 1 ? "s" : ""} des pousses comptée${c.semis.coupes > 1 ? "s" : ""}.</span></p>`;
     return `<div class="frise">
       ${rangee(reperesHaut, "haut")}
@@ -4039,9 +4406,9 @@ class GazonIntelligentPanel extends HTMLElement {
     const consigne = enCours && c.semis.coupes >= n ? v.sursemis_lame_finale : v.sursemis_lame;
     let note = "";
     if (typeof reelle === "number" && enCours && !egal(reelle / 10, consigne)) {
-      note = `<p class="note alerte"><ha-icon icon="mdi:content-cut"></ha-icon><span>Ta lame est à <b>${cmFr(reelle / 10)}</b>, le sursemis demande <b>${cmFr(consigne)}</b> : ${reelle / 10 < consigne ? "remonte" : "descends"}-la avant la prochaine tonte. Deux gestes : la molette de la tondeuse, puis « Mon installation ».</span></p>`;
+      note = `<p class="note alerte"><ha-icon icon="mdi:content-cut"></ha-icon><span>La lame est à <b>${cmFr(reelle / 10)}</b>, le sursemis demande <b>${cmFr(consigne)}</b> : la ${reelle / 10 < consigne ? "remonter" : "descendre"} avant la prochaine tonte, d'abord sur la tondeuse puis dans « Installation ».</span></p>`;
     } else if (typeof reelle === "number") {
-      note = `<p class="note"><ha-icon icon="mdi:content-cut"></ha-icon><span>Ta lame est réglée à <b>${cmFr(reelle / 10)}</b> en ce moment${enCours ? ", c'est bien ce que demande le sursemis" : " (pas de sursemis en cours)"}.</span></p>`;
+      note = `<p class="note"><ha-icon icon="mdi:content-cut"></ha-icon><span>La lame est réglée à <b>${cmFr(reelle / 10)}</b> en ce moment${enCours ? ", conformément au besoin du sursemis" : " (pas de sursemis en cours)"}.</span></p>`;
     }
     return `<div class="lame">
       <div class="lame-carte"><small>Pendant le sursemis</small><strong>${cmFr(v.sursemis_lame)}</strong><small>pour laisser passer la lumière</small></div>
@@ -4071,7 +4438,8 @@ class GazonIntelligentPanel extends HTMLElement {
         <b>${m.nom}</b><span>${esc(m.sousTitre)}</span>${ici ? `<em>jour ${age}</em>` : ""}
       </div>`;
     }).join("")}</div>
-      <p class="note"><ha-icon icon="mdi:information-outline"></ha-icon><span>Hauteurs en centimètres. Ce sont des minimums : la hauteur conseillée ne descend jamais en dessous pendant le semis.</span></p>`;
+      <p class="note"><ha-icon icon="mdi:information-outline"></ha-icon><span>Hauteurs en centimètres. Ce sont des minimums : la hauteur conseillée ne descend jamais en dessous pendant le semis.</span></p>
+      <p class="note"><ha-icon icon="mdi:robot-mower"></ha-icon><span>La tondeuse reste à l'arrêt jusqu'au jour ${v.graines_fin_enracinement} inclus (fin de l'enracinement, réglée dans « Graines » → « Les étapes »). Ce délai est commun à l'arrosage ; il n'a aucun rapport avec celui du Sursemis, bien plus court et réglé à part.</span></p>`;
   }
 
   // ══ Base de contrôle (Accueil) ══════════════════════════════════════════════════════════
@@ -4380,15 +4748,15 @@ class GazonIntelligentPanel extends HTMLElement {
       puces.push(`<span class="puce"><ha-icon icon="mdi:clock-outline"></ha-icon>${esc(majuscule(MOMENTS[moment] || moment.replace(/_/g, " ")))}</span>`);
     }
     if (!enCours && mm !== null && mm > 0) puces.push(`<span class="puce"><ha-icon icon="mdi:water"></ha-icon>${esc(mmFr(mm))}</span>`);
-    const auto = this._valeurEntiteReelle("arrosage_automatique");
-    if (auto !== undefined) {
-      puces.push(`<span class="puce"><ha-icon icon="${auto ? "mdi:autorenew" : "mdi:hand-back-right-outline"}"></ha-icon>Arrosage automatique ${auto ? "allumé" : "éteint"}</span>`);
-    }
-    if (c.mode && c.mode !== "Normal") {
+    if (c.mode && c.mode !== "Normal" && !["Semis", "Sursemis"].includes(c.semis?.mode)) {
       puces.push(`<span class="puce"><ha-icon icon="mdi:sprout"></ha-icon>${esc(c.mode)}${c.semis ? ` · jour ${c.semis.age}` : ""}</span>`);
     }
     puces.push(...this._pucesProgrammeGraines(c));
     puces.push(...this._pucesProgrammeMode(c));
+    const auto = this._valeurEntiteReelle("arrosage_automatique");
+    if (auto !== undefined) {
+      puces.push(`<span class="puce" data-maintenant="auto"><ha-icon icon="${auto ? "mdi:autorenew" : "mdi:hand-back-right-outline"}"></ha-icon>Arrosage automatique ${auto ? "allumé" : "éteint"}</span>`);
+    }
     const sur = ["En ce moment", this._donnees?.sous_titre].filter(Boolean).map(esc).join(" · ");
     return `<section class="en-ce-moment ${ton}">
       <div class="maintenant-principal">
@@ -4440,7 +4808,7 @@ class GazonIntelligentPanel extends HTMLElement {
     if (p && nombreOuNul(p.precipitation) !== null) lignes.push(`<span title="Pluie attendue aujourd'hui"><ha-icon icon="mdi:weather-rainy"></ha-icon>${nombreFr(p.precipitation, 1)} mm</span>`);
     // UV et point de rosée : utiles POUR UN GAZON (stress lumineux, rosée du matin qui retarde la tonte).
     if (nombreOuNul(a.uv_index) !== null) lignes.push(`<span title="Indice UV : au-delà de 6, le gazon encaisse"><ha-icon icon="mdi:white-balance-sunny"></ha-icon>UV ${nombreFr(a.uv_index, 1)}</span>`);
-    if (nombreOuNul(a.dew_point) !== null) lignes.push(`<span title="Point de rosée : proche de la température, la rosée arrive au petit matin"><ha-icon icon="mdi:water-outline"></ha-icon>rosée ${nombreFr(a.dew_point, 0)} ${esc(unite)}</span>`);
+    if (nombreOuNul(a.dew_point) !== null) lignes.push(`<span title="Point de rosée : proche de la température, la rosée arrive au petit matin"><ha-icon icon="mdi:water-outline"></ha-icon>Point de rosée ${nombreFr(a.dew_point, 0)} ${esc(unite)}</span>`);
     return `<div class="meteo">
       <div class="meteo-haut"><ha-icon icon="${icone}"></ha-icon><div>
         <div class="meteo-temp">${temp !== null ? `${nombreFr(temp, 1)} ${esc(unite)}` : "—"}</div>
@@ -4476,7 +4844,7 @@ class GazonIntelligentPanel extends HTMLElement {
       const aHeure = m ? ` à ${heureFr(Number(m[1]) * 60 + Number(m[2]))}` : "";
       if (ecartJours(jQuand, c.maintenant) === 0) {
         const n = nombreOuNul(this._a("dernier_arrosage", "zone_count"));
-        lignes.push(`Tu as arrosé <b>${esc(mmFr(dernier))}</b> aujourd'hui${aHeure}${n ? `, sur ${n} zone${n > 1 ? "s" : ""}` : ""}.`);
+        lignes.push(`<b>${esc(mmFr(dernier))}</b> ont été arrosés aujourd'hui${aHeure}${n ? `, sur ${n} zone${n > 1 ? "s" : ""}` : ""}.`);
       } else {
         lignes.push(`Dernier arrosage : <b>${esc(mmFr(dernier))}</b>, ${esc(dateHumaine(isoDuJour(jQuand), c.maintenant, fuseau))}${aHeure}.`);
       }
@@ -4544,23 +4912,23 @@ class GazonIntelligentPanel extends HTMLElement {
       });
     }
     if (enCours) {
-      liste.push({ commande: "arreter", icone: "mdi:stop", titre: "Arrêter l'arrosage", aide: "Ferme les vannes tout de suite.", genre: "danger" });
+      liste.push({ commande: "arreter", icone: "mdi:stop", titre: "Arrêter l'arrosage", aide: "Fermeture immédiate des vannes.", genre: "danger" });
     } else {
       liste.push({
         dialogue: "arroser", icone: "mdi:sprinkler-variant", titre: "Arroser maintenant", genre: "eau",
-        aide: objectif > 0 ? `Conseillé : ${mmFr(objectif)}` : "Tu choisis la quantité.",
+        aide: objectif > 0 ? `Conseillé : ${mmFr(objectif)}` : "Quantité à définir.",
       });
-      liste.push({ dialogue: "arrose_main", icone: "mdi:watering-can-outline", titre: "J'ai arrosé à la main", aide: "Pour que cette eau soit comptée." });
+      liste.push({ dialogue: "arrose_main", icone: "mdi:watering-can-outline", titre: "Déclarer un arrosage manuel", aide: "Pour que cette eau soit comptée." });
     }
-    // Proposer « J'ai tondu » le jour d'une tonte déjà inscrite n'aurait pas de sens.
+    // Proposer « Déclarer une tonte » le jour d'une tonte déjà inscrite n'aurait pas de sens.
     if (!this._tonduAujourdhui(c)) {
-      liste.push({ dialogue: "tondu", icone: "mdi:robot-mower-outline", titre: "J'ai tondu", aide: "Pour repartir de la bonne hauteur." });
+      liste.push({ dialogue: "tondu", icone: "mdi:robot-mower-outline", titre: "Déclarer une tonte", aide: "Pour repartir de la bonne hauteur." });
     }
-    liste.push({ dialogue: "produit", icone: "mdi:flask-outline", titre: "J'ai mis un produit", aide: "Engrais, biostimulant, traitement…" });
+    liste.push({ dialogue: "produit", icone: "mdi:flask-outline", titre: "Déclarer un produit", aide: "Engrais, biostimulant, traitement…" });
     liste.push({ dialogue: "mode", icone: "mdi:swap-horizontal", titre: "Changer de mode", aide: `En ce moment : ${c.mode || "—"}` });
     liste.push({ dialogue: "reserve", icone: "mdi:cup-water", titre: "Recaler la réserve", aide: "Après une mesure dans le sol." });
     return `<section class="section">
-      <div class="section-tete"><h3>Que veux-tu faire ?</h3><p>Chaque bouton ouvre une petite fenêtre qui explique ce qui va se passer.</p></div>
+      <div class="section-tete"><h3>Actions disponibles</h3><p>Chaque bouton ouvre une fenêtre qui décrit l'action avant validation.</p></div>
       <div class="actions-grille">${liste.map((b) => this._boutonAction(b)).join("")}</div>
     </section>`;
   }
@@ -4728,7 +5096,7 @@ class GazonIntelligentPanel extends HTMLElement {
     const objectif = nombreOuNul(this._s("objectif")) ?? 0;
     const boutons = ea.genre === "session" ? "" : `<div class="rangee-boutons">
       <button class="bouton-plein eau" data-dialogue="arroser"><ha-icon icon="mdi:sprinkler-variant"></ha-icon> Arroser maintenant${objectif > 0 ? ` (${esc(mmFr(objectif))} conseillés)` : ""}</button>
-      <button class="bouton-contour" data-dialogue="arrose_main">J'ai arrosé à la main</button>
+      <button class="bouton-contour" data-dialogue="arrose_main">Déclarer un arrosage manuel</button>
     </div>`;
     return `<section class="section">
       <div class="etat-bandeau ${ton}">
@@ -4851,7 +5219,7 @@ class GazonIntelligentPanel extends HTMLElement {
 
   _zonesHtml() {
     const zones = this._zones();
-    const tete = `<div class="section-tete"><h3>Les zones</h3><p>Tu peux ouvrir une vanne à la main. Pour un arrosage compté dans la réserve, préfère « Arroser maintenant ».</p></div>`;
+    const tete = `<div class="section-tete"><h3>Les zones</h3><p>Une vanne peut être ouverte manuellement. Pour comptabiliser l'eau dans la réserve, utiliser de préférence « Arroser maintenant ».</p></div>`;
     if (!zones.length) return `<section class="section">${tete}<p class="vide">Aucune zone configurée.</p></section>`;
     const lignes = zones.map((z) => {
       const active = this._zoneActive(z);
@@ -4864,7 +5232,7 @@ class GazonIntelligentPanel extends HTMLElement {
       const boutons = active
         ? `<button class="petit-bouton arret" data-commande="zone-arret" data-switch="${esc(z.switch)}" ${occupe ? "disabled" : ""}><ha-icon icon="mdi:stop"></ha-icon>Arrêter</button>`
         : `<button class="petit-bouton" data-commande="zone-marche" data-switch="${esc(z.switch)}" ${occupe ? "disabled" : ""}><ha-icon icon="mdi:play"></ha-icon>Ouvrir</button>
-           <button class="petit-bouton" data-commande="zone-5min" data-switch="${esc(z.switch)}" ${occupe ? "disabled" : ""} title="Se referme après 5 minutes, tant que Home Assistant reste ouvert dans ce navigateur">5 min</button>`;
+           <button class="petit-bouton" data-commande="zone-5min" data-switch="${esc(z.switch)}" ${occupe ? "disabled" : ""} title="Home Assistant referme automatiquement la vanne après 5 minutes, même si cette page est fermée">5 min</button>`;
       return `<div class="zone ${active ? "active" : ""}">
         <span class="zone-pastille" style="background:${z.couleur}">Z${z.numero}</span>
         <div class="zone-texte"><b>${esc(z.nom)}</b><small>${detail}</small></div>
@@ -5112,7 +5480,8 @@ class GazonIntelligentPanel extends HTMLElement {
   // ── Météo ──
 
   _sourceMeteo(cle) {
-    return (this._donnees?.sources || []).find((s) => s.cle === cle) || null;
+    return [...(this._donnees?.sources || []), ...(this._donnees?.liaisons_materiel || [])]
+      .find((s) => s.cle === cle) || null;
   }
 
   // L'état d'une entrée : branchée ou non, et si sa valeur est utilisable.
@@ -5294,7 +5663,7 @@ class GazonIntelligentPanel extends HTMLElement {
     if (efficace !== null) lignes.push(ligne("mdi:sprout-outline", "Comptée pour le sol", esc(mmFr(efficace)), "la part de la pluie récente créditée à la réserve"));
     const demain = nombreOuNul(this._a("objectif", "pluie_demain"));
     const origineDemain = String(this._a("phase", "pluie_demain_source") || "");
-    if (demain !== null) lignes.push(ligne("mdi:calendar-arrow-right", "Demain", esc(mmFr(demain)), esc(origineDemain.startsWith("capteur") ? "ton capteur de pluie de demain" : "prévision de l'entité météo")));
+    if (demain !== null) lignes.push(ligne("mdi:calendar-arrow-right", "Demain", esc(mmFr(demain)), esc(origineDemain.startsWith("capteur") ? "capteur de pluie de demain" : "prévision de l'entité météo")));
     const jours = (this._previsions?.jours || []).slice(1, 4);
     const trois = jours.reduce((total, j) => total + (nombreOuNul(j.precipitation) || 0), 0);
     if (jours.length) lignes.push(ligne("mdi:calendar-range", `Les ${jours.length} prochains jours`, esc(mmFr(trois)), "somme des prévisions par jour"));
@@ -5329,7 +5698,7 @@ class GazonIntelligentPanel extends HTMLElement {
       ].filter(Boolean).join(", ");
       lignes.push(ligne("mdi:water-thermometer-outline", "En ce moment", `${esc(nombreFr(horaire, 2))}\u00a0mm/h`, esc(details)));
     }
-    if (etc !== null) lignes.push(ligne("mdi:grass", "Pour ton gazon (ETc)", esc(mmFr(etc)), kc !== null ? esc(`coefficient du gazon ${nombreFr(kc, 2)}`) : ""));
+    if (etc !== null) lignes.push(ligne("mdi:grass", "Pour le gazon (ETc)", esc(mmFr(etc)), kc !== null ? esc(`coefficient du gazon ${nombreFr(kc, 2)}`) : ""));
     const reference = nombreOuNul(this._a("et0", "temperature_reference_hydrique"));
     const prevue = nombreOuNul(this._a("et0", "forecast_temperature_today"));
     if (reference !== null) lignes.push(ligne("mdi:thermometer", "Température de référence", `${esc(nombreFr(reference, 1))}\u00a0°C`, prevue !== null ? esc(`plus haut prévu pour le reste du jour : ${nombreFr(prevue, 1)} °C`) : ""));
@@ -5375,10 +5744,10 @@ class GazonIntelligentPanel extends HTMLElement {
     const s = this._sante();
     if (!Object.keys(s).length) return "";
     const voyants = [
-      ["temperature_valid", "Température", "la température vient de ton capteur"],
-      ["humidity_valid", "Humidité", "l'humidité vient de ton capteur"],
-      ["wind_valid", "Vent", "le vent vient de ton capteur"],
-      ["pluie_valid", "Pluie du jour", "la pluie du jour vient de ton capteur"],
+      ["temperature_valid", "Température", "la température vient du capteur"],
+      ["humidity_valid", "Humidité", "l'humidité vient du capteur"],
+      ["wind_valid", "Vent", "le vent vient du capteur"],
+      ["pluie_valid", "Pluie du jour", "la pluie du jour vient du capteur"],
       ["etp_valid", "Évaporation lue", "l'évaporation du jour est lisible"],
       ["eto_radiation_measured", "Soleil mesuré", "le soleil est mesuré, pas déduit des nuages"],
       ["eto_pressure_measured", "Pression mesurée", "la pression est mesurée"],
@@ -5389,12 +5758,12 @@ class GazonIntelligentPanel extends HTMLElement {
     return `<section class="section">
       <div class="section-tete"><h3>Ce que l'intégration utilise vraiment</h3><p>${repli
         ? `${repli} voyant${repli > 1 ? "s" : ""} en orange : une valeur prévue remplace la mesure.`
-        : "Tout est au vert : les calculs tournent sur tes mesures."}</p></div>
+        : "Tout est au vert : les calculs utilisent les mesures configurées."}</p></div>
       <div class="voyants-meteo">${voyants.map(([cle, court, long]) => `<span class="voyant ${s[cle] ? "ok" : "retient"}" title="${esc(majuscule(long))}${s[cle] ? "" : " : non"}"><ha-icon icon="${s[cle] ? "mdi:check-circle-outline" : "mdi:alert-outline"}"></ha-icon>${esc(court)}</span>`).join("")}</div>
     </section>`;
   }
 
-  _meteoEntreesHtml() {
+  _meteoEntreesHtml(repliable = false) {
     const lignes = this._donnees?.sources || [];
     if (!lignes.length) return "";
     const pourrait = new Map();
@@ -5425,7 +5794,7 @@ class GazonIntelligentPanel extends HTMLElement {
           : "";
         const entite = l.entity_id
           ? `<b>${esc(l.nom || l.entity_id)}</b><code>${esc(l.entity_id)}</code>${l.partagee ? `<small class="puce-mini">partagée entre pelouses</small>` : ""}`
-          : `<span class="discret">Sans elle : ${esc(minuscule(l.sans_elle))}</span>${idees.length ? `<small class="idee">Déjà chez toi : ${esc(idees.join(", "))}.</small>` : ""}`;
+          : `<span class="discret">Sans elle : ${esc(minuscule(l.sans_elle))}</span>${idees.length ? `<small class="idee">Entités disponibles : ${esc(idees.join(", "))}.</small>` : ""}`;
         return `<tr class="${ton}" data-source-meteo="${esc(l.cle)}">
           <td><b>${esc(l.titre)}</b><small>${esc(l.apporte)}</small></td>
           <td class="entree-entite">${entite}${bouton}</td>
@@ -5439,10 +5808,13 @@ class GazonIntelligentPanel extends HTMLElement {
         <thead><tr><th>Rôle</th><th>Entité</th><th>Valeur</th><th>État</th></tr></thead>
         <tbody>${tableau(cles)}</tbody>
       </table></div>`;
-    return `<section class="section">
-      <div class="section-tete"><h3>Tes entrées</h3><p>Chaque entité que tu as donnée à l'intégration, ce qu'elle lui apporte, et ce qu'elle vaut en ce moment. Une entrée non branchée est remplacée comme indiqué.${admin ? " « Changer » et « Brancher » choisissent une autre entité." : ""}</p></div>
-      <div class="entrees-deux">${table(["meteo", "air"])}${table(["pluie", "sol"])}</div>
-    </section>`;
+    const titre = "Entrées de l'intégration";
+    const phrase = `Chaque entité configurée, son rôle et sa valeur actuelle. Une entrée non branchée est remplacée comme indiqué.${admin ? " « Changer » et « Brancher » permettent de sélectionner une autre entité." : ""}`;
+    const corps = `<div class="entrees-deux">${table(["meteo", "air"])}${table(["pluie", "sol"])}</div>`;
+    if (repliable) return this._sectionReglageHtml({
+      titre, phrase, icone: "mdi:weather-partly-cloudy", corps, attributs: 'data-entrees-meteo="1"',
+    });
+    return `<section class="section"><div class="section-tete"><h3>${titre}</h3><p>${phrase}</p></div>${corps}</section>`;
   }
 
   _meteoAppareilsHtml() {
@@ -5450,9 +5822,9 @@ class GazonIntelligentPanel extends HTMLElement {
     if (!appareils.length) return "";
     const titres = new Map((this._donnees?.sources || []).map((s) => [s.cle, s.titre]));
     return `<section class="section">
-      <div class="section-tete"><h3>Toutes les mesures de tes appareils</h3><p>Les appareils de tes entrées publient souvent bien plus : les voici toutes, en direct. En vert, celles que l'intégration lit.</p></div>
+      <div class="section-tete"><h3>Stations et appareils météo détectés</h3><p>Les stations personnelles compatibles sont reconnues par leurs mesures. Elles sont proposées sans être branchées automatiquement. En vert, les entités déjà utilisées.</p></div>
       <div class="appareils-meteo">${appareils.map((ap) => `<div class="appareil-meteo">
-        <h4><ha-icon icon="mdi:access-point"></ha-icon>${esc(ap.nom || "Appareil")}${ap.fabricant || ap.modele ? `<small>${esc([ap.fabricant, ap.modele].filter(Boolean).join(" · "))}</small>` : ""}</h4>
+        <h4><ha-icon icon="mdi:${ap.station_personnelle ? "weather-partly-cloudy" : "access-point"}"></ha-icon>${esc(ap.nom || "Appareil")}${ap.fabricant || ap.modele ? `<small>${esc([ap.fabricant, ap.modele].filter(Boolean).join(" · "))}</small>` : ""}${ap.station_personnelle ? `<small class="puce-mini">Station météo personnelle${ap.detectee ? " détectée" : ""}</small>` : ""}</h4>
         <div class="voisines">${ap.entites.map((e) => {
           const etat = this._hass.states[e.entity_id];
           const titre = e.branchee ? `lue par l'intégration : ${titres.get(e.branchee) || e.branchee}` : e.pourrait?.length ? `pourrait servir : ${e.pourrait.map((c) => titres.get(c) || c).join(", ")}` : e.entity_id;
@@ -5477,12 +5849,17 @@ class GazonIntelligentPanel extends HTMLElement {
   _choixEntitesHtml(d, ligne) {
     const propres = new Set(Object.values(this._donnees?.entites || {}));
     const appareils = new Map();
-    for (const ap of this._donnees?.appareils || []) for (const e of ap.entites || []) appareils.set(e.entity_id, ap.nom || "");
+    for (const ap of this._donnees?.appareils || []) for (const e of ap.entites || []) appareils.set(e.entity_id, {
+      nom: ap.nom || "",
+      stationPersonnelle: Boolean(ap.station_personnelle),
+    });
     const utilisees = new Map((this._donnees?.sources || [])
       .filter((s) => s.entity_id && s.cle !== ligne.cle).map((s) => [s.entity_id, s.titre]));
     const actuelle = ligne.entity_id || "";
     const cherche = sansAccents(d.recherche).trim();
-    const tous = candidatsEntree(ligne, this._hass.states, { propres, appareils });
+    const autorisees = Array.isArray(ligne.choix) ? new Set(ligne.choix.map((c) => c.entity_id)) : null;
+    const tous = candidatsEntree(ligne, this._hass.states, { propres, appareils })
+      .filter((c) => !autorisees || autorisees.has(c.id));
     const trouves = cherche ? tous.filter((c) => sansAccents(`${c.nom} ${c.id}`).includes(cherche)) : tous;
     const montres = trouves.slice(0, CANDIDATS_MONTRES);
     // L'entité branchée reste visible, même quand elle ne convient pas (branchée avant la 0.95.0).
@@ -5498,6 +5875,7 @@ class GazonIntelligentPanel extends HTMLElement {
       return choix(c.id, nomCourt(c.nom, c.appareil), [
         etat ? valeurEtat(etat) : "introuvable",
         c.appareil,
+        c.stationPersonnelle ? "station météo personnelle" : "",
         c.id === actuelle ? "branchée en ce moment" : "",
         utilisees.has(c.id) ? `déjà lue pour « ${utilisees.get(c.id)} »` : "",
         c.deTravers && etat ? "ne convient pas à ce rôle" : "",
@@ -5506,7 +5884,7 @@ class GazonIntelligentPanel extends HTMLElement {
     }).join("");
     const reste = trouves.length - montres.filter((c) => !c.deTravers).length;
     return `${ligne.obligatoire ? "" : choix("", "Aucune", [ligne.sans_elle])}${options}
-      ${trouves.length ? "" : `<p class="vide">${cherche ? "Aucune entité ne correspond à ta recherche." : "Aucune entité de Home Assistant ne convient à ce rôle."}</p>`}
+      ${trouves.length ? "" : `<p class="vide">${cherche ? "Aucune entité ne correspond à la recherche." : "Aucune entité de Home Assistant ne convient à ce rôle."}</p>`}
       ${reste > 0 ? `<p class="vide">Et ${reste} autre${reste > 1 ? "s" : ""} : cherche par nom.</p>` : ""}`;
   }
 
@@ -5544,15 +5922,18 @@ class GazonIntelligentPanel extends HTMLElement {
     d.erreur = null;
     this._majPiedEntree();
     try {
+      const materiel = (this._donnees?.liaisons_materiel || []).some((l) => l.cle === d.cle);
       const reponse = await this._hass.callWS({
         type: WS_ECRIRE,
         entry_id: this._donnees.entry_id,
-        entrees: { [d.cle]: d.choix || null },
+        [materiel ? "liaisons_materiel" : "entrees"]: { [d.cle]: d.choix || null },
       });
       if (reponse?.ok === false) throw new Error(Object.values(reponse.erreurs || {})[0] || "entrée refusée");
       this._donnees = {
         ...this._donnees,
         ...(reponse.sources ? { sources: reponse.sources, appareils: reponse.appareils || [] } : {}),
+        ...(reponse.liaisons_materiel ? { liaisons_materiel: reponse.liaisons_materiel } : {}),
+        ...(reponse.zones ? { zones: reponse.zones } : {}),
         ...(reponse.meteo !== undefined ? { meteo: reponse.meteo } : {}),
       };
       if (d.cle === "entite_meteo") {
@@ -5619,7 +6000,13 @@ class GazonIntelligentPanel extends HTMLElement {
       puces.push(`<span class="puce" title="${esc(t("mowing_window_reason") || "")}"><span class="point ${etat === "discouraged" ? "attention" : etat === "blocked" ? "arret" : ""}"></span>Créneau : ${esc(minuscule(t("mowing_window_label")))}</span>`);
     }
     const frequence = t("mowing_frequency_label");
-    if (frequence) puces.push(`<span class="puce"><ha-icon icon="mdi:calendar-sync"></ha-icon>Ce mois-ci : ${esc(frequence)}</span>`);
+    if (frequence) {
+      const modeGraines = ["Semis", "Sursemis"].includes(c.semis?.mode) ? c.semis.mode : null;
+      const libelleFrequence = modeGraines
+        ? `Rythme actuel : ${frequence} (${modeGraines})`
+        : `Ce mois-ci : ${frequence}`;
+      puces.push(`<span class="puce"><ha-icon icon="mdi:calendar-sync"></ha-icon>${esc(libelleFrequence)}</span>`);
+    }
     const pourquoi = motifBlocage
       ? `<ul class="liste-simple"><li><ha-icon icon="${pluie ? "mdi:weather-rainy" : "mdi:timer-sand"}"></ha-icon><span>${esc(motifBlocage)}</span></li></ul>`
       : gazonOk === false && t("raison_blocage_tonte")
@@ -5627,7 +6014,7 @@ class GazonIntelligentPanel extends HTMLElement {
         : "";
     const actions = this._tonduAujourdhui(c)
       ? `<p class="vide">Une tonte est déjà inscrite aujourd'hui.</p>`
-      : `<div class="rangee-boutons"><button class="bouton-plein" data-dialogue="tondu">J'ai tondu</button></div>`;
+      : `<div class="rangee-boutons"><button class="bouton-plein" data-dialogue="tondu">Déclarer une tonte</button></div>`;
     const carteMachine = `<section class="section">${machine}${puces.length ? `<div class="puces" style="padding:0 20px 14px">${puces.join("")}</div>` : ""}${pourquoi}${actions}</section>`;
     return this._mosaique([
       [carteMachine, "gauche", "large"],
@@ -5645,6 +6032,8 @@ class GazonIntelligentPanel extends HTMLElement {
     const progres = nombreOuNul(a("mower_job_progress_pct"));
     const etat = a("mower_job_completion_state");
     const declaration = a("mower_auto_declaration_state");
+    const reprisePossible = a("mower_job_resume_possible") === true;
+    const pauseDepuis = a("mower_job_paused_since");
     const minutes = nombreOuNul(a("mower_mowing_minutes_today"));
     if (progres === null && !declaration && minutes === null) return "";
     const passes = nombreOuNul(a("mower_pass_count_today"));
@@ -5654,16 +6043,26 @@ class GazonIntelligentPanel extends HTMLElement {
     const etatTexte = etat === "termine" ? "terminé" : etat === "repos" ? "aucun travail en cours" : etat === "en_pause" ? "en pause à la base" : etat === "en_cours" ? "en cours" : "";
     const inscrit = declaration === "declaree" || declaration === "deja_declaree";
     const details = [];
+    let ancienTravail = "";
+    if (reprisePossible && progres !== null) {
+      const instant = pauseDepuis ? new Date(pauseDepuis) : null;
+      const valide = instant && !Number.isNaN(instant.getTime());
+      const quand = valide
+        ? `${dateHumaine(pauseDepuis, partiesLocales(new Date(), this._fuseau()), this._fuseau())} à ${heureFr(partiesLocales(instant, this._fuseau()).minute)}`
+        : "à une date inconnue";
+      ancienTravail = `<p><b>Travail précédent :</b> ${nombreFr(progres, 0)} % · interrompu ${esc(quand)} · reprise possible.</p>`;
+    }
     // Zéro est une MESURE (pas encore tourné aujourd'hui), pas une absence.
     if (minutes !== null) details.push(`Tondu aujourd'hui : <b>${minutes > 0 ? esc(dureeFr(Math.round(minutes))) : "0 min"}</b>`);
     if (passes !== null && passes > 0) details.push(`${nombreFr(passes, 0)} passe${passes > 1 ? "s" : ""}`);
     if (fin) details.push(`dernière passe : ${esc(libelleDe(FINS_DE_PASSE, fin))}`);
     if (mediane !== null) details.push(`une passe complète dure ${esc(dureeFr(Math.round(mediane)))}`);
     return `<section class="section">
-      <div class="section-tete"><h3>Le travail de la tondeuse</h3><p>La progression du travail en cours, et ce que la journée a donné.</p></div>
+      <div class="section-tete"><h3>Le travail de la tondeuse</h3><p>L'activité actuelle et le dernier travail qui peut reprendre.</p></div>
       <div class="travail">
-        ${progres !== null ? `<div class="travail-tete"><span>Progression${etatTexte ? ` · ${esc(etatTexte)}` : ""}</span><b>${nombreFr(progres, 0)} %</b></div>
+        ${progres !== null && !reprisePossible ? `<div class="travail-tete"><span>Progression${etatTexte ? ` · ${esc(etatTexte)}` : ""}</span><b>${nombreFr(progres, 0)} %</b></div>
         <div class="progression ${etat === "repos" ? "repos" : ""}" role="progressbar" aria-valuenow="${Math.round(progres)}" aria-valuemin="0" aria-valuemax="100"><i style="width:${Math.max(0, Math.min(100, progres))}%"></i></div>` : ""}
+        ${ancienTravail}
         ${declaration ? `<p class="${inscrit ? "ok" : ""}">Inscription de la tonte : ${esc(minuscule(libelleDe(DECLARATIONS, declaration)))}${!inscrit && declaration === "travail_trop_court" && plancher !== null ? ` (il faut ${esc(dureeFr(plancher))})` : ""}</p>` : ""}
         ${details.length ? `<p>${details.join(" · ")}</p>` : ""}
       </div>
@@ -5747,13 +6146,24 @@ class GazonIntelligentPanel extends HTMLElement {
     const raison = a("mower_control_reason");
     const action = a("mower_control_pending_action");
     const erreur = a("mower_control_last_error");
+    const cycle = a("mower_control_cycle_state");
+    const motifReprise = a("mower_control_resume_reason");
     const titres = { desactive: "Pilotage désactivé", observation: "Pilotage en observation", actif: "Pilotage actif" };
     const actions = { start_mowing: "départ", dock: "retour à la base", open_cover: "ouverture du garage", close_cover: "fermeture du garage" };
+    const cycles = {
+      depart_envoye: "Départ envoyé, attente de sortie",
+      cycle_autonome: "Cycle autonome : recharges gérées par la tondeuse",
+      reprise_attendue: "Reprise attendue après un rappel de l'intégration",
+    };
+    const suiviCycle = mode === "actif" && cycles[cycle]
+      ? `<p><b>${esc(cycles[cycle])}</b>${cycle === "reprise_attendue" && motifReprise ? ` · ${esc(motifReprise)}` : ""}</p>`
+      : "";
     return `<section class="section"><div class="section-tete"><h3>${esc(titres[mode] || "Pilotage de la tondeuse")}</h3><p>${mode === "observation" ? "Aucune commande n'est envoyée." : mode === "actif" ? "Gazon Intelligent commande la tondeuse selon ses sécurités." : "La tondeuse reste gérée par son système actuel."}</p></div>
       <div class="lignes"><div class="ligne compacte">
         <div class="ligne-tete"><span class="ligne-icone"><ha-icon icon="${mode === "actif" ? "mdi:robot-mower" : mode === "observation" ? "mdi:eye-outline" : "mdi:power-off"}"></ha-icon></span>
           <div class="ligne-textes"><h4>${action ? `Décision : ${esc(actions[action] || action)}` : esc(etat || "En attente")}</h4><p>${esc(erreur || raison || "Le prochain cycle précisera la décision.")}</p></div>
         </div>
+        ${suiviCycle}
       </div></div>
     </section>`;
   }
@@ -5829,14 +6239,14 @@ class GazonIntelligentPanel extends HTMLElement {
       ["tondeuse", "tondeuse"],
     ].filter(([cle]) => categories[cle] !== false).map(([, nom]) => nom);
     const alertes = n.alertes === false
-      ? "Alertes coupées (Réglages → Mon installation)."
+      ? "Alertes coupées (Réglages → Installation)."
       : !categoriesActives.length
         ? "Aucune catégorie de notification n'est cochée."
         : noms.length
           ? `${esc(categoriesActives.join(", "))} : ${esc(noms.join(", "))} ${noms.length > 1 ? "sont prévenus" : "est prévenu"}. Une trace reste aussi dans Home Assistant.`
-          : `${esc(categoriesActives.join(", "))} : les alertes restent dans Home Assistant. Choisis un téléphone pour les recevoir aussi dessus.`;
+          : `${esc(categoriesActives.join(", "))} : les alertes restent dans Home Assistant. Sélectionner un appareil pour les recevoir également.`;
     const ia = n.ia_disponible
-      ? `L'IA lit l'état du gazon et répond à tes questions${n.ia_nom ? ` (${esc(n.ia_nom)})` : ""}. Elle ne commande rien.`
+      ? `L'IA lit l'état du gazon et répond aux questions${n.ia_nom ? ` (${esc(n.ia_nom)})` : ""}. Elle ne commande rien.`
       : "Aucune IA dans Home Assistant : ajoute une intégration qui en fournit une (OpenAI, Google Gemini, Ollama…).";
     const occupe = this._commandesEnCours.has("envoyer_etat");
     return `<section class="section">
@@ -5847,7 +6257,7 @@ class GazonIntelligentPanel extends HTMLElement {
         </ul>
         <div class="rangee-boutons">
           <button class="bouton-plein" data-dialogue="conseil_ia" ${n.ia_disponible ? "" : "disabled"}><ha-icon icon="mdi:robot-outline"></ha-icon> Demander conseil à l'IA</button>
-          ${noms.length ? `<button class="bouton-contour" data-commande="envoyer_etat" ${occupe ? "disabled" : ""}>${occupe ? "Un instant…" : "Envoyer l'état sur mon téléphone"}</button>` : ""}
+          ${noms.length ? `<button class="bouton-contour" data-commande="envoyer_etat" ${occupe ? "disabled" : ""}>${occupe ? "Un instant…" : "Envoyer l'état aux appareils configurés"}</button>` : ""}
         </div>
       </section>`;
   }
@@ -5919,11 +6329,11 @@ class GazonIntelligentPanel extends HTMLElement {
   _historiqueProduitsHtml() {
     const historique = [...(this._a("derniere_application", "application_history") || [])].reverse();
     const boutons = `<div class="rangee-boutons">
-      <button class="bouton-plein" data-dialogue="produit"><ha-icon icon="mdi:plus"></ha-icon> J'ai mis un produit</button>
+      <button class="bouton-plein" data-dialogue="produit"><ha-icon icon="mdi:plus"></ha-icon> Déclarer un produit</button>
       ${historique.length ? `<button class="bouton-contour" data-dialogue="annuler_application">Annuler la dernière</button>` : ""}
     </div>`;
     if (!historique.length) {
-      return `<section class="section"><div class="section-tete"><h3>Ce que tu as mis</h3></div><p class="vide">Rien n'est encore noté.</p>${boutons}</section>`;
+      return `<section class="section"><div class="section-tete"><h3>Produits appliqués</h3></div><p class="vide">Rien n'est encore noté.</p>${boutons}</section>`;
     }
     const n = this._historiqueTout ? historique.length : 5;
     const fuseau = this._fuseau();
@@ -5940,7 +6350,7 @@ class GazonIntelligentPanel extends HTMLElement {
       </li>`;
     }).join("");
     return `<section class="section">
-      <div class="section-tete"><h3>Ce que tu as mis · ${historique.length}</h3><p>Du plus récent au plus ancien. Touche une note pour la lire en entier.</p></div>
+      <div class="section-tete"><h3>Produits appliqués · ${historique.length}</h3><p>Du plus récent au plus ancien. Sélectionner une note pour la lire en entier.</p></div>
       <ul class="historique">${lignes}</ul>
       ${historique.length > 5 ? `<div class="rangee-boutons"><button class="bouton-texte" data-action-locale="historique-tout">${this._historiqueTout ? "Réduire" : `Voir les ${historique.length - 5} plus anciennes`}</button></div>` : ""}
       ${boutons}
@@ -5965,9 +6375,9 @@ class GazonIntelligentPanel extends HTMLElement {
       </span>` : ""}
     </li>`).join("");
     if (!produits.length && !modifiable) return "";
-    const titre = type ? `Produits · ${type}` : "Mes produits";
+    const titre = type ? `Produits · ${type}` : "Produits enregistrés";
     return `<section class="section">
-      <div class="section-tete"><h3>${esc(titre)} · ${produits.length}</h3><p>${modifiable ? "Ta fiche pour chacun : modifie-la, ou ajoute un produit." : "Ta fiche pour chacun."}</p></div>
+      <div class="section-tete"><h3>${esc(titre)} · ${produits.length}</h3><p>${modifiable ? "Une fiche par produit peut être modifiée ou ajoutée." : "Une fiche est disponible pour chaque produit."}</p></div>
       ${produits.length ? `<ul class="catalogue ${type ? "catalogue-mode" : ""}">${lignes}</ul>` : `<p class="vide">Aucun produit pour l'instant.</p>`}
       ${modifiable ? `<div class="rangee-boutons"><button class="bouton-contour" data-dialogue="fiche_produit" ${type ? `data-mode="${esc(type)}"` : ""}><ha-icon icon="mdi:plus"></ha-icon> Ajouter un produit</button></div>` : ""}
     </section>`;
@@ -6100,11 +6510,11 @@ class GazonIntelligentPanel extends HTMLElement {
 
     if (d.nom === "arrose_main") {
       const corps = `
-        <p>Tu as arrosé sans passer par Gazon Intelligent (tuyau, arrosoir) ? Note-le ici pour que cette eau compte.</p>
+        <p>Un arrosage réalisé hors de Gazon Intelligent (tuyau, arrosoir) peut être noté ici afin que cette eau soit comptabilisée.</p>
         ${champDate()}
         <div class="champ"><label for="dlg-mm">Combien de millimètres ?</label><input id="dlg-mm" type="number" min="0" max="30" step="0.5" value="5" inputmode="decimal">
-          <small>Un verre à fond plat posé dans la zone te le dit.</small></div>`;
-      return cadre({ icone: "mdi:watering-can-outline", genre: "eau", titre: "J'ai arrosé à la main", corps, bouton: "Noter l'arrosage", genreBouton: "eau" });
+          <small>Un verre à fond plat posé dans la zone permet de mesurer ce débit.</small></div>`;
+      return cadre({ icone: "mdi:watering-can-outline", genre: "eau", titre: "Déclarer un arrosage manuel", corps, bouton: "Noter l'arrosage", genreBouton: "eau" });
     }
 
     if (d.nom === "tondu") {
@@ -6113,15 +6523,15 @@ class GazonIntelligentPanel extends HTMLElement {
         <p>La hauteur de l'herbe repart de la lame à partir de cette tonte.</p>
         ${champDate()}
         <div class="champ"><label for="dlg-lame">Hauteur de la lame (mm), si elle a changé</label><input id="dlg-lame" type="number" min="10" max="120" step="5" placeholder="${lame !== null ? esc(nombreFr(lame, 0)) : ""}" inputmode="numeric">
-          <small>Laisse vide si la lame n'a pas bougé${lame !== null ? ` (${esc(nombreFr(lame, 0))} mm)` : ""}.</small></div>`;
-      return cadre({ icone: "mdi:robot-mower-outline", titre: "J'ai tondu", corps, bouton: "Noter la tonte" });
+          <small>Laisser vide si la lame n'a pas été réglée${lame !== null ? ` (${esc(nombreFr(lame, 0))} mm)` : ""}.</small></div>`;
+      return cadre({ icone: "mdi:robot-mower-outline", titre: "Déclarer une tonte", corps, bouton: "Noter la tonte" });
     }
 
     if (d.nom === "produit") {
       const produits = this._a("catalogue_produits", "products_summary") || [];
       if (!produits.length) {
-        return cadre({ icone: "mdi:flask-outline", titre: "J'ai mis un produit", bouton: "Fermer",
-          corps: "<p>Aucun produit n'est encore enregistré. Ajoute d'abord sa fiche, dans l'onglet Produits (« Ajouter un produit »).</p>" });
+        return cadre({ icone: "mdi:flask-outline", titre: "Déclarer un produit", bouton: "Fermer",
+          corps: "<p>Aucun produit n'est encore enregistré. Ajouter d'abord sa fiche dans l'onglet Produits (« Ajouter un produit »).</p>" });
       }
       const choisi = d.produit || produits[0]?.id;
       const fiche = produits.find((p) => p.id === choisi) || produits[0];
@@ -6131,7 +6541,7 @@ class GazonIntelligentPanel extends HTMLElement {
           <small>${esc([fiche.type, fiche.dose_conseillee ? `dose conseillée ${fiche.dose_conseillee}` : "", fiche.application_requires_watering_after ? "demande un arrosage après" : ""].filter(Boolean).join(" · "))}</small></div>
         ${champDate()}
         <div class="champ"><label for="dlg-note">Une note ? (facultatif)</label><textarea id="dlg-note" rows="3" placeholder="Par exemple : dose réelle, surface, météo…"></textarea></div>`;
-      return cadre({ icone: "mdi:flask-outline", titre: "J'ai mis un produit", corps, bouton: "Noter le produit" });
+      return cadre({ icone: "mdi:flask-outline", titre: "Déclarer un produit", corps, bouton: "Noter le produit" });
     }
 
     if (d.nom === "annuler_application") {
@@ -6158,13 +6568,13 @@ class GazonIntelligentPanel extends HTMLElement {
             <ha-icon icon="${esc(ICONES_MODES[d.choix] || "mdi:grass")}"></ha-icon>
             <span class="mode-raccourci-texte"><b>${esc(d.choix)}</b><small>${esc(MODES[d.choix] || "")}</small></span>
           </div>
-          ${produit ? `<p>Pour enregistrer aussi le produit utilisé, passe plutôt par « J'ai mis un produit ».</p>` : ""}
+          ${produit ? `<p>Pour enregistrer aussi le produit utilisé, passer plutôt par « Déclarer un produit ».</p>` : ""}
           ${avertissements.map((t) => `<p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>${esc(t)}</span></p>`).join("")}`;
         return cadre({ icone: ICONES_MODES[d.choix] || "mdi:swap-horizontal", titre: `Passer en mode ${d.choix}`, corps,
           bouton: `Confirmer le mode ${d.choix}` });
       }
       const corps = `
-        <p>Le mode dit à Gazon Intelligent ce qui arrive à ton gazon. Pour un produit, préfère « J'ai mis un produit » : le produit est noté en même temps.</p>
+        <p>Le mode indique à Gazon Intelligent ce qui arrive au gazon. Pour une application, utiliser de préférence « Déclarer un produit » afin de la noter en même temps.</p>
         <div class="choix-modes" role="radiogroup">${options.map((m) => `<label class="choix-mode"><input type="radio" name="mode" value="${esc(m)}" data-dlg="mode" ${m === d.choix ? "checked" : ""}><span><b>${esc(m)}${m === actuel ? " · en ce moment" : ""}</b><small>${esc(MODES[m] || "")}</small></span></label>`).join("")}</div>
         ${avertissements.map((t) => `<p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>${esc(t)}</span></p>`).join("")}`;
       return cadre({ icone: "mdi:swap-horizontal", titre: "Changer de mode", corps, bouton: d.choix === actuel ? "Garder ce mode" : `Passer en ${esc(d.choix)}` });
@@ -6179,9 +6589,9 @@ class GazonIntelligentPanel extends HTMLElement {
     }
 
     if (d.nom === "deverrouiller") {
-      const corps = `<p>Utilise cette action seulement après avoir vérifié physiquement que toutes les vannes sont fermées et que la pompe est arrêtée.</p>
+      const corps = `<p>Cette action doit être utilisée seulement après avoir vérifié physiquement que toutes les vannes sont fermées et que la pompe est arrêtée.</p>
         <p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>La levée sera refusée si une zone est encore active. Le mode du gazon et le suivi Semis ou Sursemis sont conservés.</span></p>`;
-      return cadre({ icone: "mdi:shield-check-outline", genre: "danger", titre: "Lever le verrou de sécurité", corps, bouton: "J'ai vérifié, lever le verrou", genreBouton: "danger" });
+      return cadre({ icone: "mdi:shield-check-outline", genre: "danger", titre: "Lever le verrou de sécurité", corps, bouton: "Confirmer la vérification et lever le verrou", genreBouton: "danger" });
     }
 
     if (d.nom === "reserve") {
@@ -6191,7 +6601,7 @@ class GazonIntelligentPanel extends HTMLElement {
         <div class="champ"><label for="dlg-reserve">Eau dans le sol (mm)</label><input id="dlg-reserve" type="number" min="0" max="100" step="0.1" value="${actuelle !== null ? actuelle : 10}" inputmode="decimal">
           <small>En ce moment, le calcul dit ${actuelle !== null ? esc(mmFr(actuelle)) : "—"}.</small></div>
         <label class="case"><input id="dlg-figer" type="checkbox" checked><span>Garder cette valeur jusqu'à minuit
-          <small>Coché, la réserve ne bouge plus aujourd'hui. Décoché, le calcul de la journée continue à partir de ta valeur.</small></span></label>`;
+          <small>Coché, la réserve ne bouge plus aujourd'hui. Décoché, le calcul de la journée continue à partir de la valeur saisie.</small></span></label>`;
       return cadre({ icone: "mdi:cup-water", titre: "Recaler la réserve du sol", corps, bouton: "Recaler" });
     }
 
@@ -6205,8 +6615,8 @@ class GazonIntelligentPanel extends HTMLElement {
     }
 
     if (d.nom === "retirer_produit") {
-      const corps = `<p>Retirer <b>${esc(d.fiche.nom || d.id)}</b> de ta liste ?</p>
-        <p>Les applications déjà notées restent dans ton carnet. Pour le remettre, il faudra refaire sa fiche.</p>`;
+      const corps = `<p>Retirer <b>${esc(d.fiche.nom || d.id)}</b> de la liste ?</p>
+        <p>Les applications déjà notées restent dans le carnet. Pour réutiliser ce produit, une nouvelle fiche devra être créée.</p>`;
       return cadre({ icone: "mdi:delete-outline", genre: "danger", titre: "Retirer un produit", corps, bouton: "Oui, le retirer", genreBouton: "danger" });
     }
 
@@ -6236,15 +6646,15 @@ class GazonIntelligentPanel extends HTMLElement {
     if (d.nom === "conseil_ia") {
       const telephones = (this._donnees?.notifications?.cibles || []).length > 0;
       const corps = `
-        <p>L'IA lit l'état du gazon (phase, arrosages, réserve, météo, tonte) et te répond. Elle ne lance rien. Chaque question compte auprès de ton fournisseur d'IA.</p>
-        <div class="champ"><label for="dlg-question">Ta question</label>
-          <textarea id="dlg-question" rows="3" maxlength="1000" placeholder="Laisse vide pour un point sur la journée.">${esc(d.question || "")}</textarea>
+        <p>L'IA lit l'état du gazon (phase, arrosages, réserve, météo, tonte) et répond. Elle ne lance aucune action. Chaque question compte auprès du fournisseur d'IA configuré.</p>
+        <div class="champ"><label for="dlg-question">Question</label>
+          <textarea id="dlg-question" rows="3" maxlength="1000" placeholder="Laisser vide pour obtenir un point sur la journée.">${esc(d.question || "")}</textarea>
           <div class="raccourcis questions">${QUESTIONS_IA.map((q, i) => `<button type="button" class="petit-bouton" data-dlg="question-${i}" data-question="${esc(q)}">${esc(q)}</button>`).join("")}</div></div>
-        ${telephones ? `<label class="case"><input id="dlg-notifier" type="checkbox" ${d.notifier ? "checked" : ""}><span>Envoyer aussi la réponse sur mon téléphone</span></label>` : ""}
+        ${telephones ? `<label class="case"><input id="dlg-notifier" type="checkbox" ${d.notifier ? "checked" : ""}><span>Envoyer aussi la réponse aux appareils configurés</span></label>` : ""}
         ${d.enCours ? `<p class="note"><ha-icon icon="mdi:timer-sand"></ha-icon><span>L'IA réfléchit… Cela prend quelques secondes.</span></p>` : ""}
         ${d.erreur ? `<p class="note alerte" role="alert"><ha-icon icon="mdi:alert-circle-outline"></ha-icon><span>Ça n'a pas marché : ${esc(d.erreur)}</span></p>` : ""}
         ${d.reponse ? `<div class="reponse-ia" aria-live="polite"><small>${d.questionPosee ? `« ${esc(d.questionPosee)} »` : "Le point sur la journée"}</small>${String(d.reponse).split(/\n+/).filter((l) => l.trim()).map((l) => `<p>${esc(l)}</p>`).join("")}${
-          d.envoi === "ok" ? `<small>Envoyée sur ton téléphone.</small>` : d.envoi === "echec" ? `<small>Elle n'a pu partir vers aucun téléphone.</small>` : ""}</div>` : ""}`;
+          d.envoi === "ok" ? `<small>Réponse envoyée aux appareils configurés.</small>` : d.envoi === "echec" ? `<small>La réponse n'a pu être envoyée à aucun appareil.</small>` : ""}</div>` : ""}`;
       return cadre({
         icone: "mdi:robot-outline", titre: "Demander conseil à l'IA", corps, annuler: "Fermer", occupe: d.enCours,
         bouton: d.enCours ? "Un instant…" : d.reponse ? "Demander à nouveau" : "Demander",
@@ -6256,7 +6666,7 @@ class GazonIntelligentPanel extends HTMLElement {
       const allume = this._valeurEntiteReelle(cle) === true;
       const textes = d.nom === "auto"
         ? { titre: `${allume ? "Couper" : "Allumer"} l'arrosage automatique`, icone: "mdi:autorenew",
-          corps: allume ? "Gazon Intelligent ne lancera plus d'arrosage tout seul. Il continuera à te dire quand arroser." : "Gazon Intelligent pourra de nouveau lancer l'arrosage tout seul, quand le gazon en a besoin." }
+          corps: allume ? "Gazon Intelligent ne lancera plus d'arrosage tout seul. Les recommandations continueront d'indiquer quand arroser." : "Gazon Intelligent pourra de nouveau lancer l'arrosage tout seul, quand le gazon en a besoin." }
         : { titre: `${allume ? "Ne plus attendre" : "Attendre"} la tondeuse`, icone: "mdi:robot-mower",
           corps: allume ? "L'arrosage ne regardera plus si la tondeuse est dehors." : "Les vannes resteront fermées tant que la tondeuse travaille ou rentre à sa base." };
       return cadre({ icone: textes.icone, titre: textes.titre, corps: `<p>${esc(textes.corps)}</p>`, bouton: allume ? "Couper" : "Allumer", genreBouton: allume ? "danger" : "" });
@@ -6304,7 +6714,7 @@ class GazonIntelligentPanel extends HTMLElement {
     } else if (d.nom === "arrose_main") {
       const mm = Number.parseFloat(val("dlg-mm"));
       if (!Number.isFinite(mm) || mm < 0 || mm > 30) {
-        this._afficherToast("Choisis une quantité entre 0 et 30 mm.", true);
+        this._afficherToast("Sélectionner une quantité entre 0 et 30 mm.", true);
         return;
       }
       appel = ["gazon_intelligent", "declare_watering", { entity_id: entites.objectif, objectif_mm: mm, ...(dateService() ? { date_action: dateService() } : {}) }];
@@ -6357,7 +6767,7 @@ class GazonIntelligentPanel extends HTMLElement {
     } else if (d.nom === "reserve") {
       const mm = Number.parseFloat(val("dlg-reserve"));
       if (!Number.isFinite(mm) || mm < 0 || mm > 100) {
-        this._afficherToast("Choisis une valeur entre 0 et 100 mm.", true);
+        this._afficherToast("Sélectionner une valeur entre 0 et 100 mm.", true);
         return;
       }
       appel = ["gazon_intelligent", "recalibrate_reserve", { entity_id: entites.reserve, reserve_mm: mm, figer_la_journee: f.querySelector("#dlg-figer")?.checked !== false }];
@@ -6369,10 +6779,10 @@ class GazonIntelligentPanel extends HTMLElement {
         return;
       }
       appel = ["gazon_intelligent", "register_product", { entity_id: entites.catalogue_produits, ...lu.donnees }];
-      message = d.id ? `Fiche de ${lu.donnees.nom} enregistrée.` : `${lu.donnees.nom} ajouté à tes produits.`;
+      message = d.id ? `Fiche de ${lu.donnees.nom} enregistrée.` : `${lu.donnees.nom} ajouté aux produits.`;
     } else if (d.nom === "retirer_produit") {
       appel = ["gazon_intelligent", "remove_product", { entity_id: entites.catalogue_produits, product_id: d.id }];
-      message = `${d.fiche.nom || d.id} retiré de tes produits.`;
+      message = `${d.fiche.nom || d.id} retiré des produits.`;
     } else if (d.nom === "auto" || d.nom === "coordination") {
       const cle = d.nom === "auto" ? "arrosage_automatique" : "coordination_tondeuse";
       const allume = this._valeurEntiteReelle(cle) === true;
@@ -6468,7 +6878,7 @@ class GazonIntelligentPanel extends HTMLElement {
           ${champ("fp-max", "Combien de fois par an, au plus ?", nombre("fp-max", f.max_applications_per_year, 0, 3650, 1))}
           ${champ("fp-reapp", "Combien de jours avant d'en remettre ?", nombre("fp-reapp", f.reapplication_after_days, 0, 3650, 1))}
           ${champ("fp-tonte", "Combien de jours sans tondre après ?", nombre("fp-tonte", f.delai_avant_tonte_jours, 0, 3650, 1))}
-          ${champ("fp-usage", "À quoi sert-il ?", `<select id="fp-usage">${options(USAGES_PRODUIT, f.usage_mode, "Je ne sais pas")}</select>`)}
+          ${champ("fp-usage", "À quoi sert-il ?", `<select id="fp-usage">${options(USAGES_PRODUIT, f.usage_mode, "Usage inconnu")}</select>`)}
           ${champ("fp-tmin", "Température la plus basse (°C)", nombre("fp-tmin", f.temperature_min, -30, 60, 0.5))}
           ${champ("fp-tmax", "Température la plus haute (°C)", nombre("fp-tmax", f.temperature_max, -30, 60, 0.5))}
         </div>
@@ -6484,7 +6894,7 @@ class GazonIntelligentPanel extends HTMLElement {
           ${champ("fp-blocage", "Pas d'arrosage pendant (h)", nombre("fp-blocage", f.application_irrigation_block_hours, 0, 72, 1))}
         </div>
         ${champ("fp-etiquette", "Ce que dit l'étiquette", `<textarea id="fp-etiquette" rows="2">${esc(f.application_label_notes || "")}</textarea>`)}
-        ${champ("fp-note", "Ta note", `<textarea id="fp-note" rows="3">${esc(f.note || "")}</textarea>`)}
+        ${champ("fp-note", "Note", `<textarea id="fp-note" rows="3">${esc(f.note || "")}</textarea>`)}
       </details>`;
   }
 
@@ -6494,7 +6904,7 @@ class GazonIntelligentPanel extends HTMLElement {
     const nom = val("fp-nom");
     if (!nom) return { erreur: "Donne un nom au produit." };
     const id = d.id || idProduit(nom);
-    if (!id) return { erreur: "Ce nom ne donne pas d'identifiant : ajoute une lettre ou un chiffre." };
+    if (!id) return { erreur: "Ce nom ne donne pas d'identifiant : ajouter une lettre ou un chiffre." };
     if (!d.id && this._ficheProduit(id)) return { erreur: `« ${nom} » existe déjà : modifie sa fiche plutôt.` };
     const nombres = [
       ["application_post_watering_mm", "fp-arroser-mm", 0, 10, "L'eau après : entre 0 et 10 mm."],
@@ -6620,17 +7030,25 @@ class GazonIntelligentPanel extends HTMLElement {
           const ouvertes = this._zones().filter((z) => this._zoneActive(z)).map((z) => z.switch);
           if (ouvertes.length) await this._service("switch", "turn_off", { entity_id: ouvertes }, "Vannes fermées.");
         }
-      } else if (nom === "zone-marche" || nom === "zone-5min") {
+      } else if (nom === "zone-marche") {
         if (pompe) await this._service("switch", "turn_on", { entity_id: pompe });
-        const ok = await this._service("switch", "turn_on", { entity_id: id }, nom === "zone-5min" ? "Vanne ouverte pour 5 minutes." : "Vanne ouverte.");
-        if (ok && nom === "zone-5min") {
-          this._arretsDifferes = this._arretsDifferes || [];
-          this._arretsDifferes.push(setTimeout(() => this._service("switch", "turn_off", { entity_id: id }, "5 minutes écoulées : vanne fermée."), 5 * 60000));
-        }
+        await this._service("switch", "turn_on", { entity_id: id }, "Vanne ouverte.");
+      } else if (nom === "zone-5min") {
+        await this._service("gazon_intelligent", "run_zone_for_duration", {
+          entity_id: entites.objectif,
+          zone_entity_id: id,
+          duration_minutes: 5,
+        }, "Vanne ouverte pour 5 minutes. Home Assistant la refermera automatiquement.");
       } else if (nom === "zone-arret") {
+        // Une zone temporisée appartient au moteur persistant : l'arrêter par son service
+        // annule aussi la reprise après redémarrage et coupe la pompe qu'il a démarrée.
+        await this._service("gazon_intelligent", "stop_irrigation", {
+          entity_id: entites.objectif,
+          raison: "Arrêt de la zone depuis la page Gazon.",
+        });
         await this._service("switch", "turn_off", { entity_id: id }, "Vanne fermée.");
       } else if (nom === "envoyer_etat") {
-        await this._service("gazon_intelligent", "send_notification", { entity_id: entites.assistant }, "État du gazon envoyé sur ton téléphone.");
+        await this._service("gazon_intelligent", "send_notification", { entity_id: entites.assistant }, "État du gazon envoyé aux appareils configurés.");
       } else if (nom === "pompe-marche" || nom === "pompe-arret") {
         await this._service("switch", nom === "pompe-marche" ? "turn_on" : "turn_off", { entity_id: pompe }, nom === "pompe-marche" ? "Pompe en marche." : "Pompe arrêtée.");
       }
@@ -6643,7 +7061,57 @@ class GazonIntelligentPanel extends HTMLElement {
     }
   }
 
-  // ── Onglet « Mon installation » ──
+  // ── Onglet « Entités » : toutes les liaisons externes au même endroit ──
+
+  _entitesHtml() {
+    const annulables = ["cibles", "ia"].filter((cle) => cle in this._brouillonAlertes).length
+      + (this._brouillonPompe !== undefined ? 1 : 0)
+      + (this._brouillonGarageTondeuse !== undefined ? 1 : 0);
+    const cases = [
+      [this._liaisonsMaterielHtml("arrosage"), "tout", "tout"],
+      [this._liaisonsMaterielHtml("tondeuse"), "tout", "tout"],
+      [this._meteoEntreesHtml(true), "tout", "tout"],
+      [this._pompeReglageHtml(), "gauche", "large"],
+      [this._garageTondeuseHtml(true), "droite", "etroit"],
+      [this._notificationsEntitesHtml(), "tout", "tout"],
+    ];
+    return `<div class="intro-onglet">
+        <p>${esc(ONGLET_ENTITES.phrase)} Changer une liaison ne renomme ni ne supprime l'entité Home Assistant : seule la source utilisée par ce gazon change.</p>
+        <button class="bouton-texte" data-action="annuler-entites" ${annulables ? "" : "disabled"}><ha-icon icon="mdi:undo"></ha-icon>Annuler les changements en attente</button>
+      </div>
+      <p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>Réglage sensible : les vannes et la tondeuse peuvent commander du matériel réel. L'intégration vérifie le type d'entité et refuse tout changement pendant un arrosage.</span></p>
+      <div class="programme-reglages entites-reglages">${cases.map(([html, largeur]) =>
+        `<div class="${largeur === "tout" ? "reglage-tout" : ""}">${html}</div>`).join("")}</div>`;
+  }
+
+  _liaisonsMaterielHtml(groupe) {
+    const lignes = (this._donnees?.liaisons_materiel || []).filter((l) => l.groupe === groupe);
+    if (!lignes.length) return "";
+    const titres = {
+      arrosage: ["Vannes d'arrosage", "Chaque zone doit pointer vers son propre interrupteur. Une zone sans débit reste inactive."],
+      tondeuse: ["Tondeuse et ses signaux", "La tondeuse principale est prioritaire. Les signaux facultatifs complètent ses attributs quand le constructeur les publie séparément."],
+    };
+    const [titre, phrase] = titres[groupe];
+    const corps = `<div class="lignes">${lignes.map((l) => {
+        const etat = l.entity_id ? this._hass.states[l.entity_id] : null;
+        const statut = !l.entity_id ? "non branchée" : !etat ? "introuvable" : valeurEtat(etat);
+        return `<div class="ligne compacte" data-cle="${esc(l.cle)}">
+          <div class="ligne-tete"><span class="ligne-icone"><ha-icon icon="${groupe === "arrosage" ? "mdi:valve" : "mdi:robot-mower-outline"}"></ha-icon></span>
+            <div class="ligne-textes"><h4>${esc(l.titre)}</h4><p>${esc(l.apporte)} ${l.entity_id ? `<code>${esc(l.entity_id)}</code>` : `Sans elle : ${esc(minuscule(l.sans_elle))}`}</p></div>
+            ${this._estAdmin() ? `<button class="petit-bouton" data-dialogue="entree" data-entree="${esc(l.cle)}"><ha-icon icon="${l.entity_id ? "mdi:swap-horizontal" : "mdi:power-plug-outline"}"></ha-icon>${l.entity_id ? "Changer" : "Brancher"}</button>` : ""}
+          </div><p class="etat-bascule">État : ${esc(statut)}</p>
+        </div>`;
+      }).join("")}</div>`;
+    return this._sectionReglageHtml({
+      titre,
+      phrase,
+      icone: groupe === "arrosage" ? "mdi:valve" : "mdi:robot-mower-outline",
+      corps,
+      attributs: `data-liaisons-materiel="${esc(groupe)}"`,
+    });
+  }
+
+  // ── Onglet « Installation » ──
 
   _installationHtml() {
     const entites = this._donnees.entites || {};
@@ -6653,12 +7121,14 @@ class GazonIntelligentPanel extends HTMLElement {
     for (const s of INSTALLATION) {
       const lignes = s.lignes.filter((l) => entites[l.cle] && this._entite(l.cle));
       if (!lignes.length) continue;
-      parGroupe.get(s.groupe).push([`<section class="section">
-        <div class="section-tete"><h3>${esc(s.titre)}</h3><p>${esc(s.phrase)}</p></div>
-        <div class="lignes">${lignes.map((l) => this._ligneEntiteHtml(l)).join("")}</div>
-      </section>`, ...s.place]);
+      parGroupe.get(s.groupe).push([this._sectionReglageHtml({
+        titre: s.titre,
+        phrase: s.phrase,
+        icone: lignes[0]?.icone || "mdi:tune-variant",
+        cles: lignes.map((l) => l.cle),
+        corps: `<div class="lignes">${lignes.map((l) => this._ligneEntiteHtml(l)).join("")}</div>`,
+      }), ...s.place]);
     }
-    parGroupe.get("arrosage").push([this._pompeReglageHtml(), "droite", "etroit"]);
     for (const c of (this._registre.choix || []).filter((c) => c.cle === "type_sol")) {
       parGroupe.get("arrosage").push([this._choixHtml(c), "droite", "etroit"]);
     }
@@ -6672,9 +7142,6 @@ class GazonIntelligentPanel extends HTMLElement {
       cles: ["tondeuse_pilotage_batterie_min", "tondeuse_pilotage_delai_commandes"],
     });
     parGroupe.get("tondeuse").push([reglagesPilotage, "milieu", "large"], [this._garageTondeuseHtml(), "droite", "etroit"]);
-    // Les branchements de capteurs sont des reglages d'installation, pas des observations meteo.
-    const entrees = this._meteoEntreesHtml();
-    if (entrees) parGroupe.get("capteurs").push([entrees, "tout", "tout"]);
     parGroupe.get("notifications").push([this._alertesReglagesHtml(), "tout", "tout"]);
 
     const cases = [];
@@ -6684,13 +7151,13 @@ class GazonIntelligentPanel extends HTMLElement {
       cases.push([`<div class="groupe-installation"><ha-icon icon="${g.icone}"></ha-icon><h2>${esc(g.titre)}</h2></div>`, "tout", "tout"]);
       cases.push(...contenu);
     }
-    const mosaique = this._mosaique(cases);
+    const mosaique = `<div class="programme-reglages installation-reglages">${cases.map(([html, largeur]) =>
+      `<div class="${largeur === "tout" ? "reglage-tout" : ""}">${html}</div>`).join("")}</div>`;
     const annulables = Object.keys(this._brouillonEntites).length + Object.keys(this._brouillonChoix).length
-      + Object.keys(this._brouillonAlertes).length + (this._brouillonPompe !== undefined ? 1 : 0)
-      + (this._brouillonGarageTondeuse !== undefined ? 1 : 0);
+      + Object.keys(this._brouillonAlertes).filter((cle) => !["cibles", "ia"].includes(cle)).length;
     return `<div class="intro-onglet">
-        <p>${esc(ONGLET_INSTALLATION.phrase)} Ils existent aussi ailleurs dans Home Assistant (entités et options de l'intégration) : ici, ils sont plus faciles à trouver.</p>
-        <button class="bouton-texte" data-action="annuler-installation" ${annulables ? "" : "disabled"}><ha-icon icon="mdi:undo"></ha-icon>Annuler mes changements ici</button>
+        <p>${esc(ONGLET_INSTALLATION.phrase)} Les branchements vers Home Assistant sont regroupés dans l'onglet « Entités ».</p>
+        <button class="bouton-texte" data-action="annuler-installation" ${annulables ? "" : "disabled"}><ha-icon icon="mdi:undo"></ha-icon>Annuler les changements</button>
       </div>
       ${mosaique || `<div class="etat-page"><p>Aucune entité trouvée pour cette installation.</p></div>`}`;
   }
@@ -6719,9 +7186,7 @@ class GazonIntelligentPanel extends HTMLElement {
     const texteEtat = !choisie ? "Aucune : la page n'en montre pas."
       : !etat ? "Introuvable dans Home Assistant."
       : `En ce moment : ${etat.state === "on" ? "en marche" : etat.state === "off" ? "arrêtée" : valeurEtat(etat)}.`;
-    return `<section class="section" data-pompe="1">
-      <div class="section-tete"><h3>Ma pompe</h3><p>L'intégration ne la pilote pas : la page la montre et la commande avec les vannes.</p></div>
-      <div class="lignes"><div class="ligne ${change ? "change" : ""}" data-cle="pompe">
+    const corps = `<div class="lignes"><div class="ligne ${change ? "change" : ""}" data-cle="pompe">
         ${change ? `<span class="a-enregistrer">à enregistrer</span>` : ""}
         <div class="ligne-tete">
           <span class="ligne-icone"><ha-icon icon="mdi:pump"></ha-icon></span>
@@ -6733,8 +7198,15 @@ class GazonIntelligentPanel extends HTMLElement {
           ${proposees.length ? `<optgroup label="Leur nom parle d'une pompe">${proposees.map(option).join("")}</optgroup>` : ""}
           ${autres.length ? `<optgroup label="Les autres interrupteurs">${autres.map(option).join("")}</optgroup>` : ""}
         </select></div>
-      </div></div>
-    </section>`;
+      </div></div>`;
+    return this._sectionReglageHtml({
+      titre: "Pompe",
+      phrase: "L'intégration ne la pilote pas : la page la montre et la commande avec les vannes.",
+      icone: "mdi:pump",
+      corps,
+      attributs: 'data-pompe="1"',
+      ouverte: change,
+    });
   }
 
   _changerGarageTondeuse(valeur) {
@@ -6742,7 +7214,7 @@ class GazonIntelligentPanel extends HTMLElement {
     this._brouillonGarageTondeuse = valeur === enregistree ? undefined : valeur;
   }
 
-  _garageTondeuseHtml() {
+  _garageTondeuseHtml(choixSeulement = false) {
     const c = this._donnees?.garage_tondeuse;
     if (!c) return "";
     const lecture = !this._estAdmin();
@@ -6752,9 +7224,7 @@ class GazonIntelligentPanel extends HTMLElement {
     const option = (v) => `<option value="${esc(v.entity_id)}" ${v.entity_id === choisie ? "selected" : ""}>${esc(v.nom)}</option>`;
     const perdue = choisie && !volets.some((v) => v.entity_id === choisie)
       ? `<option value="${esc(choisie)}" selected>${esc(choisie)} (introuvable)</option>` : "";
-    return `<section class="section" data-garage-tondeuse="1">
-      <div class="section-tete"><h3>Garage de la tondeuse</h3><p>Facultatif. Sans volet choisi, cette protection reste entièrement inactive.</p></div>
-      <div class="lignes"><div class="ligne ${change ? "change" : ""}" data-cle="garage-tondeuse">
+    const choix = `<div class="lignes"><div class="ligne ${change ? "change" : ""}" data-cle="garage-tondeuse">
         ${change ? `<span class="a-enregistrer">à enregistrer</span>` : ""}
         <div class="ligne-tete">
           <span class="ligne-icone"><ha-icon icon="mdi:garage"></ha-icon></span>
@@ -6766,17 +7236,56 @@ class GazonIntelligentPanel extends HTMLElement {
         </select></div>
         ${choisie ? this._etatGarageTondeuseHtml(choisie) : ""}
         <p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>Réglage sensible : en cas d'état inconnu, la tondeuse ne démarre pas et le volet ne se ferme pas.</span></p>
-      </div>
-      ${choisie ? `<p class="note"><ha-icon icon="mdi:cog-outline"></ha-icon><span>Automatismes du volet : choisis séparément l'ouverture avant départ, l'ouverture pour retour et la fermeture après rentrée.</span></p>
-      <div class="lignes garage-reglages">${[
-        "tondeuse_garage_ouvrir_avant_depart",
-        "tondeuse_garage_ouvrir_pour_retour",
-        "tondeuse_garage_fermer_apres_retour",
-        "tondeuse_garage_avance_ouverture",
-        "tondeuse_garage_delai_fermeture",
-      ].map((cle) => this._ligneHtml(this._reglage(cle))).join("")}</div>` : `<p class="note"><ha-icon icon="mdi:information-outline"></ha-icon><span>Choisis un volet pour afficher ses automatismes et ses délais.</span></p>`}
-      </div>
-    </section>`;
+      </div></div>`;
+    if (choixSeulement) return this._sectionReglageHtml({
+      titre: "Garage de la tondeuse",
+      phrase: "Facultatif. Sans volet choisi, cette protection reste entièrement inactive.",
+      icone: "mdi:garage-variant",
+      corps: choix,
+      attributs: 'data-garage-tondeuse="1"',
+      ouverte: change,
+    });
+    const scenario = (titre, icone, resume, cles) => {
+      const ouvert = cles.some((cle) => Object.hasOwn(this._brouillon, cle));
+      return `<details class="garage-groupe" data-garage-groupe="${esc(titre)}" ${!this._narrow || ouvert ? "open" : ""}>
+        <summary>
+          <span class="garage-scenario-icone"><ha-icon icon="${icone}"></ha-icon></span>
+          <span class="garage-scenario-texte"><b>${esc(titre)}</b><small>${esc(resume)}</small></span>
+          <ha-icon class="garage-chevron" icon="mdi:chevron-down"></ha-icon>
+        </summary>
+        <div class="lignes">${cles.map((cle) => this._ligneHtml(this._reglage(cle))).join("")}</div>
+      </details>`;
+    };
+    const ouvertureAuto = this._valeur("tondeuse_garage_ouvrir_avant_depart") === true;
+    const retourAuto = this._valeur("tondeuse_garage_ouvrir_pour_retour") === true;
+    const fermetureAuto = this._valeur("tondeuse_garage_fermer_apres_retour") === true;
+    const avance = nombreFr(this._valeur("tondeuse_garage_avance_ouverture"), 3);
+    const ouvertureMin = nombreFr(this._valeur("tondeuse_garage_ouverture_min"), 3);
+    const fermeture = nombreFr(this._valeur("tondeuse_garage_delai_fermeture"), 3);
+    const phrase = choisie
+      ? `Le passage est protégé par ${volets.find((v) => v.entity_id === choisie)?.nom || choisie}. Chaque étape reste indépendante.`
+      : "Aucun volet n'est branché.";
+    const corps = `${choisie ? this._etatGarageTondeuseHtml(choisie) : ""}
+      ${choisie ? `<div class="garage-reglages">
+        ${scenario("Avant le départ", "mdi:garage-open-variant", `${ouvertureAuto ? "Ouverture automatique" : "Ouverture manuelle"} · passage à ${ouvertureMin} % · attente ${avance} min`, [
+          "tondeuse_garage_ouvrir_avant_depart",
+          "tondeuse_garage_ouverture_min",
+          "tondeuse_garage_avance_ouverture",
+        ])}
+        ${scenario("Au retour", "mdi:home-import-outline", `${retourAuto ? "Ouverture automatique" : "Ouverture manuelle"} · ${fermetureAuto ? `fermeture après ${fermeture} min` : "reste ouvert"}`, [
+          "tondeuse_garage_ouvrir_pour_retour",
+          "tondeuse_garage_fermer_apres_retour",
+          "tondeuse_garage_delai_fermeture",
+        ])}
+      </div>` : `<p class="note"><ha-icon icon="mdi:information-outline"></ha-icon><span>Sélectionner un volet dans Réglages → Entités pour afficher ses automatismes et ses délais.</span></p>`}`;
+    return this._sectionReglageHtml({
+      titre: "Garage de la tondeuse",
+      phrase,
+      icone: "mdi:garage-variant",
+      corps,
+      attributs: 'data-garage-tondeuse="1"',
+      ouverte: change,
+    });
   }
 
   _etatGarageTondeuseHtml(entityId) {
@@ -6795,9 +7304,12 @@ class GazonIntelligentPanel extends HTMLElement {
     };
     const [ton, icone, libelle] = etats[brut] || ["retient", "mdi:garage-alert-variant", valeurEtat(etat)];
     const nom = etat.attributes?.friendly_name || entityId;
+    const position = Number(etat.attributes?.current_position);
+    const libelleComplet = Number.isFinite(position) && ["open", "opening", "closing"].includes(brut)
+      ? `${libelle} · ${nombreFr(position, 3)} %` : libelle;
     return `<div class="etat-garage">
       <span>${esc(nom)}</span>
-      <span class="statut ${ton}"><ha-icon icon="${icone}"></ha-icon>${esc(libelle)}</span>
+      <span class="statut ${ton}"><ha-icon icon="${icone}"></ha-icon>${esc(libelleComplet)}</span>
     </div>`;
   }
 
@@ -6850,12 +7362,6 @@ class GazonIntelligentPanel extends HTMLElement {
     const niveauMinimal = this._valeurAlerte("niveau_minimal");
     const heuresCalmes = this._valeurAlerte("heures_calmes");
     const categories = this._valeurAlerte("categories");
-    const cibles = new Set(this._valeurAlerte("cibles"));
-    const ia = this._valeurAlerte("ia");
-    const telephones = [...(Array.isArray(n.telephones) ? n.telephones : [])];
-    // Un téléphone choisi puis retiré de Home Assistant reste visible : on peut le décocher.
-    for (const c of n.cibles || []) if (!telephones.some((t) => t.entity_id === c.entity_id)) telephones.push(c);
-    const ias = [{ entity_id: "", nom: "Automatique" }, ...(Array.isArray(n.ias) ? n.ias : [])];
     const puce = (action, valeur, nom, actif) => `<button class="puce-bascule ${actif ? "active" : ""}" data-action="${action}" data-valeur="${esc(valeur)}" aria-pressed="${actif}" ${lecture ? "disabled" : ""}>${actif ? `<ha-icon icon="mdi:check"></ha-icon>` : ""}${esc(nom)}</button>`;
     const choixCategories = [
       ["arrosage_graines", "mdi:sprinkler-variant", "Arrosage et graines", "Cycle retardé, suspendu ou rattrapé."],
@@ -6873,9 +7379,7 @@ class GazonIntelligentPanel extends HTMLElement {
         <button class="bascule" role="switch" data-action="alerte-categorie" data-valeur="${cle}" aria-checked="${categories[cle] !== false}" aria-label="Recevoir : ${titre}" ${lecture ? "disabled" : ""}></button>
       </div>
     </div>`).join("");
-    return `<section class="section section-rangee" data-alertes="1">
-      <div class="section-tete"><h3>Alertes et conseils</h3><p>Choisis ce que tu veux recevoir, sur quels téléphones et quelle IA répond à tes questions.</p></div>
-      <div class="lignes">
+    const corps = `<div class="lignes">
         <div class="ligne ${change("alertes") ? "change" : ""}" data-cle="alertes-actives">
           ${marque("alertes")}
           <div class="ligne-tete">
@@ -6900,7 +7404,7 @@ class GazonIntelligentPanel extends HTMLElement {
           ${marque("niveau_minimal")}
           <div class="ligne-tete">
             <span class="ligne-icone"><ha-icon icon="mdi:filter-variant"></ha-icon></span>
-            <div class="ligne-textes"><h4>Quel niveau doit sonner sur le téléphone ?</h4><p>Les messages filtrés restent visibles dans les notifications de Home Assistant.</p></div>
+            <div class="ligne-textes"><h4>Quel niveau doit déclencher une notification ?</h4><p>Les messages filtrés restent visibles dans les notifications de Home Assistant.</p></div>
           </div>
           <div class="puces-bascule" role="radiogroup" aria-label="Niveau minimal des notifications">
             ${puce("alerte-niveau", "information", "Tout recevoir", niveauMinimal === "information")}
@@ -6912,7 +7416,7 @@ class GazonIntelligentPanel extends HTMLElement {
           ${marque("heures_calmes")}
           <div class="ligne-tete">
             <span class="ligne-icone"><ha-icon icon="mdi:weather-night"></ha-icon></span>
-            <div class="ligne-textes"><h4>Heures calmes</h4><p>Les alertes non critiques attendent dans Home Assistant sans faire sonner le téléphone. Une vanne bloquée reste toujours urgente.</p></div>
+            <div class="ligne-textes"><h4>Heures calmes</h4><p>Les alertes non critiques attendent dans Home Assistant sans alerter les appareils. Une vanne bloquée reste toujours urgente.</p></div>
             <button class="bascule" role="switch" data-action="alerte-heures-calmes" aria-checked="${heuresCalmes.active}" aria-label="Activer les heures calmes" ${lecture ? "disabled" : ""}></button>
           </div>
           <div class="heures-calmes-champs">
@@ -6925,32 +7429,59 @@ class GazonIntelligentPanel extends HTMLElement {
           ${marque("categories")}
           <div class="ligne-tete">
             <span class="ligne-icone"><ha-icon icon="mdi:bell-cog-outline"></ha-icon></span>
-            <div class="ligne-textes"><h4>Que veux-tu recevoir ?</h4><p>Chaque catégorie est indépendante. Une même panne n'est envoyée qu'une fois.</p></div>
+            <div class="ligne-textes"><h4>Quelles notifications recevoir ?</h4><p>Chaque catégorie est indépendante. Une même panne n'est envoyée qu'une fois.</p></div>
           </div>
           <div class="lignes alertes-categories">${choixHtml}</div>
         </div>
+      </div>`;
+    return this._sectionReglageHtml({
+      titre: "Alertes et conseils",
+      phrase: "Configurer les messages à recevoir. Les appareils destinataires et l'IA se choisissent dans Entités.",
+      icone: "mdi:bell-cog-outline",
+      cles: ["alertes", "source", "niveau_minimal", "heures_calmes", "categories"],
+      corps,
+      classes: "section-rangee",
+      attributs: 'data-alertes="1"',
+    });
+  }
+
+  _notificationsEntitesHtml() {
+    const n = this._donnees?.notifications;
+    if (!n) return "";
+    const lecture = !this._estAdmin();
+    const change = (cle) => cle in this._brouillonAlertes;
+    const marque = (cle) => change(cle) ? `<span class="a-enregistrer">à enregistrer</span>` : "";
+    const cibles = new Set(this._valeurAlerte("cibles"));
+    const ia = this._valeurAlerte("ia");
+    const telephones = [...(Array.isArray(n.telephones) ? n.telephones : [])];
+    for (const cible of n.cibles || []) {
+      if (!telephones.some((t) => t.entity_id === cible.entity_id)) telephones.push(cible);
+    }
+    const ias = [{ entity_id: "", nom: "Automatique" }, ...(Array.isArray(n.ias) ? n.ias : [])];
+    const puce = (action, valeur, nom, actif) => `<button class="puce-bascule ${actif ? "active" : ""}" data-action="${action}" data-valeur="${esc(valeur)}" aria-pressed="${actif}" ${lecture ? "disabled" : ""}>${actif ? `<ha-icon icon="mdi:check"></ha-icon>` : ""}${esc(nom)}</button>`;
+    const corps = `<div class="lignes">
         <div class="ligne ${change("cibles") ? "change" : ""}" data-cle="alertes-telephones">
-          ${marque("cibles")}
-          <div class="ligne-tete">
-            <span class="ligne-icone"><ha-icon icon="mdi:cellphone-message"></ha-icon></span>
-            <div class="ligne-textes"><h4>Sur quels téléphones ?</h4><p>Les alertes et « Envoyer l'état » y arrivent. Aucun : seulement dans Home Assistant.</p></div>
-          </div>
-          ${telephones.length
-            ? `<div class="puces-bascule">${telephones.map((t) => puce("alerte-telephone", t.entity_id, t.nom, cibles.has(t.entity_id))).join("")}</div>`
-            : `<p class="note"><ha-icon icon="mdi:information-outline"></ha-icon><span>Aucun appareil à prévenir dans Home Assistant : installe l'application Home Assistant sur ton téléphone.</span></p>`}
+          ${marque("cibles")}<div class="ligne-tete"><span class="ligne-icone"><ha-icon icon="mdi:cellphone-message"></ha-icon></span>
+            <div class="ligne-textes"><h4>Appareils à prévenir</h4><p>Entités <code>notify.*</code> qui reçoivent les alertes et « Envoyer l'état ». Aucun : seulement dans Home Assistant.</p></div></div>
+          ${telephones.length ? `<div class="puces-bascule">${telephones.map((t) => puce("alerte-telephone", t.entity_id, t.nom, cibles.has(t.entity_id))).join("")}</div>`
+            : `<p class="note"><ha-icon icon="mdi:information-outline"></ha-icon><span>Aucune entité de notification disponible. Installer l'application Home Assistant sur un téléphone pour en créer une.</span></p>`}
         </div>
         <div class="ligne ${change("ia") ? "change" : ""}" data-cle="alertes-ia">
-          ${marque("ia")}
-          <div class="ligne-tete">
-            <span class="ligne-icone"><ha-icon icon="mdi:robot-outline"></ha-icon></span>
-            <div class="ligne-textes"><h4>Conseiller Gazon</h4><p>L'IA qui personnalise les notifications quand tu le choisis et répond à tes questions. Elle ne commande jamais les machines.</p></div>
-          </div>
-          ${n.ia_disponible || ias.length > 1
-            ? `<div class="puces-bascule" role="radiogroup" aria-label="Quelle IA pour les conseils ?">${ias.map((x) => puce("alerte-ia", x.entity_id, x.nom, ia === x.entity_id)).join("")}</div>`
-            : `<p class="note"><ha-icon icon="mdi:information-outline"></ha-icon><span>Aucune IA dans Home Assistant : ajoute une intégration qui en fournit une (OpenAI, Google Gemini, Ollama…).</span></p>`}
+          ${marque("ia")}<div class="ligne-tete"><span class="ligne-icone"><ha-icon icon="mdi:robot-outline"></ha-icon></span>
+            <div class="ligne-textes"><h4>IA du Conseiller Gazon</h4><p>Entité <code>ai_task.*</code> utilisée pour personnaliser les messages et répondre aux questions. Elle ne commande jamais les machines.</p></div></div>
+          ${n.ia_disponible || ias.length > 1 ? `<div class="puces-bascule" role="radiogroup" aria-label="Quelle IA pour les conseils ?">${ias.map((x) => puce("alerte-ia", x.entity_id, x.nom, ia === x.entity_id)).join("")}</div>`
+            : `<p class="note"><ha-icon icon="mdi:information-outline"></ha-icon><span>Aucune entité d'IA dans Home Assistant.</span></p>`}
         </div>
-      </div>
-    </section>`;
+      </div>`;
+    return this._sectionReglageHtml({
+      titre: "Notifications et intelligence artificielle",
+      phrase: "Les entités qui reçoivent ou rédigent les messages. Le contenu et les catégories restent dans Installation.",
+      icone: "mdi:bell-outline",
+      cles: ["cibles", "ia"],
+      corps,
+      classes: "section-rangee",
+      attributs: 'data-entites-notifications="1"',
+    });
   }
 
   // ── Les choix (type de sol) ──
@@ -6986,13 +7517,15 @@ class GazonIntelligentPanel extends HTMLElement {
         <span class="choix-sol-chiffres">garde ${esc(mmFr(o.reserve_mm))} pour le gazon · ${esc(mmFr(o.reserve_max_mm))} au plus</span>
       </button>`;
     }).join("");
-    return `<section class="section ${enAttente ? "change" : ""}" data-cle="${esc(c.cle)}" data-choix-carte="1">
-      <div class="section-tete"><h3>La terre de ton jardin</h3><p>${esc(c.titre)} ${esc(c.aide)}</p></div>
-      <div class="choix-sols" role="radiogroup" aria-label="${esc(c.titre)}">${options}</div>
+    const corps = `<div class="choix-sols" role="radiogroup" aria-label="${esc(c.titre)}">${options}</div>
       <p class="note choix-sol-note"><ha-icon icon="mdi:information-outline"></ha-icon><span>${enAttente
         ? "Pas encore enregistré. Une fois enregistré, le calcul de la réserve suit la nouvelle terre dès son prochain passage."
-        : "Un doute ? Prends une poignée de terre humide : elle file entre les doigts (sableuse), reste douce (limoneuse) ou colle (argileuse)."}</span></p>
-    </section>`;
+        : "En cas de doute, prendre une poignée de terre humide : elle file entre les doigts (sableuse), reste douce (limoneuse) ou colle (argileuse)."}</span></p>`;
+    return this._sectionReglageHtml({
+      titre: "La terre du jardin", phrase: `${c.titre} ${c.aide}`, icone: "mdi:terrain",
+      cles: [c.cle], corps, classes: enAttente ? "change" : "",
+      attributs: `data-cle="${esc(c.cle)}" data-choix-carte="1"`,
+    });
   }
 
   _creneauxDepartTondeuseHtml(c) {
@@ -7013,11 +7546,13 @@ class GazonIntelligentPanel extends HTMLElement {
         <span class="choix-sol-texte">${esc(o.aide)}</span>
       </button>`;
     }).join("");
-    return `<section class="section ${enAttente ? "change" : ""}" data-cle="${esc(c.cle)}" data-choix-carte="1">
-      <div class="section-tete"><h3>Créneau des départs automatiques</h3><p>${esc(c.aide)}</p></div>
-      <div class="choix-sols" role="radiogroup" aria-label="${esc(c.titre)}">${options}</div>
-      <p class="note"><ha-icon icon="mdi:shield-check-outline"></ha-icon><span>Un créneau déconseillé reste visible dans les conseils, mais ne déclenche un départ que si tu choisis explicitement « Tout créneau non bloqué ».</span></p>
-    </section>`;
+    const corps = `<div class="choix-sols" role="radiogroup" aria-label="${esc(c.titre)}">${options}</div>
+      <p class="note"><ha-icon icon="mdi:shield-check-outline"></ha-icon><span>Un créneau déconseillé reste visible dans les conseils, mais ne déclenche un départ que lorsque « Tout créneau non bloqué » est sélectionné explicitement.</span></p>`;
+    return this._sectionReglageHtml({
+      titre: "Créneau des départs automatiques", phrase: c.aide, icone: "mdi:clock-outline",
+      cles: [c.cle], corps, classes: enAttente ? "change" : "",
+      attributs: `data-cle="${esc(c.cle)}" data-choix-carte="1"`,
+    });
   }
 
   _pilotageTondeuseHtml(c) {
@@ -7034,11 +7569,14 @@ class GazonIntelligentPanel extends HTMLElement {
         <span class="choix-sol-texte">${esc(o.aide)}</span>
       </button>`;
     }).join("");
-    return `<section class="section ${enAttente ? "change" : ""}" data-cle="${esc(c.cle)}" data-choix-carte="1">
-      <div class="section-tete"><h3>Pilotage automatique de la tondeuse</h3><p>${esc(c.aide)}</p></div>
-      <div class="choix-sols" role="radiogroup" aria-label="${esc(c.titre)}">${options}</div>
-      <p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>Actif doit rester éteint tant qu'un autre automatisme, notamment Node-RED, peut encore commander la tondeuse.</span></p>
-    </section>`;
+    const corps = `<div class="choix-sols" role="radiogroup" aria-label="${esc(c.titre)}">${options}</div>
+      <p class="note"><ha-icon icon="mdi:sync"></ha-icon><span>Après un départ, la tondeuse gère seule ses retours batterie et ses redéparts. Si Gazon Intelligent la rappelle pour une condition bloquante, il envoie une seule reprise lorsque toutes les sécurités sont de nouveau réunies.</span></p>
+      <p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>Actif doit rester éteint tant qu'un autre automatisme, notamment Node-RED, peut encore commander la tondeuse.</span></p>`;
+    return this._sectionReglageHtml({
+      titre: "Pilotage automatique de la tondeuse", phrase: c.aide, icone: "mdi:robot-mower",
+      cles: [c.cle], corps, classes: enAttente ? "change" : "",
+      attributs: `data-cle="${esc(c.cle)}" data-choix-carte="1"`,
+    });
   }
 
   _ligneEntiteHtml(ligne) {
@@ -7124,8 +7662,8 @@ class GazonIntelligentPanel extends HTMLElement {
     const { erreurs } = valider(this._registre, this._toutesLesValeurs());
     const nErreurs = Object.keys(erreurs).length + (this._erreurEntite("hauteur_min_tondeuse_cm") ? 1 : 0);
     const resume = nErreurs
-      ? `${nErreurs} réglage${nErreurs > 1 ? "s" : ""} à corriger<small>Regarde le message en rouge.</small>`
-      : `${n} changement${n > 1 ? "s" : ""} à enregistrer<small>Rien n'est appliqué tant que tu n'as pas enregistré.</small>`;
+      ? `${nErreurs} réglage${nErreurs > 1 ? "s" : ""} à corriger<small>Consulter le message en rouge.</small>`
+      : `${n} changement${n > 1 ? "s" : ""} à enregistrer<small>Rien n'est appliqué avant l'enregistrement.</small>`;
     this._barre.innerHTML = `
       <div class="resume">${this._enregistrement ? "Enregistrement…<small>Un instant.</small>" : resume}</div>
       <div class="actions">
@@ -7389,7 +7927,7 @@ class GazonIntelligentPanel extends HTMLElement {
     if (cible.matches?.('select[data-role="instance"]')) {
       if (this._nombreChangements()) {
         cible.value = this._donnees.entry_id;
-        this._afficherToast("Enregistre ou annule d'abord tes changements.", true);
+        this._afficherToast("Enregistrer ou annuler les changements en cours avant de continuer.", true);
         return;
       }
       this._charger(cible.value);
@@ -7530,11 +8068,13 @@ class GazonIntelligentPanel extends HTMLElement {
         this._pasMois(action, cle);
         return;
       case "tout-revenir":
+        const groupesARestaurer = String(bouton.dataset.groupes || bouton.dataset.groupe || "")
+          .split(",").filter(Boolean);
         for (const r of this._registre.reglages) {
-          if (r.groupe === bouton.dataset.groupe) this._changer(r.cle, copie(r.defaut));
+          if (groupesARestaurer.includes(r.groupe)) this._changer(r.cle, copie(r.defaut));
         }
         this._rendre();
-        this._afficherToast("Valeurs conseillées remises. Appuie sur « Enregistrer » pour les garder.");
+        this._afficherToast("Valeurs conseillées restaurées. Utiliser « Enregistrer » pour les conserver.");
         return;
       case "profil-gazon": {
         const profil = PROFILS_GAZON.find((p) => p.cle === bouton.dataset.profil);
@@ -7546,7 +8086,7 @@ class GazonIntelligentPanel extends HTMLElement {
           if ((this._registre.choix || []).some((c) => c.cle === cleProfil)) this._changerChoix(cleProfil, valeur);
         }
         this._rendre();
-        this._afficherToast(`Profil « ${profil.titre} » préparé. Appuie sur « Enregistrer » pour l'appliquer.`);
+        this._afficherToast(`Profil « ${profil.titre} » préparé. Utiliser « Enregistrer » pour l'appliquer.`);
         return;
       }
       case "profil-pluie":
@@ -7560,7 +8100,7 @@ class GazonIntelligentPanel extends HTMLElement {
           if (r) this._changer(cleMode, copie(r.defaut));
         }
         this._rendre();
-        this._afficherToast("Valeurs conseillées remises pour ce mode. Appuie sur « Enregistrer » pour les garder.");
+        this._afficherToast("Valeurs conseillées restaurées pour ce mode. Utiliser « Enregistrer » pour les conserver.");
         return;
       }
       case "basculer":
@@ -7621,12 +8161,19 @@ class GazonIntelligentPanel extends HTMLElement {
         this._changerAlerte("ia", bouton.dataset.valeur || "");
         this._rendre();
         return;
+      case "annuler-entites":
+        delete this._brouillonAlertes.cibles;
+        delete this._brouillonAlertes.ia;
+        this._brouillonPompe = undefined;
+        this._brouillonGarageTondeuse = undefined;
+        this._rendre();
+        return;
       case "annuler-installation":
         this._brouillonEntites = {};
         this._brouillonChoix = {};
-        this._brouillonAlertes = {};
-        this._brouillonPompe = undefined;
-        this._brouillonGarageTondeuse = undefined;
+        for (const cleAlerte of Object.keys(this._brouillonAlertes)) {
+          if (!["cibles", "ia"].includes(cleAlerte)) delete this._brouillonAlertes[cleAlerte];
+        }
         this._rendre();
         return;
       case "annuler":

@@ -138,6 +138,9 @@ class ReglagesEtape7Tests(unittest.TestCase):
         self.assertIn("Gazon de jeu", html)
         self.assertIn("Gazon rustique, économe en eau", html)
         self.assertIn('data-action="profil-gazon"', html)
+        self.assertIn('class="profils-selecteur"', html)
+        self.assertIn('class="profil-option actif"', html)
+        self.assertNotIn('class="ligne compacte"', html)
         self.assertIn("Il ne modifie jamais les protections des vannes", html)
         for cles in cles_par_profil.values():
             self.assertIn("tonte_hauteur_par_mois", cles)

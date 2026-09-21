@@ -72,9 +72,14 @@ def estimate_rosee(
     weather_profile: dict[str, Any],
     temperature: float | None,
     humidite: float | None,
+    point_de_rosee: float | None = None,
 ) -> float | None:
-    """Estime la presence de rosee/humidite foliaire depuis la meteo disponible."""
-    dew_point = weather_profile.get("weather_dew_point")
+    """Estime la presence de rosee/humidite foliaire depuis la meteo disponible.
+
+    `point_de_rosee` : le capteur dedie (CONF_CAPTEUR_POINT_DE_ROSEE), prioritaire sur le point
+    de rosee de l'entite meteo — plus fidele au jardin qu'une prevision generique.
+    """
+    dew_point = point_de_rosee if point_de_rosee is not None else weather_profile.get("weather_dew_point")
     if dew_point is not None and temperature is not None:
         try:
             if float(temperature) - float(dew_point) <= 2.0:

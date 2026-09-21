@@ -3835,6 +3835,62 @@ class AmortissementDuRisqueTests(unittest.TestCase):
                 self.assertEqual(guidance_mod.palier_et0_stress(valeur, None), attendu)
                 self.assertEqual(guidance_mod.palier_et0_stress(valeur, "deux"), attendu)
 
+    def test_une_rafale_isolee_ne_fait_plus_monter_le_palier(self) -> None:
+        debut = datetime(2026, 9, 20, 16, 44, tzinfo=timezone.utc)
+        palier, memoire = guidance_mod.stabiliser_montee_palier_et0(
+            4.2, 0, None, observed_at=debut
+        )
+        self.assertEqual(palier, 0)
+        self.assertEqual(memoire["palier"], 2)
+
+        palier, memoire = guidance_mod.stabiliser_montee_palier_et0(
+            2.8, palier, memoire, observed_at=debut + timedelta(seconds=30)
+        )
+        self.assertEqual(palier, 0)
+        self.assertIsNone(memoire, "la rafale passée doit annuler la montée candidate")
+
+    def test_une_et0_haute_tenue_deux_minutes_finit_par_monter(self) -> None:
+        debut = datetime(2026, 9, 20, 16, 44, tzinfo=timezone.utc)
+        palier, memoire = guidance_mod.stabiliser_montee_palier_et0(
+            4.2, 0, None, observed_at=debut
+        )
+        palier, memoire = guidance_mod.stabiliser_montee_palier_et0(
+            4.2, palier, memoire, observed_at=debut + timedelta(seconds=119)
+        )
+        self.assertEqual(palier, 0)
+        self.assertIsNotNone(memoire)
+
+        palier, memoire = guidance_mod.stabiliser_montee_palier_et0(
+            4.2, palier, memoire, observed_at=debut + timedelta(seconds=120)
+        )
+        self.assertEqual(palier, 2)
+        self.assertIsNone(memoire)
+
+    def test_les_alertes_critiques_hors_et0_restent_immediates(self) -> None:
+        palier, _ = guidance_mod.stabiliser_montee_palier_et0(
+            4.2,
+            0,
+            None,
+            observed_at=datetime(2026, 9, 20, 16, 44, tzinfo=timezone.utc),
+        )
+        niveau, raisons = guidance_mod._evaluer_risque_gazon(
+            water_balance={},
+            bilan_hydrique_mm=0.0,
+            pression_hydrique=0.0,
+            utiliser_reserve=False,
+            vent=20.0,
+            heat_stress_level=guidance_mod._heat_stress_level(
+                temperature=24.0,
+                etp=4.2,
+                humidite=65.0,
+                weather_profile={},
+                deficit_mm_brut=0.0,
+                points_etp=palier,
+            ),
+        )
+        self.assertEqual(niveau, "eleve")
+        self.assertTrue(any("vent soutenu" in raison for raison in raisons))
+
     def test_la_serie_REELLE_du_31_08_cesse_de_clignoter(self) -> None:
         """Le banc part de la série mesurée sur l'installation, pas d'un cas inventé.
 
@@ -4082,6 +4138,32 @@ class AmortissementDuRisqueTests(unittest.TestCase):
         self.assertIn("stress_palier_et0", snapshot,
                       "la clé n'atteint pas le snapshot — recopie ou liste blanche ?")
         self.assertIsInstance(snapshot["stress_palier_et0"], int)
+
+    def test_la_temporisation_de_montee_traverse_le_pipeline(self) -> None:
+        debut = datetime(2026, 9, 20, 16, 44, tzinfo=timezone.utc)
+
+        def _snapshot(risk_context, instant):
+            ctx = decision.DecisionContext.from_legacy_args(
+                history=[], today=date(2026, 9, 20), hour_of_day=16.75,
+                temperature=24.0, pluie_24h=0.0, pluie_demain=0.0, humidite=65,
+                type_sol="limoneux", etp_capteur=4.2, risk_context=risk_context,
+            )
+            with patch.object(guidance_mod, "_current_datetime", return_value=instant):
+                return decision.build_decision_result(ctx).to_snapshot()
+
+        premier = _snapshot({"palier_et0": 0, "palier_et0_montee": None}, debut)
+        self.assertEqual(premier["stress_palier_et0"], 0)
+        self.assertEqual(premier["stress_palier_et0_montee"]["palier"], 2)
+
+        confirme = _snapshot(
+            {
+                "palier_et0": premier["stress_palier_et0"],
+                "palier_et0_montee": premier["stress_palier_et0_montee"],
+            },
+            debut + timedelta(minutes=2),
+        )
+        self.assertEqual(confirme["stress_palier_et0"], 2)
+        self.assertIsNone(confirme.get("stress_palier_et0_montee"))
 
     def test_la_memoire_du_palier_est_REELLEMENT_relue(self) -> None:
         """⚠️ CALCULER N'EST PAS APPLIQUER. La mémoire doit changer la sortie, pas décorer.

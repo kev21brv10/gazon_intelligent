@@ -694,6 +694,11 @@ class ChaqueReglageEstBrancheTests(unittest.TestCase):
         # Lus par le coordinateur, avec ses faux coordinateurs.
         "arrosage_marge_avant_lever": "test_watering_session_monitoring.py",
         "arrosage_delai_relance": "test_watering_session_monitoring.py",
+        "arrosage_reduction_ombre_zone_1": "test_watering_session_monitoring.py",
+        "arrosage_reduction_ombre_zone_2": "test_watering_session_monitoring.py",
+        "arrosage_reduction_ombre_zone_3": "test_watering_session_monitoring.py",
+        "arrosage_reduction_ombre_zone_4": "test_watering_session_monitoring.py",
+        "arrosage_reduction_ombre_zone_5": "test_watering_session_monitoring.py",
         # Le délai de l'alerte des graines : une alerte, pas une décision (0.94.0).
         "graines_alerte_retard": "test_notifications.py",
         # Le pilote pur vérifie chaque garde matérielle sans appeler Home Assistant.
@@ -703,6 +708,7 @@ class ChaqueReglageEstBrancheTests(unittest.TestCase):
         "tondeuse_garage_ouvrir_pour_retour": "test_mower_control.py",
         "tondeuse_garage_fermer_apres_retour": "test_mower_control.py",
         "tondeuse_garage_avance_ouverture": "test_mower_control.py",
+        "tondeuse_garage_ouverture_min": "test_mower_control.py",
         "tondeuse_garage_delai_fermeture": "test_mower_control.py",
     }
 

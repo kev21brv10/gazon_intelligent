@@ -201,12 +201,14 @@ Les réglages sont propres à chaque instance et s'appliquent au cycle suivant, 
 | Domaine | Services *(préfixe `gazon_intelligent.`)* |
 |---|---|
 | **Métier** | `set_mode` · `reset_mode` · `set_date_action` |
-| **Arrosage** | `start_manual_irrigation` · `start_auto_irrigation` · `start_application_irrigation` · **`stop_irrigation`** · `declare_watering` · `recalibrate_reserve` |
+| **Arrosage** | `start_manual_irrigation` · `run_zone_for_duration` · `start_auto_irrigation` · `start_application_irrigation` · **`stop_irrigation`** · `declare_watering` · `recalibrate_reserve` |
 | **Tonte** | `declare_mowing` · `reset_mower_passes` |
 | **Produits** | `declare_intervention` · `remove_last_application` · `register_product` · `remove_product` |
 | **Alertes et IA** | `send_notification` · `ask_ai` |
 
 `stop_irrigation` arrête immédiatement le cycle en cours : la vanne ouverte se ferme, l'eau déjà appliquée est enregistrée (y compris la zone interrompue, au prorata) et le cycle est libéré. Également disponible en bouton (`button.gazon_intelligent_arreter_arrosage`), pour l'avoir à portée sur un tableau de bord.
+
+`run_zone_for_duration` ouvre une seule zone configurée pendant 0,5 à 180 minutes. L'échéance est persistée par l'intégration : fermer la page n'annule pas la fermeture et un redémarrage reprend uniquement le temps restant.
 
 `recalibrate_reserve` recale la réserve hydrique du sol à une valeur connue (calibration manuelle, persistante au redémarrage).
 

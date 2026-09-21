@@ -539,6 +539,7 @@ def _build_decision_extra(
         # en ayant l'air branché. Constaté en production le 01/09/2026.
         "risque_gazon_brut": risk_bundle.get("risque_gazon_brut"),
         "stress_palier_et0": risk_bundle.get("stress_palier_et0"),
+        "stress_palier_et0_montee": risk_bundle.get("stress_palier_et0_montee"),
         "risque_amortissement": risk_bundle.get("risque_amortissement"),
         # Même piège : mémoire de l'hystérésis météo des cycles de graines (Semis/Sursemis).
         # Oubliée ici, elle n'atteint jamais le snapshot et le coordinateur ne peut rien ranger.

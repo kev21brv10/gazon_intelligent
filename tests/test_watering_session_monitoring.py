@@ -346,7 +346,7 @@ class CoordinatorFacadeExtractionTests(unittest.TestCase):
         }
         appels_rosee: list[tuple[object, object]] = []
 
-        def _rosee(weather_profile, temperature, humidite):  # noqa: ARG001
+        def _rosee(weather_profile, temperature, humidite, point_de_rosee=None):  # noqa: ARG001
             appels_rosee.append((temperature, humidite))
             return 0.42
 
@@ -544,7 +544,7 @@ def _build_update_data_coordinator(*, weather_temperature: float | None) -> obje
         return None
 
     coordinator._get_weather_forecast_summary = _forecast_summary
-    coordinator._estimate_rosee = lambda weather_profile, temperature, humidite: 0.0  # noqa: ARG005
+    coordinator._estimate_rosee = lambda weather_profile, temperature, humidite, point_de_rosee=None: 0.0  # noqa: ARG005
     coordinator._get_float_conf = lambda key, default: default  # noqa: ARG005
     coordinator._async_save_state = _save_state
     return coordinator
@@ -1340,7 +1340,7 @@ class WateringSessionMonitoringTests(unittest.TestCase):
             return None
 
         coordinator._get_weather_forecast_summary = _forecast_summary
-        coordinator._estimate_rosee = lambda weather_profile, temperature, humidite: 0.0  # noqa: ARG001
+        coordinator._estimate_rosee = lambda weather_profile, temperature, humidite, point_de_rosee=None: 0.0  # noqa: ARG001
         coordinator._get_float_conf = lambda key, default: default
         coordinator._async_save_state = _save_state
 
@@ -1435,7 +1435,7 @@ class WateringSessionMonitoringTests(unittest.TestCase):
             return None
 
         coordinator._get_weather_forecast_summary = _forecast_summary
-        coordinator._estimate_rosee = lambda weather_profile, temperature, humidite: 0.0  # noqa: ARG001
+        coordinator._estimate_rosee = lambda weather_profile, temperature, humidite, point_de_rosee=None: 0.0  # noqa: ARG001
         coordinator._get_float_conf = lambda key, default: default
         coordinator._async_save_state = _save_state
 
@@ -2776,6 +2776,48 @@ class WateringSessionMonitoringTests(unittest.TestCase):
         self.assertEqual(execution["reconciliation"]["planned_mm"], 3.0)
         self.assertEqual(execution["reconciliation"]["executed_mm"], 3.0)
         self.assertEqual(execution["reconciliation"]["detected_mm"], 3.0)
+        self.assertEqual(execution["execution_anomalies"], [])
+
+    def test_completed_shaded_plan_is_not_reported_as_partial(self) -> None:
+        plan = watering_plan_mod.build_watering_plan(
+            10.0,
+            [
+                ("switch.zone_1", 60.0, 0.0),
+                ("switch.zone_2", 60.0, 30.0),
+            ],
+        )
+        assert plan is not None
+        coordinator = _build_runtime_ready_coordinator(plan_attrs=plan.as_dict())
+
+        async def _run() -> None:
+            original_sleep = coordinator_mod.asyncio.sleep
+
+            async def _noop_sleep(*args, **kwargs):
+                return None
+
+            coordinator_mod.asyncio.sleep = _noop_sleep
+            try:
+                await coordinator_mod.GazonIntelligentCoordinator.async_start_auto_irrigation(
+                    coordinator,
+                    10.0,
+                    plan_arrosage_entity_id="sensor.gazon_intelligent_plan_arrosage",
+                    source="auto_irrigation",
+                )
+                task = coordinator._auto_irrigation_task
+                assert task is not None
+                await task
+            finally:
+                coordinator_mod.asyncio.sleep = original_sleep
+
+        asyncio.run(_run())
+
+        call = coordinator.async_record_watering.await_args
+        self.assertEqual(call.kwargs["objectif_mm"], 8.5)
+        self.assertEqual(call.kwargs["zones"][0]["mm"], 10.0)
+        self.assertEqual(call.kwargs["zones"][1]["mm"], 7.0)
+        execution = coordinator._runtime_state["last_irrigation_execution"]
+        self.assertEqual(execution["target_mm"], 8.5)
+        self.assertEqual(execution["completion_status"], "completed")
         self.assertEqual(execution["execution_anomalies"], [])
 
     def test_active_irrigation_session_includes_live_progress_metadata(self) -> None:
@@ -4693,6 +4735,53 @@ class PlanCanoniqueSnapshotFraisTests(unittest.TestCase):
         self.assertEqual(plan.passage_count, 2)
         self.assertEqual(plan.pause_between_passages_s, 25 * 60)
 
+    def test_le_plan_canonique_applique_la_reduction_de_la_zone_ombragee(self) -> None:
+        coordinator = _build_coordinator()
+        coordinator.history = []
+        coordinator.data = {"objectif_mm": 10.0}
+        coordinator.entry.options = {
+            "reglages": {"arrosage_reduction_ombre_zone_2": 30.0},
+        }
+
+        plan = coordinator._get_canonical_watering_plan(objectif_mm=10.0)
+
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan.zones[0].mm, 10.0)
+        self.assertEqual(plan.zones[1].mm, 7.0)
+        self.assertEqual(plan.zones[1].water_reduction_pct, 30.0)
+        self.assertEqual(plan.planned_surface_mm, 8.5)
+
+    def test_chacune_des_cinq_zones_peut_avoir_sa_propre_reduction(self) -> None:
+        cles = (
+            "arrosage_reduction_ombre_zone_1",
+            "arrosage_reduction_ombre_zone_2",
+            "arrosage_reduction_ombre_zone_3",
+            "arrosage_reduction_ombre_zone_4",
+            "arrosage_reduction_ombre_zone_5",
+        )
+        for numero, cle in enumerate(cles, start=1):
+            with self.subTest(zone=numero):
+                coordinator = _build_coordinator()
+                coordinator.history = []
+                coordinator.data = {"objectif_mm": 10.0}
+                coordinator.entry.data.update({
+                    f"zone_{idx}": f"switch.zone_{idx}" for idx in range(1, 6)
+                })
+                coordinator.entry.data.update({
+                    f"debit_zone_{idx}": 60.0 for idx in range(1, 6)
+                })
+                coordinator.entry.options = {"reglages": {cle: 25.0}}
+
+                plan = coordinator._get_canonical_watering_plan(objectif_mm=10.0)
+
+                self.assertIsNotNone(plan)
+                self.assertEqual(plan.zones[numero - 1].water_reduction_pct, 25.0)
+                self.assertEqual(plan.zones[numero - 1].duration_s, 450)
+                self.assertTrue(all(
+                    zone.duration_s == (450 if idx == numero else 600)
+                    for idx, zone in enumerate(plan.zones, start=1)
+                ))
+
 
 class TestStopIrrigation(unittest.IsolatedAsyncioTestCase):
     """Service `stop_irrigation` — arrêt d'un cycle en cours.
@@ -6408,7 +6497,7 @@ class LaBandeMorteDEt0SurvitAuRedemarrageTests(unittest.TestCase):
     cette installation les redémarrages sont fréquents.
     """
 
-    def _coord(self, palier):
+    def _coord(self, palier, montee=None):
         coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
         coord._runtime_state = {
             "active_irrigation_session": None,
@@ -6417,6 +6506,7 @@ class LaBandeMorteDEt0SurvitAuRedemarrageTests(unittest.TestCase):
             "last_auto_irrigation_completed_at": None,
             "auto_irrigation_safety_lock": False,
             "stress_palier_et0": palier,
+            "stress_palier_et0_montee": montee,
         }
         coord._ensure_irrigation_runtime_bootstrap = lambda: None
         return coord
@@ -6438,6 +6528,12 @@ class LaBandeMorteDEt0SurvitAuRedemarrageTests(unittest.TestCase):
         relu._restore_runtime_state(self._coord(3)._serialized_runtime_state())
         self.assertEqual(relu._runtime_state["stress_palier_et0"], 3)
 
+    def test_la_montee_candidate_survit_au_redemarrage(self) -> None:
+        montee = {"palier": 2, "depuis": "2026-09-20T16:44:00+00:00"}
+        relu = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        relu._restore_runtime_state(self._coord(0, montee)._serialized_runtime_state())
+        self.assertEqual(relu._runtime_state["stress_palier_et0_montee"], montee)
+
     def test_le_palier_traverse_la_SECONDE_liste_blanche(self) -> None:
         """⚠️ LE PIÈGE DU PROJET, TROISIÈME FOIS SUR CETTE FAMILLE DE CLÉS.
 
@@ -6449,13 +6545,18 @@ class LaBandeMorteDEt0SurvitAuRedemarrageTests(unittest.TestCase):
         Le banc l'a reconfirmé sur cette clé-ci : la retirer de la liste ne faisait tomber
         aucun test. On rejoue donc la recopie RÉELLE du coordinateur, pas une appartenance.
         """
-        snapshot = {"stress_palier_et0": 2, "risque_gazon": "modere"}
+        snapshot = {
+            "stress_palier_et0": 2,
+            "stress_palier_et0_montee": {"palier": 3, "depuis": "maintenant"},
+            "risque_gazon": "modere",
+        }
         recopie = {cle: snapshot.get(cle) for cle in coordinator_mod._COORDINATOR_SNAPSHOT_KEYS}
         self.assertIn(
             "stress_palier_et0", recopie,
             "la clé meurt dans la recopie du coordinateur : la mémoire repartira vide",
         )
         self.assertEqual(recopie["stress_palier_et0"], 2)
+        self.assertEqual(recopie["stress_palier_et0_montee"]["palier"], 3)
 
     def test_un_palier_a_ZERO_n_est_pas_une_absence(self) -> None:
         """⚠️ 0 est un palier MESURÉ (ET0 sous 3 mm), pas une mémoire vide. Un garde en
@@ -7210,6 +7311,64 @@ class AutoDeclarationTonteTests(unittest.TestCase):
         self.assertEqual(fin["mower_auto_declaration_state"], "declaree")
         self.assertEqual(len(self._tontes(coord)), 1)
 
+    def test_un_ancien_travail_a_quai_est_au_repos_mais_reste_recuperable(self) -> None:
+        coord = self._coord()
+        maintenant = datetime(2026, 8, 6, 15, 0, tzinfo=timezone.utc)
+        coord._current_datetime = lambda: maintenant
+
+        pause = coord._declarer_tonte_du_jour(
+            self._ctx(25.0, progression=18.0, tache="travail-ancien")
+            | {"_vu_inacheve": None, "mower_is_docked": True}
+        )
+        self.assertEqual(pause["mower_job_completion_state"], "en_pause")
+        pause_depuis = pause["mower_job_paused_since"]
+
+        # Le délai ne repart pas à zéro après un redémarrage de Home Assistant.
+        persiste = coord._serialized_runtime_state()
+        relu = self._coord()
+        relu._restore_runtime_state(persiste)
+        coord = relu
+        maintenant += timedelta(minutes=60)
+        coord._current_datetime = lambda: maintenant
+        ancien = coord._declarer_tonte_du_jour(
+            self._ctx(25.0, progression=18.0, tache="travail-ancien")
+            | {"_vu_inacheve": None, "mower_is_docked": True}
+        )
+        self.assertEqual(ancien["mower_job_completion_state"], "repos")
+        self.assertEqual(ancien["mower_auto_declaration_state"], "travail_au_repos")
+        self.assertTrue(ancien["mower_job_resume_possible"])
+        self.assertEqual(ancien["mower_job_paused_since"], pause_depuis)
+        self.assertEqual(self._tontes(coord), [])
+
+        maintenant += timedelta(hours=5)
+        reprise = coord._declarer_tonte_du_jour(
+            self._ctx(40.0, progression=32.0, tache="travail-ancien")
+            | {"_vu_inacheve": None, "mower_is_docked": False}
+        )
+        self.assertEqual(reprise["mower_job_completion_state"], "en_cours")
+        self.assertFalse(reprise["mower_job_resume_possible"])
+        self.assertIsNone(reprise["mower_job_paused_since"])
+
+    def test_un_signal_d_activite_interdit_de_ranger_le_travail(self) -> None:
+        maintenant = datetime(2026, 8, 6, 15, 0, tzinfo=timezone.utc)
+        for activite in ({"mower_is_mowing": True}, {"mower_pass_in_progress": True}):
+            with self.subTest(activite=activite):
+                coord = self._coord()
+                coord._current_datetime = lambda: maintenant
+                coord._runtime_state["mower_job_suivi"] = {
+                    "task_id": "travail-actif",
+                    "vu_inacheve": True,
+                    "pause_a_quai_depuis": (maintenant - timedelta(hours=5)).isoformat(),
+                }
+                trace = coord._declarer_tonte_du_jour(
+                    self._ctx(40.0, progression=32.0, tache="travail-actif")
+                    | {"_vu_inacheve": None, "mower_is_docked": True}
+                    | activite
+                )
+                self.assertEqual(trace["mower_job_completion_state"], "en_cours")
+                self.assertFalse(trace["mower_job_resume_possible"])
+                self.assertIsNone(trace["mower_job_paused_since"])
+
     def test_le_passage_a_100_dun_travail_suivi_declare(self) -> None:
         coord = self._coord()
         # ⚠️ PRÉMISSE CORRIGÉE le 03/09/2026 : la tâche naît AU DÉBUT du travail, compteur du
@@ -7444,6 +7603,8 @@ class AutoDeclarationCablageTests(unittest.TestCase):
         # retirer de `_MOWER_CONTEXT_KEYS` ne faisait tomber AUCUN test — le piège du projet,
         # pour la deuxième fois sur cette même famille de clés.
         "mower_job_minutes_total",
+        "mower_job_resume_possible",
+        "mower_job_paused_since",
         # Ajoutée en 0.82.0 : les minutes des travaux TERMINÉS du jour, c'est-à-dire la
         # grandeur réellement comparée au plancher. Troisième clé de cette famille à traverser
         # ce banc — les deux précédentes y sont entrées après avoir manqué une liste.
@@ -7495,6 +7656,16 @@ class AutoDeclarationCablageTests(unittest.TestCase):
         })
         self.assertEqual(trace["mower_auto_declaration_state"], "declaree",
                          msg="prémisse : la trace exercée doit être celle d'une déclaration")
+
+        # Un travail terminé publie logiquement un horodatage de pause nul, ensuite filtré.
+        # On prend donc sa valeur non nulle sur une seconde sortie RÉELLE du coordinateur.
+        pause = coord._declarer_tonte_du_jour({
+            "mower_mowing_minutes_today": 126.6,
+            "mower_job_progress_pct": 30.0,
+            "mower_job_id": "t2",
+            "mower_is_docked": True,
+        })
+        trace["mower_job_paused_since"] = pause["mower_job_paused_since"]
 
         contexte.mower_context = dict(trace)
         snapshot = decision.build_decision_result(contexte).to_snapshot()
@@ -9552,7 +9723,7 @@ class RoseeLueSurLHerbeTests(unittest.TestCase):
                     self.assertIsNone(coord._lire_rosee())
                 self.assertEqual(len(journal.output), 1, "une seule fois par entité")
                 self.assertIn("sensor.point_de_rosee", journal.output[0])
-                self.assertIn("Réglages → Mon installation", journal.output[0])
+                self.assertIn("Réglages → Installation", journal.output[0])
 
     def test_une_humidite_du_feuillage_est_lue(self) -> None:
         for etat, attendu in (("0", 0.0), ("1", 1.0), ("35", 35.0)):
@@ -9796,6 +9967,122 @@ class PilotageTondeuseCoordinateurTests(unittest.TestCase):
         )
         self.assertIsNone(snapshot["mower_control_pending_action"])
         self.assertEqual(snapshot["mower_control_last_action"], "start_mowing")
+        self.assertEqual(snapshot["mower_control_cycle_state"], "depart_envoye")
+
+        # Tant que la sortie n'est pas observée, la commande acceptée n'est jamais répétée.
+        asyncio.run(coord._async_apply_mower_control(snapshot))
+        service.assert_awaited_once()
+        self.assertEqual(snapshot["mower_control_state"], "depart_envoye")
+
+    def test_position_partielle_du_volet_est_transmise_au_pilote(self) -> None:
+        coord, service = self._coord("actif")
+        coord._get_conf = lambda cle: (
+            "actif"
+            if cle == "pilotage_tondeuse"
+            else "cover.garage_tondeuse"
+            if cle == "entite_volet_garage_tondeuse"
+            else None
+        )
+        coord.hass.states.get = lambda _entity_id: types.SimpleNamespace(
+            state="open", attributes={"current_position": 70}
+        )
+        snapshot = self._snapshot()
+
+        asyncio.run(coord._async_apply_mower_control(snapshot))
+
+        service.assert_awaited_once_with(
+            "cover", "open_cover", {"entity_id": "cover.garage_tondeuse"}, blocking=True
+        )
+        self.assertEqual(snapshot["mower_garage_position"], 70)
+        self.assertEqual(snapshot["mower_control_state"], "ouverture_garage")
+
+    def test_un_rappel_du_cycle_gere_cree_une_unique_reprise(self) -> None:
+        coord, service = self._coord("actif")
+        coord._runtime_state["mower_control"] = {
+            "managed_cycle_active": True,
+            "managed_start_pending": False,
+        }
+        dehors = self._snapshot() | {
+            "mower_is_docked": False,
+            "mower_is_outside": True,
+            "mower_is_mowing": True,
+            "mower_operation_state": "mowing",
+            "gazon_permet_tonte": False,
+            "action_possible": False,
+            "mowing_block_reason_label": "Pluie en cours",
+            "mower_job_progress_pct": 42,
+            "mower_job_completion_state": "en_cours",
+        }
+        asyncio.run(coord._async_apply_mower_control(dehors))
+        service.assert_awaited_once_with(
+            "lawn_mower", "dock", {"entity_id": "lawn_mower.esperance_jr"}, blocking=True
+        )
+        runtime = coord._runtime_state["mower_control"]
+        self.assertTrue(runtime["resume_required"])
+        self.assertEqual(runtime["resume_reason"], "Pluie en cours")
+        self.assertEqual(dehors["mower_control_cycle_state"], "reprise_attendue")
+
+        retour = self._snapshot() | {
+            "mower_job_progress_pct": 42,
+            "mower_job_completion_state": "en_pause",
+        }
+        asyncio.run(coord._async_apply_mower_control(retour))
+        self.assertEqual(service.await_count, 2)
+        self.assertEqual(service.await_args.args[:2], ("lawn_mower", "start_mowing"))
+        self.assertFalse(runtime["resume_required"])
+        self.assertTrue(runtime["managed_start_pending"])
+
+        # Même état cloud encore à quai au cycle suivant : aucun second start_mowing.
+        asyncio.run(coord._async_apply_mower_control(retour))
+        self.assertEqual(service.await_count, 2)
+        self.assertEqual(retour["mower_control_cycle_state"], "cycle_autonome")
+
+    def test_la_reprise_due_survit_au_redemarrage(self) -> None:
+        source, _service = self._coord("actif")
+        source._runtime_state["mower_control"] = {
+            "managed_cycle_active": True,
+            "managed_start_pending": False,
+            "resume_required": True,
+            "resume_reason": "Vent fort",
+            "resume_requested_at": "2026-09-19T09:30:00+00:00",
+        }
+        payload = source._serialized_runtime_state()
+
+        relu, service = self._coord("actif")
+        relu._restore_runtime_state(payload)
+        retour = self._snapshot() | {
+            "mower_job_progress_pct": 42,
+            "mower_job_completion_state": "en_pause",
+        }
+        asyncio.run(relu._async_apply_mower_control(retour))
+        service.assert_awaited_once_with(
+            "lawn_mower", "start_mowing", {"entity_id": "lawn_mower.esperance_jr"}, blocking=True
+        )
+        self.assertFalse(relu._runtime_state["mower_control"]["resume_required"])
+
+    def test_un_rappel_refuse_ou_seulement_observe_ne_cree_pas_de_reprise(self) -> None:
+        dehors = self._snapshot() | {
+            "mower_is_docked": False,
+            "mower_is_outside": True,
+            "mower_is_mowing": True,
+            "mower_operation_state": "mowing",
+            "gazon_permet_tonte": False,
+            "action_possible": False,
+            "mower_job_progress_pct": 42,
+            "mower_job_completion_state": "en_cours",
+        }
+        for mode, erreur in (
+            ("observation", None),
+            ("actif", RuntimeError("dock refusé")),
+        ):
+            with self.subTest(mode=mode):
+                coord, _service = self._coord(mode, service_error=erreur)
+                coord._runtime_state["mower_control"] = {"managed_cycle_active": True}
+                asyncio.run(coord._async_apply_mower_control(dict(dehors)))
+                self.assertIsNot(
+                    coord._runtime_state["mower_control"].get("resume_required"),
+                    True,
+                )
 
     def test_le_choix_de_creneau_arrive_jusqu_a_la_commande_reelle(self) -> None:
         snapshot = self._snapshot()
@@ -9826,3 +10113,168 @@ class PilotageTondeuseCoordinateurTests(unittest.TestCase):
         service.assert_awaited_once()
         self.assertEqual(snapshot["mower_control_state"], "erreur")
         self.assertEqual(snapshot["mower_control_last_error"], "service indisponible")
+
+
+class ArrosageZoneTemporiseTests(unittest.TestCase):
+    """Le bouton 5 min appartient au moteur HA, jamais au cycle de vie du navigateur."""
+
+    def test_le_service_construit_un_plan_exact_d_une_seule_zone(self) -> None:
+        async def _run() -> None:
+            coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+            coord._irrigation_launch_lock = asyncio.Lock()
+            coord._auto_irrigation_task = None
+            coord._auto_irrigation_scheduler_task = None
+            coord._runtime_state = {
+                "active_irrigation_session": None,
+                "auto_irrigation_safety_lock": False,
+            }
+            coord._iter_zones_with_rate = lambda: iter(
+                [("switch.zone_1", 14.0 / 60.0), ("switch.zone_2", 17.0 / 60.0)]
+            )
+            coord._watering_session_active = lambda: False
+            coord._shared_valve_busy_elsewhere = lambda: False
+            coord._auto_irrigation_safety_lock_active = lambda: False
+            coord._get_conf = lambda key: "switch.pompe" if key == "entite_pompe" else None
+            coord._build_active_irrigation_session = lambda **kwargs: {
+                "source": kwargs["source"],
+                "strategy": kwargs["strategy"],
+                "zones_pending": [{"zone": "switch.zone_2"}],
+            }
+            coord.async_record_user_action = AsyncMock()
+            coord._execute_canonical_watering_plan = AsyncMock()
+            events: list[tuple[str, dict[str, object]]] = []
+            coord.hass = types.SimpleNamespace(
+                async_create_task=lambda coro, name=None: asyncio.create_task(coro),
+                bus=types.SimpleNamespace(
+                    async_fire=lambda event, payload=None: events.append((event, dict(payload or {})))
+                ),
+            )
+
+            await coordinator_mod.GazonIntelligentCoordinator.async_run_zone_for_duration(
+                coord, "switch.zone_2", duration_minutes=5
+            )
+            assert coord._auto_irrigation_task is not None
+            await coord._auto_irrigation_task
+
+            kwargs = coord._execute_canonical_watering_plan.await_args.kwargs
+            plan = kwargs["plan"]
+            self.assertEqual(plan.plan_type, "single_zone")
+            self.assertEqual(plan.zones[0].zone, "switch.zone_2")
+            self.assertEqual(plan.zones[0].duration_s, 300)
+            self.assertAlmostEqual(plan.zones[0].mm, 17.0 * 5.0 / 60.0)
+            self.assertEqual(kwargs["source"], "manual_timed_zone")
+            self.assertEqual(kwargs["session"]["managed_pump_entity_id"], "switch.pompe")
+            self.assertFalse(kwargs["session"]["managed_pump_started_by_integration"])
+            self.assertEqual(events[0][1]["duration_seconds"], 300)
+
+        asyncio.run(_run())
+
+    def test_une_zone_non_configuree_est_refusee_avant_toute_commande(self) -> None:
+        async def _run() -> None:
+            coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+            coord._iter_zones_with_rate = lambda: iter([("switch.zone_1", 1.0)])
+            with self.assertRaises(coordinator_mod.HomeAssistantError):
+                await coordinator_mod.GazonIntelligentCoordinator.async_run_zone_for_duration(
+                    coord, "switch.inconnue", duration_minutes=5
+                )
+
+        asyncio.run(_run())
+
+    def test_la_pompe_est_arretee_seulement_si_le_cycle_l_a_demarree(self) -> None:
+        async def _run(initial_state: str) -> tuple[list[str], dict[str, object]]:
+            calls: list[str] = []
+
+            async def _call(_domain, service, _data, blocking=True):  # noqa: ARG001
+                calls.append(service)
+
+            coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+            coord.hass = types.SimpleNamespace(
+                states=_FakeStates(
+                    {"switch.pompe": _FakeState(initial_state, datetime.now(timezone.utc))}
+                ),
+                services=types.SimpleNamespace(async_call=_call),
+            )
+            coord._persist_runtime_state = AsyncMock()
+            session: dict[str, object] = {
+                "managed_pump_entity_id": "switch.pompe",
+                "managed_pump_started_by_integration": False,
+            }
+            await coordinator_mod.GazonIntelligentCoordinator._ensure_managed_irrigation_pump(
+                coord, session
+            )
+            closed = await coordinator_mod.GazonIntelligentCoordinator._safe_turn_off_managed_irrigation_pump(
+                coord, session
+            )
+            self.assertTrue(closed)
+            return calls, session
+
+        calls_off, session_off = asyncio.run(_run("off"))
+        self.assertEqual(calls_off, ["turn_on", "turn_off"])
+        self.assertFalse(session_off["managed_pump_started_by_integration"])
+
+        calls_on, session_on = asyncio.run(_run("on"))
+        self.assertEqual(calls_on, [])
+        self.assertFalse(session_on["managed_pump_started_by_integration"])
+
+    def test_une_session_terminee_au_redemarrage_ferme_la_pompe_avant_d_etre_purgee(self) -> None:
+        async def _run() -> None:
+            coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+            session = {
+                "status": "running",
+                "managed_pump_entity_id": "switch.pompe",
+                "managed_pump_started_by_integration": True,
+                coordinator_mod.WATERING_RECORDED_KEY: True,
+            }
+            coord._runtime_state = {
+                "active_irrigation_session": session,
+                "auto_irrigation_safety_lock": False,
+            }
+            coord._is_finished_irrigation_session = lambda _session: True
+            coord._auto_irrigation_safety_lock_active = lambda: False
+            coord._persist_execution_snapshot = lambda *args, **kwargs: None
+            coord._set_active_irrigation_session = lambda value: coord._runtime_state.__setitem__(
+                "active_irrigation_session", value
+            )
+            coord._finalize_pending_irrigation_user_action = AsyncMock()
+            coord._persist_runtime_state = AsyncMock()
+
+            with patch.object(
+                coordinator_mod.GazonIntelligentCoordinator,
+                "_safe_turn_off_managed_irrigation_pump",
+                new=AsyncMock(return_value=True),
+            ) as close_pump:
+                await coordinator_mod.GazonIntelligentCoordinator._restore_active_irrigation_session(
+                    coord
+                )
+
+            close_pump.assert_awaited_once_with(coord, session)
+            self.assertIsNone(coord._runtime_state["active_irrigation_session"])
+
+        asyncio.run(_run())
+
+    def test_le_panneau_n_utilise_plus_de_minuteur_navigateur(self) -> None:
+        source = (PACKAGE_DIR / "frontend" / "gazon-intelligent-panel.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"gazon_intelligent", "run_zone_for_duration"', source)
+        self.assertIn("duration_minutes: 5", source)
+        self.assertNotIn("_arretsDifferes", source)
+        self.assertIn('"gazon_intelligent", "stop_irrigation"', source)
+        apercu = (ROOT / "dev" / "panel" / "index.html").read_text(encoding="utf-8")
+        self.assertIn('service === "run_zone_for_duration"', apercu)
+        chemin_services_apercu = ROOT / "dev" / "panel" / "services.json"
+        if chemin_services_apercu.exists():
+            services_apercu = json.loads(
+                chemin_services_apercu.read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                services_apercu["run_zone_for_duration"],
+                ["duration_minutes", "entity_id", "zone_entity_id"],
+            )
+
+    def test_le_service_est_declare_et_enregistre(self) -> None:
+        yaml_source = (PACKAGE_DIR / "services.yaml").read_text(encoding="utf-8")
+        init_source = (PACKAGE_DIR / "__init__.py").read_text(encoding="utf-8")
+        self.assertIn("run_zone_for_duration:", yaml_source)
+        self.assertIn('SERVICE_RUN_ZONE_FOR_DURATION = "run_zone_for_duration"', init_source)
+        self.assertIn("SERVICE_RUN_ZONE_FOR_DURATION,\n        _handle_run_zone_for_duration,", init_source)

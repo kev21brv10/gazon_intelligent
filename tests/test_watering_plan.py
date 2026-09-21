@@ -54,6 +54,36 @@ class WateringPlanTests(unittest.TestCase):
         self.assertEqual(plan.as_dict()["objective_mm"], 1.0)
         self.assertEqual(plan.as_dict()["zones"][0]["mm"], 0.9)
 
+    def test_shaded_zone_reduces_only_its_duration_and_surface_target(self) -> None:
+        plan = watering_plan.build_watering_plan(
+            10.0,
+            [
+                ("switch.sunny", 60.0, 0.0),
+                ("switch.shaded", 60.0, 30.0),
+            ],
+        )
+
+        assert plan is not None
+        self.assertEqual(plan.zones[0].duration_s, 600)
+        self.assertEqual(plan.zones[1].duration_s, 420)
+        self.assertEqual(plan.zones[1].water_reduction_pct, 30.0)
+        self.assertEqual(plan.planned_surface_mm, 8.5)
+        serialized = plan.as_dict()
+        self.assertEqual(serialized["objective_mm"], 10.0)
+        self.assertEqual(serialized["reference_objective_mm"], 10.0)
+        self.assertEqual(serialized["surface_mm"], 8.5)
+        self.assertEqual(serialized["mm_scope"], "zone_adjusted_surface")
+        self.assertEqual(serialized["mm_interpretation"], "zone_adjusted")
+
+    def test_zero_shade_reduction_preserves_the_historical_plan(self) -> None:
+        historical = watering_plan.build_watering_plan(5.0, [("switch.zone_1", 20.0)])
+        explicit_zero = watering_plan.build_watering_plan(5.0, [("switch.zone_1", 20.0, 0.0)])
+
+        self.assertEqual(historical, explicit_zero)
+        assert explicit_zero is not None
+        self.assertFalse(explicit_zero.has_zone_adjustments)
+        self.assertEqual(explicit_zero.as_dict()["mm_scope"], "global_surface")
+
     def test_normalize_existing_plan_reconstructs_missing_objective_from_max_zone_mm(self) -> None:
         plan = watering_plan.normalize_existing_plan(
             {

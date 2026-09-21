@@ -83,10 +83,10 @@ class LeRegistreEstCoherentTests(unittest.TestCase):
 
     def test_une_valeur_hors_bornes_est_refusee_en_clair(self) -> None:
         erreurs = reglages.valider({"tonte_vent_bloque": 200})
-        self.assertEqual(erreurs, {"tonte_vent_bloque": "Choisis une valeur entre 20 et 60."})
+        self.assertEqual(erreurs, {"tonte_vent_bloque": "Sélectionner une valeur entre 20 et 60."})
         self.assertEqual(
             reglages.valider({"sursemis_pousse_plantules": 2}),
-            {"sursemis_pousse_plantules": "Choisis une valeur entre 0,1 et 1."},
+            {"sursemis_pousse_plantules": "Sélectionner une valeur entre 0,1 et 1."},
         )
 
     def test_une_contrainte_violee_est_refusee_en_clair(self) -> None:
@@ -115,7 +115,7 @@ class LeRegistreEstCoherentTests(unittest.TestCase):
         )
         self.assertEqual(
             reglages.valider({"tonte_hauteur_par_mois": [4.0] * 11 + [9.0]}),
-            {"tonte_hauteur_par_mois": "Choisis une valeur entre 3 et 8."},
+            {"tonte_hauteur_par_mois": "Sélectionner une valeur entre 3 et 8."},
         )
         self.assertEqual(reglages.valider({"tonte_hauteur_par_mois": [5.0] * 12}), {})
 
@@ -156,6 +156,11 @@ class LeRegistreEstCoherentTests(unittest.TestCase):
                 "arrosage_decoupage_seuil",
                 "arrosage_pause_duree",
                 "arrosage_sensibilite_pluie",
+                "arrosage_reduction_ombre_zone_1",
+                "arrosage_reduction_ombre_zone_2",
+                "arrosage_reduction_ombre_zone_3",
+                "arrosage_reduction_ombre_zone_4",
+                "arrosage_reduction_ombre_zone_5",
                 "rafraichissement_temperature",
                 "rafraichissement_dose",
                 "graines_germination_dose",
@@ -168,6 +173,7 @@ class LeRegistreEstCoherentTests(unittest.TestCase):
                 "tondeuse_garage_ouvrir_pour_retour",
                 "tondeuse_garage_fermer_apres_retour",
                 "tondeuse_garage_avance_ouverture",
+                "tondeuse_garage_ouverture_min",
                 "tondeuse_garage_delai_fermeture",
             },
         )
@@ -202,7 +208,7 @@ class LesValeursParDefautSontCellesDuMoteurTests(unittest.TestCase):
                 self.assertEqual(self.defauts[cle], valeur)
         self.assertEqual(
             reglages.valider({"tondeuse_garage_ouvrir_avant_depart": "oui"}),
-            {"tondeuse_garage_ouvrir_avant_depart": "Choisis activé ou désactivé."},
+            {"tondeuse_garage_ouvrir_avant_depart": "Sélectionner activé ou désactivé."},
         )
 
     def test_le_rythme_du_mois_est_celui_qui_juge_le_retard(self) -> None:
@@ -347,6 +353,7 @@ class LesValeursParDefautSontCellesDuMoteurTests(unittest.TestCase):
             "tondeuse_pilotage_batterie_min": mc.DEFAULT_MOWER_CONTROL_MIN_BATTERY,
             "tondeuse_pilotage_delai_commandes": mc.DEFAULT_MOWER_CONTROL_COMMAND_COOLDOWN_MINUTES,
             "tondeuse_garage_avance_ouverture": mc.DEFAULT_MOWER_GARAGE_OPEN_LEAD_MINUTES,
+            "tondeuse_garage_ouverture_min": mc.DEFAULT_MOWER_GARAGE_MIN_OPEN_POSITION,
             "tondeuse_garage_delai_fermeture": mc.DEFAULT_MOWER_GARAGE_CLOSE_DELAY_MINUTES,
             "tondeuse_garage_ouvrir_avant_depart": mc.DEFAULT_MOWER_GARAGE_OPEN_BEFORE_START,
             "tondeuse_garage_ouvrir_pour_retour": mc.DEFAULT_MOWER_GARAGE_OPEN_FOR_RETURN,
@@ -394,7 +401,7 @@ class LesValeursParDefautSontCellesDuMoteurTests(unittest.TestCase):
         self.assertEqual(reglages.valider_choix({"type_sol": "argileux"}), {})
         self.assertEqual(
             reglages.valider_choix({"type_sol": "tourbe"}),
-            {"type_sol": "Choisis parmi : sableuse, limoneuse, argileuse."},
+            {"type_sol": "Sélectionner parmi : sableuse, limoneuse, argileuse."},
         )
         self.assertEqual(reglages.valider_choix({"inconnu": "x"}), {"inconnu": "Choix inconnu."})
         sol = next(c for c in reglages.exporter()["choix"] if c["cle"] == "type_sol")
