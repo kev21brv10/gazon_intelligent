@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.0.0-rc.4
+
+- **Une pluie apparue pendant une recharge intermédiaire ne pouvait pas interrompre le cycle** :
+  le pilote rendait immédiatement la main au constructeur dès que la tondeuse était à sa base,
+  même lorsque le gazon retirait formellement son autorisation. Le robot pouvait donc repartir
+  sous la pluie et le volet devait rester ouvert. Le pilote envoie désormais une unique commande
+  `dock` dans ce cas précis. La dette de reprise n'est créée qu'après le succès réel du service
+  Home Assistant; un refus ne ferme pas le garage et ne mémorise pas une reprise fictive.
+- **Recharge normale inchangée** : tant que la tonte reste autorisée, le volet demeure ouvert et
+  le constructeur gère seul la recharge et le redépart. Un créneau seulement « déconseillé »
+  n'interrompt pas un cycle déjà engagé.
+- **Reprise complète après interruption** : une fois l'arrêt accepté, le volet peut se fermer
+  après la temporisation configurée. Au retour de conditions sûres, il est rouvert et une seule
+  commande de reprise est envoyée, avec les gardes de batterie, de disponibilité et d'arrosage.
+- **Le repli sans télémétrie ne confond plus une charge avec une fin de travail** : l'opération
+  `charging`, une interdiction active ou une dette de reprise empêchent désormais ce repli
+  d'effacer prématurément le cycle géré.
+- **Vérifié** : 54 tests ciblés sur le moteur pur et le coordinateur, puis suite complète avec
+  2 175 tests et 3 214 sous-tests sous Pytest. La suite `unittest` passe également avec 2 132
+  tests. Compilation Python et `git diff --check` verts. Un essai surveillé sur le matériel reste
+  requis pour confirmer la réaction propre à l'adaptateur lorsqu'il reçoit `dock` déjà à la base.
+- **Trou de couverture comblé après vérification indépendante** : le garde qui exclut `charging`
+  du repli sans télémétrie est correct, mais rien ne le prouvait — le retirer par mutation
+  laissait passer les 60 tests ciblés sans qu'aucun n'échoue, en reproduisant pourtant le danger
+  initial (recharge normale, tonte encore autorisée, aucune télémétrie). Un test dédié comble ce
+  trou. Suite complète : 2176 tests, verte.
+
 ## 1.0.0-rc.3
 
 - **Un départ jamais confirmé restait bloqué pour toujours** : signalé en relecture automatique

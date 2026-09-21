@@ -134,6 +134,7 @@ def evaluate_mower_control(
     strong_dock = snapshot.get("mower_dock_signal_fort") is True or operation in {"docked", "charging"}
     completion_state = str(snapshot.get("mower_job_completion_state") or "").lower()
     progress = _number(snapshot.get("mower_job_progress_pct"))
+    mowing_forbidden = snapshot.get("gazon_permet_tonte") is False
 
     # Un départ envoyé par l'intégration ouvre un seul cycle autonome. Une fois la machine
     # sortie, ses retours batterie et ses redéparts appartiennent au constructeur : nous ne
@@ -225,7 +226,10 @@ def evaluate_mower_control(
                 progress is None
                 and not completion_state
                 and not managed_job_seen_incomplete
+                and not resume_required
                 and strong_dock
+                and operation != "charging"
+                and not mowing_forbidden
             )
         )
         and not outside
@@ -317,8 +321,20 @@ def evaluate_mower_control(
 
     # On rappelle uniquement quand le GAZON retire son autorisation. Une donnée machine incertaine
     # ne suffit pas : elle pourrait produire des rappels inutiles à chaque indisponibilité réseau.
-    if (outside or mowing) and snapshot.get("gazon_permet_tonte") is False and not returning:
+    if (outside or mowing) and mowing_forbidden and not returning:
         return command("dock", "retour_demande", "Les conditions du gazon ne permettent plus la tonte.")
+
+    # Une interdiction forte peut apparaître pendant une recharge intermédiaire. Même déjà à la
+    # base, le travail constructeur doit alors être explicitement arrêté avant de refermer le
+    # garage. Le coordinateur ne crée la dette de reprise qu'après le succès réel de `dock` ; si
+    # Home Assistant refuse la commande, le volet reste donc ouvert et aucune reprise fictive
+    # n'est mémorisée.
+    if cycle_active and not resume_required and strong_dock and mowing_forbidden:
+        return command(
+            "dock",
+            "interruption_recharge",
+            "Les conditions ne permettent plus la tonte : arrêt du cycle pendant la recharge.",
+        )
 
     # Tant que le départ accepté n'a pas encore été observé, ne rien répéter et garder un garage
     # éventuel disponible. Dès que le cycle est actif, les retours batterie et les redéparts sont
