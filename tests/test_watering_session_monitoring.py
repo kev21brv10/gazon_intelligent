@@ -10079,6 +10079,33 @@ class PilotageTondeuseCoordinateurTests(unittest.TestCase):
         self.assertEqual(sorti["mower_control_cycle_state"], "cycle_autonome")
         self.assertTrue(runtime["managed_cycle_active"])
 
+    def test_pluie_pendant_recharge_cree_la_dette_apres_dock_reussi(self) -> None:
+        coord, service = self._coord("actif")
+        coord._runtime_state["mower_control"] = {
+            "managed_cycle_active": True,
+            "managed_start_pending": False,
+        }
+        recharge_bloquee = self._snapshot() | {
+            "mower_operation_state": "charging",
+            "mower_battery": 35,
+            "gazon_permet_tonte": False,
+            "action_possible": False,
+            "mowing_block_reason_label": "Pluie en cours",
+            "mower_job_progress_pct": 42,
+            "mower_job_completion_state": "en_pause",
+        }
+
+        asyncio.run(coord._async_apply_mower_control(recharge_bloquee))
+
+        service.assert_awaited_once_with(
+            "lawn_mower", "dock", {"entity_id": "lawn_mower.esperance_jr"}, blocking=True
+        )
+        runtime = coord._runtime_state["mower_control"]
+        self.assertTrue(runtime["managed_cycle_active"])
+        self.assertTrue(runtime["resume_required"])
+        self.assertEqual(runtime["resume_reason"], "Pluie en cours")
+        self.assertEqual(recharge_bloquee["mower_control_cycle_state"], "reprise_attendue")
+
     def test_la_reprise_due_survit_au_redemarrage(self) -> None:
         source, _service = self._coord("actif")
         source._runtime_state["mower_control"] = {

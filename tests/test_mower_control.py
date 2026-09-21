@@ -197,6 +197,130 @@ def test_normal_battery_return_is_left_entirely_to_mower_autonomy():
     assert garage["mower_control_pending_action"] is None
 
 
+def test_rain_during_managed_recharge_stops_cycle_before_closing_garage():
+    charging_blocked = ready(
+        mower_operation_state="charging",
+        mower_battery=35,
+        mower_job_progress_pct=42,
+        mower_job_completion_state="en_pause",
+        gazon_permet_tonte=False,
+        action_possible=False,
+    )
+    result = decide(
+        charging_blocked,
+        runtime={"managed_cycle_active": True, "resume_required": False},
+        cover_entity="cover.garage_tondeuse",
+        cover_state="open",
+    )
+    assert result["mower_control_state"] == "interruption_recharge"
+    assert result["mower_control_pending_action"] == "dock"
+    assert result["mower_control_runtime_updates"].get("managed_cycle_active") is not False
+
+
+def test_blocked_recharge_without_job_telemetry_is_not_mistaken_for_completion():
+    result = decide(
+        ready(
+            mower_operation_state="charging",
+            mower_battery=35,
+            mower_job_progress_pct=None,
+            mower_job_completion_state=None,
+            gazon_permet_tonte=False,
+            action_possible=False,
+        ),
+        runtime={"managed_cycle_active": True, "resume_required": False},
+    )
+    assert result["mower_control_state"] == "interruption_recharge"
+    assert result["mower_control_pending_action"] == "dock"
+    assert result["mower_control_runtime_updates"].get("managed_cycle_active") is not False
+
+
+def test_interrupted_recharge_closes_then_resumes_exactly_once_when_safe():
+    blocked = ready(
+        mower_operation_state="charging",
+        mower_battery=100,
+        mower_job_progress_pct=42,
+        mower_job_completion_state="en_pause",
+        gazon_permet_tonte=False,
+        action_possible=False,
+    )
+    runtime = {
+        "managed_cycle_active": True,
+        "resume_required": True,
+        "resume_reason": "pluie",
+        "resume_requested_at": (NOW - timedelta(minutes=5)).isoformat(),
+        "docked_since": (NOW - timedelta(minutes=3)).isoformat(),
+    }
+    closing = decide(
+        blocked,
+        runtime=runtime,
+        settings={"tondeuse_garage_delai_fermeture": 2},
+        cover_entity="cover.garage_tondeuse",
+        cover_state="open",
+    )
+    assert closing["mower_control_pending_action"] == "close_cover"
+
+    reopening = decide(
+        blocked | {"gazon_permet_tonte": True, "action_possible": True},
+        runtime=runtime | {"docked_since": None},
+        cover_entity="cover.garage_tondeuse",
+        cover_state="closed",
+    )
+    assert reopening["mower_control_pending_action"] == "open_cover"
+
+    restarting = decide(
+        blocked | {"gazon_permet_tonte": True, "action_possible": True},
+        runtime=runtime
+        | {
+            "docked_since": None,
+            "garage_opened_at": (NOW - timedelta(minutes=1)).isoformat(),
+        },
+        settings={"tondeuse_garage_avance_ouverture": 0},
+        cover_entity="cover.garage_tondeuse",
+        cover_state="open",
+    )
+    assert restarting["mower_control_state"] == "reprise_demandee"
+    assert restarting["mower_control_pending_action"] == "start_mowing"
+
+
+def test_discouraged_window_does_not_interrupt_managed_recharge():
+    result = decide(
+        ready(
+            mower_operation_state="charging",
+            mower_battery=35,
+            mower_job_progress_pct=42,
+            mower_job_completion_state="en_pause",
+            mowing_window_state="discouraged",
+            gazon_permet_tonte=True,
+            action_possible=False,
+        ),
+        runtime={"managed_cycle_active": True, "resume_required": False},
+    )
+    assert result["mower_control_state"] == "cycle_autonome"
+    assert result["mower_control_pending_action"] is None
+
+
+def test_une_recharge_normale_sans_telemetrie_ne_termine_pas_le_cycle():
+    """Trou de couverture trouvé par mutation (22/09/2026) : le garde `operation != "charging"`
+    du repli sans télémétrie est bien correct dans le code (vérifié manuellement), mais aucun
+    test existant ne le prouvait — retirer ce garde faisait passer les 60 tests ciblés sans qu'un
+    seul échoue, reproduisant pourtant le danger initial (recharge normale, tonte encore
+    autorisée, aucune télémétrie de travail, prise pour une fin de cycle)."""
+    result = decide(
+        ready(
+            mower_operation_state="charging",
+            mower_battery=60,
+            mower_job_progress_pct=None,
+            mower_job_completion_state=None,
+            gazon_permet_tonte=True,
+            action_possible=True,
+        ),
+        runtime={"managed_cycle_active": True, "resume_required": False},
+    )
+    assert result["mower_control_state"] == "cycle_autonome"
+    assert result["mower_control_pending_action"] is None
+    assert result["mower_control_runtime_updates"].get("managed_cycle_active") is not False
+
+
 def test_pending_start_becomes_autonomous_once_activity_is_observed():
     result = decide(
         ready(
