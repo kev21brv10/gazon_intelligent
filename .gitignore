@@ -24,8 +24,8 @@ docs/node_red/
 .coverage.*
 htmlcov/
 
-# Documents de travail Claude/Codex : arbitrages et détails d'installation, gardés hors dépôt
-# (choix de Kévin, 16/09/2026). La référence d'architecture vit dans l'artefact, voir CLAUDE.md.
+# Fiches de travail interagents : arbitrages et détails d'installation, gardées hors dépôt.
+# La référence d'architecture vit dans l'artefact, voir CLAUDE.md (non versionné lui aussi).
 docs/claude-codex-shared-review.md
 docs/codex-handoff-notes.md
 docs/claude-codex-idees.md

@@ -3908,8 +3908,10 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     runtime["managed_start_pending"] = True
                     runtime["managed_start_requested_at"] = instant
                     # Référence au moment de la commande (0.97.25) : le pilote n'accepte ensuite
-                    # que des signaux plus récents que cette référence pour confirmer un vrai
-                    # départ — voir mower_control.evaluate_mower_control.
+                    # qu'une vraie TRANSITION par rapport à cette référence (identifiant, progression
+                    # ET état du travail) pour confirmer un vrai départ, jamais une simple valeur
+                    # déjà présente avant la commande — voir mower_control.evaluate_mower_control.
+                    runtime["managed_start_baseline_captured"] = True
                     runtime["managed_start_baseline_job_id"] = (
                         str(
                             snapshot.get("mower_job_followed_id")
@@ -3919,6 +3921,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         or None
                     )
                     runtime["managed_start_baseline_progress"] = snapshot.get("mower_job_progress_pct")
+                    runtime["managed_start_baseline_completion_state"] = (
+                        str(snapshot.get("mower_job_completion_state") or "").lower() or None
+                    )
                     if not reprise and runtime.get("managed_cycle_active") is not True:
                         runtime["managed_job_seen_incomplete"] = False
                         runtime["managed_job_id"] = None

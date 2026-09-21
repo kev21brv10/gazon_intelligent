@@ -10,9 +10,16 @@
   cycle autonome lancé qui n'avait jamais réellement commencé, et ne plus jamais relancer la
   machine.
 - **Un signal frais est désormais exigé** : une référence (identifiant de travail, progression,
-  horodatage) est mémorisée au moment même de la commande ; le départ n'est confirmé que sur un
-  signal postérieur à cette référence — sortie ou tonte observée, nouvel identifiant de travail,
-  ou progression qui a réellement augmenté depuis la commande.
+  état du travail, horodatage) est mémorisée au moment même de la commande ; le départ n'est
+  confirmé que sur une vraie TRANSITION par rapport à cette référence — sortie ou tonte observée,
+  nouvel identifiant de travail, progression qui a réellement augmenté, ou passage à un état actif
+  qui n'y était pas déjà. Une deuxième relecture a montré qu'un premier correctif laissait encore
+  passer un travail resté `en_pause` sans changement (même identifiant, même progression, tondeuse
+  toujours à quai) : corrigé en exigeant aussi une transition sur l'état du travail, pas seulement
+  sur l'identifiant et la progression.
+- **Repli prudent sur un état hérité d'avant ce correctif** : un cycle déjà en attente (persisté)
+  sans aucune référence capturée ne confirme le départ que sur un signal physique sans ambiguïté
+  (sortie ou tonte observée), jamais sur l'identifiant ou la progression seuls.
 - **Diagnostic après un long silence** : si aucun signal frais n'arrive dans les 15 minutes
   suivant la commande, l'état affiché devient « départ non confirmé » — purement informatif,
   aucune commande n'est relancée ni annulée.
@@ -20,9 +27,10 @@
   ce correctif ne change rien pour une installation restée en Observation, mais protège le
   passage futur à Actif.
 - **Vérifié** : cas de régression exact (travail ancien à 18 %, tondeuse à quai) reproduit et
-  couvert, avec 5 tests supplémentaires sur les signaux frais et l'expiration ; tué par mutation
-  (l'ancien comportement remis en place fait échouer 3 tests). Suite complète : 2163 tests,
-  verte.
+  couvert pour les trois signaux (identifiant, progression, état), plus l'état hérité sans
+  référence et l'expiration diagnostique — 9 tests dédiés au total ; chaque trou corrigé a été
+  confirmé par mutation (le comportement retiré fait échouer le test correspondant, jamais
+  d'autres). Suite complète : 2166 tests, verte.
 
 ## 1.0.0-rc.1
 
