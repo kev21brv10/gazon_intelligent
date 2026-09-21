@@ -214,6 +214,114 @@ def test_pending_start_becomes_autonomous_once_activity_is_observed():
     assert result["mower_control_runtime_updates"]["managed_cycle_active"] is True
 
 
+def test_un_vieux_pourcentage_ne_confirme_pas_un_depart_a_quai():
+    """Signalé en relecture de la PR #52 (21/09/2026) : un travail ANCIEN à 18 %, jamais remis à zéro,
+    ne doit pas faire croire à un départ confirmé tant que la tondeuse reste à quai."""
+    result = decide(
+        ready(
+            mower_is_docked=True,
+            mower_is_outside=False,
+            mower_is_mowing=False,
+            mower_operation_state="docked",
+            mower_job_progress_pct=18,
+            mower_job_completion_state="repos",
+            mower_job_id="ancien-job",
+        ),
+        runtime={
+            "managed_start_pending": True,
+            "managed_start_baseline_job_id": "ancien-job",
+            "managed_start_baseline_progress": 18,
+            "managed_start_requested_at": NOW.isoformat(),
+        },
+    )
+    assert result["mower_control_state"] == "depart_envoye"
+    assert result["mower_control_runtime_updates"].get("managed_start_pending") is not False
+    assert result["mower_control_runtime_updates"].get("managed_cycle_active") is not True
+
+
+def test_une_progression_qui_augmente_reellement_confirme_le_depart():
+    result = decide(
+        ready(
+            mower_is_docked=True,
+            mower_is_outside=False,
+            mower_is_mowing=False,
+            mower_operation_state="docked",
+            mower_job_progress_pct=19,
+            mower_job_id="ancien-job",
+        ),
+        runtime={
+            "managed_start_pending": True,
+            "managed_start_baseline_job_id": "ancien-job",
+            "managed_start_baseline_progress": 18,
+        },
+    )
+    assert result["mower_control_state"] == "cycle_autonome"
+    assert result["mower_control_runtime_updates"]["managed_cycle_active"] is True
+
+
+def test_un_nouvel_identifiant_de_travail_confirme_le_depart_meme_a_quai():
+    result = decide(
+        ready(
+            mower_is_docked=True,
+            mower_is_outside=False,
+            mower_is_mowing=False,
+            mower_operation_state="docked",
+            mower_job_progress_pct=0,
+            mower_job_id="nouveau-job",
+        ),
+        runtime={
+            "managed_start_pending": True,
+            "managed_start_baseline_job_id": "ancien-job",
+            "managed_start_baseline_progress": 18,
+        },
+    )
+    assert result["mower_control_state"] == "cycle_autonome"
+    assert result["mower_control_runtime_updates"]["managed_cycle_active"] is True
+
+
+def test_un_depart_jamais_confirme_le_dit_apres_un_long_delai():
+    result = decide(
+        ready(
+            mower_is_docked=True,
+            mower_is_outside=False,
+            mower_is_mowing=False,
+            mower_operation_state="docked",
+            mower_job_progress_pct=18,
+            mower_job_id="ancien-job",
+        ),
+        runtime={
+            "managed_start_pending": True,
+            "managed_start_baseline_job_id": "ancien-job",
+            "managed_start_baseline_progress": 18,
+            "managed_start_requested_at": (NOW - timedelta(minutes=16)).isoformat(),
+        },
+    )
+    assert result["mower_control_state"] == "depart_non_confirme"
+    # Purement diagnostique : aucune commande relancée, rien annulé.
+    assert result["mower_control_pending_action"] is None
+    assert "managed_start_pending" not in result["mower_control_runtime_updates"]
+
+
+def test_un_depart_recent_non_confirme_reste_silencieux() -> None:
+    result = decide(
+        ready(
+            mower_is_docked=True,
+            mower_is_outside=False,
+            mower_is_mowing=False,
+            mower_operation_state="docked",
+            mower_job_progress_pct=18,
+            mower_job_id="ancien-job",
+        ),
+        runtime={
+            "managed_start_pending": True,
+            "managed_start_baseline_job_id": "ancien-job",
+            "managed_start_baseline_progress": 18,
+            "managed_start_requested_at": (NOW - timedelta(minutes=14)).isoformat(),
+        },
+    )
+    assert result["mower_control_state"] == "depart_envoye"
+
+
 def test_resume_owed_bypasses_new_start_window_and_daily_quota_only():
     interrupted = ready(
         mowing_window_state="discouraged",
@@ -251,6 +359,9 @@ def test_completed_managed_job_clears_all_resume_markers():
     assert result["mower_control_runtime_updates"] == {
         "managed_start_pending": False,
         "managed_cycle_active": False,
+        "managed_start_baseline_job_id": None,
+        "managed_start_baseline_progress": None,
+        "managed_start_requested_at": None,
         "resume_required": False,
         "resume_reason": None,
         "resume_requested_at": None,

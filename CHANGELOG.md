@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.0.0-rc.2
+
+- **Un vieux pourcentage de tonte ne confirme plus un départ jamais observé** : signalé en
+  relecture de la PR #52. Après l'envoi de `start_mowing`, le pilote considérait le cycle
+  « bien parti » (`managed_cycle_active`) dès que la progression publiée par la tondeuse
+  passait sous 100 % — même si cette valeur venait d'un travail ancien, interrompu, jamais
+  remis à zéro, et que la tondeuse était toujours à quai. Le pilote pouvait alors croire un
+  cycle autonome lancé qui n'avait jamais réellement commencé, et ne plus jamais relancer la
+  machine.
+- **Un signal frais est désormais exigé** : une référence (identifiant de travail, progression,
+  horodatage) est mémorisée au moment même de la commande ; le départ n'est confirmé que sur un
+  signal postérieur à cette référence — sortie ou tonte observée, nouvel identifiant de travail,
+  ou progression qui a réellement augmenté depuis la commande.
+- **Diagnostic après un long silence** : si aucun signal frais n'arrive dans les 15 minutes
+  suivant la commande, l'état affiché devient « départ non confirmé » — purement informatif,
+  aucune commande n'est relancée ni annulée.
+- **Aucun impact aujourd'hui** : les commandes réelles ne partent qu'en mode Pilotage **Actif** ;
+  ce correctif ne change rien pour une installation restée en Observation, mais protège le
+  passage futur à Actif.
+- **Vérifié** : cas de régression exact (travail ancien à 18 %, tondeuse à quai) reproduit et
+  couvert, avec 5 tests supplémentaires sur les signaux frais et l'expiration ; tué par mutation
+  (l'ancien comportement remis en place fait échouer 3 tests). Suite complète : 2163 tests,
+  verte.
+
 ## 1.0.0-rc.1
 
 - **Premiere candidate officielle a la version stable** : les fonctions validees des versions

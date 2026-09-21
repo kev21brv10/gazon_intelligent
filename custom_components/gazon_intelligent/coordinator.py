@@ -3906,6 +3906,19 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     # recharge/redépart sans autre commande de l'intégration.
                     reprise = runtime.get("resume_required") is True
                     runtime["managed_start_pending"] = True
+                    runtime["managed_start_requested_at"] = instant
+                    # Référence au moment de la commande (0.97.25) : le pilote n'accepte ensuite
+                    # que des signaux plus récents que cette référence pour confirmer un vrai
+                    # départ — voir mower_control.evaluate_mower_control.
+                    runtime["managed_start_baseline_job_id"] = (
+                        str(
+                            snapshot.get("mower_job_followed_id")
+                            or snapshot.get("mower_job_id")
+                            or ""
+                        )
+                        or None
+                    )
+                    runtime["managed_start_baseline_progress"] = snapshot.get("mower_job_progress_pct")
                     if not reprise and runtime.get("managed_cycle_active") is not True:
                         runtime["managed_job_seen_incomplete"] = False
                         runtime["managed_job_id"] = None

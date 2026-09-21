@@ -9974,6 +9974,30 @@ class PilotageTondeuseCoordinateurTests(unittest.TestCase):
         service.assert_awaited_once()
         self.assertEqual(snapshot["mower_control_state"], "depart_envoye")
 
+    def test_une_commande_envoyee_memorise_une_reference_pour_confirmer_le_depart(self) -> None:
+        """Signalé en relecture de la PR #52 (21/09/2026) : sans référence mémorisée au moment de la
+        commande, un vieux pourcentage de travail suffisait à confirmer un départ jamais
+        réellement observé."""
+        coord, service = self._coord("actif")
+        snapshot = self._snapshot() | {
+            "mower_job_progress_pct": 18,
+            "mower_job_id": "ancien-job",
+        }
+
+        asyncio.run(coord._async_apply_mower_control(snapshot))
+
+        service.assert_awaited_once()
+        runtime = coord._runtime_state["mower_control"]
+        self.assertEqual(runtime["managed_start_baseline_job_id"], "ancien-job")
+        self.assertEqual(runtime["managed_start_baseline_progress"], 18)
+
+        # Même relevé exactement (tondeuse toujours à quai, même vieux pourcentage) au cycle
+        # suivant : la commande ne doit ni se répéter, ni être prise pour un départ confirmé.
+        asyncio.run(coord._async_apply_mower_control(snapshot))
+        service.assert_awaited_once()
+        self.assertEqual(snapshot["mower_control_state"], "depart_envoye")
+        self.assertIsNot(coord._runtime_state["mower_control"].get("managed_cycle_active"), True)
+
     def test_position_partielle_du_volet_est_transmise_au_pilote(self) -> None:
         coord, service = self._coord("actif")
         coord._get_conf = lambda cle: (
