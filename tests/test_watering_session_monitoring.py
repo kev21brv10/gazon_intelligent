@@ -10056,10 +10056,28 @@ class PilotageTondeuseCoordinateurTests(unittest.TestCase):
         self.assertFalse(runtime["resume_required"])
         self.assertTrue(runtime["managed_start_pending"])
 
-        # Même état cloud encore à quai au cycle suivant : aucun second start_mowing.
+        # Même état cloud encore à quai au cycle suivant : aucun second start_mowing. Avec le
+        # signal frais exigé depuis la 0.97.25, un relevé identique (toujours à quai, même
+        # progression, même état) ne confirme plus le départ à sa place — corrigé après une
+        # relecture qui a montré que ce relevé inchangé reproduisait exactement le faux positif
+        # signalé lors d'une relecture.
         asyncio.run(coord._async_apply_mower_control(retour))
         self.assertEqual(service.await_count, 2)
-        self.assertEqual(retour["mower_control_cycle_state"], "cycle_autonome")
+        self.assertEqual(retour["mower_control_cycle_state"], "depart_envoye")
+
+        # Une fois la sortie réellement observée, le départ est enfin confirmé.
+        sorti = self._snapshot() | {
+            "mower_is_docked": False,
+            "mower_is_outside": True,
+            "mower_is_mowing": True,
+            "mower_operation_state": "mowing",
+            "mower_job_progress_pct": 43,
+            "mower_job_completion_state": "en_cours",
+        }
+        asyncio.run(coord._async_apply_mower_control(sorti))
+        self.assertEqual(service.await_count, 2)
+        self.assertEqual(sorti["mower_control_cycle_state"], "cycle_autonome")
+        self.assertTrue(runtime["managed_cycle_active"])
 
     def test_la_reprise_due_survit_au_redemarrage(self) -> None:
         source, _service = self._coord("actif")

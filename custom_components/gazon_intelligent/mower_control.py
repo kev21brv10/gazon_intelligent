@@ -146,29 +146,38 @@ def evaluate_mower_control(
     managed_job_seen_incomplete = runtime.get("managed_job_seen_incomplete") is True
     managed_job_id = runtime.get("managed_job_id")
     observed_job_id = snapshot.get("mower_job_followed_id") or snapshot.get("mower_job_id")
-    # ⚠️ Un signal FRAIS est exigé (0.97.25, signalé en relecture de la PR #52). `mower_job_progress_pct`
-    # peut encore afficher le pourcentage d'un ANCIEN travail (interrompu, jamais remis à zéro)
-    # au moment même où la commande est envoyée : sans comparaison à une référence, n'importe
-    # quelle valeur sous 100 % suffisait à faire croire un départ confirmé alors que la tondeuse
-    # n'avait jamais quitté sa station — le cycle managed_cycle_active s'armait pour rien, et
-    # l'intégration ne relançait plus jamais la tondeuse.
+    # ⚠️ Un signal FRAIS est exigé (0.97.25, signalé en relecture de la PR #52, complété après une
+    # deuxième relecture). `mower_job_progress_pct` et `mower_job_completion_state` peuvent encore
+    # décrire un ANCIEN travail (interrompu, jamais remis à zéro) au moment même où la commande est
+    # envoyée : sans comparaison à une référence, n'importe quelle valeur sous 100 % — ou un simple
+    # `en_pause` déjà présent avant la commande — suffisait à faire croire un départ confirmé alors
+    # que la tondeuse n'avait jamais quitté sa station. Les TROIS signaux dérivés du travail
+    # (identifiant, progression, état) exigent donc désormais une vraie TRANSITION par rapport à la
+    # référence mémorisée au moment de la commande (`coordinator.py`), pas seulement une valeur.
+    #
+    # Repli prudent : un runtime persistant d'avant cette référence (mise à jour en cours, aucune
+    # référence capturée) ne doit ACCEPTER que les signaux physiques sans ambiguïté — dehors ou en
+    # train de tondre — jamais une comparaison à une référence absente.
+    baseline_captured = runtime.get("managed_start_baseline_captured") is True
     start_baseline_job_id = runtime.get("managed_start_baseline_job_id")
     start_baseline_progress = _number(runtime.get("managed_start_baseline_progress"))
-    fresh_job = observed_job_id not in (None, "") and str(observed_job_id) != str(
-        start_baseline_job_id or ""
-    )
-    fresh_progress = (
-        progress is not None
-        and start_baseline_progress is not None
-        and progress > start_baseline_progress
-    )
-    observed_activity = (
-        outside
-        or mowing
-        or completion_state in {"en_cours", "en_pause"}
-        or fresh_job
-        or fresh_progress
-    )
+    start_baseline_completion_state = str(
+        runtime.get("managed_start_baseline_completion_state") or ""
+    ).lower()
+    if baseline_captured:
+        fresh_job = observed_job_id not in (None, "") and str(observed_job_id) != str(
+            start_baseline_job_id
+        )
+        fresh_progress = progress is not None and (
+            start_baseline_progress is None or progress > start_baseline_progress
+        )
+        fresh_completion_transition = (
+            completion_state in {"en_cours", "en_pause"}
+            and completion_state != start_baseline_completion_state
+        )
+    else:
+        fresh_job = fresh_progress = fresh_completion_transition = False
+    observed_activity = outside or mowing or fresh_job or fresh_progress or fresh_completion_transition
     if start_pending and observed_activity:
         start_pending = False
         cycle_active = True
@@ -176,8 +185,10 @@ def evaluate_mower_control(
             {
                 "managed_start_pending": False,
                 "managed_cycle_active": True,
+                "managed_start_baseline_captured": False,
                 "managed_start_baseline_job_id": None,
                 "managed_start_baseline_progress": None,
+                "managed_start_baseline_completion_state": None,
                 "managed_start_requested_at": None,
             }
         )
@@ -220,8 +231,10 @@ def evaluate_mower_control(
                 "resume_requested_at": None,
                 "managed_job_seen_incomplete": False,
                 "managed_job_id": None,
+                "managed_start_baseline_captured": False,
                 "managed_start_baseline_job_id": None,
                 "managed_start_baseline_progress": None,
+                "managed_start_baseline_completion_state": None,
                 "managed_start_requested_at": None,
             }
         )
