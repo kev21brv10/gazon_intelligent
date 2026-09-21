@@ -213,6 +213,20 @@ def evaluate_mower_control(
                     or str(observed_job_id) == str(managed_job_id)
                 )
             )
+            or (
+                # Repli pour un adaptateur qui ne publie JAMAIS ni progression ni état de travail
+                # (relecture automatique de la PR #52, 21/09/2026) : sans lui, `cycle_active` ne
+                # retombe jamais — plus aucun départ ni fermeture de garage n'est possible après le
+                # tout premier cycle, y compris après redémarrage puisque l'état est persisté. Seul
+                # un signal de quai FORT (mower_dock_signal_fort) sert de substitut, et seulement en
+                # l'absence totale de télémétrie ; un adaptateur qui publie la progression garde la
+                # détection précise ci-dessus, jamais ce repli — une simple pause batterie mi-travail
+                # ne doit jamais être prise pour une fin de cycle.
+                progress is None
+                and not completion_state
+                and not managed_job_seen_incomplete
+                and strong_dock
+            )
         )
         and not outside
         and not mowing
@@ -313,10 +327,24 @@ def evaluate_mower_control(
     # elle-même le cycle et reprend la responsabilité jusqu'à son unique commande de reprise.
     if start_pending:
         if _elapsed(now, runtime.get("managed_start_requested_at"), MOWER_MANAGED_START_TIMEOUT_MINUTES):
+            # ⚠️ Libère l'état plutôt que de le montrer indéfiniment (relecture automatique de la
+            # PR #52, 21/09/2026) : un simple changement de libellé sans rien effacer laissait
+            # `managed_start_pending` bloqué pour toujours, sans plus jamais retenter le départ. La
+            # nouvelle tentative reste protégée par le délai habituel entre deux commandes
+            # (`tondeuse_pilotage_delai_commandes`) et par celui-ci (le prochain départ ne peut pas
+            # se reproduire avant la prochaine évaluation, ~2 min plus tard).
             return result(
                 "depart_non_confirme",
                 "Départ envoyé mais aucun signal de sortie confirmée après un long délai : "
-                "à vérifier sur la tondeuse.",
+                "nouvelle tentative autorisée au prochain cycle.",
+                updates={
+                    "managed_start_pending": False,
+                    "managed_start_baseline_captured": False,
+                    "managed_start_baseline_job_id": None,
+                    "managed_start_baseline_progress": None,
+                    "managed_start_baseline_completion_state": None,
+                    "managed_start_requested_at": None,
+                },
             )
         return result(
             "depart_envoye",

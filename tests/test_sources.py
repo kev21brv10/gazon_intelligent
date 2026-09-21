@@ -91,7 +91,9 @@ class LaListeDesEntreesTests(unittest.TestCase):
         rosee = sources.PAR_CLE["capteur_rosee"]
         self.assertIn("(air)", point_de_rosee.titre)
         self.assertNotIn("herbe", point_de_rosee.titre.lower())
-        self.assertEqual(point_de_rosee.unites, sources.UNITES_TEMPERATURE)
+        # °C uniquement (0.97.25, relecture automatique) : la valeur n'est jamais convertie avant
+        # comparaison, comme la température de l'air — un °F ou K serait lu comme des °C.
+        self.assertEqual(point_de_rosee.unites, ("°C",))
         self.assertEqual(point_de_rosee.classes, ("temperature",))
         self.assertNotEqual(point_de_rosee.indices, rosee.indices)
 
@@ -234,6 +236,26 @@ class CeQueLaPageAccepteTests(unittest.TestCase):
         ):
             with self.subTest(entity_id=entity_id):
                 self.assertIsNone(self._refus("capteur_point_de_rosee", entity_id, "°C", "temperature", nom=nom))
+
+    def test_le_point_de_rosee_refuse_le_fahrenheit_et_le_kelvin(self) -> None:
+        """Corrigé en relecture automatique de la PR #52 (21/09/2026) : la valeur n'est jamais
+        convertie avant d'être comparée à une température en °C dans `estimate_rosee` — un
+        capteur en °F ou K lu tel quel ferait croire l'herbe mouillée en permanence (ou jamais)."""
+        for unite in ("°F", "K"):
+            with self.subTest(unite=unite):
+                self.assertIsNotNone(
+                    self._refus(
+                        "capteur_point_de_rosee",
+                        "sensor.station_meteo_jardin_point_de_rosee",
+                        unite,
+                        "temperature",
+                    )
+                )
+        self.assertIsNone(
+            self._refus(
+                "capteur_point_de_rosee", "sensor.station_meteo_jardin_point_de_rosee", "°C", "temperature"
+            )
+        )
 
     def test_le_point_de_rosee_et_la_rosee_sur_l_herbe_ne_se_substituent_jamais(self) -> None:
         # Le même capteur réel de station (un point de rosée en °C) est accepté pour l'un,

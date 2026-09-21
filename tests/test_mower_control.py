@@ -371,9 +371,51 @@ def test_un_depart_jamais_confirme_le_dit_apres_un_long_delai():
         },
     )
     assert result["mower_control_state"] == "depart_non_confirme"
-    # Purement diagnostique : aucune commande relancée, rien annulé.
+    # Corrigé en relecture automatique de la PR #52 (21/09/2026) : un simple changement de libellé
+    # sans rien effacer bloquait `managed_start_pending` pour toujours. L'état est maintenant
+    # libéré pour permettre une nouvelle tentative au prochain cycle (aucune commande n'est
+    # relancée dans CE même appel : `mower_control_pending_action` reste vide ici).
     assert result["mower_control_pending_action"] is None
-    assert "managed_start_pending" not in result["mower_control_runtime_updates"]
+    updates = result["mower_control_runtime_updates"]
+    assert updates["managed_start_pending"] is False
+    assert updates["managed_start_baseline_captured"] is False
+    assert updates["managed_start_baseline_job_id"] is None
+    assert updates["managed_start_baseline_progress"] is None
+    assert updates["managed_start_baseline_completion_state"] is None
+    assert updates["managed_start_requested_at"] is None
+
+
+def test_apres_expiration_une_nouvelle_tentative_part_au_cycle_suivant() -> None:
+    """Le pendant du test précédent : une fois l'état libéré, le cycle SUIVANT doit pouvoir
+    retenter un départ normalement — pas rester bloqué pour autant."""
+    expire = decide(
+        ready(
+            mower_is_docked=True,
+            mower_is_outside=False,
+            mower_is_mowing=False,
+            mower_operation_state="docked",
+            mower_job_progress_pct=18,
+            mower_job_id="ancien-job",
+        ),
+        runtime={
+            "managed_start_pending": True,
+            **_BASELINE_ANCIEN_JOB,
+            "managed_start_requested_at": (NOW - timedelta(minutes=16)).isoformat(),
+        },
+    )
+    runtime_apres = expire["mower_control_runtime_updates"]
+    resultat_suivant = decide(
+        ready(
+            mower_is_docked=True,
+            mower_is_outside=False,
+            mower_is_mowing=False,
+            mower_operation_state="docked",
+            mower_job_progress_pct=18,
+            mower_job_id="ancien-job",
+        ),
+        runtime=runtime_apres,
+    )
+    assert resultat_suivant["mower_control_pending_action"] == "start_mowing"
 
 
 def test_un_depart_recent_non_confirme_reste_silencieux() -> None:
@@ -443,6 +485,34 @@ def test_completed_managed_job_clears_all_resume_markers():
         "managed_job_seen_incomplete": False,
         "managed_job_id": None,
     }
+
+
+def test_un_adaptateur_sans_telemetrie_ne_bloque_pas_le_cycle_pour_toujours():
+    """Relecture automatique de la PR #52 (21/09/2026) : un adaptateur qui ne publie jamais ni
+    progression ni état de travail ne pouvait jamais faire retomber `managed_cycle_active` —
+    plus aucun départ ni fermeture de garage n'était possible après le tout premier cycle."""
+    result = decide(
+        ready(),  # à quai, ni dehors ni en train de tondre, sans progression ni état publiés
+        runtime={"managed_cycle_active": True, "managed_start_pending": False},
+    )
+    assert result["mower_control_state"] == "cycle_termine"
+    assert result["mower_control_runtime_updates"]["managed_cycle_active"] is False
+
+
+def test_un_adaptateur_sans_telemetrie_n_efface_pas_un_cycle_qui_a_deja_eu_une_progression():
+    """Le garde-fou du repli : un adaptateur qui A DÉJÀ publié une progression incomplète ne doit
+    jamais basculer sur ce repli — une simple pause batterie mi-travail, tondeuse rentrée le temps
+    de charger, ne doit jamais être prise pour une fin de cycle."""
+    result = decide(
+        ready(),
+        runtime={
+            "managed_cycle_active": True,
+            "managed_start_pending": False,
+            "managed_job_seen_incomplete": True,
+        },
+    )
+    assert result["mower_control_state"] != "cycle_termine"
+    assert result["mower_control_runtime_updates"].get("managed_cycle_active") is not False
 
 
 def test_raw_progress_can_finish_cycle_without_auto_declaration_state():

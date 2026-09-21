@@ -170,7 +170,11 @@ SOURCES: tuple[Source, ...] = (
         CONF_CAPTEUR_POINT_DE_ROSEE, "Point de rosée (air)", "le point de rosée", "air",
         "Affine la détection de l'herbe mouillée quand aucune « Rosée sur l'herbe » n'est branchée.",
         "Le point de rosée de l'entité météo.",
-        unites=UNITES_TEMPERATURE,
+        # ⚠️ °C UNIQUEMENT (corrigé en relecture automatique de la PR #52, 21/09/2026) : la valeur
+        # est comparée telle quelle à une température en °C dans `estimate_rosee`, sans conversion
+        # — comme `CONF_CAPTEUR_TEMPERATURE`. Un capteur en °F ou K y serait lu comme des °C (50 °F
+        # traité comme 50 °C), faisant croire l'herbe mouillée en permanence et bloquant la tonte.
+        unites=("°C",),
         classes=("temperature",),
         indices=("rosee", "dew"),
         exige_indice=True,
