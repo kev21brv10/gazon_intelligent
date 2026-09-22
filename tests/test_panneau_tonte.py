@@ -194,5 +194,62 @@ class PastilleTonteTests(unittest.TestCase):
         self.assertNotIn("Ce mois-ci", sursemis)
 
 
+SCRIPT_MAINTENANT = r"""
+const fs = require("fs");
+const vm = require("vm");
+const { chemin, cas } = JSON.parse(fs.readFileSync(0, "utf8"));
+const ctx = {
+  HTMLElement: class {},
+  customElements: { get: () => undefined, define: (nom, classe) => { ctx.Classe = classe; } },
+  console, structuredClone,
+};
+ctx.window = ctx;
+vm.createContext(ctx);
+vm.runInContext(fs.readFileSync(chemin, "utf8"), ctx);
+const sorties = cas.map((c) => {
+  const p = Object.create(ctx.Classe.prototype);
+  p._hass = { config: { time_zone: "Europe/Paris" }, states: {
+    "sensor.assistant": { state: c.action, attributes: { action: c.action, status: c.statutAssistant, reason: "Tonte autorisée" } },
+    "binary_sensor.tonte": { state: c.gazon ? "on" : "off", attributes: { tonte_statut: c.statutTonte } },
+  } };
+  p._donnees = { entites: { assistant: "sensor.assistant", tonte_autorisee: "binary_sensor.tonte" } };
+  p._arrosageEnCours = () => false;
+  p._commandesEnCours = new Set();
+  p._blocageMeriteAlerte = () => false;
+  p._texteSession = () => "";
+  p._sessionActive = () => false;
+  return p._maintenantHtml({ maintenant: { annee: 2026, mois: 9, jour: 22 } });
+});
+process.stdout.write(JSON.stringify(sorties));
+"""
+
+
+@unittest.skipUnless(NODE, "Node n'est pas installé")
+class BandeauMaintenantTontePrecautionTests(unittest.TestCase):
+    """L'assistant range « autorisee_avec_precaution » et « a_surveiller » dans le même
+    statut « pas bloqué » que « autorisee » (assistant.py : `actionable_statuses`). Le
+    titre du bandeau « En ce moment » suivait ce regroupement au lieu du vrai statut :
+    même dès que la tonte était juste à surveiller, la page affirmait « possible ».
+    """
+
+    def test_le_titre_reprend_le_vrai_statut_de_tonte(self) -> None:
+        cas = [
+            {"action": "tonte", "statutAssistant": "action_required", "statutTonte": "autorisee", "gazon": True},
+            {"action": "tonte", "statutAssistant": "action_required", "statutTonte": "autorisee_avec_precaution", "gazon": True},
+            {"action": "tonte", "statutAssistant": "action_required", "statutTonte": "a_surveiller", "gazon": True},
+        ]
+        sortie = subprocess.run(
+            [NODE, "-e", SCRIPT_MAINTENANT],
+            input=json.dumps({"chemin": str(PANNEAU), "cas": cas}),
+            capture_output=True, text=True, check=True, timeout=60,
+        )
+        autorisee, precaution, surveiller = json.loads(sortie.stdout)
+        self.assertIn("La tonte est possible</h2>", autorisee)
+        self.assertIn("possible, avec précaution", precaution)
+        self.assertNotIn("La tonte est possible</h2>", precaution)
+        self.assertIn("Tonte à surveiller", surveiller)
+        self.assertNotIn("La tonte est possible</h2>", surveiller)
+
+
 if __name__ == "__main__":
     unittest.main()

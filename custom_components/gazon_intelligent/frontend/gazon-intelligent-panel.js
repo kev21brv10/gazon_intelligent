@@ -4745,6 +4745,14 @@ class GazonIntelligentPanel extends HTMLElement {
     let titre = fiche ? (bloque && fiche.attente) || fiche.titre : majuscule(action.replace(/_/g, " "));
     let icone = fiche?.icone || "mdi:timer-sand";
     if (action === "aucune_action" && statut === "no_need") titre = "Tout va bien";
+    // L'assistant range « autorisee_avec_precaution » et « a_surveiller » dans le même statut
+    // « pas bloqué » que « autorisee » (assistant.py, actionable_statuses) : le titre suivait donc
+    // ce regroupement et annonçait « possible » sans nuance, même en précaution ou à surveiller.
+    if (action === "tonte" && !bloque) {
+      const statutTonte = String(this._a("tonte_autorisee", "tonte_statut") || "");
+      if (statutTonte === "autorisee_avec_precaution") titre = "La tonte est possible, avec précaution";
+      else if (statutTonte && statutTonte !== "autorisee") titre = `Tonte ${minuscule(libelleDe(STATUTS_TONTE, statutTonte))}`;
+    }
     let sous = majuscule(a("reason") || "");
     let session = "";
     if (enCours) {
