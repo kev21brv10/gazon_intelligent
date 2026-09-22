@@ -675,6 +675,37 @@ class AssistantDecisionTests(unittest.TestCase):
         self.assertEqual(conseil_entity.native_value, expected)
         self.assertEqual(conseil_entity.extra_state_attributes["summary"], expected)
 
+    def test_public_action_bare_watering_block_does_not_hide_mowing_advice(self) -> None:
+        """Trouvé en auditant chaque entité/attribut de l'intégration sur l'installation réelle
+        le 22/09/2026 : `type_arrosage=bloque` sans motif nommé (avant l'heure du prochain
+        micro-cycle graines, par exemple) affichait « Arrosage bloqué par conditions. » nu à
+        la place du conseil tonte déjà connu et bien plus précis. Contrairement au test
+        précédent (motif NOMMÉ « Sol non adapté »), ici aucun libellé n'existe : rien à perdre
+        en laissant le conseil tonte remonter.
+        """
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={
+                "action_recommandee": "Réévalue au prochain cycle météo.",
+                "type_arrosage": "bloque",
+                "block_reason": None,
+                "objectif_mm": 0.0,
+                "besoin_mm": 1.0,
+                "arrosage_recommande": False,
+                "assistant": {
+                    "action": "tonte",
+                    "moment": "attendre",
+                    "quantity_mm": 0.0,
+                    "status": "blocked",
+                    "reason": "Sursemis / levée (J+6) : tonte suspendue jusqu'à J+7, le temps que les graines s'ancrent.",
+                },
+            },
+        )
+
+        entity = sensor.GazonActionRecommandeeSensor(coordinator)
+
+        self.assertEqual(entity.native_value, "Attends avant de tondre.")
+
     def test_conseil_principal_sensor_reports_low_battery_delay_for_mowing(self) -> None:
         coordinator = _FakeCoordinator(
             entry=_FakeEntry(),
