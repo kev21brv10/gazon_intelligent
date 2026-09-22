@@ -242,17 +242,17 @@ def _phase_adjusted_mowing_frequency(
         return 1.5, "1 à 2 / semaine"
     if phase_dominante != "Semis":
         return _seasonal_mowing_frequency(month, reglages)
-    if sous_phase in {"Germination", "Enracinement"}:
+    if _semis_tonte_bloquee(phase_bundle, reglages):
         return 0.0, "0 / semaine"
-    if sous_phase == "Reprise":
+    if sous_phase in {"Germination", "Enracinement", "Reprise"}:
         return 1.0, "1 / semaine"
     if sous_phase == "Stabilisation":
         return 2.0, "2 / semaine"
     return 1.0, "1 / semaine"
 
 
-# Semis sur sol NU : la tonte attend l'installation (comportement historique, conservé).
-_SURSEMIS_MOWING_BLOCKED_SUBPHASES = {"Germination", "Enracinement"}
+# Semis sur sol NU : la tonte attend l'installation, sans lier ce délai aux stades d'arrosage.
+SEMIS_REPRISE_TONTE_JOUR = 25
 
 # SURSEMIS — graines dans un gazon EN PLACE (arbitrage de Kévin, 16/09/2026). Sources relues :
 #   · Purdue AY-13-W (PDF lu) : « Mow frequently to limit the competition from the established
@@ -282,6 +282,24 @@ def _sursemis_en_levee(phase_bundle: dict[str, Any], reglages: dict[str, Any] | 
     except (TypeError, ValueError):
         age = 0
     return age <= levee_sursemis_jours(reglages)
+
+
+def semis_reprise_tonte_jour(reglages: dict[str, Any] | None = None) -> int:
+    """Premier jour où la tonte d'un Semis peut reprendre, indépendamment de l'arrosage."""
+    return int(lire(reglages, "semis_reprise_tonte_jours", SEMIS_REPRISE_TONTE_JOUR))
+
+
+def _semis_tonte_bloquee(
+    phase_bundle: dict[str, Any],
+    reglages: dict[str, Any] | None = None,
+) -> bool:
+    if str(phase_bundle.get("phase_dominante") or "") != "Semis":
+        return False
+    try:
+        age = int(phase_bundle.get("phase_age_days") or 0)
+    except (TypeError, ValueError):
+        age = 0
+    return age < semis_reprise_tonte_jour(reglages)
 
 
 def _mowing_window_label(state: str) -> str:
@@ -1210,7 +1228,6 @@ def _mowing_projection_forecast_offset_days(
     wind = float(context.vent or weather_profile.get("weather_wind_speed") or 0.0)
     temperature = float(context.temperature or 0.0)
     phase_dominante = str(phase_bundle.get("phase_dominante") or "")
-    sous_phase = str(phase_bundle.get("sous_phase") or "")
 
     if pluie_demain >= 2.0 or precip_probability >= 85.0:
         offsets.append(1)
@@ -1241,9 +1258,9 @@ def _mowing_projection_forecast_offset_days(
         offsets.append(1)
         reasons.append("sechage_faible")
 
-    if phase_dominante == "Semis" and sous_phase in {"Germination", "Enracinement"}:
+    if _semis_tonte_bloquee(phase_bundle, context.reglages):
         offsets.append(1)
-        reasons.append(f"sous_phase={sous_phase.lower()}")
+        reasons.append("semis=installation")
     elif _sursemis_en_levee(phase_bundle, context.reglages):
         offsets.append(1)
         reasons.append("sursemis=levee")
@@ -1470,7 +1487,11 @@ def _to_float_safe(value: Any) -> float | None:
         return None
 
 
-def _growth_rate_cm_per_day(phase_bundle: dict[str, Any], month: int) -> float:
+def _growth_rate_cm_per_day(
+    phase_bundle: dict[str, Any],
+    month: int,
+    reglages: dict[str, Any] | None = None,
+) -> float:
     """Vitesse de croissance journalière estimée selon la phase et le mois."""
     phase_dominante = str(phase_bundle.get("phase_dominante") or "")
     sous_phase = str(phase_bundle.get("sous_phase") or "")
@@ -1478,9 +1499,9 @@ def _growth_rate_cm_per_day(phase_bundle: dict[str, Any], month: int) -> float:
     # le gazon en place pousse au rythme du mois — le mettre à zéro (comportement d'avant le
     # 16/09/2026) le laissait « à 3 cm » dans le modèle pendant qu'il en gagnait 7.
     if phase_dominante == "Semis":
-        if sous_phase in {"Germination", "Enracinement"}:
+        if _semis_tonte_bloquee(phase_bundle, reglages):
             return 0.0
-        if sous_phase == "Reprise":
+        if sous_phase in {"Germination", "Enracinement", "Reprise"}:
             return 0.2
     return _GROWTH_RATE_BY_MONTH.get(month, 0.3)
 
@@ -1575,7 +1596,7 @@ def _grass_growth_details(
     if cutting_height_cm is None or cutting_height_cm <= 0:
         return None
     jours_pleins = max((context.today - last_mowing).days, 0)
-    taux = _growth_rate_cm_per_day(phase_bundle, context.today.month)
+    taux = _growth_rate_cm_per_day(phase_bundle, context.today.month, context.reglages)
     # Au REDÉMARRAGE, le premier cycle tourne sans bilan hydrique : le frein d'eau était
     # silencieusement sauté, donc un frein plus OPTIMISTE et une hauteur trop haute publiée
     # pendant ~1 s (constaté le 01/08/2026 : 6,0 puis 5,9 à 0,9 s d'intervalle, et le même
@@ -1726,7 +1747,9 @@ def _mowing_spacing_min_days(
     phase_dominante = str(phase_bundle.get("phase_dominante") or "")
     sous_phase = str(phase_bundle.get("sous_phase") or "")
     if phase_dominante == "Semis":
-        if sous_phase == "Reprise":
+        if not _semis_tonte_bloquee(phase_bundle, reglages) and sous_phase in {
+            "Germination", "Enracinement", "Reprise"
+        }:
             return 6
         if sous_phase == "Stabilisation":
             return 3
@@ -1758,13 +1781,10 @@ def _active_seeding_mowing_floor(context: DecisionContext) -> tuple[date | None,
             candidate = start + timedelta(days=levee_sursemis_jours(context.reglages) + 1)
             hint = "sursemis=levee_masquee"
         elif phase == "Semis":
-            fin_enracinement = dict(
-                (libelle, borne)
-                for borne, libelle in regles_des_sous_phases("Semis", context.reglages)
-            ).get("Enracinement", 24)
-            if age_days <= fin_enracinement:
-                candidate = start + timedelta(days=fin_enracinement + 1)
-                hint = "semis=enracinement_masque"
+            reprise_jour = semis_reprise_tonte_jour(context.reglages)
+            if age_days < reprise_jour:
+                candidate = start + timedelta(days=reprise_jour)
+                hint = "semis=installation_masquee"
         if candidate is not None and (floor is None or candidate > floor):
             floor = candidate
             floor_hint = hint
@@ -1787,7 +1807,6 @@ def _project_next_mowing_date(
 
     if reason_code in {"phase_sursemis", "phase_traitement", "phase_hivernage"}:
         phase_dominante = str(phase_bundle.get("phase_dominante") or "")
-        sous_phase = str(phase_bundle.get("sous_phase") or "")
         phase_start = phase_bundle.get("date_action")
         if phase_dominante == "Sursemis" and phase_start:
             try:
@@ -1801,18 +1820,15 @@ def _project_next_mowing_date(
                 )
             except ValueError:
                 anchor = None
-        elif phase_dominante == "Semis" and sous_phase in {"Germination", "Enracinement"} and phase_start:
+        elif phase_dominante == "Semis" and _semis_tonte_bloquee(phase_bundle, context.reglages) and phase_start:
             try:
-                # Premier jour de la reprise : le lendemain de la fin de l'enracinement (J+25 par
-                # défaut). Écrit « 25 » en dur, il ne suivait pas la borne réglée.
-                fin_enracinement = dict(
-                    (libelle, borne) for borne, libelle in regles_des_sous_phases("Semis", context.reglages)
-                ).get("Enracinement", 24)
-                reprise_start_date = date.fromisoformat(str(phase_start)) + timedelta(days=fin_enracinement + 1)
+                reprise_start_date = date.fromisoformat(str(phase_start)) + timedelta(
+                    days=semis_reprise_tonte_jour(context.reglages)
+                )
                 return (
                     reprise_start_date.isoformat(),
                     reprise_start_date.strftime("%d/%m/%Y"),
-                    f"sous_phase={sous_phase.lower()}",
+                    "semis=installation",
                 )
             except ValueError:
                 anchor = None
@@ -2279,13 +2295,12 @@ def _select_mowing_block_reason(
 
     # Le CODE public reste `phase_sursemis` pour les deux modes : Node-RED et la carte le
     # connaissent déjà ; c'est le libellé qui dit de quel semis il s'agit.
-    if phase_dominante == "Semis":
-        if phase_bundle["sous_phase"] in _SURSEMIS_MOWING_BLOCKED_SUBPHASES:
-            return (
-                f"Semis / {phase_bundle['sous_phase']}: tonte interdite pendant l'installation du gazon.",
-                "phase_sursemis",
-                False,
-            )
+    if _semis_tonte_bloquee(phase_bundle, context.reglages):
+        return (
+            f"Semis / installation: tonte interdite jusqu'à J+{semis_reprise_tonte_jour(context.reglages)}.",
+            "phase_sursemis",
+            False,
+        )
     elif _sursemis_en_levee(phase_bundle, context.reglages):
         return (
             f"Sursemis / levée (J+{int(phase_bundle.get('phase_age_days') or 0)}) : tonte suspendue "
@@ -2704,9 +2719,8 @@ def build_mowing_bundle(
     score_tonte = int(risk_bundle["scores"]["score_tonte"])
     score_stress = int(risk_bundle["scores"]["score_stress"])
     phase_dominante = str(phase_bundle.get("phase_dominante") or "")
-    sous_phase = str(phase_bundle.get("sous_phase") or "")
     semis_tondable = (
-        phase_dominante == "Semis" and sous_phase in {"Reprise", "Stabilisation"}
+        phase_dominante == "Semis" and not _semis_tonte_bloquee(phase_bundle, context.reglages)
     ) or (phase_dominante == "Sursemis" and not _sursemis_en_levee(phase_bundle, context.reglages))
     if semis_tondable:
         baseline_tonte_ok = score_tonte < 65 and score_stress < 75
