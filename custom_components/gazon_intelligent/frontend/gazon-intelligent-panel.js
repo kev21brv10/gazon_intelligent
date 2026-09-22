@@ -4888,15 +4888,24 @@ class GazonIntelligentPanel extends HTMLElement {
     const gazonOk = this._a("assistant", "gazon_permet_tonte");
     const machineOk = this._a("assistant", "machine_permet_tonte");
     const motifTonte = this._a("tonte_autorisee", "raison_blocage_tonte");
-    if (gazonOk === false && motifTonte) {
-      const court = String(motifTonte).split(/\s*:\s*/)[0].split(/\.\s/)[0].replace(/\.$/, "");
+    if (gazonOk === false) {
+      const court = motifTonte
+        ? String(motifTonte).split(/\s*:\s*/)[0].split(/\.\s/)[0].replace(/\.$/, "")
+        : "conditions non réunies";
       const prochaine = this._a("prochaine_tonte", "target_date");
       const quandTonte = prochaine ? ` Prochaine tonte possible : <b>${esc(dateHumaine(prochaine, c.maintenant, fuseau))}</b>.` : "";
       lignes.push(`La tonte attend : <b>${esc(minuscule(court))}</b>.${quandTonte}`);
     } else if (gazonOk === true && machineOk === false) {
       lignes.push("Le gazon est prêt à être tondu, mais <b>la tondeuse n'est pas disponible</b>.");
     } else if (gazonOk === true && machineOk === true) {
-      lignes.push("La tonte est <b>possible dès maintenant</b>.");
+      const statut = String(this._a("tonte_autorisee", "tonte_statut") || "");
+      if (statut === "autorisee_avec_precaution") {
+        lignes.push("La tonte est <b>possible avec précaution</b>.");
+      } else if (statut === "a_surveiller" || statut === "deconseillee" || statut === "interdite") {
+        lignes.push(`La tonte est <b>${esc(minuscule(libelleDe(STATUTS_TONTE, statut)))}</b> pour l'instant.`);
+      } else {
+        lignes.push("La tonte est <b>possible dès maintenant</b>.");
+      }
     }
     if (["recommande", "recommended"].includes(String(this._s("prochaine_intervention") || ""))) {
       lignes.push(`Un produit est conseillé : <b>${esc(this._a("prochaine_intervention", "product_name") || "voir l'onglet Produits")}</b>.`);
