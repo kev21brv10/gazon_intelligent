@@ -290,7 +290,13 @@ def _public_action_recommandee(entity: GazonEntityBase) -> str | None:
     action_text = _aligned_public_watering_action_text(entity, action_text)
     snapshot = _coordinator_snapshot(entity.coordinator)
     blocked_due_to_conditions = _irrigation_blocked_due_to_conditions_summary(entity)
-    if blocked_due_to_conditions:
+    # Un motif d'arrosage NOMMÉ (« : Sol déjà humide. », etc.) reste prioritaire — c'est un
+    # vrai conflit entre deux activités bloquées, et le motif nommé est le plus actionnable.
+    # Mais la version NUE (aucun libellé, ex. avant l'heure du prochain micro-cycle) ne doit
+    # pas masquer une action tonte/assistant déjà plus précise : sinon le seul capteur qui
+    # affichait encore quelque chose d'utile perdait son information (trouvé en auditant
+    # chaque entité de l'intégration sur l'installation réelle, 22/09/2026).
+    if blocked_due_to_conditions and blocked_due_to_conditions != "Arrosage bloqué par conditions.":
         return blocked_due_to_conditions
     assistant_payload = entity._decision_value("assistant")
     if not isinstance(assistant_payload, dict) and snapshot:
@@ -298,6 +304,8 @@ def _public_action_recommandee(entity: GazonEntityBase) -> str | None:
     assistant_fallback = _assistant_action_fallback(assistant_payload)
     if (not action_text or _is_generic_noop_action_label(action_text)) and assistant_fallback:
         return assistant_fallback
+    if blocked_due_to_conditions:
+        return blocked_due_to_conditions
     return action_text or None
 
 
