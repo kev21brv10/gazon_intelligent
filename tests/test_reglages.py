@@ -369,6 +369,14 @@ class LesValeursParDefautSontCellesDuMoteurTests(unittest.TestCase):
         self.assertEqual(creneaux.defaut, mc.DEFAULT_MOWER_START_WINDOW_POLICY)
         self.assertEqual(tuple(o.valeur for o in creneaux.options), mc.MOWER_START_WINDOW_POLICIES)
 
+    def test_surface_totale_du_gazon(self) -> None:
+        (surface,) = [r for r in reglages.REGLAGES if r.cle == "surface_gazon_m2"]
+        self.assertEqual(surface.defaut, 0.0)
+        self.assertEqual(surface.minimum, 0.0)
+        self.assertEqual(surface.maximum, 100000.0)
+        self.assertEqual(surface.pas, 1.0)
+        self.assertEqual(surface.unite, "m²")
+
     def test_le_jour_de_la_declaration_compte_dans_la_duree(self) -> None:
         """« 2 jours » = le jour déclaré et le lendemain : c'est ce que la page écrit."""
         from datetime import date, timedelta

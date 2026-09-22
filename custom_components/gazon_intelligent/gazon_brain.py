@@ -391,12 +391,18 @@ class GazonBrain:
             return
         self.mode = mode
         self.date_action = dt_util.now().date()
-        self._append_history(
-            {
-                "type": mode,
-                "date": self.date_action.isoformat(),
-            }
-        )
+        item = {
+            "type": mode,
+            "date": self.date_action.isoformat(),
+        }
+        preparation = {
+            "Semis": "travail_complet_du_sol",
+            "Sursemis": "scarification_incluse",
+            "Scarification": "scarification_seule_sans_graines",
+        }.get(mode)
+        if preparation is not None:
+            item["preparation_sol"] = preparation
+        self._append_history(item)
 
     def set_date_action(self, date_action: date | None = None) -> None:
         target_date = date_action or dt_util.now().date()

@@ -317,6 +317,27 @@ class GazonBrainTests(unittest.TestCase):
         self.assertEqual(brain.history[-1]["date"], "2026-04-26")
         self.assertIsNone(brain.selected_product_id)
 
+    def test_modes_de_graines_et_scarification_precisent_la_preparation_du_sol(self) -> None:
+        attendus = {
+            "Semis": "travail_complet_du_sol",
+            "Sursemis": "scarification_incluse",
+            "Scarification": "scarification_seule_sans_graines",
+        }
+        for mode, preparation in attendus.items():
+            brain = GazonBrain()
+            with patch.object(
+                gazon_brain_module.dt_util,
+                "now",
+                return_value=datetime(2026, 9, 22, 8, 0, tzinfo=timezone.utc),
+            ):
+                brain.set_mode(mode)
+            with self.subTest(mode=mode):
+                self.assertEqual(brain.history, [{
+                    "type": mode,
+                    "date": "2026-09-22",
+                    "preparation_sol": preparation,
+                }])
+
     def test_record_watering_conserve_la_cause_arret_manuel(self) -> None:
         """DEUXIÈME liste blanche sur le chemin de la cause, et elle la jetait.
 
