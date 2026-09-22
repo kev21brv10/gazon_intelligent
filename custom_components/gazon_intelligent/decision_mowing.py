@@ -254,7 +254,7 @@ def _phase_adjusted_mowing_frequency(
 # Semis sur sol NU : la tonte attend l'installation, sans lier ce délai aux stades d'arrosage.
 SEMIS_REPRISE_TONTE_JOUR = 25
 
-# SURSEMIS — graines dans un gazon EN PLACE (arbitrage de Kévin, 16/09/2026). Sources relues :
+# SURSEMIS — graines dans un gazon EN PLACE (arbitrage du 16/09/2026). Sources relues :
 #   · Purdue AY-13-W (PDF lu) : « Mow frequently to limit the competition from the established
 #     turf. Mow at 1.5 inches until new seedlings have been cut at least two times. After that,
 #     raise the mowing height in 1/2 inch intervals » ;
