@@ -625,6 +625,7 @@ def _sursemis_micro_apport_decision(
     soil_profile: str,
     reglages: Mapping[str, Any] | None = None,
     ajustement_precedent: str | None = None,
+    pluie_active: bool = False,
 ) -> dict[str, Any]:
     policy_key = str(policy.get("policy_key") or "enracinement_prudent")
     watering_stage, stage_program = resolve_semis_stage_program(
@@ -686,6 +687,17 @@ def _sursemis_micro_apport_decision(
         allowed = False
         block_reason = "temperature_trop_basse_germination"
         reason = "Germination bloquée: température trop basse pour la levée."
+
+    # Pluie ACTIVE (mesurée ou prévision à l'instant, cf. `is_active_rain_weather`) : dernier mot,
+    # même règle que partout ailleurs dans l'intégration — plus stricte que les seuils `pluie_24h`/
+    # `pluie_demain` ci-dessus, qui ne voient qu'un cumul ou une prévision. Avant ce garde, une
+    # pluie active pendant un Semis/Sursemis sortait par le court-circuit générique du dispatcher
+    # (`is_active_rain_weather` avant le test de phase) : la stratégie `semis_frequent` disparaissait
+    # le temps de l'averse et la page retombait sur l'estimation de recharge du régime Normal.
+    if pluie_active:
+        allowed = False
+        block_reason = "pluie_active"
+        reason = "pluie active, stratégie semis_frequent reportée."
 
     cycle_mm = stage_program.surface_cycle_mm_optimal
     daily_cycles_target = stage_program.daily_cycles_optimal
@@ -2234,6 +2246,7 @@ def _profile_for_sursemis(ctx: _WateringCtx) -> dict[str, Any]:
         soil_profile=ctx.soil_profile,
         reglages=ctx.reglages,
         ajustement_precedent=ctx.semis_ajustement_precedent,
+        pluie_active=is_active_rain_weather(ctx.weather_profile),
     )
     mm_cible = float(sursemis_state.get("surface_cycle_mm") or 0.0) if sursemis_state["allowed"] else 0.0
     block_reason = sursemis_state["block_reason"]
@@ -3217,11 +3230,20 @@ def compute_watering_profile(
         )
         block_reason = _normalize_public_block_reason(resolved_policy.blocking.reason) or "mode_bloque"
         return _profile_for_blocked(ctx, block_reason)
+    # ⚠️ Semis/Sursemis passent par leur propre profil AVANT le court-circuit pluie active
+    # générique ci-dessous. Ce dernier ne connaît que le régime Normal (`watering_strategy` par
+    # défaut) : y passer pendant un semis en cours faisait perdre la stratégie `semis_frequent`
+    # le temps de l'averse, et la page retombait sur l'estimation générique de recharge profonde
+    # (« prochain arrosage » à plusieurs jours) alors que les micro-cycles de graines reprennent
+    # dès le lendemain. `_sursemis_micro_apport_decision` sait déjà bloquer proprement (pluie
+    # prévue, sol humide...) sans perdre cette identité ; elle apprend ici aussi à bloquer sur la
+    # pluie ACTIVE, avec le même motif public `pluie_active`.
+    if is_seeding_phase(phase_dominante):
+        _fill_post_preamble(ctx)
+        return _profile_for_sursemis(ctx)
     if is_active_rain_weather(weather_profile):
         return _profile_for_blocked(ctx, "pluie_active")
     _fill_post_preamble(ctx)
-    if is_seeding_phase(phase_dominante):
-        return _profile_for_sursemis(ctx)
     if phase_dominante == "Traitement":
         return _profile_for_traitement(ctx)
     if phase_dominante == "Normal":

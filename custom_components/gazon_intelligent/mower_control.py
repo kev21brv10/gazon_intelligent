@@ -308,16 +308,21 @@ def evaluate_mower_control(
             return result("temporisation", f"Commande {action} déjà envoyée récemment.")
         return result(state, reason, action=action)
 
-    # Une tondeuse dehors ne doit jamais trouver son volet fermé, même avant un ordre de retour.
-    if cover_entity and (outside or returning) and ouverture_a_completer:
-        if open_for_return:
-            raison = (
-                f"Ouverture du garage à compléter avant le retour ({position:g} %, minimum {minimum_position:g} %)."
-                if position_insuffisante
-                else "Ouverture du garage avant le retour de la tondeuse."
-            )
-            return command("open_cover", "ouverture_garage", raison)
-        return result("bloque_garage", "Le retour attend l'ouverture manuelle du garage.")
+    # Le retour commandé par l'intégration attend une ouverture confirmée, y compris
+    # quand le volet est encore en mouvement ou que son état est inconnu.
+    if cover_entity and (outside or mowing or returning) and not ouverture_confirmee:
+        if ouverture_a_completer:
+            if open_for_return:
+                raison = (
+                    f"Ouverture du garage à compléter avant le retour ({position:g} %, minimum {minimum_position:g} %)."
+                    if position_insuffisante
+                    else "Ouverture du garage avant le retour de la tondeuse."
+                )
+                return command("open_cover", "ouverture_garage", raison)
+            return result("bloque_garage", "Le retour attend l'ouverture manuelle du garage.")
+        if cover in _COVER_OPENING:
+            return result("attente_garage", "Ouverture du garage en cours avant le retour.")
+        return result("bloque_garage", "L'ouverture du garage n'est pas confirmée pour le retour.")
 
     # On rappelle uniquement quand le GAZON retire son autorisation. Une donnée machine incertaine
     # ne suffit pas : elle pourrait produire des rappels inutiles à chaque indisponibilité réseau.
@@ -349,12 +354,19 @@ def evaluate_mower_control(
             # nouvelle tentative reste protégée par le délai habituel entre deux commandes
             # (`tondeuse_pilotage_delai_commandes`) et par celui-ci (le prochain départ ne peut pas
             # se reproduire avant la prochaine évaluation, ~2 min plus tard).
+            reprise_non_confirmee = cycle_active
             return result(
                 "depart_non_confirme",
                 "Départ envoyé mais aucun signal de sortie confirmée après un long délai : "
                 "nouvelle tentative autorisée au prochain cycle.",
                 updates={
                     "managed_start_pending": False,
+                    # Une reprise acceptée par HA n'est pas encore une sortie effective.
+                    # Sans dette restaurée, `cycle_active` bloque toute nouvelle tentative.
+                    "resume_required": reprise_non_confirmee,
+                    "resume_reason": (
+                        "Départ de reprise non confirmé." if reprise_non_confirmee else None
+                    ),
                     "managed_start_baseline_captured": False,
                     "managed_start_baseline_job_id": None,
                     "managed_start_baseline_progress": None,
@@ -380,7 +392,12 @@ def evaluate_mower_control(
     if close_delay is None:
         close_delay = DEFAULT_MOWER_GARAGE_CLOSE_DELAY_MINUTES
     runtime_clear: dict[str, Any] = {}
-    if cover_entity and strong_dock and snapshot.get("action_possible") is not True:
+    if (
+        cover_entity
+        and strong_dock
+        and not (outside or mowing or returning)
+        and snapshot.get("action_possible") is not True
+    ):
         docked_since = runtime.get("docked_since")
         updates = {} if docked_since else {"docked_since": now.isoformat()}
         if cover in _COVER_OPEN | _COVER_OPENING:

@@ -231,7 +231,8 @@ def pourquoi_le_cycle_attend(
 ) -> tuple[str, str]:
     """(pourquoi, que faire) pour un cycle de graines dû qui n'est pas parti.
 
-    L'ordre compte : une fenêtre fermée est définitive pour la journée, le vent ne l'est pas.
+    L'ordre compte : la fenêtre actuellement fermée prime sur le vent, mais la météo
+    peut la rouvrir avant la fin du créneau réglé.
     Le vent n'est nommé que si la mesure du jardin dépasse vraiment la limite réglée : une
     fausse piste ferait chercher au mauvais endroit.
     """
@@ -242,7 +243,10 @@ def pourquoi_le_cycle_attend(
             pourquoi = f"Il tombait après la fermeture de la fenêtre des graines ({fin})."
         else:
             pourquoi = f"La fenêtre des graines a fermé à {fin} avant qu'il puisse partir."
-        return pourquoi, "Il ne partira plus aujourd'hui : un arrosage à la main reste possible."
+        return pourquoi, (
+            "Aucun départ automatique n'est possible dans la fenêtre actuelle. "
+            "Vérifiez le prochain créneau ; un arrosage à la main reste possible."
+        )
     if (
         vent_kmh is not None
         and vent_max_kmh is not None
@@ -342,7 +346,7 @@ def _phase_tondeuse(source: Mapping[str, Any] | None) -> str | None:
     if not isinstance(source, Mapping):
         return None
     operation = str(source.get("operation") or "").strip().lower()
-    if source.get("docked") is True or operation in {"docked", "charging", "idle", "parked", "home"}:
+    if source.get("docked") is True or operation in {"docked", "charging"}:
         return "station"
     if source.get("returning") is True or operation in {"returning", "going_home", "homing", "retour_station"}:
         return "retour"
@@ -440,7 +444,7 @@ def _evaluer_activites(
                 message="",
                 resolue=True,
             ))
-        elif SUJET_ACTIVITE_TONDEUSE in sujets_actifs and phase and phase != precedente:
+        if SUJET_ACTIVITE_TONDEUSE in sujets_actifs and phase and phase != precedente and not tondeuse_error:
             titre, message = {
                 "tonte": ("🤖 Tonte démarrée", "La tondeuse a démarré sa tonte."),
                 "retour": ("🤖 Retour demandé", "La tondeuse retourne à sa station."),
@@ -484,7 +488,7 @@ def _evaluer_activites(
                 message="",
                 resolue=True,
             ))
-        elif SUJET_GARAGE_TONDEUSE in sujets_actifs and garage_state and garage_state != precedente:
+        if SUJET_GARAGE_TONDEUSE in sujets_actifs and garage_state and garage_state != precedente and not garage_error:
             ouvert = garage_state == "open"
             alertes.append(Alerte(
                 sujet=SUJET_GARAGE_TONDEUSE,
@@ -920,6 +924,20 @@ def resume_du_gazon(
     return lignes
 
 
+def contexte_pour_alerte(sujet: str, lignes: Sequence[str]) -> list[str]:
+    """Ne donne à l'IA que les données liées à la catégorie de la notification."""
+    prefixes = {
+        SUJET_GRAINES: ("Phase :", "Cycles de graines", "Moment conseillé :", "Arrosage automatique :", "Météo :"),
+        SUJET_VERROU: ("Arrosage automatique :", "Cycles de graines", "Arrosage du jour :"),
+        SUJET_MESURES: ("Météo :",),
+        SUJET_TONDEUSE: ("Tonte :", "Météo :"),
+        SUJET_ACTIVITE_ARROSAGE: ("Arrosage du jour :", "Cycles de graines", "Arrosage automatique :"),
+        SUJET_ACTIVITE_TONDEUSE: ("Tonte :",),
+        SUJET_GARAGE_TONDEUSE: ("Tonte :",),
+    }.get(sujet, ())
+    return [ligne for ligne in lignes if ligne.startswith(prefixes)]
+
+
 # ── Options de l'entrée ────────────────────────────────────────────────────────────────────
 
 
@@ -1095,11 +1113,12 @@ async def async_publier(
         ):
             message = alerte.message
             if source_notifications(entry) == "conseiller_gazon":
+                contexte_alerte = contexte_pour_alerte(alerte.sujet, contexte)
                 instructions = ia.consigne_notification(
                     alerte.titre,
                     alerte.message,
                     niveau,
-                    contexte,
+                    contexte_alerte,
                     maintenant=instant,
                 )
                 try:
@@ -1109,7 +1128,16 @@ async def async_publier(
                         entite=ia.entite_effective(hass, entry),
                         delai_s=ia.DELAI_NOTIFICATION_S,
                     )
-                    message = message[: ia.MESSAGE_NOTIFICATION_MAX_CARACTERES]
+                    # Le texte du moteur reste lisible même si l'IA omet ou invente un fait.
+                    conseil = message.strip()
+                    faits = f"Faits vérifiés : {alerte.message}"
+                    place = ia.MESSAGE_NOTIFICATION_MAX_CARACTERES - len(faits) - len("Conseil IA : \n\n")
+                    message = (
+                        f"Conseil IA : {conseil[:place].rstrip()}\n\n{faits}"
+                        if place > 0 and ia.conseil_notification_utilisable(
+                            conseil, faits=alerte.message, contexte=contexte_alerte,
+                        ) else alerte.message
+                    )
                 except ia.IaIndisponible as err:
                     _LOGGER.warning(
                         "Conseiller Gazon indisponible pour la notification %s : %s. "

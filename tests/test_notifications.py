@@ -168,7 +168,19 @@ class CycleDeGrainesEnRetardTests(unittest.TestCase):
         alertes, _ = _evaluer(heure="16:25", progression=_progression(prevu="15:12", faits=3), vent_kmh=3.0)
         message = alertes[0].message
         self.assertIn("La fenêtre des graines a fermé à 16:00 avant qu'il puisse partir.", message)
-        self.assertIn("Il ne partira plus aujourd'hui", message)
+        self.assertIn("Aucun départ automatique n'est possible dans la fenêtre actuelle", message)
+        self.assertNotIn("ne partira plus aujourd'hui", message)
+
+    def test_fermeture_reglee_ne_promet_pas_de_reouverture_meteo(self) -> None:
+        alertes, _ = _evaluer(
+            heure="17:25",
+            fin_fenetre_minute=17 * 60,
+            progression=_progression(prevu="16:02", faits=3),
+            vent_kmh=3.0,
+        )
+        message = alertes[0].message
+        self.assertIn("Aucun départ automatique n'est possible dans la fenêtre actuelle", message)
+        self.assertNotIn("la météo rouvre", message)
 
     def test_cycle_prevu_apres_la_fermeture(self) -> None:
         # Défaut connu du moteur : à 1,8 mm, le 4ᵉ cycle tombe après la fin de la fenêtre.
@@ -624,6 +636,30 @@ class NotificationsActiviteTests(unittest.TestCase):
             self.assertEqual([a.sujet for a in alertes], ["activite_tondeuse"])
             self.assertIn(texte, f"{alertes[0].titre} {alertes[0].message}".lower())
 
+    def test_idle_hors_station_ne_declenche_pas_une_fausse_rentree(self) -> None:
+        _, memoire = _evaluer(
+            progression=None, sujets_actifs=self.SUJETS,
+            activite_tondeuse={"operation": "mowing", "docked": False},
+        )
+        alertes, _ = _evaluer(
+            memoire, progression=None, sujets_actifs=self.SUJETS,
+            activite_tondeuse={"operation": "idle", "docked": False},
+        )
+        self.assertEqual(alertes, [])
+
+    def test_fin_erreur_et_retour_station_restent_deux_evenements(self) -> None:
+        _, memoire = _evaluer(
+            progression=None, sujets_actifs=self.SUJETS,
+            activite_tondeuse={"operation": "mowing", "docked": False, "error": "Service refusé"},
+        )
+        alertes, _ = _evaluer(
+            memoire, progression=None, sujets_actifs=self.SUJETS,
+            activite_tondeuse={"operation": "docked", "docked": True, "error": None},
+        )
+        self.assertEqual([(a.resolue, a.titre) for a in alertes], [
+            (True, ""), (False, "🤖 Tondeuse rentrée"),
+        ])
+
     def test_une_erreur_de_commande_tondeuse_est_signalee_puis_resolue(self) -> None:
         _, memoire = _evaluer(
             progression=None, sujets_actifs=self.SUJETS,
@@ -671,6 +707,19 @@ class NotificationsActiviteTests(unittest.TestCase):
             activite_garage={"configured": True, "state": "open", "error": None},
         )
         self.assertEqual([(a.sujet, a.resolue) for a in alertes], [("garage_tondeuse", True)])
+
+    def test_fin_erreur_et_ouverture_garage_restent_deux_evenements(self) -> None:
+        _, memoire = _evaluer(
+            progression=None, sujets_actifs=self.SUJETS,
+            activite_garage={"configured": True, "state": "closed", "error": "Volet bloqué"},
+        )
+        alertes, _ = _evaluer(
+            memoire, progression=None, sujets_actifs=self.SUJETS,
+            activite_garage={"configured": True, "state": "open", "error": None},
+        )
+        self.assertEqual([(a.resolue, a.message) for a in alertes], [
+            (True, ""), (False, "Le garage de la tondeuse est maintenant ouvert."),
+        ])
 
     def test_un_etat_de_garage_intermediaire_ne_declenche_rien_mais_ne_casse_pas_la_suite(self) -> None:
         # « opening »/« unavailable » ne sont ni ouverts ni fermés : les annoncer casserait le
@@ -1143,7 +1192,7 @@ class CoordinateurAlertesTests(unittest.TestCase):
         self.assertEqual([(d, s) for d, s, _, _ in services.appels], [("persistent_notification", "create")])
 
     def test_conseiller_gazon_personnalise_le_telephone_et_garde_la_trace_factuelle(self) -> None:
-        services = _Services(ia={"data": "Message personnalisé pour Kevin."})
+        services = _Services(ia={"data": "Le problème demande une vérification de la vanne."})
         hass = types.SimpleNamespace(services=services)
         entree = _FakeEntry(entry_id="e", options={
             "notification_cibles": ["notify.iphone"],
@@ -1161,8 +1210,12 @@ class CoordinateurAlertesTests(unittest.TestCase):
         )
         self.assertEqual(services.appels[0][2]["message"], "Vérifie la vanne Zone 1.")
         self.assertEqual(services.appels[2][2]["title"], "Vanne bloquée")
-        self.assertEqual(services.appels[2][2]["message"], "Message personnalisé pour Kevin.")
-        self.assertIn("Phase : Sursemis.", services.appels[1][2]["instructions"])
+        self.assertEqual(
+            services.appels[2][2]["message"],
+            "Conseil IA : Le problème demande une vérification de la vanne.\n\nFaits vérifiés : Vérifie la vanne Zone 1.",
+        )
+        self.assertNotIn("Phase : Sursemis.", services.appels[1][2]["instructions"])
+        self.assertIn("sans nom", services.appels[1][2]["instructions"])
 
     def test_conseiller_gazon_retombe_sur_le_message_integration_si_l_ia_echoue(self) -> None:
         services = _Services(ia=RuntimeError("IA hors ligne"))
@@ -1181,9 +1234,8 @@ class CoordinateurAlertesTests(unittest.TestCase):
             ], maintenant=_a("13:20")))
         self.assertEqual(services.appels[-1][2]["message"], "Le capteur ne répond plus.")
 
-    def test_conseiller_gazon_borne_une_reponse_anormalement_longue(self) -> None:
-        limite = notifications.ia.MESSAGE_NOTIFICATION_MAX_CARACTERES
-        services = _Services(ia={"data": "x" * (limite + 500)})
+    def test_conseiller_gazon_rejette_une_reponse_anormalement_longue(self) -> None:
+        services = _Services(ia={"data": "x" * (notifications.ia.MESSAGE_NOTIFICATION_MAX_CARACTERES + 500)})
         hass = types.SimpleNamespace(services=services)
         entree = _FakeEntry(entry_id="e", options={
             "notification_cibles": ["notify.iphone"],
@@ -1195,9 +1247,33 @@ class CoordinateurAlertesTests(unittest.TestCase):
                 persistante=False,
             ),
         ], maintenant=_a("13:20")))
+        self.assertEqual(services.appels[-1][2]["message"], "Le capteur ne répond plus.")
+
+    def test_conseiller_gazon_rejette_un_prenom_ou_une_nouvelle_consigne(self) -> None:
+        for reponse in ("Bonjour Camille, vérifiez la vanne.", "Fermez la vanne maintenant."):
+            with self.subTest(reponse=reponse):
+                services = _Services(ia={"data": reponse})
+                hass = types.SimpleNamespace(services=services)
+                entree = _FakeEntry(entry_id="e", options={
+                    "notification_cibles": ["notify.iphone"],
+                    "source_notifications": "conseiller_gazon",
+                })
+                asyncio.run(notifications.async_publier(hass, entree, [
+                    notifications.Alerte(
+                        sujet="verrou", titre="Vanne bloquée", message="La vanne Zone 1 est bloquée.",
+                    ),
+                ], maintenant=_a("13:20")))
+                self.assertEqual(services.appels[-1][2]["message"], "La vanne Zone 1 est bloquée.")
+
+    def test_contexte_ia_reste_dans_la_categorie_de_l_alerte(self) -> None:
+        lignes = ["Tonte : autorisée.", "Météo : vent 8 km/h.", "Arrosage du jour : 3 mm demandés."]
         self.assertEqual(
-            len(services.appels[-1][2]["message"]),
-            limite,
+            notifications.contexte_pour_alerte("activite_tondeuse", lignes),
+            ["Tonte : autorisée."],
+        )
+        self.assertEqual(
+            notifications.contexte_pour_alerte("activite_arrosage", lignes),
+            ["Arrosage du jour : 3 mm demandés."],
         )
 
     def test_un_message_filtre_n_appelle_pas_l_ia(self) -> None:

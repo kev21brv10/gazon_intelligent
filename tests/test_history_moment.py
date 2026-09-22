@@ -166,7 +166,7 @@ class BornesDeHauteurSuiventLaConfigTests(unittest.TestCase):
         self.assertEqual(snap["hauteur_tonte_min_cm"], 3.0, "un plancher fixe a été réintroduit")
         self.assertEqual(snap["hauteur_tonte_max_cm"], 8.0, "un plafond fixe a été réintroduit")
 
-    def test_la_config_de_kevin_est_respectee_telle_quelle(self) -> None:
+    def test_la_config_utilisateur_est_respectee_telle_quelle(self) -> None:
         snap = self._snapshot(3.0, 6.0)
         self.assertEqual(snap["hauteur_tonte_min_cm"], 3.0)
         self.assertEqual(snap["hauteur_tonte_max_cm"], 6.0)

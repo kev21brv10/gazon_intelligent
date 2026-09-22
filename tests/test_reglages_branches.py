@@ -364,11 +364,11 @@ class LesPhasesSuiventLeursDureesTests(_Comparaison):
                              history=[{"type": "Sursemis", "date": SEMIS.isoformat()}],
                              today=SEMIS + timedelta(days=age))
 
-    def test_la_projection_du_semis_suit_la_fin_de_l_enracinement(self) -> None:
-        # Semis sur sol nu, tonte interdite jusqu'à la reprise : le lendemain de la fin réglée.
+    def test_la_projection_du_semis_est_independante_de_la_fin_de_l_enracinement(self) -> None:
+        # L'enracinement règle l'arrosage ; la reprise de tonte possède désormais son propre jour.
         self.compare({"graines_fin_enracinement": 28}, (),
                      {"next_mowing_date": (SEMIS + timedelta(days=25)).isoformat()},
-                     {"next_mowing_date": (SEMIS + timedelta(days=29)).isoformat()},
+                     {"next_mowing_date": (SEMIS + timedelta(days=25)).isoformat()},
                      history=[{"type": "Semis", "date": SEMIS.isoformat()}], today=SEMIS + timedelta(days=5))
 
 
@@ -700,6 +700,7 @@ class ChaqueReglageEstBrancheTests(unittest.TestCase):
         "arrosage_reduction_ombre_zone_4": "test_watering_session_monitoring.py",
         "arrosage_reduction_ombre_zone_5": "test_watering_session_monitoring.py",
         "surface_gazon_m2": "test_water_consumption.py",
+        "semis_reprise_tonte_jours": "test_decision_extra.py",
         # Le délai de l'alerte des graines : une alerte, pas une décision (0.94.0).
         "graines_alerte_retard": "test_notifications.py",
         # Le pilote pur vérifie chaque garde matérielle sans appeler Home Assistant.

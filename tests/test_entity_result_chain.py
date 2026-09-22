@@ -282,6 +282,24 @@ class DecisionResultChainTests(unittest.TestCase):
         attrs = sensor.GazonFenetreOptimaleSensor(hors_graines).extra_state_attributes
         self.assertFalse([cle for cle in attrs if cle.startswith("semis_")])
 
+    def test_la_fenetre_meteo_reduit_la_cible_publiee_sans_cacher_la_demande_brute(self) -> None:
+        result = _make_result()
+        result.daily_cycles_target = 4
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={
+                "semis_daily_cycles_target": 3,
+                "semis_weather_cycles_target": 4,
+                "semis_cycles_limited_by_window": True,
+            },
+            result=result, history=[], memory={},
+        )
+        attrs = sensor.GazonFenetreOptimaleSensor(coordinator).extra_state_attributes
+        self.assertEqual(attrs["daily_cycles_target"], 3)
+        self.assertEqual(attrs["semis_daily_cycles_target"], 3)
+        self.assertEqual(attrs["semis_weather_cycles_target"], 4)
+        self.assertTrue(attrs["semis_cycles_limited_by_window"])
+
     def test_sensor_setup_entry_tolerates_missing_hass_domain_data(self) -> None:
         hass = types.SimpleNamespace(data={})
         added_entities: list[object] = []

@@ -868,6 +868,116 @@ class WateringSessionMonitoringTests(unittest.TestCase):
         self.assertEqual(progress["last_cycle_at"], datetime(2026, 4, 27, 10, 0, tzinfo=timezone.utc))
         self.assertEqual(progress["next_due_at"], datetime(2026, 4, 27, 12, 0, tzinfo=timezone.utc))
 
+    def test_fenetre_meteo_fermee_a_16h_annonce_trois_cycles_sans_deplacer_les_creneaux(self) -> None:
+        coordinator = _build_coordinator()
+        snapshot = {
+            "watering_strategy": "semis_frequent",
+            "objective_scope": "surface_cycle",
+            "watering_stage": "germination",
+            "surface_cycle_mm": 1.3,
+            "daily_cycles_target": 4,
+            "cycle_spacing_minutes": 120,
+            "watering_window_end_minute": 960,
+            "watering_window_acceptable_end_minute": 960,
+        }
+        current = datetime(2026, 9, 25, 15, 0, tzinfo=timezone.utc)
+        coordinator._current_datetime = lambda: current
+        coordinator._current_utc_datetime = lambda: current
+        coordinator._current_date = lambda: current.date()
+        coordinator.history = [
+            {
+                "type": "arrosage",
+                "date": "2026-09-25",
+                "started_at": f"2026-09-25T{hour}:00:00+00:00",
+                "watering_strategy": "semis_frequent",
+                "objective_scope": "surface_cycle",
+            }
+            for hour in ("10", "12", "14")
+        ]
+
+        progress = coordinator._semis_cycle_progress(snapshot)
+        assert progress is not None
+        self.assertEqual(progress["cycle_slots_minutes"], (600, 720, 840, 960))
+        self.assertEqual(progress["daily_cycles_target"], 3)
+        self.assertEqual(progress["weather_cycles_target"], 4)
+        self.assertTrue(progress["window_limited_cycles"])
+        self.assertEqual(progress["window_limit_reason"], "weather")
+        self.assertEqual(progress["state"], "complete")
+        self.assertEqual(progress["cycles_remaining_today"], 0)
+        self.assertEqual(progress["next_due_at"], datetime(2026, 9, 26, 10, 0, tzinfo=timezone.utc))
+        public = coordinator._suivi_des_graines(snapshot)
+        self.assertEqual(public["semis_daily_cycles_target"], 3)
+        self.assertEqual(public["semis_weather_cycles_target"], 4)
+        self.assertTrue(public["semis_cycles_limited_by_window"])
+        self.assertEqual(public["semis_cycles_limit_reason"], "weather")
+
+        coordinator.history = coordinator.history[:2]
+        third = coordinator._semis_cycle_progress(snapshot)
+        assert third is not None
+        self.assertEqual(third["next_due_at"], datetime(2026, 9, 25, 14, 0, tzinfo=timezone.utc))
+        coordinator.history = coordinator.history + [
+            {
+                "type": "arrosage", "date": "2026-09-25",
+                "started_at": "2026-09-25T14:00:00+00:00",
+                "watering_strategy": "semis_frequent", "objective_scope": "surface_cycle",
+            }
+        ]
+
+        snapshot["watering_window_acceptable_end_minute"] = 1020
+        reopened = coordinator._semis_cycle_progress(snapshot)
+        assert reopened is not None
+        self.assertEqual(reopened["daily_cycles_target"], 4)
+        self.assertFalse(reopened["window_limited_cycles"])
+        self.assertEqual(reopened["state"], "waiting")
+        self.assertEqual(reopened["next_due_at"], datetime(2026, 9, 25, 16, 0, tzinfo=timezone.utc))
+
+        coordinator._current_datetime = lambda: datetime(2026, 9, 25, 20, 38, tzinfo=timezone.utc)
+        closed = coordinator._semis_cycle_progress(snapshot)
+        assert closed is not None
+        self.assertEqual(closed["daily_cycles_target"], 3)
+        self.assertEqual(closed["window_limit_reason"], "closed")
+        self.assertEqual(closed["state"], "complete")
+        self.assertEqual(closed["next_due_at"], datetime(2026, 9, 26, 10, 0, tzinfo=timezone.utc))
+
+        coordinator._current_datetime = lambda: current
+        coordinator.entry.options["reglages"] = {"graines_fenetre_fin": 960}
+        snapshot["watering_window_end_minute"] = 960
+        snapshot["watering_window_acceptable_end_minute"] = 960
+        configured_short = coordinator._semis_cycle_progress(snapshot)
+        assert configured_short is not None
+        self.assertEqual(configured_short["daily_cycles_target"], 3)
+        self.assertEqual(configured_short["window_limit_reason"], "schedule")
+
+    def test_deux_cycles_le_second_a_la_borne_meteo_exclusive_n_est_pas_annonce(self) -> None:
+        coordinator = _build_coordinator()
+        current = datetime(2026, 9, 26, 12, 0, tzinfo=timezone.utc)
+        coordinator._current_datetime = lambda: current
+        coordinator._current_utc_datetime = lambda: current
+        coordinator._current_date = lambda: current.date()
+        coordinator.history = [{
+            "type": "arrosage", "date": "2026-09-26",
+            "started_at": "2026-09-26T10:00:00+00:00",
+            "watering_strategy": "semis_frequent", "objective_scope": "surface_cycle",
+        }]
+        snapshot = {
+            "watering_strategy": "semis_frequent",
+            "objective_scope": "surface_cycle",
+            "watering_stage": "germination",
+            "surface_cycle_mm": 0.7,
+            "daily_cycles_target": 2,
+            "cycle_spacing_minutes": 120,
+            "watering_window_end_minute": 960,
+            "watering_window_acceptable_end_minute": 960,
+        }
+
+        progress = coordinator._semis_cycle_progress(snapshot)
+        assert progress is not None
+        self.assertEqual(progress["cycle_slots_minutes"], (600, 960))
+        self.assertEqual(progress["daily_cycles_target"], 1)
+        self.assertEqual(progress["window_limit_reason"], "weather")
+        self.assertEqual(progress["state"], "complete")
+        self.assertEqual(progress["next_due_at"], datetime(2026, 9, 27, 10, 0, tzinfo=timezone.utc))
+
     def test_un_redemarrage_pendant_l_attente_garde_le_vrai_prochain_cycle(self) -> None:
         """Le suivi est reconstruit depuis l'historique persisté, pas depuis un minuteur en RAM."""
         snapshot = {

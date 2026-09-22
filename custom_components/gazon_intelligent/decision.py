@@ -762,6 +762,7 @@ def build_decision_snapshot(
     pluie_3j: float | None = None,
     pluie_probabilite_max_3j: float | None = None,
     et0_source: str | None = None,
+    reglages: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Construit le snapshot historique complet utilisé par les entités HA."""
     context = DecisionContext.from_legacy_args(
@@ -793,6 +794,7 @@ def build_decision_snapshot(
         hauteur_max_tondeuse_cm=hauteur_max_tondeuse_cm,
         memory=memory,
         sun_context=sun_context,
+        reglages=reglages,
     )
     return build_decision_result(context).to_snapshot()
 

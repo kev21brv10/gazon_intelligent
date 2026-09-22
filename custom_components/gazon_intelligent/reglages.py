@@ -465,6 +465,14 @@ REGLAGES: tuple[Reglage, ...] = (
     ),
     # ── Semis : tonte sur terrain nu ─────────────────────────────────────────────────────
     Reglage(
+        "semis_reprise_tonte_jours", "semis",
+        "À partir de quel jour la tondeuse peut-elle reprendre ?",
+        "Ce délai protège le jeune gazon sans modifier les étapes ni l'arrosage des graines.",
+        "jour", 25, 14, 40, 1,
+        source="decision_mowing.SEMIS_REPRISE_TONTE_JOUR",
+        avertissement="Réglage sensible : une reprise trop précoce peut arracher des plantules encore mal enracinées.",
+    ),
+    Reglage(
         "semis_hauteur_germination", "semis",
         "Pendant la germination, quelle hauteur conseiller ?",
         "Sur un terrain nu, on ne tond pas encore : l'herbe doit d'abord s'installer.",
@@ -687,6 +695,8 @@ CONTRAINTES: tuple[Contrainte, ...] = (
                "L'enracinement doit finir avant la reprise."),
     Contrainte("graines_fin_reprise", "graines_duree",
                "La reprise doit finir avant la fin du suivi des graines."),
+    Contrainte("semis_reprise_tonte_jours", "graines_duree",
+               "La tonte doit reprendre avant la fin du suivi des graines."),
     Contrainte("graines_fenetre_debut", "graines_fenetre_fin",
                "Les graines doivent pouvoir être arrosées avant l'heure de fin."),
     # « attente de la tondeuse < durée du suivi » n'est pas une contrainte : les bornes (21 < 30)

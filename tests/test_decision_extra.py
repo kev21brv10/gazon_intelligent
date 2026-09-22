@@ -155,6 +155,36 @@ class TestDecisionSnapshotSursemisRules(unittest.TestCase):
                 profil = guidance.compute_watering_profile(**(base | changements))
                 self.assertEqual(profil["daily_cycles_target"], cycles)
 
+    def test_pluie_active_bloque_sans_perdre_la_strategie_semis_frequent(self) -> None:
+        """Une pluie ACTIVE (pas seulement prévue) bloquait le cycle de surface en sortant par le
+        court-circuit générique du dispatcher, AVANT le test de phase Semis/Sursemis. Le profil
+        perdait alors sa stratégie `semis_frequent` (repli sur `adult_deep`, le régime Normal) :
+        la page affichait l'estimation de recharge profonde à plusieurs jours au lieu du suivi des
+        micro-cycles de graines, alors que ceux-ci reprennent dès le lendemain matin."""
+        base = dict(
+            phase_dominante="Sursemis", sous_phase="Enracinement",
+            water_balance={"bilan_hydrique_mm": 0.0, "arrosage_recent_jour": 0.0},
+            today=date(2026, 9, 28), pluie_24h=0.0, pluie_demain=0.0, humidite=55.0,
+            temperature=17.0, vent=3.0, etp=1.1, type_sol="limoneux",
+            history=[], forecast_temperature_today=18.0,
+        )
+        sec = guidance.compute_watering_profile(
+            **base, weather_profile={"weather_precipitation_probability": 20.0}
+        )
+        self.assertEqual(sec["watering_strategy"], "semis_frequent")
+        self.assertGreater(sec["daily_cycles_target"], 0)
+
+        pluie_active = guidance.compute_watering_profile(
+            **base, weather_profile={"weather_condition": "rainy"}
+        )
+        self.assertEqual(pluie_active["watering_strategy"], "semis_frequent")
+        self.assertEqual(pluie_active["objective_scope"], "surface_cycle")
+        self.assertEqual(pluie_active["block_reason"], "pluie_active")
+        self.assertEqual(pluie_active["seeding_block_reason"], "pluie_active")
+        self.assertGreater(pluie_active["daily_cycles_target"], 0)
+        self.assertGreater(pluie_active["surface_cycle_mm"], 0)
+        self.assertEqual(pluie_active["mm_final"], 0.0)
+
     def test_le_vent_du_jardin_arrive_jusqu_aux_graines(self) -> None:
         """0.96.0 : la décision transmet le vent mesuré ; sans lui, la prévision (14,4 km/h le
         17/09, contre 3,2 au jardin) ajoutait un cycle « venteux »."""
@@ -6401,7 +6431,39 @@ class SursemisDansUnGazonEnPlaceTests(unittest.TestCase):
         self.assertFalse(snap["tonte_autorisee"])
         self.assertEqual(snap["tonte_statut"], "interdite")
         self.assertEqual(snap["next_mowing_date"], "2026-10-11")  # semis + 25 jours
-        self.assertIn("Semis / Germination", snap["tonte_reason"])
+        self.assertIn("Semis / installation", snap["tonte_reason"])
+
+    def test_le_semis_reprend_a_j25_sans_dependre_de_la_fin_d_enracinement(self) -> None:
+        veille = self._snap(24, mode="Semis")
+        reprise = self._snap(25, mode="Semis")
+
+        self.assertFalse(veille["tonte_autorisee"])
+        self.assertEqual(veille["next_mowing_date"], "2026-10-11")
+        self.assertTrue(reprise["tonte_autorisee"], reprise.get("tonte_reason"))
+        self.assertEqual(reprise["mowing_frequency_label"], "1 / semaine")
+
+    def test_le_reglage_semis_debloque_la_tonte_sans_changer_le_stade_d_arrosage(self) -> None:
+        reglages = {
+            "semis_reprise_tonte_jours": 18,
+            "graines_fin_enracinement": 24,
+        }
+        avant = self._snap(17, mode="Semis", reglages=reglages)
+        reprise = self._snap(18, mode="Semis", reglages=reglages)
+
+        self.assertEqual(avant["sous_phase"], "Enracinement")
+        self.assertEqual(reprise["sous_phase"], "Enracinement")
+        self.assertFalse(avant["tonte_autorisee"])
+        self.assertEqual(avant["next_mowing_date"], "2026-10-04")
+        self.assertTrue(reprise["tonte_autorisee"], reprise.get("tonte_reason"))
+        self.assertEqual(reprise["mowing_frequency_label"], "1 / semaine")
+        self.assertEqual(
+            decision_mowing._growth_rate_cm_per_day(
+                {"phase_dominante": "Semis", "sous_phase": "Enracinement", "phase_age_days": 18},
+                9,
+                reglages,
+            ),
+            0.2,
+        )
 
     def test_cinq_jours_minimum_entre_deux_tontes(self) -> None:
         refus = self._snap(12, tontes=(8,))

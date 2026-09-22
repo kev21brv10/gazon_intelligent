@@ -542,6 +542,37 @@ def test_apres_expiration_une_nouvelle_tentative_part_au_cycle_suivant() -> None
     assert resultat_suivant["mower_control_pending_action"] == "start_mowing"
 
 
+def test_reprise_non_confirmee_retablit_la_dette_apres_expiration() -> None:
+    snapshot = ready(
+        mower_is_docked=True,
+        mower_is_outside=False,
+        mower_is_mowing=False,
+        mower_operation_state="docked",
+        mower_job_progress_pct=42,
+        mower_job_id="travail-interrompu",
+        mower_job_completion_state="en_pause",
+    )
+    runtime = {
+        "managed_cycle_active": True,
+        "managed_start_pending": True,
+        "resume_required": False,
+        "managed_start_baseline_captured": True,
+        "managed_start_baseline_job_id": "travail-interrompu",
+        "managed_start_baseline_progress": 42,
+        "managed_start_baseline_completion_state": "en_pause",
+        "managed_start_requested_at": (NOW - timedelta(minutes=16)).isoformat(),
+    }
+    expire = decide(snapshot, runtime=runtime)
+    assert expire["mower_control_state"] == "depart_non_confirme"
+    assert expire["mower_control_pending_action"] is None
+    runtime.update(expire["mower_control_runtime_updates"])
+    assert runtime["resume_required"] is True
+
+    prochain = decide(snapshot, runtime=runtime)
+    assert prochain["mower_control_pending_action"] == "start_mowing"
+    assert prochain["mower_control_state"] == "reprise_demandee"
+
+
 def test_un_depart_recent_non_confirme_reste_silencieux() -> None:
     result = decide(
         ready(
@@ -808,6 +839,27 @@ def test_outside_mower_reopens_garage_before_returning():
     assert result["mower_control_pending_action"] == "open_cover"
 
 
+def test_recall_waits_for_garage_opening_to_finish() -> None:
+    outside = ready(
+        mower_is_docked=False,
+        mower_is_outside=True,
+        mower_is_mowing=True,
+        mower_operation_state="mowing",
+        gazon_permet_tonte=False,
+        action_possible=False,
+    )
+    opening = decide(outside, cover_entity="cover.garage_tondeuse", cover_state="opening")
+    assert opening["mower_control_state"] == "attente_garage"
+    assert opening["mower_control_pending_action"] is None
+
+    unknown = decide(outside, cover_entity="cover.garage_tondeuse", cover_state="unknown")
+    assert unknown["mower_control_state"] == "bloque_garage"
+    assert unknown["mower_control_pending_action"] is None
+
+    opened = decide(outside, cover_entity="cover.garage_tondeuse", cover_state="open")
+    assert opened["mower_control_pending_action"] == "dock"
+
+
 def test_garage_closes_only_after_strong_dock_signal_and_delay():
     weak = ready(mower_dock_signal_fort=False, mower_operation_state="idle", action_possible=False)
     result = decide(
@@ -835,6 +887,24 @@ def test_garage_closes_only_after_strong_dock_signal_and_delay():
         runtime={"docked_since": (NOW - timedelta(minutes=3)).isoformat()},
     )
     assert delayed["mower_control_state"] == "attente_fermeture_garage"
+
+
+def test_garage_never_closes_with_conflicting_outside_signal() -> None:
+    snapshot = ready(
+        action_possible=False,
+        mower_dock_signal_fort=True,
+        mower_is_docked=True,
+        mower_is_outside=True,
+        mower_is_mowing=False,
+        mower_operation_state="docked",
+    )
+    result = decide(
+        snapshot,
+        cover_entity="cover.garage_tondeuse",
+        cover_state="open",
+        runtime={"docked_since": (NOW - timedelta(minutes=5)).isoformat()},
+    )
+    assert result["mower_control_pending_action"] is None
 
 
 def test_docked_with_closed_garage_and_stale_docked_since_does_not_crash():

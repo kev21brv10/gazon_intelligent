@@ -135,6 +135,23 @@ class ProgrammesSemisTests(unittest.TestCase):
             self.assertTrue(details, onglet)
             self.assertTrue(all(" open" not in detail for detail in details), onglet)
 
+    def test_le_voyage_sursemis_affiche_la_reprise_apres_le_dernier_jour_d_attente(self) -> None:
+        source = PANNEAU.read_text(encoding="utf-8")
+        self.assertIn("const repriseTonte = v.sursemis_levee + 1;", source)
+        self.assertIn("j: repriseTonte, texte: `la tondeuse repart J${repriseTonte}`", source)
+        self.assertIn("reprise au jour ${repriseTonte}, le ${date(repriseTonte)}", source)
+        self.assertNotIn("la tondeuse repart J${v.sursemis_levee}", source)
+
+    def test_l_escalier_semis_separe_la_tonte_des_etapes_d_arrosage(self) -> None:
+        source = PANNEAU.read_text(encoding="utf-8")
+        self.assertIn('return `reprise à J${this._valeur("semis_reprise_tonte_jours")}`', source)
+        self.assertIn('return `reprise à J${Number(this._valeur("sursemis_levee")) + 1}', source)
+        self.assertIn("jusqu'au jour ${v.semis_reprise_tonte_jours - 1} inclus", source)
+        self.assertIn("peut reprendre à J${v.semis_reprise_tonte_jours}", source)
+        self.assertIn("ne modifie pas les étapes d'arrosage", source)
+        self.assertNotIn("jusqu'au jour ${v.graines_fin_enracinement} inclus", source)
+        self.assertNotIn('sousTitre: "on ne tond pas"', source)
+
 
 if __name__ == "__main__":
     unittest.main()
