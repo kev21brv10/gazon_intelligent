@@ -42,16 +42,25 @@ const sorties = cas.map((c) => {
           ...(c.attrs || {}),
         },
       },
+      "sensor.assistant": {
+        state: "Prêt",
+        attributes: {
+          gazon_permet_tonte: c.gazon,
+          machine_permet_tonte: c.machine,
+        },
+      },
     },
   };
-  p._donnees = { entites: { tonte_autorisee: "binary_sensor.tonte", tonte_etat: "binary_sensor.tonte" } };
+  p._donnees = { entites: { tonte_autorisee: "binary_sensor.tonte", tonte_etat: "binary_sensor.tonte", assistant: "sensor.assistant" } };
   p._mosaique = (items) => items.map((item) => item[0]).join("");
   p._coordinationHtml = () => "";
+  p._arrosageEnCours = () => false;
   if (!c.travail) p._travailHtml = () => "";
   p._hauteursHtml = () => "";
   p._pousseHtml = () => "";
   p._tonduAujourdhui = () => true;
-  return c.travail ? p._travailHtml() : p._ongletTonteHtml(c.contexte || {});
+  return c.bulletin ? p._bulletinHtml({ maintenant: { annee: 2026, mois: 9, jour: 22 } })
+    : c.travail ? p._travailHtml() : p._ongletTonteHtml(c.contexte || {});
 });
 process.stdout.write(JSON.stringify(sorties));
 """
@@ -77,6 +86,31 @@ def _rendre() -> list[str]:
 
 @unittest.skipUnless(NODE, "Node n'est pas installé")
 class PastilleTonteTests(unittest.TestCase):
+    def test_le_bulletin_respecte_le_niveau_reel_de_tonte(self) -> None:
+        cas = [
+            {"statut": "autorisee", "gazon": True, "machine": True, "bulletin": True},
+            {"statut": "autorisee_avec_precaution", "gazon": True, "machine": True, "bulletin": True},
+            {"statut": "deconseillee", "gazon": True, "machine": True, "bulletin": True},
+            {"statut": "deconseillee", "gazon": False, "machine": True, "bulletin": True,
+             "attrs": {"raison_blocage_tonte": "Pluie en cours: attendre le ressuyage."}},
+            {"statut": "interdite", "gazon": False, "machine": True, "bulletin": True},
+        ]
+        sortie = subprocess.run(
+            [NODE, "-e", SCRIPT],
+            input=json.dumps({"chemin": str(PANNEAU), "cas": cas}),
+            capture_output=True, text=True, check=True, timeout=60,
+        )
+        autorisee, precaution, deconseillee, bloquee, sans_motif = json.loads(sortie.stdout)
+        self.assertIn("possible dès maintenant", autorisee)
+        self.assertIn("possible avec précaution", precaution)
+        self.assertNotIn("possible dès maintenant", precaution)
+        self.assertIn("déconseillée", deconseillee)
+        self.assertNotIn("possible dès maintenant", deconseillee)
+        self.assertIn("La tonte attend", bloquee)
+        self.assertIn("pluie en cours", bloquee)
+        self.assertNotIn("possible dès maintenant", bloquee)
+        self.assertIn("conditions non réunies", sans_motif)
+
     def test_un_seul_badge_decrit_le_gazon_sans_le_confondre_avec_la_machine(self) -> None:
         autorisee, deconseillee, interdite = _rendre()
         self.assertIn("Gazon : prêt", autorisee)
