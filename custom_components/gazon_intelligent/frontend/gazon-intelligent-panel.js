@@ -3602,6 +3602,7 @@ class GazonIntelligentPanel extends HTMLElement {
     const n = g.cle === ONGLET_INSTALLATION.cle
       ? Object.keys(this._brouillonEntites).length + Object.keys(this._brouillonChoix).length
         + Object.keys(this._brouillonAlertes).length - alertesEntites
+        + Object.keys(this._brouillon).filter((cle) => this._reglage(cle)?.groupe === "installation").length
       : g.cle === ONGLET_ENTITES.cle
         ? alertesEntites + (this._brouillonPompe !== undefined ? 1 : 0)
           + (this._brouillonGarageTondeuse !== undefined ? 1 : 0)
@@ -7173,7 +7174,8 @@ class GazonIntelligentPanel extends HTMLElement {
     const mosaique = `<div class="programme-reglages installation-reglages">${cases.map(([html, largeur]) =>
       `<div class="${largeur === "tout" ? "reglage-tout" : ""}">${html}</div>`).join("")}</div>`;
     const annulables = Object.keys(this._brouillonEntites).length + Object.keys(this._brouillonChoix).length
-      + Object.keys(this._brouillonAlertes).filter((cle) => !["cibles", "ia"].includes(cle)).length;
+      + Object.keys(this._brouillonAlertes).filter((cle) => !["cibles", "ia"].includes(cle)).length
+      + Object.keys(this._brouillon).filter((cle) => this._reglage(cle)?.groupe === "installation").length;
     return `<div class="intro-onglet">
         <p>${esc(ONGLET_INSTALLATION.phrase)} Les branchements vers Home Assistant sont regroupés dans l'onglet « Entités ».</p>
         <button class="bouton-texte" data-action="annuler-installation" ${annulables ? "" : "disabled"}><ha-icon icon="mdi:undo"></ha-icon>Annuler les changements</button>
@@ -8192,6 +8194,9 @@ class GazonIntelligentPanel extends HTMLElement {
         this._brouillonChoix = {};
         for (const cleAlerte of Object.keys(this._brouillonAlertes)) {
           if (!["cibles", "ia"].includes(cleAlerte)) delete this._brouillonAlertes[cleAlerte];
+        }
+        for (const cleReglage of Object.keys(this._brouillon)) {
+          if (this._reglage(cleReglage)?.groupe === "installation") delete this._brouillon[cleReglage];
         }
         this._rendre();
         return;
