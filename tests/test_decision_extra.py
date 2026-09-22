@@ -6401,7 +6401,39 @@ class SursemisDansUnGazonEnPlaceTests(unittest.TestCase):
         self.assertFalse(snap["tonte_autorisee"])
         self.assertEqual(snap["tonte_statut"], "interdite")
         self.assertEqual(snap["next_mowing_date"], "2026-10-11")  # semis + 25 jours
-        self.assertIn("Semis / Germination", snap["tonte_reason"])
+        self.assertIn("Semis / installation", snap["tonte_reason"])
+
+    def test_le_semis_reprend_a_j25_sans_dependre_de_la_fin_d_enracinement(self) -> None:
+        veille = self._snap(24, mode="Semis")
+        reprise = self._snap(25, mode="Semis")
+
+        self.assertFalse(veille["tonte_autorisee"])
+        self.assertEqual(veille["next_mowing_date"], "2026-10-11")
+        self.assertTrue(reprise["tonte_autorisee"], reprise.get("tonte_reason"))
+        self.assertEqual(reprise["mowing_frequency_label"], "1 / semaine")
+
+    def test_le_reglage_semis_debloque_la_tonte_sans_changer_le_stade_d_arrosage(self) -> None:
+        reglages = {
+            "semis_reprise_tonte_jours": 18,
+            "graines_fin_enracinement": 24,
+        }
+        avant = self._snap(17, mode="Semis", reglages=reglages)
+        reprise = self._snap(18, mode="Semis", reglages=reglages)
+
+        self.assertEqual(avant["sous_phase"], "Enracinement")
+        self.assertEqual(reprise["sous_phase"], "Enracinement")
+        self.assertFalse(avant["tonte_autorisee"])
+        self.assertEqual(avant["next_mowing_date"], "2026-10-04")
+        self.assertTrue(reprise["tonte_autorisee"], reprise.get("tonte_reason"))
+        self.assertEqual(reprise["mowing_frequency_label"], "1 / semaine")
+        self.assertEqual(
+            decision_mowing._growth_rate_cm_per_day(
+                {"phase_dominante": "Semis", "sous_phase": "Enracinement", "phase_age_days": 18},
+                9,
+                reglages,
+            ),
+            0.2,
+        )
 
     def test_cinq_jours_minimum_entre_deux_tontes(self) -> None:
         refus = self._snap(12, tontes=(8,))
