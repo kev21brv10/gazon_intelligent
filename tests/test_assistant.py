@@ -706,6 +706,36 @@ class AssistantDecisionTests(unittest.TestCase):
 
         self.assertEqual(entity.native_value, "Attends avant de tondre.")
 
+    def test_public_action_bare_watering_block_yields_to_mowing_even_with_specific_watering_text(self) -> None:
+        """P2 signalé en relecture automatique sur la PR #54 : quand le cycle graines est déjà
+        planifié, `decision_watering.py` publie un `action_recommandee` NON générique
+        (« Prochain cycle semis_frequent à ... »). Le test précédent ne couvre que le cas où ce
+        texte est générique ; ici il est spécifique, mais reste moins utile qu'un conseil tonte
+        déjà connu quand le blocage d'arrosage lui-même est nu (aucun motif nommé).
+        """
+        coordinator = _FakeCoordinator(
+            entry=_FakeEntry(),
+            data={
+                "action_recommandee": "Prochain cycle semis_frequent à 08:30.",
+                "type_arrosage": "bloque",
+                "block_reason": None,
+                "objectif_mm": 0.0,
+                "besoin_mm": 1.0,
+                "arrosage_recommande": False,
+                "assistant": {
+                    "action": "tonte",
+                    "moment": "attendre",
+                    "quantity_mm": 0.0,
+                    "status": "blocked",
+                    "reason": "Sursemis / levée (J+6) : tonte suspendue jusqu'à J+7, le temps que les graines s'ancrent.",
+                },
+            },
+        )
+
+        entity = sensor.GazonActionRecommandeeSensor(coordinator)
+
+        self.assertEqual(entity.native_value, "Attends avant de tondre.")
+
     def test_conseil_principal_sensor_reports_low_battery_delay_for_mowing(self) -> None:
         coordinator = _FakeCoordinator(
             entry=_FakeEntry(),
