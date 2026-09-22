@@ -96,5 +96,90 @@ class SurfaceGazonDansInstallationTests(unittest.TestCase):
         self.assertIn("Quelle est la surface totale du gazon", self.html)
 
 
+SCRIPT_BROUILLON = r"""
+const fs = require("fs");
+const vm = require("vm");
+const { chemin, registre } = JSON.parse(fs.readFileSync(0, "utf8"));
+const ctx = {
+  HTMLElement: class {},
+  customElements: { get: () => undefined, define: (nom, classe) => { ctx.Classe = classe; } },
+  console,
+};
+ctx.window = ctx;
+vm.createContext(ctx);
+vm.runInContext(fs.readFileSync(chemin, "utf8"), ctx);
+
+const p = Object.create(ctx.Classe.prototype);
+p._donnees = { registre, entites: {}, entry_id: "test" };
+p._brouillon = { surface_gazon_m2: 255 };
+p._brouillonEntites = {};
+p._brouillonChoix = {};
+p._brouillonAlertes = {};
+p._narrow = false;
+p._fenetre = { contains: () => false };
+p._rendre = () => {};
+
+const groupeInstallation = registre.groupes.find((g) => g.cle === "installation") || { cle: "installation", icone: "" };
+const badgeAvant = /<span class="compteur"[^>]*>(\d+)<\/span>/.exec(p._ongletHtml(groupeInstallation, false));
+const annulerHtmlAvant = p._installationHtml();
+const boutonActif = !/data-action="annuler-installation"[^>]*disabled/.test(annulerHtmlAvant);
+
+// Simule le clic sur « Annuler les changements » : un bouton sans data-cle englobant,
+// exactement la structure réelle du bouton dans _installationHtml.
+const bouton = {
+  dataset: { action: "annuler-installation" },
+  disabled: false,
+  closest: (sel) => (sel === "[data-cle]" ? null : null),
+};
+const cible = {
+  closest: (sel) => (sel === "[data-action]" ? bouton : null),
+};
+const evenement = { target: cible };
+p._surClic(evenement);
+
+process.stdout.write(JSON.stringify({
+  badgeAvant: badgeAvant ? Number(badgeAvant[1]) : 0,
+  boutonActifAvant: boutonActif,
+  brouillonApres: p._brouillon,
+}));
+"""
+
+
+def _rendre_brouillon() -> dict:
+    assert NODE
+    resultat = subprocess.run(
+        [NODE, "-e", SCRIPT_BROUILLON],
+        input=json.dumps({"chemin": str(PANNEAU), "registre": REGISTRE}),
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    )
+    return json.loads(resultat.stdout)
+
+
+@unittest.skipUnless(NODE, "Node n'est pas installé")
+class SurfaceGazonComptabiliteBrouillonTests(unittest.TestCase):
+    """P2 signalé en relecture automatique : le compteur de l'onglet Installation et son
+    bouton « Annuler les changements » ne comptaient que les brouillons d'entités, de choix
+    et d'alertes — jamais les réglages génériques comme `surface_gazon_m2`, qui passent par
+    `_brouillon`. Une modification de la surface seule restait donc invisible au compteur et
+    le bouton « Annuler » ne l'effaçait pas.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.resultat = _rendre_brouillon()
+
+    def test_le_badge_de_longlet_compte_le_brouillon_de_surface(self) -> None:
+        self.assertEqual(self.resultat["badgeAvant"], 1)
+
+    def test_le_bouton_annuler_est_actif_avec_un_brouillon_de_surface(self) -> None:
+        self.assertTrue(self.resultat["boutonActifAvant"])
+
+    def test_annuler_installation_efface_le_brouillon_de_surface(self) -> None:
+        self.assertNotIn("surface_gazon_m2", self.resultat["brouillonApres"])
+
+
 if __name__ == "__main__":
     unittest.main()
