@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 import sys
 import types
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, PropertyMock, patch
 from zoneinfo import ZoneInfo
 
 
@@ -156,6 +156,29 @@ class _FakeRegistry:
 
 
 class EntityRegistryTests(unittest.TestCase):
+    def test_consommation_eau_exige_surface_et_coordinateur_disponible(self) -> None:
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={})
+        entity = sensor.GazonConsommationEauEstimeeSensor(coordinator)
+
+        for coordinateur_disponible, surface_m2, attendu in (
+            (True, 255.0, True),
+            (False, 255.0, False),
+            (True, 0.0, False),
+            (False, 0.0, False),
+        ):
+            with self.subTest(
+                coordinateur_disponible=coordinateur_disponible,
+                surface_m2=surface_m2,
+            ), patch.object(
+                sensor.GazonEntityBase,
+                "available",
+                new_callable=PropertyMock,
+                return_value=coordinateur_disponible,
+                create=True,
+            ):
+                entity._consumption = Mock(return_value={"surface_m2": surface_m2})  # noqa: SLF001
+                self.assertEqual(entity.available, attendu)
+
     def test_all_exposed_entities_have_known_suffixes(self) -> None:
         coordinator = _FakeCoordinator(entry=_FakeEntry(), data={})
         entities = [
