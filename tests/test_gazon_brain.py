@@ -338,6 +338,28 @@ class GazonBrainTests(unittest.TestCase):
                     "preparation_sol": preparation,
                 }])
 
+    def test_declare_intervention_precise_aussi_la_preparation_du_sol(self) -> None:
+        """P2 signalé en relecture automatique sur la PR : `preparation_sol` n'était posé
+        que par `set_mode`, pas par `declare_intervention` — le service public utilisé par les
+        automatisations créait donc un historique sans ce champ pour les trois mêmes chantiers.
+        """
+        attendus = {
+            "Semis": "travail_complet_du_sol",
+            "Sursemis": "scarification_incluse",
+            "Scarification": "scarification_seule_sans_graines",
+        }
+        for intervention, preparation in attendus.items():
+            with self.subTest(intervention=intervention):
+                brain = GazonBrain()
+                item = brain.declare_intervention(intervention, date_action=date(2026, 9, 22))
+                self.assertEqual(item["preparation_sol"], preparation)
+                self.assertEqual(brain.history[-1]["preparation_sol"], preparation)
+
+    def test_declare_intervention_sans_preparation_de_sol_associee(self) -> None:
+        brain = GazonBrain()
+        item = brain.declare_intervention("Hivernage", date_action=date(2026, 9, 22))
+        self.assertNotIn("preparation_sol", item)
+
     def test_record_watering_conserve_la_cause_arret_manuel(self) -> None:
         """DEUXIÈME liste blanche sur le chemin de la cause, et elle la jetait.
 
