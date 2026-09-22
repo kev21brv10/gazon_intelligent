@@ -2712,7 +2712,7 @@ class GazonConsommationEauEstimeeSensor(GazonEntityBase, SensorEntity):
 
     @property
     def available(self):
-        return self._consumption()["surface_m2"] > 0
+        return super().available and self._consumption()["surface_m2"] > 0
 
     @property
     def native_value(self):
