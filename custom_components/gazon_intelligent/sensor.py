@@ -296,14 +296,21 @@ def _public_action_recommandee(entity: GazonEntityBase) -> str | None:
     # pas masquer une action tonte/assistant déjà plus précise : sinon le seul capteur qui
     # affichait encore quelque chose d'utile perdait son information (trouvé en auditant
     # chaque entité de l'intégration sur l'installation réelle, 22/09/2026).
-    if blocked_due_to_conditions and blocked_due_to_conditions != "Arrosage bloqué par conditions.":
+    bare_block = blocked_due_to_conditions == "Arrosage bloqué par conditions."
+    if blocked_due_to_conditions and not bare_block:
         return blocked_due_to_conditions
     assistant_payload = entity._decision_value("assistant")
     if not isinstance(assistant_payload, dict) and snapshot:
         assistant_payload = build_assistant_decision(snapshot)
     assistant_fallback = _assistant_action_fallback(assistant_payload)
-    if (not action_text or _is_generic_noop_action_label(action_text)) and assistant_fallback:
+    # Un blocage NU ne porte lui-même aucune information : même un `action_text` par ailleurs
+    # spécifique (ex. « Prochain cycle semis_frequent à 08:30. ») reste moins utile qu'un
+    # conseil tonte/traitement déjà connu de l'assistant — signalé en relecture automatique
+    # sur la PR #54, le motif nu masquait encore ce cas précis.
+    if assistant_fallback and (bare_block or not action_text or _is_generic_noop_action_label(action_text)):
         return assistant_fallback
+    if action_text and not _is_generic_noop_action_label(action_text):
+        return action_text
     if blocked_due_to_conditions:
         return blocked_due_to_conditions
     return action_text or None
