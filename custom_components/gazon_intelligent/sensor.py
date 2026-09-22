@@ -25,12 +25,14 @@ from .entity_base import GazonEntityBase
 from .entity_ids import public_entity_id, resolve_entry_instance_slug
 from .intervention_recommendation import build_intervention_recommendation, public_intervention_ui
 from .memory import build_application_summary, compute_application_state, normalize_post_application_status
+from .reglages import lire as lire_reglage
 from .watering_plan import build_watering_plan
 from .water import (
     _is_technical_watering,
     _zone_session_surface_mm,
     _zone_session_total_mm,
     compute_live_session_water,
+    compute_estimated_water_consumption,
 )
 
 
@@ -1641,6 +1643,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
             GazonArrosageEnCoursSensor(coordinator),
             GazonDernierArrosageDetecteSensor(coordinator),
             GazonDernierArrosageTotalZonesSensor(coordinator),
+            GazonConsommationEauEstimeeSensor(coordinator),
             GazonProchainArrosageSensor(coordinator),
             GazonProchaineTonteSensor(coordinator),
             GazonDerniereApplicationSensor(coordinator),
@@ -2684,6 +2687,52 @@ class GazonDernierArrosageTotalZonesSensor(GazonDernierArrosageDetecteSensor):
             except (TypeError, ValueError):
                 continue
         return 0.0
+
+
+class GazonConsommationEauEstimeeSensor(GazonEntityBase, SensorEntity):
+    _attr_name = "Consommation d'eau estimée"
+    _attr_has_entity_name = True
+    _attr_native_unit_of_measurement = "L"
+    _attr_icon = "mdi:water-outline"
+
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self._set_entity_identity("sensor", "consommation_eau_estimee")
+
+    def _consumption(self) -> dict[str, Any]:
+        settings_getter = getattr(self.coordinator, "_reglages_instance", None)
+        settings = settings_getter() if callable(settings_getter) else {}
+        surface = lire_reglage(settings, "surface_gazon_m2", 0.0)
+        history = getattr(self.coordinator, "history", None)
+        return compute_estimated_water_consumption(
+            history if isinstance(history, list) else [],
+            surface_m2=surface,
+            today=dt_util.now().date(),
+        )
+
+    @property
+    def available(self):
+        return self._consumption()["surface_m2"] > 0
+
+    @property
+    def native_value(self):
+        return self._consumption()["year_l"]
+
+    @property
+    def extra_state_attributes(self):
+        data = self._consumption()
+        return {
+            **data,
+            "periode": f"Depuis le 1er janvier {dt_util.now().year}",
+            "couverture": (
+                "année complète"
+                if data["year_complete"]
+                else "partielle : depuis la première trace encore conservée"
+            ),
+            "precision": (
+                "Estimation calculée avec la surface totale. Un compteur d'eau remplacera cette estimation par une mesure réelle."
+            ),
+        }
 
 
 class GazonDerniereApplicationSensor(GazonEntityBase, SensorEntity):

@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.0.0-rc.6
+
+- **Trois chantiers clairement distincts** : le Sursemis comprend désormais explicitement la
+  scarification du gazon existant, le Semis comprend un travail complet du sol et le mode
+  Scarification désigne uniquement une scarification sans graines.
+- **Historique explicite** : les nouvelles déclarations conservent la préparation du sol associée
+  (`scarification_incluse`, `travail_complet_du_sol` ou
+  `scarification_seule_sans_graines`) sans créer de deuxième phase concurrente.
+- **Activation plus sûre** : la page demande d'activer Semis ou Sursemis seulement après la
+  préparation correspondante et la mise en place des graines. Une scarification seule ne lance
+  aucun programme d'arrosage de graines.
+- **Vérifié** : 71 tests ciblés et 24 sous-tests, puis suite complète avec 2 182 tests et
+  3 220 sous-tests.
+
+## 1.0.0-rc.5
+
+- **Estimation de la consommation d'eau** : un nouveau capteur additionne les lames d'eau
+  enregistrées pour aujourd'hui, le mois courant et depuis le 1er janvier, puis les convertit en
+  litres avec la surface totale du gazon (`1 mm × 1 m² = 1 L`).
+- **Surface configurable** : le nouveau réglage `surface_gazon_m2` reste neutre par défaut afin
+  que chaque installation renseigne sa propre surface. Sans surface, le capteur demeure
+  indisponible plutôt que d'afficher un faux zéro.
+- **Couverture historique explicite** : l'estimation indique la première date encore conservée
+  et ne présente l'année comme complète que si une trace remonte au 1er janvier ou avant. Elle
+  reste clairement identifiée comme une estimation jusqu'à l'installation d'un compteur d'eau.
+- **Vérifié** : scénarios sur une surface de 255 m², registres de réglages et d'entités, puis
+  suite complète avec 2 180 tests et 3 217 sous-tests. Compilation Python et contrôle du diff
+  verts.
+
 ## 1.0.0-rc.4
 
 - **Une pluie apparue pendant une recharge intermédiaire ne pouvait pas interrompre le cycle** :

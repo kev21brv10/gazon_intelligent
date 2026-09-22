@@ -237,6 +237,16 @@ class LOngletModesTests(unittest.TestCase):
 
 @unittest.skipUnless(NODE, "Node n'est pas installé")
 class LesSituationsDeLOngletModesTests(unittest.TestCase):
+    def test_semis_sursemis_et_scarification_expliquent_des_chantiers_distincts(self) -> None:
+        rendu = _rendre([_cas(choisi=mode) for mode in ("Semis", "Sursemis", "Scarification")])
+        semis, sursemis, scarification = [
+            _texte(_bloc(sortie["html"], "mode-action")) for sortie in rendu["sorties"]
+        ]
+        self.assertIn("travail complet du sol", semis)
+        self.assertIn("scarification est terminée", sursemis)
+        self.assertIn("scarification seule", scarification)
+        self.assertIn("aucun programme de Semis ou de Sursemis", scarification)
+
     def test_sans_choix_l_onglet_montre_le_mode_du_moment(self) -> None:
         rendu = _rendre([
             _cas(actuel="Sursemis", semis={"age": 3}),

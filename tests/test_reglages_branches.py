@@ -699,6 +699,7 @@ class ChaqueReglageEstBrancheTests(unittest.TestCase):
         "arrosage_reduction_ombre_zone_3": "test_watering_session_monitoring.py",
         "arrosage_reduction_ombre_zone_4": "test_watering_session_monitoring.py",
         "arrosage_reduction_ombre_zone_5": "test_watering_session_monitoring.py",
+        "surface_gazon_m2": "test_water_consumption.py",
         # Le délai de l'alerte des graines : une alerte, pas une décision (0.94.0).
         "graines_alerte_retard": "test_notifications.py",
         # Le pilote pur vérifie chaque garde matérielle sans appeler Home Assistant.

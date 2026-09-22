@@ -58,6 +58,7 @@ PUBLIC_ENTITY_KEYS: dict[str, tuple[str, str]] = {
     "arrosage_en_cours": ("sensor", f"{DOMAIN}_arrosage_en_cours"),
     "dernier_arrosage_detecte": ("sensor", f"{DOMAIN}_dernier_arrosage_detecte"),
     "dernier_arrosage_total_zones": ("sensor", f"{DOMAIN}_dernier_arrosage_total_zones"),
+    "consommation_eau_estimee": ("sensor", f"{DOMAIN}_consommation_d_eau_estimee"),
     "prochain_arrosage": ("sensor", f"{DOMAIN}_prochain_arrosage"),
     "prochaine_tonte": ("sensor", f"{DOMAIN}_prochaine_tonte"),
     "derniere_application": ("sensor", f"{DOMAIN}_derniere_application"),

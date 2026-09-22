@@ -713,6 +713,62 @@ def compute_recent_watering_count(
     )
 
 
+def compute_estimated_water_consumption(
+    history: list[dict[str, Any]],
+    *,
+    surface_m2: float,
+    today: date | None = None,
+) -> dict[str, Any]:
+    """Convertit les lames réellement enregistrées en litres estimés.
+
+    Le calcul reste honnête sur sa couverture : l'historique interne est borné, donc une somme
+    annuelle ne devient « complète » que si une trace d'arrosage antérieure ou égale au
+    1er janvier est encore présente. Une absence de trace avant cette date ne vaut jamais zéro.
+    """
+    today = today or _current_date()
+    try:
+        area = max(0.0, float(surface_m2))
+    except (TypeError, ValueError):
+        area = 0.0
+    year_start = date(today.year, 1, 1)
+    month_start = date(today.year, today.month, 1)
+    totals_mm = {"today": 0.0, "month": 0.0, "year": 0.0}
+    watering_dates: list[date] = []
+    for item in history:
+        if not isinstance(item, dict) or item.get("type") != "arrosage":
+            continue
+        raw_date = item.get("date")
+        try:
+            watering_date = date.fromisoformat(str(raw_date))
+        except (TypeError, ValueError):
+            continue
+        amount = _watering_item_mm(item)
+        if amount is None or amount < 0:
+            continue
+        watering_dates.append(watering_date)
+        if watering_date == today:
+            totals_mm["today"] += amount
+        if month_start <= watering_date <= today:
+            totals_mm["month"] += amount
+        if year_start <= watering_date <= today:
+            totals_mm["year"] += amount
+
+    coverage_start = min(watering_dates) if watering_dates else None
+    rounded_mm = {key: _round_half_up_1(value) for key, value in totals_mm.items()}
+    return {
+        "surface_m2": area,
+        "today_mm": rounded_mm["today"],
+        "month_mm": rounded_mm["month"],
+        "year_mm": rounded_mm["year"],
+        "today_l": round(rounded_mm["today"] * area),
+        "month_l": round(rounded_mm["month"] * area),
+        "year_l": round(rounded_mm["year"] * area),
+        "coverage_start": coverage_start.isoformat() if coverage_start else None,
+        "year_complete": coverage_start is not None and coverage_start <= year_start,
+        "measurement_kind": "estimated_from_depth_and_total_area",
+    }
+
+
 def _effective_rain_mm(
     pluie_j: float,
     pluie_j1: float,

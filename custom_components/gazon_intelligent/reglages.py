@@ -539,6 +539,13 @@ REGLAGES: tuple[Reglage, ...] = (
         source="watering_policy.WATERING_POLICIES['scarification'].conditions['temperature_min_c']",
         avertissement="Réglage sensible : sous 12 °C la reprise est lente ; abaisser cette limite peut arroser sans bénéfice réel.",
     ),
+    Reglage(
+        "surface_gazon_m2", "installation",
+        "Quelle est la surface totale du gazon ?",
+        "Elle sert à convertir les millimètres d'arrosage en litres estimés. Sans compteur d'eau, le résultat reste une estimation.",
+        "nombre", 0.0, 0.0, 100000.0, 1.0, "m²",
+        source="water.compute_estimated_water_consumption (1 mm × 1 m² = 1 L)",
+    ),
     # ── Pilotage matériel de la tondeuse ───────────────────────────────────────────────
     Reglage(
         "tondeuse_pilotage_batterie_min", "installation",

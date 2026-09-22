@@ -365,11 +365,13 @@ const REGLES_MODES = {
     "La tonte suit ses fenêtres et ses limites de vent et de chaleur.",
   ],
   Semis: [
+    "Le chantier comprend un travail complet du sol avant la mise en place des graines.",
     "Les graines sont arrosées par petits cycles, ajustés à la météo.",
     "Par défaut, la tonte est interdite 25 jours.",
     "Puis la hauteur de coupe descend par étapes, de 7,5 à 5 cm.",
   ],
   Sursemis: [
+    "Le chantier comprend la scarification du gazon existant avant l'épandage des graines.",
     "Les graines sont arrosées par petits cycles, ajustés à la météo.",
     "Par défaut, la tonte est suspendue pendant la levée (7 jours), puis reprend.",
     "Coupe à 4 cm, puis 4,5 cm après deux coupes des jeunes pousses.",
@@ -392,6 +394,7 @@ const REGLES_MODES = {
     "La quantité s'adapte à l'état hydrique du sol.",
   ],
   Scarification: [
+    "Ce mode correspond à une scarification seule, sans semis ni sursemis.",
     "Sans dose précise dans la fiche, l'accompagnement vise 5 à 10 mm.",
     "Le sol doit être légèrement humide et sans forte pluie annoncée.",
     "La tonte est limitée à une session par jour pendant la récupération.",
@@ -850,13 +853,13 @@ const METEOS = {
 // Volontairement sobres : le détail de chaque mode vit dans le moteur, pas ici.
 const MODES = {
   Normal: "L'entretien de tous les jours.",
-  Semis: "Semis sur terrain nu : les graines sont arrosées plusieurs fois par jour et la tondeuse attend.",
-  Sursemis: "Sursemis dans un gazon en place : les graines sont arrosées souvent, puis la tonte reprend progressivement après la levée.",
+  Semis: "Semis sur terrain nu après un travail complet du sol : les graines sont arrosées plusieurs fois par jour et la tondeuse attend.",
+  Sursemis: "Sursemis dans un gazon en place, scarification incluse : les graines sont arrosées souvent, puis la tonte reprend progressivement après la levée.",
   Traitement: "Un traitement vient d'être appliqué au gazon.",
   Fertilisation: "Un engrais vient d'être appliqué.",
   Biostimulant: "Un biostimulant vient d'être appliqué.",
   "Agent Mouillant": "Un agent mouillant vient d'être appliqué.",
-  Scarification: "Le gazon vient d'être scarifié.",
+  Scarification: "Le gazon vient d'être scarifié sans semis ni sursemis.",
   Hivernage: "Le gazon se repose pour l'hiver.",
 };
 
@@ -3791,7 +3794,13 @@ class GazonIntelligentPanel extends HTMLElement {
         lignes.push(`<button class="bouton-plein" data-dialogue="mode" data-mode="${esc(mode)}" ${admin ? "" : "disabled"}><ha-icon icon="${esc(ICONES_MODES[mode] || "mdi:swap-horizontal")}"></ha-icon>Passer en mode ${esc(mode)}</button>`);
       }
       if (mode === "Semis" || mode === "Sursemis") {
-        lignes.push(`<p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>À choisir une fois les graines au sol : un arrosage des graines peut partir dès l'ouverture de leur fenêtre.</span></p>`);
+        const preparation = mode === "Semis"
+          ? "le travail complet du sol est terminé et les graines sont au sol"
+          : "la scarification est terminée et les graines sont au sol";
+        lignes.push(`<p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>À choisir une fois que ${preparation} : un arrosage des graines peut partir dès l'ouverture de leur fenêtre.</span></p>`);
+      }
+      if (mode === "Scarification") {
+        lignes.push(`<p class="note"><ha-icon icon="mdi:information-outline"></ha-icon><span>Ce mode correspond à une scarification seule, sans graines. Pour semer ensuite, choisir directement Semis ou Sursemis : ces chantiers comprennent déjà leur préparation du sol et aucun programme de Semis ou de Sursemis n'est lancé ici.</span></p>`);
       }
       if (mode === "Normal" && actuel && actuel !== "Normal") {
         lignes.push(`<p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>Revenir au mode Normal efface le suivi en cours (${esc(actuel)}).</span></p>`);
@@ -6560,7 +6569,9 @@ class GazonIntelligentPanel extends HTMLElement {
       const avertissements = [];
       if (d.choix === "Normal" && actuel && actuel !== "Normal") avertissements.push("Revenir au mode Normal efface le suivi en cours (semis, traitement…).");
       if (d.choix === "Normal" && this._verrouSecuriteActif()) avertissements.push("Le verrou de sécurité de l'arrosage restera posé : il se lève séparément, après vérification des vannes.");
-      if (d.choix === "Semis" || d.choix === "Sursemis") avertissements.push("À choisir une fois les graines au sol : un arrosage des graines peut partir dès 10 h.");
+      if (d.choix === "Semis") avertissements.push("À choisir une fois le travail complet du sol terminé et les graines au sol : un arrosage des graines peut partir dès l'ouverture de leur fenêtre.");
+      if (d.choix === "Sursemis") avertissements.push("À choisir une fois la scarification terminée et les graines au sol : un arrosage des graines peut partir dès l'ouverture de leur fenêtre.");
+      if (d.choix === "Scarification") avertissements.push("Ce mode note une scarification seule. Il ne lance aucun programme de Semis ou de Sursemis.");
       if (d.direct) {
         const produit = ["Traitement", "Fertilisation", "Biostimulant", "Agent Mouillant", "Scarification"].includes(d.choix);
         const corps = `
