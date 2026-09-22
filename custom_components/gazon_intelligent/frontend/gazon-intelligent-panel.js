@@ -259,12 +259,6 @@ const DISPOSITION = {
   ],
   semis: [
     {
-      titre: "Quand la tondeuse peut-elle reprendre ?",
-      phrase: "Ce délai protège le jeune gazon sans changer son programme d'arrosage.",
-      cles: ["semis_reprise_tonte_jours"],
-      place: ["gauche", "etroit"],
-    },
-    {
       titre: "La hauteur conseillée à chaque étape",
       phrase: "Sur un terrain nu, on ne tond pas tout de suite. Puis on descend doucement.",
       dessin: "escalier_semis",
@@ -4370,14 +4364,13 @@ class GazonIntelligentPanel extends HTMLElement {
 
   _dessinVoyageSursemis(v, c) {
     const duree = v.graines_duree;
-    const repriseTonte = v.sursemis_levee + 1;
     const premiere = joursAvantPremiereCoupe(v);
     const n = v.sursemis_coupes_avant_remontee;
     const remontee = premiere + (n - 1) * v.sursemis_ecart_tontes;
     const pct = (j) => pourcent(j, 0, duree);
     const zones = [
-      { de: 0, a: repriseTonte, teinte: "ambre", nom: "La tondeuse attend" },
-      { de: repriseTonte, a: Math.min(remontee, duree), teinte: "vert-clair", nom: `Lame à ${cmFr(v.sursemis_lame)}` },
+      { de: 0, a: v.sursemis_levee, teinte: "ambre", nom: "La tondeuse attend" },
+      { de: v.sursemis_levee, a: Math.min(remontee, duree), teinte: "vert-clair", nom: `Lame à ${cmFr(v.sursemis_lame)}` },
       { de: Math.min(remontee, duree), a: duree, teinte: "vert", nom: `Lame à ${cmFr(v.sursemis_lame_finale)}` },
     ].filter((z) => z.a > z.de);
     const segs = zones.map((z) => {
@@ -4389,13 +4382,13 @@ class GazonIntelligentPanel extends HTMLElement {
     const date = (jour) => jourPlus(base, jour - (age ?? 0), { weekday: "short", day: "numeric", month: "short" });
     const reperesHaut = [];
     if (premiere < duree) reperesHaut.push({ j: premiere, texte: `${ordinal(1)} coupe J${premiere}`, icone: "mdi:content-cut" });
-    const reperesBas = [{ j: repriseTonte, texte: `la tondeuse repart J${repriseTonte}`, icone: "mdi:robot-mower" }];
+    const reperesBas = [{ j: v.sursemis_levee, texte: `la tondeuse repart J${v.sursemis_levee}`, icone: "mdi:robot-mower" }];
     if (age !== null && age < duree) reperesBas.push({ j: age + 0.5, texte: `jour ${age}`, icone: "mdi:flag-variant", genre: "maintenant" });
     const rangee = (items, ligne) => this._rangeesHtml(items.map((r) => ({ ...r, p: pct(r.j) })), ligne);
     const aiguilles = [...reperesHaut, ...reperesBas].map((r) => `<span class="aiguille ${r.genre || ""}" style="left:${pct(r.j)}%"></span>`).join("");
     const hauteurCoupe = v.sursemis_premiere_coupe * v.sursemis_lame;
     const lignes = [
-      `<li><span class="pastille t-ambre"></span><span><b>Jusqu'au jour ${v.sursemis_levee}</b> — la tondeuse attend que les graines s'accrochent<br><span class="heures">reprise au jour ${repriseTonte}, le ${date(repriseTonte)}</span></span></li>`,
+      `<li><span class="pastille t-ambre"></span><span><b>Jusqu'au jour ${v.sursemis_levee}</b> — la tondeuse attend que les graines s'accrochent<br><span class="heures">jusqu'au ${date(v.sursemis_levee)}</span></span></li>`,
       premiere < duree
         ? `<li><span class="pastille t-vert-clair"></span><span><b>Jour ${premiere} : ${ordinal(1)} coupe des pousses</b> — elles mesurent alors ${cmFr(hauteurCoupe)} (${nombreFr(v.sursemis_premiere_coupe)} × ${cmFr(v.sursemis_lame)})<br><span class="heures">vers le ${date(premiere)}</span></span></li>`
         : `<li><span class="pastille t-vert-clair"></span><span><b>Première coupe après la fin du suivi</b> — les pousses n'atteignent ${cmFr(hauteurCoupe)} qu'au jour ${premiere}</span></li>`,
@@ -4439,9 +4432,9 @@ class GazonIntelligentPanel extends HTMLElement {
     const etapes = etapesGraines(v);
     // Césures douces : « Enracinement » ne tient pas dans une colonne de téléphone.
     const marches = [
-      { nom: "Germi&shy;nation", h: v.semis_hauteur_germination, sousTitre: "jeunes pousses", classe: "", etape: etapes[0] },
-      { nom: "Enraci&shy;nement", h: v.semis_hauteur_enracinement, sousTitre: "racines en formation", classe: "", etape: etapes[1] },
-      { nom: "Reprise", h: v.semis_hauteur_reprise, sousTitre: "hauteur protégée", classe: "", etape: etapes[2] },
+      { nom: "Germi&shy;nation", h: v.semis_hauteur_germination, sousTitre: "on ne tond pas", classe: "sans-tonte", etape: etapes[0] },
+      { nom: "Enraci&shy;nement", h: v.semis_hauteur_enracinement, sousTitre: "on ne tond pas", classe: "sans-tonte", etape: etapes[1] },
+      { nom: "Reprise", h: v.semis_hauteur_reprise, sousTitre: "premières coupes", classe: "", etape: etapes[2] },
       { nom: "Stabili&shy;sation", h: v.semis_hauteur_stabilisation, sousTitre: "on descend", classe: "", etape: etapes[3] },
       { nom: "Ensuite", h: base, sousTitre: `hauteur de ${MOIS_LONGS[ceMois]}`, classe: "base", etape: null },
     ];
@@ -4455,7 +4448,7 @@ class GazonIntelligentPanel extends HTMLElement {
       </div>`;
     }).join("")}</div>
       <p class="note"><ha-icon icon="mdi:information-outline"></ha-icon><span>Hauteurs en centimètres. Ce sont des minimums : la hauteur conseillée ne descend jamais en dessous pendant le semis.</span></p>
-      <p class="note"><ha-icon icon="mdi:robot-mower"></ha-icon><span>La tondeuse reste à l'arrêt jusqu'au jour ${v.semis_reprise_tonte_jours - 1} inclus et peut reprendre à J${v.semis_reprise_tonte_jours}. Ce délai est réglé dans « Semis » et ne modifie pas les étapes d'arrosage.</span></p>`;
+      <p class="note"><ha-icon icon="mdi:robot-mower"></ha-icon><span>La tondeuse reste à l'arrêt jusqu'au jour ${v.graines_fin_enracinement} inclus (fin de l'enracinement, réglée dans « Graines » → « Les étapes »). Ce délai est commun à l'arrosage ; il n'a aucun rapport avec celui du Sursemis, bien plus court et réglé à part.</span></p>`;
   }
 
   // ══ Base de contrôle (Accueil) ══════════════════════════════════════════════════════════
