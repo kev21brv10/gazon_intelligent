@@ -34,6 +34,16 @@ from .soil_balance import normalize_soil_balance_state, set_reserve_mm, update_s
 from .water import compute_etp, compute_recent_watering_mm, build_watering_session_summary
 from .decision_risk import compute_fungal_risk
 
+# Préparation du sol associée à chaque chantier (contrat 1.0.0-rc.6) : Sursemis inclut la
+# scarification du gazon existant, Semis un travail complet du sol, Scarification seule ne
+# lance aucun programme de graines. Partagé entre set_mode et declare_intervention pour que le
+# champ existe quel que soit le chemin de déclaration utilisé.
+PREPARATION_SOL_PAR_MODE = {
+    "Semis": "travail_complet_du_sol",
+    "Sursemis": "scarification_incluse",
+    "Scarification": "scarification_seule_sans_graines",
+}
+
 
 class GazonBrain:
     """Cerveau métier de Gazon Intelligent."""
@@ -395,11 +405,7 @@ class GazonBrain:
             "type": mode,
             "date": self.date_action.isoformat(),
         }
-        preparation = {
-            "Semis": "travail_complet_du_sol",
-            "Sursemis": "scarification_incluse",
-            "Scarification": "scarification_seule_sans_graines",
-        }.get(mode)
+        preparation = PREPARATION_SOL_PAR_MODE.get(mode)
         if preparation is not None:
             item["preparation_sol"] = preparation
         self._append_history(item)
@@ -547,6 +553,9 @@ class GazonBrain:
             "source": "service",
             "declared_at": datetime.now(timezone.utc).isoformat(),
         }
+        preparation = PREPARATION_SOL_PAR_MODE.get(intervention)
+        if preparation is not None:
+            item["preparation_sol"] = preparation
         if product_record:
             item["produit_id"] = product_record.get("id")
             item["produit_catalogue"] = copy.deepcopy(product_record)
