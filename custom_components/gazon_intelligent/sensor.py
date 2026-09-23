@@ -5014,12 +5014,20 @@ class GazonProchainArrosageSensor(GazonFenetreOptimaleSensor):
             "date_prochain_arrosage_estime": self._decision_value("date_prochain_arrosage_estime"),
         }
         if self._active_irrigation_session() is not None:
-            # Le reste des attributs décrit la fenêtre théorique, potentiellement déjà dépassée
-            # par ce cycle en cours : le statut et le résumé priment, le reste n'est pas effacé
-            # (utile une fois le cycle terminé pour comprendre ce qui a été visé).
+            # ⚠️ Relevé en revue (PR #60) : le statut et le résumé primaient déjà, mais la cible
+            # théorique restait publiée telle quelle — `target_datetime` pouvait afficher une
+            # heure déjà passée (ex. 10:00) sous un capteur « Prochain arrosage » pendant qu'une
+            # session tournait depuis 14:00, contradiction lisible par tout consommateur direct
+            # de l'attribut. Le prochain VRAI micro-cycle n'est pas connu avant la fin du cycle en
+            # cours : ces champs sont donc absents plutôt que faux, pas recalculés à la volée.
             attrs["source_status"] = "en_cours"
             attrs["summary"] = "Arrosage en cours"
-            attrs["next_action"] = None
+            for cle in (
+                "next_action", "target_date", "target_display", "target_datetime",
+                "optimal_target_datetime", "departure_time", "end_time",
+                "target_window", "target_window_label",
+            ):
+                attrs[cle] = None
         return _clean_public_attrs(attrs) or {}
 
 
