@@ -42,10 +42,11 @@ const sorties = cas.map((c) => {
       "sensor.reserve": { state: "0", attributes: { arrosage_recent_7j: c.utilise, arrosage_applique_7j: c.recu ?? c.utilise } },
       "sensor.fenetre": { state: "maintenant", attributes: { weekly_guardrail_mm_max: c.plafond, weekly_guardrail_mm_min: c.plancher ?? null } },
       "sensor.phase": { state: c.phase || "Normal", attributes: {} },
+      "sensor.mode": { state: c.mode || c.phase || "Normal", attributes: {} },
       "sensor.prochain": { state: "Maintenant", attributes: { block_reason: c.blockReason || "" } },
     },
   };
-  p._donnees = { entites: { reserve: "sensor.reserve", fenetre_optimale: "sensor.fenetre", phase: "sensor.phase", prochain_arrosage: "sensor.prochain" } };
+  p._donnees = { entites: { reserve: "sensor.reserve", fenetre_optimale: "sensor.fenetre", phase: "sensor.phase", mode: "sensor.mode", prochain_arrosage: "sensor.prochain" } };
   return { html: p._budgetHtml(), retenu: p._retenuParLeBudget() };
 });
 process.stdout.write(JSON.stringify(sorties));
@@ -101,6 +102,19 @@ class BudgetSemaineSemisSursemisTests(unittest.TestCase):
         # Si le moteur cite lui-même le garde-fou hebdomadaire dans son motif de blocage, on le
         # croit sur parole même en Sursemis plutôt que de l'ignorer par principe.
         [sortie] = _rendre([{"phase": "Sursemis", "utilise": 10.0, "plafond": 25.0, "blockReason": "garde_fou_hebdomadaire"}])
+        self.assertTrue(sortie["retenu"])
+
+    def test_un_traitement_pendant_un_mode_sursemis_reste_une_vraie_limite(self) -> None:
+        # ⚠️ Le réglage `mode` (déclaré par l'utilisateur) peut rester "Sursemis" pendant qu'un
+        # Traitement (priorité plus haute) prend la phase dominante que le moteur utilise
+        # réellement pour choisir le profil de décision (`guidance.is_seeding_phase(phase_
+        # dominante)`). Si la carte se fiait à `mode` plutôt qu'à `phase`, elle masquerait un
+        # plafond qui, lui, s'applique vraiment sous ce profil.
+        [sortie] = _rendre([{"mode": "Sursemis", "phase": "Traitement", "utilise": 29.9, "plafond": 17.4}])
+        html = sortie["html"]
+        self.assertIn(">limite", html)
+        self.assertIn("var(--gz-rouge)", html)
+        self.assertNotIn(">repère", html)
         self.assertTrue(sortie["retenu"])
 
     def test_le_motif_explicite_ne_contredit_plus_le_texte_informatif(self) -> None:
