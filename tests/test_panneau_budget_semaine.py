@@ -135,6 +135,33 @@ class BudgetSemaineTests(unittest.TestCase):
         self.assertNotIn(">repère", html)
         self.assertTrue(sortie["retenu"])
 
+    def test_une_phase_indisponible_ou_inconnue_reste_une_vraie_limite(self) -> None:
+        # ⚠️ Trouvé en revue (PR #63) : une première version comparait `phase !== "Normal"` pour
+        # décider si le plafond est informatif. Si le capteur de phase est indisponible, pas
+        # encore chargé ou renvoie une valeur non reconnue, cette valeur n'est pas non plus
+        # "Normal" — un simple `!==` aurait donc masqué à tort un plafond qui, par défaut
+        # (`phases.py`, `phase_dominante` vaut "Normal" tant que rien d'autre n'est actif),
+        # s'applique réellement. La liste blanche explicite doit échouer du bon côté : vers la
+        # vraie limite, jamais vers l'informatif.
+        for phase in ("unavailable", "unknown", "Une Phase Qui N'existe Pas"):
+            with self.subTest(phase=phase):
+                [sortie] = _rendre([{"phase": phase, "utilise": 29.9, "plafond": 17.4}])
+                html = sortie["html"]
+                self.assertNotIn("informatif", _sans_balises(html))
+                self.assertIn("var(--gz-rouge)", html)
+                self.assertTrue(sortie["retenu"])
+
+    def test_le_texte_informatif_ne_nomme_pas_les_graines_hors_semis(self) -> None:
+        # ⚠️ Trouvé en revue (PR #63) : le texte informatif nommait toujours « Semis/Sursemis »
+        # et « les graines », même affiché pendant un Traitement ou une Fertilisation — un texte
+        # factuellement faux hors phase de graines (le mécanisme réel y est la fiche produit, pas
+        # une fenêtre/pluie/saturation liée aux graines).
+        [sortie] = _rendre([{"phase": "Traitement", "utilise": 10.0, "plafond": 25.0}])
+        texte = _sans_balises(sortie["html"])
+        self.assertIn("informatif", texte)
+        self.assertNotIn("Semis/Sursemis", texte)
+        self.assertNotIn("graines", texte)
+
     def test_le_motif_explicite_ne_contredit_plus_le_texte_informatif(self) -> None:
         # ⚠️ Relevé en revue (PR #61) : `retenu=True` (motif nommé) affichait quand même le texte
         # « cumul informatif, pas une limite qui les retiendrait » ET « Semaine couverte » juste

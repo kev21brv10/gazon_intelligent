@@ -423,6 +423,12 @@ const LIENS_MODES = {
 // Un produit se déclare plutôt qu'un mode : il est noté, et sa fiche fixe la dose.
 const MODES_PRODUIT = ["Traitement", "Fertilisation", "Biostimulant", "Agent Mouillant", "Scarification"];
 
+// Phases où `guidance.py` ne cappe jamais la dose sur le plafond hebdomadaire du profil Normal
+// (`_profile_for_sursemis`, `_profile_for_traitement`, `_profile_for_agro_phases`,
+// `_profile_for_blocked` pour l'Hivernage) — seul `_profile_for_normal` l'applique réellement.
+// Liste blanche explicite, pas un `!== "Normal"` : voir `_budgetEstInformatifSeul`.
+const _PHASES_SANS_PLAFOND_HEBDO = new Set(["Semis", "Sursemis", "Hivernage", ...MODES_PRODUIT]);
+
 // Le besoin propre à chaque mode produit et à l'hivernage, en une phrase courte pour une puce
 // (0.96.2) — repris de `REGLES_MODES`, jamais réinventé. Sans dose précise dans une fiche, le
 // moteur applique la sienne (cf. `REGLES_MODES`) ; la puce le dit en bref, la phrase complète
@@ -4531,8 +4537,16 @@ class GazonIntelligentPanel extends HTMLElement {
   // seuls et traitait Traitement comme une vraie limite, alors qu'il ne l'est pas davantage).
   // Présenter ce plafond comme une limite bloquante hors phase Normal promettrait donc une
   // sécurité qui n'existe pas.
+  //
+  // ⚠️ LISTE BLANCHE, PAS `!== "Normal"` (revue du 23/09/2026) : si le capteur de phase est
+  // indisponible, désactivé ou pas encore chargé, `_s("phase")` rend `null`, ce que `!== "Normal"`
+  // aurait classé « pas Normal » et donc masqué un plafond qui, par défaut (`phases.py`,
+  // `phase_dominante` vaut « Normal » tant que rien d'autre n'est actif), s'applique réellement.
+  // Un plafond affiché par excès de prudence est sans conséquence (texte seul) ; un plafond
+  // masqué à tort cache une vraie limite.
   _budgetEstInformatifSeul() {
-    return this._s("phase") !== "Normal";
+    const phase = this._s("phase");
+    return _PHASES_SANS_PLAFOND_HEBDO.has(phase);
   }
 
   // L'orange est une ALERTE : un blocage sain (déjà arrosé, pluie prévue) reste calme.
@@ -5398,14 +5412,19 @@ class GazonIntelligentPanel extends HTMLElement {
     const motLimite = informatifSeul ? "ce repère" : "cette limite";
     const notes = [];
     if (informatifSeul) {
-      notes.push("Pendant le Semis/Sursemis, les micro-arrosages des graines suivent leurs propres garde-fous (fenêtre, pluie, saturation estimée) : ce cumul est informatif, pas une limite qui les retiendrait.");
+      // Texte volontairement neutre vis-à-vis de la phase (revue du 23/09/2026, PR #63) : le
+      // mécanisme réel diffère selon la phase (fenêtre/pluie/saturation pour Semis/Sursemis,
+      // fiche produit pour Traitement/Fertilisation/Biostimulant/Agent Mouillant/Scarification,
+      // arrosage bloqué pour Hivernage) — nommer « Semis/Sursemis » ou « les graines » ici serait
+      // faux pour les autres phases de la liste blanche `_PHASES_SANS_PLAFOND_HEBDO`.
+      notes.push("Hors du mode Normal, la dose de cette phase suit ses propres règles plutôt que ce plafond hebdomadaire : ce cumul est informatif, pas une limite qui la retiendrait.");
     } else if (plancherPct !== null) {
       notes.push(`Le trait marque <b>${esc(mmFr(plancher))}</b> : au-delà, l'arrosage peut se retenir si le gazon a peu soif.`);
     }
     if (retenu && !depasse) notes.push("<b>Semaine couverte</b> : ça reprend dès que le gazon a de nouveau soif.");
     if (horsBudget >= 0.1) notes.push(`En plus : <b>${esc(mmFr(horsBudget))}</b> qui ne comptent pas dans ${motLimite}. Total reçu : <b>${esc(mmFr(recu))}</b>.`);
     return `<section class="section">
-      <div class="section-tete"><h3>L'eau de la semaine</h3><p>${informatifSeul ? "Cumul informatif des 7 derniers jours, sans effet sur les micro-arrosages des graines." : "Pour ne pas trop arroser, l'intégration surveille ce qui a été versé sur 7 jours."}</p></div>
+      <div class="section-tete"><h3>L'eau de la semaine</h3><p>${informatifSeul ? "Cumul informatif des 7 derniers jours, sans effet sur la dose appliquée pendant cette phase." : "Pour ne pas trop arroser, l'intégration surveille ce qui a été versé sur 7 jours."}</p></div>
       <div class="budget">
         <div class="budget-chiffres"><span><b>${esc(mmFr(utilise))}</b> sur 7 jours</span><span>${informatifSeul ? "repère" : "limite"} ${esc(mmFr(plafond))} · ${pct} %</span></div>
         <div class="budget-rail" role="img" aria-label="${pct} % ${informatifSeul ? "du repère" : "de la limite"}">
