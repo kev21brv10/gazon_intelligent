@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.0.0-rc.7
+
+- **Réglage dédié pour la reprise de tonte en Semis** : nouveau réglage `semis_reprise_tonte_jours`
+  (groupe Semis, 25 jours par défaut, réglable de 14 à 40), indépendant de
+  `graines_fin_enracinement` qui continue de piloter uniquement l'arrosage. Il aligne
+  l'autorisation de tonte, la fréquence affichée, la croissance estimée, l'espacement minimal
+  et la prochaine date projetée.
+- **Date de reprise corrigée en Sursemis** : le panneau annonçait un jour de moins que ce que le
+  moteur autorise réellement ; la zone d'attente et la date affichée suivent maintenant la même
+  échéance.
+- **Bulletin de tonte plus précis** : le texte « Ce qu'il faut savoir » annonçait la tonte
+  possible dès maintenant même quand le statut réel imposait de la prudence ou une surveillance ;
+  il reprend désormais le vrai statut publié.
+- **Bandeau d'accueil aligné sur le même statut** : le titre « En ce moment » affichait la même
+  généralisation optimiste que le bulletin ; il distingue maintenant tonte possible, possible
+  avec précaution et à surveiller.
+- **Vérifié** : suite complète avec 2 198 tests et 3 233 sous-tests, verte.
+
 ## 1.0.0-rc.6
 
 - **Trois chantiers clairement distincts** : le Sursemis comprend désormais explicitement la
