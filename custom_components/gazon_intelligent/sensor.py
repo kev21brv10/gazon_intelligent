@@ -4827,8 +4827,20 @@ class GazonProchainArrosageSensor(GazonFenetreOptimaleSensor):
         """
         return _motif_de_blocage_effectif(self)
 
+    def _active_irrigation_session(self) -> dict[str, Any] | None:
+        """Session d'arrosage en cours, ou None. Même détection que le capteur de progression.
+
+        ⚠️ Sans ce garde, ce capteur continuait d'annoncer la fenêtre théorique (« Maintenant »,
+        « Arrosage possible maintenant ») pendant qu'un cycle tournait déjà — la fenêtre visée
+        avait déjà été atteinte, mais rien ici ne le savait. Relevé en conditions réelles le
+        23/09/2026 : session active à 14 h, capteur toujours sur l'ancienne cible.
+        """
+        return GazonArrosageEnCoursSensor._current_session(self.coordinator)
+
     @property
     def native_value(self):
+        if self._active_irrigation_session() is not None:
+            return "En cours"
         contextual = self._contextual_watering_state() or {}
         status = str(contextual.get("status") or "").strip().lower()
         objective_mm = _objective_mm_value(self)
@@ -5001,6 +5013,13 @@ class GazonProchainArrosageSensor(GazonFenetreOptimaleSensor):
             "jours_avant_arrosage_estime": self._decision_value("jours_avant_arrosage_estime"),
             "date_prochain_arrosage_estime": self._decision_value("date_prochain_arrosage_estime"),
         }
+        if self._active_irrigation_session() is not None:
+            # Le reste des attributs décrit la fenêtre théorique, potentiellement déjà dépassée
+            # par ce cycle en cours : le statut et le résumé priment, le reste n'est pas effacé
+            # (utile une fois le cycle terminé pour comprendre ce qui a été visé).
+            attrs["source_status"] = "en_cours"
+            attrs["summary"] = "Arrosage en cours"
+            attrs["next_action"] = None
         return _clean_public_attrs(attrs) or {}
 
 
