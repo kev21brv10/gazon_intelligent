@@ -3290,7 +3290,10 @@ class ProchainArrosageSensorTests(unittest.TestCase):
         # ⚠️ Relevé en conditions réelles le 23/09/2026 : une session active à 14 h, et ce
         # capteur annonçait toujours « Maintenant » / « Arrosage possible maintenant », comme si
         # rien n'avait encore démarré. La fenêtre théorique ne sait pas qu'elle est déjà atteinte.
-        capteur = self._sensor(status="autorise", objectif_mm=6.0, target_date="")
+        # Relevé aussi en contre-revue : `target_datetime` restait sur l'ancienne cible (10:00)
+        # pendant que la session tournait depuis 14:00 — incohérent pour qui lit l'attribut
+        # directement plutôt que le texte affiché.
+        capteur = self._sensor(status="autorise", objectif_mm=6.0, target_date="2026-09-23")
         started_at = datetime(2026, 9, 23, 14, 0, tzinfo=timezone.utc)
         capteur.coordinator._watering_session = {
             "started_at": started_at,
@@ -3315,7 +3318,12 @@ class ProchainArrosageSensorTests(unittest.TestCase):
         attrs = capteur.extra_state_attributes
         self.assertEqual(attrs.get("source_status"), "en_cours")
         self.assertEqual(attrs.get("summary"), "Arrosage en cours")
-        self.assertNotIn("next_action", attrs)
+        for cle in (
+            "next_action", "target_date", "target_display", "target_datetime",
+            "optimal_target_datetime", "departure_time", "end_time",
+            "target_window", "target_window_label",
+        ):
+            self.assertNotIn(cle, attrs, f"{cle} ne devrait pas survivre pendant une session active")
 
     def test_le_motif_accompagne_toujours_l_etat_bloque(self) -> None:
         # Cohérence : quand l'état dit « Bloqué », le motif doit être exposé pour l'expliquer,
