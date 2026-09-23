@@ -4512,9 +4512,22 @@ class GazonIntelligentPanel extends HTMLElement {
   _retenuParLeBudget() {
     const code = String(this._a("prochain_arrosage", "block_reason") || "");
     if (code.includes("garde_fou") || code.includes("guardrail")) return true;
+    // ⚠️ Ce repli suppose un lien entre dépassement et retenue qui n'existe pas en Semis/Sursemis :
+    // `guidance._profile_for_sursemis` ne regarde jamais ce plafond (23/09/2026, relevé en direct
+    // à 119 % du plafond pendant un cycle graines normalement autorisé).
+    if (this._budgetEstInformatifSeul()) return false;
     const utilise = nombreOuNul(this._a("reserve", "arrosage_recent_7j"));
     const plafond = nombreOuNul(this._a("fenetre_optimale", "weekly_guardrail_mm_max"));
     return utilise !== null && plafond !== null && plafond > 0 && utilise >= plafond;
+  }
+
+  // Le plafond hebdomadaire du profil Normal n'est jamais appliqué pendant le Semis/Sursemis :
+  // les micro-arrosages des graines suivent leurs propres garde-fous (fenêtre, pluie, saturation
+  // estimée), pas ce cumul. Le présenter comme une limite bloquante promettrait une sécurité qui
+  // n'existe pas à ce stade.
+  _budgetEstInformatifSeul() {
+    const phase = this._s("phase");
+    return phase === "Semis" || phase === "Sursemis";
   }
 
   // L'orange est une ALERTE : un blocage sain (déjà arrosé, pluie prévue) reste calme.
@@ -5366,22 +5379,28 @@ class GazonIntelligentPanel extends HTMLElement {
     const plafond = nombreOuNul(this._a("fenetre_optimale", "weekly_guardrail_mm_max"));
     const plancher = nombreOuNul(this._a("fenetre_optimale", "weekly_guardrail_mm_min"));
     if (utilise === null || plafond === null || plafond <= 0) return "";
+    const informatifSeul = this._budgetEstInformatifSeul();
     const pct = Math.round((utilise / plafond) * 100);
-    const depasse = utilise >= plafond;
+    const depasse = !informatifSeul && utilise >= plafond;
     // « Semaine couverte » n'est PAS une alerte : l'orange est réservé à l'approche du plafond dur.
-    const couleur = depasse ? "var(--gz-rouge)" : pct >= 80 ? "var(--gz-ambre)" : "var(--gz-accent)";
+    const couleur = informatifSeul ? "var(--gz-accent)" : depasse ? "var(--gz-rouge)" : pct >= 80 ? "var(--gz-ambre)" : "var(--gz-accent)";
     const retenu = this._retenuParLeBudget();
     const horsBudget = recu !== null ? Math.max(0, recu - utilise) : 0;
-    const plancherPct = plancher !== null && plancher > 0 ? Math.min(100, (plancher / plafond) * 100) : null;
+    const plancherPct = !informatifSeul && plancher !== null && plancher > 0 ? Math.min(100, (plancher / plafond) * 100) : null;
+    const motLimite = informatifSeul ? "ce repère" : "cette limite";
     const notes = [];
-    if (plancherPct !== null) notes.push(`Le trait marque <b>${esc(mmFr(plancher))}</b> : au-delà, l'arrosage peut se retenir si le gazon a peu soif.`);
+    if (informatifSeul) {
+      notes.push("Pendant le Semis/Sursemis, les micro-arrosages des graines suivent leurs propres garde-fous (fenêtre, pluie, saturation estimée) : ce cumul est informatif, pas une limite qui les retiendrait.");
+    } else if (plancherPct !== null) {
+      notes.push(`Le trait marque <b>${esc(mmFr(plancher))}</b> : au-delà, l'arrosage peut se retenir si le gazon a peu soif.`);
+    }
     if (retenu && !depasse) notes.push("<b>Semaine couverte</b> : ça reprend dès que le gazon a de nouveau soif.");
-    if (horsBudget >= 0.1) notes.push(`En plus : <b>${esc(mmFr(horsBudget))}</b> qui ne comptent pas dans cette limite. Total reçu : <b>${esc(mmFr(recu))}</b>.`);
+    if (horsBudget >= 0.1) notes.push(`En plus : <b>${esc(mmFr(horsBudget))}</b> qui ne comptent pas dans ${motLimite}. Total reçu : <b>${esc(mmFr(recu))}</b>.`);
     return `<section class="section">
-      <div class="section-tete"><h3>L'eau de la semaine</h3><p>Pour ne pas trop arroser, l'intégration surveille ce qui a été versé sur 7 jours.</p></div>
+      <div class="section-tete"><h3>L'eau de la semaine</h3><p>${informatifSeul ? "Cumul informatif des 7 derniers jours, sans effet sur les micro-arrosages des graines." : "Pour ne pas trop arroser, l'intégration surveille ce qui a été versé sur 7 jours."}</p></div>
       <div class="budget">
-        <div class="budget-chiffres"><span><b>${esc(mmFr(utilise))}</b> sur 7 jours</span><span>limite ${esc(mmFr(plafond))} · ${pct} %</span></div>
-        <div class="budget-rail" role="img" aria-label="${pct} % de la limite">
+        <div class="budget-chiffres"><span><b>${esc(mmFr(utilise))}</b> sur 7 jours</span><span>${informatifSeul ? "repère" : "limite"} ${esc(mmFr(plafond))} · ${pct} %</span></div>
+        <div class="budget-rail" role="img" aria-label="${pct} % ${informatifSeul ? "du repère" : "de la limite"}">
           <i style="width:${Math.min(100, pct)}%;background:${couleur}"></i>
           ${plancherPct !== null ? `<span class="budget-plancher" style="left:${plancherPct}%"></span>` : ""}
         </div>
