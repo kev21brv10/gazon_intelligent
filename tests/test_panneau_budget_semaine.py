@@ -103,6 +103,17 @@ class BudgetSemaineSemisSursemisTests(unittest.TestCase):
         [sortie] = _rendre([{"phase": "Sursemis", "utilise": 10.0, "plafond": 25.0, "blockReason": "garde_fou_hebdomadaire"}])
         self.assertTrue(sortie["retenu"])
 
+    def test_le_motif_explicite_ne_contredit_plus_le_texte_informatif(self) -> None:
+        # ⚠️ Relevé en revue (PR #61) : `retenu=True` (motif nommé) affichait quand même le texte
+        # « cumul informatif, pas une limite qui les retiendrait » ET « Semaine couverte » juste
+        # en dessous — deux messages contradictoires sur la même carte. Un motif nommé doit faire
+        # basculer la présentation en vraie limite, pas rester « informatif ».
+        [sortie] = _rendre([{"phase": "Sursemis", "utilise": 10.0, "plafond": 25.0, "blockReason": "garde_fou_hebdomadaire"}])
+        html = _sans_balises(sortie["html"])
+        self.assertIn("limite", html)
+        self.assertNotIn("informatif", html)
+        self.assertIn("Semaine couverte", html)
+
 
 if __name__ == "__main__":
     unittest.main()

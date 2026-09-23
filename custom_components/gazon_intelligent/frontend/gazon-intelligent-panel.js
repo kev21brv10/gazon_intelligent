@@ -5379,12 +5379,15 @@ class GazonIntelligentPanel extends HTMLElement {
     const plafond = nombreOuNul(this._a("fenetre_optimale", "weekly_guardrail_mm_max"));
     const plancher = nombreOuNul(this._a("fenetre_optimale", "weekly_guardrail_mm_min"));
     if (utilise === null || plafond === null || plafond <= 0) return "";
-    const informatifSeul = this._budgetEstInformatifSeul();
+    const retenu = this._retenuParLeBudget();
+    // Un motif de blocage qui cite EXPLICITEMENT le garde-fou hebdomadaire (`retenu` via ce motif
+    // nommé, pas via la simple présomption de phase) prime sur la présentation informative : le
+    // moteur affirme alors une vraie retenue, la carte ne doit pas dire le contraire au même endroit.
+    const informatifSeul = this._budgetEstInformatifSeul() && !retenu;
     const pct = Math.round((utilise / plafond) * 100);
     const depasse = !informatifSeul && utilise >= plafond;
     // « Semaine couverte » n'est PAS une alerte : l'orange est réservé à l'approche du plafond dur.
     const couleur = informatifSeul ? "var(--gz-accent)" : depasse ? "var(--gz-rouge)" : pct >= 80 ? "var(--gz-ambre)" : "var(--gz-accent)";
-    const retenu = this._retenuParLeBudget();
     const horsBudget = recu !== null ? Math.max(0, recu - utilise) : 0;
     const plancherPct = !informatifSeul && plancher !== null && plancher > 0 ? Math.min(100, (plancher / plafond) * 100) : null;
     const motLimite = informatifSeul ? "ce repère" : "cette limite";
