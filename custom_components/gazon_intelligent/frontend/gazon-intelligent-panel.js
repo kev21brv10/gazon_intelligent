@@ -5417,14 +5417,14 @@ class GazonIntelligentPanel extends HTMLElement {
       // fiche produit pour Traitement/Fertilisation/Biostimulant/Agent Mouillant/Scarification,
       // arrosage bloqué pour Hivernage) — nommer « Semis/Sursemis » ou « les graines » ici serait
       // faux pour les autres phases de la liste blanche `_PHASES_SANS_PLAFOND_HEBDO`.
-      notes.push("Hors du mode Normal, la dose de cette phase suit ses propres règles plutôt que ce plafond hebdomadaire : ce cumul est informatif, pas une limite qui la retiendrait.");
+      notes.push("Hors de la phase Normal, l'arrosage suit d'autres règles que ce plafond hebdomadaire : ce cumul est informatif, pas une limite qui le retiendrait.");
     } else if (plancherPct !== null) {
       notes.push(`Le trait marque <b>${esc(mmFr(plancher))}</b> : au-delà, l'arrosage peut se retenir si le gazon a peu soif.`);
     }
     if (retenu && !depasse) notes.push("<b>Semaine couverte</b> : ça reprend dès que le gazon a de nouveau soif.");
     if (horsBudget >= 0.1) notes.push(`En plus : <b>${esc(mmFr(horsBudget))}</b> qui ne comptent pas dans ${motLimite}. Total reçu : <b>${esc(mmFr(recu))}</b>.`);
     return `<section class="section">
-      <div class="section-tete"><h3>L'eau de la semaine</h3><p>${informatifSeul ? "Cumul informatif des 7 derniers jours, sans effet sur la dose appliquée pendant cette phase." : "Pour ne pas trop arroser, l'intégration surveille ce qui a été versé sur 7 jours."}</p></div>
+      <div class="section-tete"><h3>L'eau de la semaine</h3><p>${informatifSeul ? "Cumul informatif des 7 derniers jours, sans limiter l'arrosage prévu pendant cette phase." : "Pour ne pas trop arroser, l'intégration surveille ce qui a été versé sur 7 jours."}</p></div>
       <div class="budget">
         <div class="budget-chiffres"><span><b>${esc(mmFr(utilise))}</b> sur 7 jours</span><span>${informatifSeul ? "repère" : "limite"} ${esc(mmFr(plafond))} · ${pct} %</span></div>
         <div class="budget-rail" role="img" aria-label="${pct} % ${informatifSeul ? "du repère" : "de la limite"}">
