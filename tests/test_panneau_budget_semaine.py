@@ -2,12 +2,19 @@
 
 Relevé en conditions réelles le 23/09/2026 (Sursemis / Germination, 119 % du plafond
 hebdomadaire pendant un cycle graines pourtant autorisé) : `guidance._profile_for_sursemis`
-ne regarde jamais `weekly_guardrail_mm_max`/`_min` pour sa décision (contrairement au profil
-Normal) — ce sont de simples valeurs de contexte qui traversent le payload sans jamais capper
-la dose. Le panneau affichait pourtant ce nombre comme une « limite » bloquante (barre rouge,
-« pour ne pas trop arroser »), ce qui laissait croire à une sécurité qui n'existe pas pendant
-le Semis/Sursemis. Ce test charge la page dans Node et exécute `_budgetHtml`/
-`_retenuParLeBudget` avec les attributs que publient les capteurs. Sans Node, il est sauté.
+ne regarde jamais `weekly_guardrail_mm_max`/`_min` pour sa décision — ce sont de simples valeurs
+de contexte qui traversent le payload sans jamais capper la dose. Le panneau affichait pourtant
+ce nombre comme une « limite » bloquante (barre rouge, « pour ne pas trop arroser »).
+
+⚠️ Trouvé en revue (PR #63) : la première version de ce correctif ne l'avait vérifié que pour
+Semis/Sursemis et traitait tout le reste, y compris Traitement, comme une vraie limite. Vérifié
+depuis dans les cinq autres fonctions de profil (`_profile_for_traitement`,
+`_profile_for_agro_phases` — Fertilisation/Biostimulant/Agent Mouillant/Scarification —,
+`_profile_for_generic`, `_profile_for_blocked` pour l'Hivernage) : aucune ne cappe jamais la
+dose sur ce plafond. `_profile_for_normal` est le SEUL profil qui l'applique réellement. Le
+garde côté panneau doit donc être un blanchiment de `phase === "Normal"`, pas une liste noire de
+Semis/Sursemis. Ce test charge la page dans Node et exécute `_budgetHtml`/`_retenuParLeBudget`
+avec les attributs que publient les capteurs. Sans Node, il est sauté.
 """
 
 from __future__ import annotations
@@ -67,7 +74,7 @@ def _sans_balises(html: str) -> str:
 
 
 @unittest.skipUnless(NODE, "Node n'est pas installé")
-class BudgetSemaineSemisSursemisTests(unittest.TestCase):
+class BudgetSemaineTests(unittest.TestCase):
     def test_le_plafond_normal_reste_une_limite_avec_barre_rouge(self) -> None:
         [sortie] = _rendre([{"phase": "Normal", "utilise": 29.9, "plafond": 25.1, "plancher": 12.0}])
         self.assertIn("limite", sortie["html"])
@@ -104,13 +111,24 @@ class BudgetSemaineSemisSursemisTests(unittest.TestCase):
         [sortie] = _rendre([{"phase": "Sursemis", "utilise": 10.0, "plafond": 25.0, "blockReason": "garde_fou_hebdomadaire"}])
         self.assertTrue(sortie["retenu"])
 
-    def test_un_traitement_pendant_un_mode_sursemis_reste_une_vraie_limite(self) -> None:
-        # ⚠️ Le réglage `mode` (déclaré par l'utilisateur) peut rester "Sursemis" pendant qu'un
-        # Traitement (priorité plus haute) prend la phase dominante que le moteur utilise
-        # réellement pour choisir le profil de décision (`guidance.is_seeding_phase(phase_
-        # dominante)`). Si la carte se fiait à `mode` plutôt qu'à `phase`, elle masquerait un
-        # plafond qui, lui, s'applique vraiment sous ce profil.
-        [sortie] = _rendre([{"mode": "Sursemis", "phase": "Traitement", "utilise": 29.9, "plafond": 17.4}])
+    def test_traitement_fertilisation_et_hivernage_sont_aussi_informatifs(self) -> None:
+        # `_profile_for_traitement` et `_profile_for_agro_phases` ne cappent pas plus la dose sur
+        # ce plafond que `_profile_for_sursemis` — seul `_profile_for_normal` le fait. Un plafond
+        # affiché comme bloquant pendant un Traitement promettrait donc la même fausse sécurité.
+        for phase in ("Traitement", "Fertilisation", "Biostimulant", "Agent Mouillant", "Scarification", "Hivernage"):
+            with self.subTest(phase=phase):
+                [sortie] = _rendre([{"phase": phase, "utilise": 29.9, "plafond": 17.4}])
+                self.assertNotIn("var(--gz-rouge)", sortie["html"])
+                self.assertFalse(sortie["retenu"])
+
+    def test_mode_declare_traitement_avec_phase_normale_reste_une_vraie_limite(self) -> None:
+        # ⚠️ Le réglage `mode` (déclaré par l'utilisateur) peut afficher une valeur différente de
+        # la phase dominante que le moteur utilise réellement pour choisir son profil de décision
+        # (`guidance.py`, dispatcher sur `ctx.phase_dominante`) — ex. un mode resté sur l'ancien
+        # choix pendant que la phase a déjà basculé. Si la carte se fiait à `mode` plutôt qu'à
+        # `phase`, un Traitement déclaré masquerait à tort un plafond qui, lui, s'applique
+        # réellement dès que la phase dominante est repassée à Normal.
+        [sortie] = _rendre([{"mode": "Traitement", "phase": "Normal", "utilise": 29.9, "plafond": 17.4}])
         html = sortie["html"]
         self.assertIn(">limite", html)
         self.assertIn("var(--gz-rouge)", html)
