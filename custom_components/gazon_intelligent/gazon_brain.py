@@ -901,7 +901,7 @@ class GazonBrain:
             humidite=humidite,
             vent=vent,
         )
-        # Choix explicite (Kévin, 25/06/2026) : les arrosages EXTERNES (`zone_session` :
+        # Choix explicite (25/06/2026) : les arrosages EXTERNES (`zone_session` :
         # manuel, Assist, Node-RED…) sont TOTALEMENT ignorés, y compris pour la jauge du sol —
         # l'intégration pilote son auto-arrosage indépendamment de ce qu'on fait à la main.
         # Contrepartie ASSUMÉE (pas de capteur de sol) : le robot croit le sol sec après un
@@ -909,7 +909,7 @@ class GazonBrain:
         # retient donc que les arrosages pilotés par l'intégration.
         # `include_incorporation=True` : l'arrosage d'incorporation post-produit (5-10 mm) a pour
         # BUT de faire pénétrer le produit dans le sol — cette eau atteint donc la zone racinaire
-        # et crédite la réserve (décision de Kévin, 29/07/2026). Le rafraîchissement du soir, lui,
+        # et crédite la réserve (décision du 29/07/2026). Le rafraîchissement du soir, lui,
         # reste exclu : ses ~3 mm s'évaporent pour refroidir le gazon, c'est leur fonction.
         arrosage_reel_jour = compute_recent_watering_mm(
             self.history, today=today, days=0, include_external=False, include_incorporation=True

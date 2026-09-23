@@ -1,6 +1,6 @@
 """Les besoins du mode actif sur la page (0.96.2).
 
-Demande de Kévin : « quand je suis en semis ou sursemis ou autre, il faudrait que la page bascule
+Demande : « quand je suis en semis ou sursemis ou autre, il faudrait que la page bascule
 sur les besoins de chaque mode ». C'était déjà le cas pour Semis/Sursemis (`_pucesProgrammeGraines`)
 mais pas pour les modes produit (Traitement, Fertilisation…) ni pour l'Hivernage. Ce test charge la
 page dans Node et exécute `_pucesProgrammeMode` avec les attributs que publient les capteurs.

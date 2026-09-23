@@ -21,7 +21,7 @@ except Exception:  # pragma: no cover - standalone fallback
 # retombait sur 06:00, l'arrosage sur 00:00, et seul le premier lisait `declared_at`. Un arrosage
 # déclaré à la main (date seule) se retrouvait à 6 h d'écart selon qui le regardait.
 #
-# Arbitrage de Kévin : « le déclarer à l'heure où l'arrosage a été déclaré ». `declared_at` porte
+# Arbitrage retenu : « le déclarer à l'heure où l'arrosage a été déclaré ». `declared_at` porte
 # justement cet instant (écrit par gazon_brain lors de l'appel au service). On l'utilise donc —
 # MAIS uniquement s'il tombe le jour déclaré : sur une déclaration rétroactive (« j'ai arrosé
 # avant-hier »), l'instant de déclaration désigne aujourd'hui et daterait l'arrosage du mauvais
@@ -40,7 +40,7 @@ _HISTORY_EXACT_MOMENT_FIELDS: tuple[str, ...] = (
 )
 
 # Heure retenue pour une entrée qui n'a QUE sa date, sans instant de déclaration exploitable.
-# 06:00 et non minuit : la règle de Kévin est d'arroser à l'aube, un arrosage déclaré sans heure
+# 06:00 et non minuit : la règle retenue est d'arroser à l'aube, un arrosage déclaré sans heure
 # a donc eu lieu le matin. Repli plus proche du réel — et plus prudent sur le cooldown 24 h.
 HISTORY_DATE_ONLY_FALLBACK_HOUR = 6
 
@@ -150,7 +150,7 @@ _SOIL_RESERVE_UTILE_MM: dict[str, float] = {
 #
 # Plus il fait chaud, plus `p` DESCEND : sous forte évapotranspiration, la plante souffre avant
 # d'avoir épuisé la même fraction. C'est ce que ne peut pas faire un seuil figé.
-# Adopté le 29/07/2026 (arbitrage de Kévin) : l'ancien calcul empilait deux réductions —
+# Adopté le 29/07/2026 (arbitrage retenu) : l'ancien calcul empilait deux réductions —
 # `stock × 0,5 → réserve utile × MAD 0,5` — soit 0,25 du stock, nettement en deçà de la
 # référence, et sans lien avec les conditions du jour. Mesuré à ce moment-là : 6 mm autorisés
 # contre 9 mm selon la FAO à l'ETc réelle, et 12,6 mm tolérés par le régime manuel éprouvé.
@@ -162,7 +162,7 @@ _SOIL_RESERVE_UTILE_MM: dict[str, float] = {
 # poser `p × stock` comme seuil revenait à comparer des choux et des carottes.
 # Brancher la FAO proprement suppose de changer AUSSI la cible de recharge (remplir vers la
 # capacité au champ, pas vers 12) — donc la dose, qui passerait de ~6 à ~9-12 mm par apport.
-# C'est cohérent avec le régime manuel éprouvé de Kévin (9-10 mm), mais ça demande de savoir si le
+# C'est cohérent avec le régime manuel éprouvé (9-10 mm), mais ça demande de savoir si le
 # sol tient et restitue réellement ses 24 mm aux racines : c'est la mesure au tournevis.
 # Bornes FAO : p reste dans [0,1 ; 0,8].
 # JUMEAU : const.KC_GAZON_NORMAL_DEFAUT — ce module est volontairement découplé (aucun import
@@ -562,7 +562,7 @@ _COOLING_WATERING_CAUSES = ("rafraichissement_soir",)
 
 # INCORPORATION POST-PRODUIT : 5 à 10 mm dont le BUT EST de faire pénétrer le produit dans le sol
 # (fertigation). Cette eau atteint donc bien la zone racinaire.
-# Décision de Kévin (29/07/2026) : elle CRÉDITE désormais la réserve. Ne pas la compter la
+# Décision retenue (29/07/2026) : elle CRÉDITE désormais la réserve. Ne pas la compter la
 # sous-estimait de la dose d'incorporation, ce qui provoquait une recharge inutile le lendemain
 # matin — en silence. Le motif historique (« les arrosages techniques ne rechargent pas ») reste
 # vrai pour les 3 mm de rafraîchissement, il ne l'était pas pour 8 mm d'incorporation.
@@ -586,7 +586,7 @@ def _is_incorporation_watering(item: dict[str, Any]) -> bool:
 # Le moniteur passif est gelé pendant les cycles de l'intégration, donc `zone_session` ne double
 # jamais un cycle piloté : c'est bien de l'arrosage externe.
 #
-# Choix explicite (Kévin, 25/06/2026) : ces sessions externes sont TOTALEMENT ignorées par la
+# Choix explicite (25/06/2026) : ces sessions externes sont TOTALEMENT ignorées par la
 # DÉCISION — ni budget hebdomadaire, ni cooldown 24 h (cf. guidance._latest_watering_datetime),
 # ni crédit de la réserve sol (cf. gazon_brain). L'intégration pilote son auto-arrosage
 # indépendamment de ce qu'on fait à la main. Contrepartie ASSUMÉE (pas de capteur de sol) : le
@@ -1219,7 +1219,7 @@ def compute_etp(
     temperature = float(temperature)
 
     # Priorité aux capteurs mesurés configurés (ex. Netatmo) → repli sur l'entité météo
-    # (weather_profile) → repli sur les valeurs par défaut plus bas. Demandé par Kévin.
+    # (weather_profile) → repli sur les valeurs par défaut plus bas. Demande utilisateur.
     humidity = humidite if humidite is not None else weather_profile.get("weather_humidity")
     wind = vent if vent is not None else weather_profile.get("weather_wind_speed")
     cloud = weather_profile.get("weather_cloud_coverage")
@@ -1506,7 +1506,7 @@ def compute_water_balance(
     )
 
     # --- Réserve AFFICHÉE = réserve de DÉCISION (anti-incohérence) ----------------------
-    # Choix Kévin (25/06/2026) : la jauge de la carte affiche EXACTEMENT la réserve sur
+    # Choix retenu (25/06/2026) : la jauge de la carte affiche EXACTEMENT la réserve sur
     # laquelle l'intégration DÉCIDE d'arroser. L'ancien « lissage » (réserve de décision + ET
     # du jour, plafonné au plein utile) gonflait la jauge à « plein » le matin alors que la
     # décision pouvait être « a soif » → la carte contredisait le cerveau (cas vécu : décision

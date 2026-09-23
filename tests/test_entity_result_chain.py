@@ -3656,7 +3656,7 @@ class HorodatageArrosageDebutPasFinTests(unittest.TestCase):
 
     Nuit du 04/08/2026, vérifiée sur les vannes :
         Z1 03:45:13 → 04:18:13   Z2 04:18:13 → 04:51:13   Z3 04:51:13 → 05:18:13
-    L'intégration annonçait « arrosé à 05:18 » — la FIN. Kévin a corrigé : le cycle est parti
+    L'intégration annonçait « arrosé à 05:18 » — la FIN. Correction : le cycle est parti
     treize secondes après l'ouverture de la fenêtre (03:45). L'écart faisait croire à 1 h 30 de
     retard au déclenchement, retard qui n'a jamais existé.
 
@@ -3941,7 +3941,7 @@ class BlocageSansObjetDefinitionTests(unittest.TestCase):
 
 # ─── Traduction des états codés (0.86.0) ────────────────────────────────────────────────
 # Onze capteurs publiaient des codes (`aucune_action`, `a_surveiller`, `modere`) que Home
-# Assistant affichait tels quels, tirets bas compris (question de Kévin le 11/09/2026).
+# Assistant affichait tels quels, tirets bas compris (question posée le 11/09/2026).
 # L'état publié NE CHANGE PAS — les automatisations et la carte lisent toujours le code ;
 # c'est le frontend qui le traduit, en cherchant
 #     component.<intégration>.entity.sensor.<translation_key>.state.<état>

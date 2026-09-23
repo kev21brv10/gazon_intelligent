@@ -186,7 +186,7 @@ _FALLBACK_DAY_END_MINUTE: int = 21 * 60
 _ZONE_WATCH_INTERVAL_S = 15.0
 _ZONE_WATCH_MAX_RELANCES = 1
 
-# Étape 2 (choix de Kévin, 15/09/2026) : l'arrosage du matin vise une fin 15 min avant le lever du
+# Étape 2 (choix retenu, 15/09/2026) : l'arrosage du matin vise une fin 15 min avant le lever du
 # soleil. La marge couvre surtout le retard au lancement (jusqu'à un intervalle de contrôle, 2 min)
 # et un objectif qui monte pendant l'attente. La latence des vannes n'y pèse presque rien : 0,3 s
 # mesurées par cycle (11 et 15/09).

@@ -319,7 +319,7 @@ class TestPhaseLogic(unittest.TestCase):
         self.assertEqual(water.compute_recent_watering_count(history, today=date(2026, 3, 17), days=7), 2)
 
     def test_latest_watering_datetime_ignores_external_sessions(self) -> None:
-        # Choix Kévin (25/06/2026) : un arrosage EXTERNE (`zone_session`) n'arme PAS le cooldown 24 h.
+        # Choix retenu (25/06/2026) : un arrosage EXTERNE (`zone_session`) n'arme PAS le cooldown 24 h.
         # _latest_watering_datetime (l'ancre du cooldown) doit donc ignorer l'externe et renvoyer la
         # dernière session PILOTÉE par l'intégration, même si une session externe est plus récente.
         piloted_at = datetime(2026, 3, 16, 6, 0, tzinfo=timezone.utc)
@@ -2551,7 +2551,7 @@ class TestNextWateringEstimateAfterTodaysWatering(unittest.TestCase):
 
 
 class TestPauseReserveeAuxGrossesDoses(unittest.TestCase):
-    """La pause de 25 min ne se justifie que sur une GROSSE dose (demande de Kévin, 29/07/2026).
+    """La pause de 25 min ne se justifie que sur une GROSSE dose (demande du 29/07/2026).
 
     Elle existe pour laisser le premier passage s'infiltrer avant le second — un enjeu de
     ruissellement, qui ne se pose pas sur un petit volume. Or le fractionnement peut être imposé
@@ -2570,7 +2570,7 @@ class TestPauseReserveeAuxGrossesDoses(unittest.TestCase):
         dict(temperature=33, humidite=35, type_sol="sableux", etp_capteur=6.0),
         # DISCRIMINANT : produit 9,5 mm, soit entre l'ancien seuil (6) et le nouveau (10).
         # Sous l'ancienne règle cette dose était coupée en deux avec 25 min d'attente ;
-        # c'est exactement le cas que Kévin arrosait en un seul passage depuis des années.
+        # c'est exactement le cas qui était arrosé en un seul passage depuis des années.
         dict(temperature=18, humidite=50, type_sol="sableux", etp_capteur=1.5),
     ]
 
@@ -2609,7 +2609,7 @@ class TestPauseReserveeAuxGrossesDoses(unittest.TestCase):
         self.assertEqual(guidance_module.PAUSE_ENTRE_PASSAGES_MIN, 25)
 
     def test_une_dose_de_9_5_mm_part_en_un_seul_passage_sans_pause(self) -> None:
-        # LE cas concret de la demande de Kévin, valeurs codées en dur exprès : sous l'ancienne
+        # LE cas concret de la demande initiale, valeurs codées en dur exprès : sous l'ancienne
         # règle (seuil 6 mm, pause inconditionnelle), 9,5 mm était coupé en deux avec 25 minutes
         # d'attente — alors que c'est précisément la dose qu'il appliquait d'un trait depuis des
         # années sans ruissellement. Ce test échoue si quelqu'un rabaisse le seuil.
@@ -2695,7 +2695,7 @@ class TestArrosageSoirSecoursAtteignable(unittest.TestCase):
 class TestIncorporationCrediteLaReserve(unittest.TestCase):
     """L'arrosage d'incorporation post-produit crédite la réserve ; le rafraîchissement du soir non.
 
-    Décision de Kévin (29/07/2026). L'incorporation a pour BUT de faire pénétrer le produit dans
+    Décision retenue (29/07/2026). L'incorporation a pour BUT de faire pénétrer le produit dans
     le sol : cette eau atteint la zone racinaire. Ne pas la compter sous-estimait la réserve de la
     dose d'incorporation et provoquait une recharge inutile le lendemain matin, en silence.
     Les 3 mm du rafraîchissement du soir, eux, s'évaporent pour refroidir le gazon — c'est leur
@@ -2755,7 +2755,7 @@ class BesoinMmTraverseLaChaineTests(unittest.TestCase):
         self.assertGreater(snapshot["besoin_mm"], 0.0)
 
     def test_le_besoin_survit_a_un_blocage(self) -> None:
-        """Le cas de Kévin du 01/08/2026, reproduit de bout en bout.
+        """Le cas réel du 01/08/2026, reproduit de bout en bout.
 
         ⚠️ Ce test bloquait par le GARDE-FOU HEBDOMADAIRE jusqu'au 02/08/2026. Depuis, celui-ci
         se lève dès que le sol dépasse le seuil MAD (0.38.0) — c'est-à-dire exactement quand un
@@ -2955,7 +2955,7 @@ class PluiePrevueNeBloquePasUnSolAssoiffeTests(unittest.TestCase):
     Il est tombé 3,2 mm effectifs pour 4,8 consommés : la réserve a atteint 0,0 mm à 12 h 09.
 
     La pluie était le SEUL des cinq blocages sans échappatoire sur l'état du sol — et le seul
-    fondé sur une prévision. Arbitrage de Kévin : « la pluie prévue n'est jamais sûre, je
+    fondé sur une prévision. Arbitrage retenu : « la pluie prévue n'est jamais sûre, je
     préfère arroser ».
     """
 
@@ -3554,7 +3554,7 @@ class LHeurePasseAvantLesVerdictsAEviterTests(unittest.TestCase):
             type_sol="limoneux", etp_capteur=3.0,
         )
         # `raison_blocage_tonte` est assemblée au niveau DÉCISION, pas dans le bundle tonte :
-        # c'est la phrase publiée, celle que Kévin lit sur la carte.
+        # c'est la phrase publiée, celle que l'utilisateur lit sur la carte.
         snapshot = decision.build_decision_result(ctx).to_snapshot()
         raison = snapshot.get("raison_blocage_tonte") or ""
         self.assertIn("Nuit", raison, "prémisse : on doit bien être bloqué pour la nuit")
@@ -4313,7 +4313,7 @@ class AmortissementDuRisqueTests(unittest.TestCase):
 class AjustementMeteoGrainesHysteresisTests(unittest.TestCase):
     """⚠️ MÊME DÉFAUT QUE LES QUATORZE BASCULES DU 31/08, CÔTÉ GRAINES.
 
-    Demande de Kévin (18/09/2026) : « il faut que ça fonctionne comme une horloge ». Sans
+    Demande du 18/09/2026 : « il faut que ça fonctionne comme une horloge ». Sans
     marge, chacun des seuils météo de `_sursemis_micro_apport_decision` (température, ETP,
     vent, humidité, pluie) bascule sur un simple bruit de mesure/prévision — mesuré en
     simulation : une prévision qui oscille de ±0,3 °C autour de 28 °C fait sauter le prochain

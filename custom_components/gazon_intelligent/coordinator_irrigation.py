@@ -13,7 +13,7 @@ def plan_morning_departure(
 ) -> dict[str, int] | None:
     """Départ du matin calé pour FINIR juste avant le lever du soleil (minutes locales).
 
-    Arbitrage de Kévin, 15/09/2026 (étape 2) : arroser sur la rosée et finir avant que le soleil
+    Arbitrage du 15/09/2026 (étape 2) : arroser sur la rosée et finir avant que le soleil
     ne sèche le feuillage (NC State : « just before sunrise »). La fin visée est `lever − marge`.
     Le départ ne précède jamais l'ouverture de la fenêtre. Un cycle trop long pour tenir avant la
     fin visée part donc à l'ouverture et finit plus tard.
@@ -21,7 +21,7 @@ def plan_morning_departure(
     ⚠️ AUCUN PLAFOND LIÉ À LA TONTE. Un premier jet finissait au plus tard à 07:00, pour que le délai
     de reprise de 180 min tombe à 10:00. La prémisse était fausse : après ce délai, le ressuyage
     estimé (`recent_watering`) retient encore la tonte, 4 à 6 h après la fin de l'arrosage en sol
-    limoneux. Le plafond ne rendait donc pas la tonte de 10:00. Kévin a choisi de tondre plus tard
+    limoneux. Le plafond ne rendait donc pas la tonte de 10:00. Choix retenu : tondre plus tard
     et d'élargir les fenêtres de tonte (`decision_mowing`).
 
     `None` quand le lever du soleil est inconnu : l'appelant garde l'ouverture de la fenêtre,

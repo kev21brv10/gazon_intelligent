@@ -78,16 +78,16 @@ _MOWING_WINDOW_LABELS = {
     "blocked": "Bloqué",
 }
 _MOWING_WINDOW_IDEAL_START = 10
-# Élargie de 12:00 à 14:00 le 15/09/2026 (choix de Kévin). L'arrosage du matin finit désormais
+# Élargie de 12:00 à 14:00 le 15/09/2026. L'arrosage du matin finit désormais
 # 15 min avant le lever du soleil, et le ressuyage qui suit retient la tonte 4 à 6 h : fermée à
 # 12:00, la fenêtre idéale se réduisait à peu de chose, parfois à rien.
 _MOWING_WINDOW_IDEAL_END = 14
 # FENÊTRE DU SOIR — ANCRÉE SUR LE COUCHER DU SOLEIL, pas sur une heure figée.
-# Demandé par Kévin le 30/07/2026 : « il peut tondre plus tard, comme le soleil se couche plus
+# Demandé le 30/07/2026 : « il peut tondre plus tard, comme le soleil se couche plus
 # tard ». Le créneau valait 17-19 h toute l'année. En juillet (coucher ~21 h 45) il s'arrêtait
 # 2 h 45 trop tôt ; en décembre (coucher ~17 h) il tombait ENTIÈREMENT après la nuit — le gazon
 # se serait fait tondre dans le noir si les autres gardes ne l'avaient pas rattrapé.
-# Élargie le 15/09/2026 (choix de Kévin) : de 5 h avant le coucher jusqu'au coucher + 30 min.
+# Élargie le 15/09/2026 : de 5 h avant le coucher jusqu'au coucher + 30 min.
 # Coucher à 20:12 : 15:12 → 20:42 ; en juillet : ~16:45 → 22:15. Elle finissait 90 min AVANT le coucher,
 # la marge de séchage de l'arrosage du soir (`guidance.EVENING_DRYING_MARGIN_MIN`) : une herbe
 # coupée tard reste humide plus longtemps, c'est le prix assumé de la tonte plus tardive.
@@ -181,7 +181,7 @@ def _round_to_step(value: float) -> float:
 # ⚠️ Refaite le 11/09/2026 (0.87.0). L'ancienne table (5,0 / 5,8 / 5,0 / 6,2 / 5,0, arrivée en
 # 0.7.0 sans justification écrite) ne descendait jamais sous 5 cm, et ses corrections toujours
 # positives, arrondies VERS LE HAUT, la collaient au maximum machine : 6,0 cm affichés de juillet
-# à septembre, alors que Kévin tond volontairement à 4 cm (lame à 40 mm).
+# à septembre, alors que la tonte est volontairement réglée à 4 cm (lame à 40 mm).
 # Celle-ci suit une recherche croisée (RHS, DLF/Johnsons, société allemande du gazon DRG, Oregon
 # State EM 9321, Barenbrug, constructeurs de robots) : hauteur de pousse ~4 cm, reprise un peu
 # plus haute en mars, relèvement STRUCTUREL de l'été (ombrer le collet) de +1 cm. Aucune source
@@ -236,7 +236,7 @@ def _phase_adjusted_mowing_frequency(
     sous_phase = str(phase_bundle.get("sous_phase") or "")
     if phase_dominante == "Sursemis":
         # Gazon en place : rien pendant la levée, puis des passages espacés (« de temps en temps »,
-        # Kévin) que la règle du tiers déclenche au rythme de la pousse.
+        # que la règle du tiers déclenche au rythme de la pousse.
         if _sursemis_en_levee(phase_bundle, reglages):
             return 0.0, "0 / semaine"
         return 1.5, "1 à 2 / semaine"
@@ -265,7 +265,7 @@ SEMIS_REPRISE_TONTE_JOUR = 25
 # (graines non ancrées, surface détrempée) et la pousse des plantules (0,4 cm/j ; seuls des délais
 # de première tonte sont publiés : 18 à 21 j chez Team Green, 3 à 6 semaines chez DLF).
 # Le calendrier des plantules (levée, pousse, hauteur de coupe) vit dans `phases.py`.
-SURSEMIS_HAUTEUR_FINALE_CM = 4.5         # fin de remontée (Kévin)
+SURSEMIS_HAUTEUR_FINALE_CM = 4.5         # fin de remontée
 SURSEMIS_COUPES_AVANT_REMONTEE = 2       # Purdue : « cut at least two times »
 SURSEMIS_ESPACEMENT_TONTE_JOURS = 5      # 0,35 cm/j en septembre : ~6 j pour passer de 4 à 6 cm
 # Régime ordinaire (hors semis, sursemis et phases sensibles) : réglables depuis la page.
@@ -562,7 +562,7 @@ def _est_la_nuit(context: DecisionContext, weather_profile: dict[str, Any] | Non
     confondues avec le « matin trop tôt » de la fenêtre (avant 10 h), qui parle de ROSÉE et de
     ressuyage, pas d'obscurité — deux notions différentes qui se recouvrent partiellement.
 
-    Depuis le 15/09/2026 (choix de Kévin), la nuit de la tonte commence au coucher + 30 min, pas au
+    Depuis le 15/09/2026, la nuit de la tonte commence au coucher + 30 min, pas au
     coucher : c'est aussi la fin de la fenêtre du soir. Il faut donc l'heure du coucher
     (`weather_profile`) ; sans elle, le soleil sous l'horizon reste la nuit, comme avant.
     """
@@ -854,7 +854,7 @@ _PLUIE_STATE_KEY = "derniere_pluie_active"
 # 2,3 mm de 04:14 à minuit. La tonte était bloquée jusqu'à 23:12 pour une pluie que la pelouse
 # n'a pas reçue.
 #
-# Trois corrections tenues ensemble, demandées par Kévin le 09/09 (« il faudrait un peu des 3 ») :
+# Trois corrections tenues ensemble, demandées le 09/09 (« il faudrait un peu des 3 ») :
 #
 #   1. UN MINIMUM. En dessous de 0,3 mm sur l'épisode, aucun ressuyage n'est armé — la tonte
 #      reste bloquée tant qu'il PLEUT (c'est un autre garde, intact), mais sans traîne de 3 h.
@@ -922,7 +922,7 @@ def _ressuyage_effectif(plein_minutes: float, lame_mm: float | None) -> float:
         return 0.0
     if lame_mm >= _PLUIE_RESSUYAGE_SATURATION_MM:
         return plein_minutes
-    # ⚠️ Le plancher est BORNÉ par le délai plein : si Kévin descend le réglage à 30 min, le
+    # ⚠️ Le plancher est BORNÉ par le délai plein : si ce réglage descend à 30 min, le
     # ressuyage d'une petite pluie ne doit pas se retrouver plus long que celui d'une grosse.
     plancher = min(_PLUIE_RESSUYAGE_PLANCHER_MINUTES, plein_minutes)
     part = (lame_mm - _PLUIE_RESSUYAGE_MIN_MM) / (
@@ -1100,7 +1100,7 @@ def _resolve_mowing_block(
         context.weather_profile
     ):
         # RESSUYAGE APRÈS PLUIE — né de la symétrie avec l'arrosage (« c'est l'intégration qui
-        # gère le temps de pause de la tondeuse pendant la pluie », Kévin) : il n'existait
+        # gère le temps de pause de la tondeuse pendant la pluie ») : il n'existait
         # AUCUN délai côté pluie, alors que le libellé promettait « ou récente ».
         # ⚠️ Le délai n'est plus le MÊME que celui de l'arrosage depuis la 0.83.0 : celui-ci
         # en reste le PLAFOND, atteint seulement quand le couvert est saturé.
@@ -1362,7 +1362,7 @@ _GROWTH_RATE_BY_MONTH: dict[int, float] = {
 
 # CROISSANCE — répartition de la pousse sur les 24 heures.
 #
-# ⚠️ CORRIGÉ le 30/07/2026, sur une question de Kévin (« le gazon pousse la nuit ? »). Le modèle
+# ⚠️ CORRIGÉ le 30/07/2026, sur une question posée (« le gazon pousse la nuit ? »). Le modèle
 # bornait la pousse à 7 h - 20 h en affirmant que « le gazon ne s'allonge pas la nuit ». C'était
 # FAUX, par confusion entre deux mécanismes distincts :
 #   - la PHOTOSYNTHÈSE suit la lumière : elle fabrique les sucres, le jour ;
@@ -1424,7 +1424,7 @@ def _growth_modulation(
 ) -> float:
     """Facteur 0 → 1 appliqué à la vitesse de croissance selon les conditions du jour.
 
-    Demandé par Kévin le 30/07/2026 : « à certain moment la hauteur peut ne pas bouger et
+    Demandé le 30/07/2026 : « à certain moment la hauteur peut ne pas bouger et
     c'est normal ». C'est agronomiquement exact — une graminée de saison fraîche cesse de
     s'allonger quand il fait trop chaud ou que le sol est sec. Le modèle ne tenait compte que
     de la phase et du mois : il faisait donc pousser le gazon de 0,3 cm par jour en pleine
@@ -1516,7 +1516,7 @@ def _hauteur_coupe_reelle_cm(context: DecisionContext) -> float | None:
     ⚠️ `None` = réglage inconnu : ni l'entité de hauteur de coupe ni l'option manuelle
     `hauteur_coupe_tondeuse_mm` ne donnent de valeur. Une tondeuse INJOIGNABLE ne suffit pas
     quand l'option est posée (`_resolve_mower_cutting_height_mm` y retombe, cf. coordinator.py)
-    — c'est le cas de l'installation de Kévin (40 mm). L'appelant retombe alors sur la
+    — c'est le cas de cette installation (40 mm). L'appelant retombe alors sur la
     recommandation : une absence ne doit pas désarmer le garde-fou.
     """
     mower_context = context.mower_context if isinstance(context.mower_context, dict) else {}
@@ -1551,7 +1551,7 @@ def _grass_growth_details(
     Retourne None si la hauteur de coupe ou la date de dernière tonte est inconnue.
     Ne remplace pas un capteur physique — utilisé comme fallback uniquement.
 
-    Deux corrections du 30/07/2026, demandées par Kévin :
+    Deux corrections du 30/07/2026 :
     - la hauteur MONTE AU FIL DE LA JOURNÉE au lieu de sauter d'un cran à minuit. La pousse
       est répartie sur la fenêtre 7 h - 20 h : le gazon ne s'allonge pas la nuit ;
     - elle tient compte des CONDITIONS. Le modèle n'utilisait que la phase et le mois, donc
@@ -1687,7 +1687,7 @@ def _pousse_acquise_avant_aujourdhui(
     que la journée en cours était freinée par les conditions. À minuit, tout ce que la
     chaleur avait retiré était donc rendu d'un coup — mesuré le 30/07/2026 : +0,30 cm par
     30-35 °C, +0,40 cm au-delà de 35 °C. Le frein, qui est toute la raison d'être du modèle,
-    était annulé chaque nuit. Repéré par Kévin : « la hauteur ne bouge pas ».
+    était annulé chaque nuit. Repéré : « la hauteur ne bouge pas ».
 
     La journée qui vient de s'achever est créditée avec SON propre frein, le dernier observé.
     Une journée entièrement manquée (intégration arrêtée > 24 h) retombe sur le taux nominal :
@@ -2008,7 +2008,7 @@ def _tontes_depuis(context: DecisionContext, debut: date) -> int:
 def _etat_plantules(context: DecisionContext) -> dict[str, Any] | None:
     """Suivi ESTIMÉ des plantules du dernier semis, sol nu ou sursemis — ou None hors semis.
 
-    Répond à la question de Kévin (16/09/2026) : « au bout de combien de temps elles sont à la
+    Répond à une question posée (16/09/2026) : « au bout de combien de temps elles sont à la
     bonne taille ». Nulles jusqu'à la levée, puis `PLANTULES_POUSSE_CM_JOUR`. Première coupe quand
     elles atteignent une fois et demie la hauteur de coupe du sursemis (UC IPM). Une tonte déclarée
     à partir de cette date compte comme une coupe des plantules.
@@ -2124,7 +2124,7 @@ def _temperature_de_reference_hauteur(context: DecisionContext) -> tuple[float |
 
     ⚠️ Pas la mesure instantanée : une hauteur de lame se règle pour la journée. Lue sur le
     thermomètre, elle montait l'après-midi et prenait « froid » (+0,5) chaque aube fraîche.
-    ⚠️ Pas non plus la prévision « du jour » seule : chez le fournisseur de Kévin, c'est le maximum
+    ⚠️ Pas non plus la prévision « du jour » seule : chez ce fournisseur météo, c'est le maximum
     des heures RESTANTES. Relevé le 10/09/2026 : 22,5 °C prévus à 14 h, 21,9 à 19 h (mesure 23,5),
     15,8 à 23 h 40. Sans cliquet, « journée froide » revenait le soir en demi-saison, et la chaleur
     retombait avant la nuit (revue adversariale de la 0.87.0).
@@ -2560,7 +2560,7 @@ def _recommended_mowing_height(
     if current_height is None:
         current_height = _estimated_grass_height_cm(context, phase_bundle, water_bundle)
     third_floor = None
-    # PLANCHER/PLAFOND FIXES RETIRÉS le 29/07/2026 (arbitrage de Kévin : « pour la tondeuse il
+    # PLANCHER/PLAFOND FIXES RETIRÉS le 29/07/2026 (arbitrage : « pour la tondeuse il
     # devrait se fier au min max »). Ils valaient 4,0 et 6,5 cm, portaient un nom trompeur
     # (`robot_*`, comme des limites machine) et rognaient EN SILENCE la configuration : un
     # réglage 3,0-6,0 devenait 4,0-6,0.
@@ -2659,7 +2659,7 @@ def _recommended_mowing_height(
     else:
         garde_fou_label = None
 
-    # Le POURQUOI de la valeur, en clair. Sans lui, « 6,0 cm toute l'année » (question de Kévin
+    # Le POURQUOI de la valeur, en clair. Sans lui, « 6,0 cm toute l'année » (question posée
     # le 11/09/2026) ne se comprenait qu'en relisant ce fichier : le stress qui la montait
     # n'était publié nulle part. Il décrit la valeur PUBLIÉE : bornes machine et lissage compris.
     if sursemis is not None:
@@ -2747,7 +2747,7 @@ def build_mowing_bundle(
     #
     # La règle du tiers l'utilise aussi (plus bas) : la juger sur la consigne validerait une
     # coupe à 6,0 pendant que la machine descend réellement à 5,5.
-    # Arbitré par Kévin le 30/08/2026. Consigne inconnue → repli sur la recommandation : une
+    # Arbitré le 30/08/2026. Consigne inconnue → repli sur la recommandation : une
     # absence ne doit pas désarmer le garde-fou.
     recommandee_cm = float(height_recommendation["hauteur_tonte_recommandee_cm"] or 0.0)
     target_height = _hauteur_coupe_reelle_cm(context) or recommandee_cm
@@ -2785,7 +2785,7 @@ def build_mowing_bundle(
     # ⚠️ LE LIBELLÉ PRÉCIS EST DÉJÀ CALCULÉ, deux lignes plus haut. La décision publiait quand
     # même le générique « Robot indisponible: attendre qu'elle soit prête. », et chaque
     # plateforme d'entité le rafistolait de son côté — sauf qu'elles ne le faisaient pas toutes.
-    # Résultat sur l'écran de Kévin le 03/08/2026 à 14 h 31, robot EN TONTE depuis 14 h 19 :
+    # Résultat observé le 03/08/2026 à 14 h 31, robot EN TONTE depuis 14 h 19 :
     #   binary_sensor  → « Robot déjà en tonte : attendre la fin du cycle. »   (juste)
     #   sensor hauteur → « Robot indisponible : attendre qu'elle soit prête. » (faux)
     # Même attribut, deux valeurs, même instant — et le bandeau de la carte affichait la fausse.

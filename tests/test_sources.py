@@ -285,7 +285,7 @@ class CeQueLaPageAccepteTests(unittest.TestCase):
         self.assertIsNone(self._refus("capteur_humidite", "sensor.x", "%", "HUMIDITY"))
 
     def test_sans_classe_le_nom_doit_annoncer_le_role(self) -> None:
-        """Relevé sur la station de Kévin le 17/09 : « Stress thermique » est en %, sans classe."""
+        """Relevé sur la station météo le 17/09 : « Stress thermique » est en %, sans classe."""
         self.assertEqual(
             self._refus("capteur_humidite", "sensor.station_meteo_jardin_stress_thermique", "%", nom="Stress thermique"),
             "« Humidité de l'air » attend l'humidité de l'air, et ce capteur ne dit pas ce qu'il mesure : "

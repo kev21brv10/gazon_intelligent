@@ -3877,7 +3877,7 @@ class CoordinatorMowerResolutionTests(unittest.TestCase):
 
         # Une passe est ouverte : elle est sortie et n'est pas revenue.
         # ⚠️ `dock_signal_vu` est la prémisse, pas un détail de fixture : le cliquet ne vaut
-        # que pour une machine dont on a DÉJÀ vu un signal fort de station. Celle de Kévin
+        # que pour une machine dont on a DÉJÀ vu un signal fort de station. Celle utilisée ici
         # annonce `docked` et la charge, elle est donc dans ce cas.
         coord._runtime_state["mower_passes"] = {
             "en_cours": {"debut": "2026-09-02T22:40:31+02:00", "batterie_debut": 91},
@@ -5548,10 +5548,10 @@ class TestFinDeCycleEauEnregistreeUneFois(unittest.IsolatedAsyncioTestCase):
 
 
 class TestDepartCaleSurLeLeverDuSoleil(unittest.TestCase):
-    """Étape 2, arbitrage de Kévin le 15/09/2026 : l'arrosage du matin finit 15 min avant le lever.
+    """Étape 2, arbitrage du 15/09/2026 : l'arrosage du matin finit 15 min avant le lever.
 
     La nuit l'ET est quasi nulle : partir plus tard qu'à 03:45 ne coûte rien au sol, et l'eau
-    tombe sur la rosée. Aucun plafond lié à la tonte : Kévin a choisi de tondre plus tard, dans
+    tombe sur la rosée. Aucun plafond lié à la tonte : choix retenu de tondre plus tard, dans
     des fenêtres élargies (`decision_mowing`), plutôt que d'avancer l'arrosage.
     """
 
@@ -7982,7 +7982,7 @@ class CarnetDePassesTondeuseTests(unittest.TestCase):
         self.assertAlmostEqual(profil["mower_autonomous_return_battery_median"], 96.0, places=1)
 
     def test_les_passes_bloquees_ne_comptent_pas_dans_le_rythme_quotidien(self) -> None:
-        """Kévin décrit deux sorties par jour ; une passe bloquée n'en est pas une."""
+        """Deux sorties par jour sont attendues ; une passe bloquée n'en est pas une."""
         coord = self._coord(datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc))
         journal = []
         for jour in ("2026-08-02", "2026-08-03", "2026-08-04"):
@@ -8585,7 +8585,7 @@ class PluieMesureeTests(unittest.TestCase):
         self.assertEqual(sortie["pluie_mesuree_cumul_mm"], 2.3)
 
     def test_une_remontee_sous_le_pic_du_jour_n_est_pas_une_averse(self) -> None:
-        """⚠️ LE DÉFAUT DU 16/08/2026, trouvé par Kévin deux heures après la livraison.
+        """⚠️ LE DÉFAUT DU 16/08/2026, trouvé deux heures après la livraison.
 
         Comparer à la LECTURE PRÉCÉDENTE prenait chaque remontée de bruit pour une pluie.
         Journée réelle, sans une goutte après 05:52 — le détecteur criait « il pleut »
@@ -9742,7 +9742,7 @@ class RoseeLueSurLHerbeTests(unittest.TestCase):
 
 
 class RafraichissementApresActionTests(unittest.TestCase):
-    """⚠️ « Quand je clique j'ai quelques secondes avant que ça se mette à jour » — Kévin,
+    """⚠️ « Quand je clique j'ai quelques secondes avant que ça se mette à jour »,
     10/09/2026.
 
     Le coordinateur s'initialise sans debouncer personnalisé : il hérite de celui de Home
@@ -9770,7 +9770,7 @@ class RafraichissementApresActionTests(unittest.TestCase):
         "async_changer_entrees",
     )
 
-    # ⚠️ CHEMINS MIXTES — ils servent une action de Kévin **et** l'exécuteur d'arrosage.
+    # ⚠️ CHEMINS MIXTES — ils servent une action utilisateur **et** l'exécuteur d'arrosage.
     # Les brancher sur l'immédiat ferait tourner un cycle complet, en ligne, à l'intérieur de la
     # tâche d'arrosage. C'est le point d'entrée utilisateur qui rafraîchit, pas eux.
     MIXTES = ("async_record_watering", "async_record_user_action")
@@ -9858,7 +9858,7 @@ class RafraichissementApresActionTests(unittest.TestCase):
         """⚠️ TROUVÉ PAR LA REVUE, et mon premier jet avait tort.
 
         `async_record_watering` et `async_record_user_action` servent bien un service appelé par
-        Kévin — mais elles sont aussi appelées par l'exécuteur d'arrosage à chaque étape
+        l'utilisateur — mais elles sont aussi appelées par l'exécuteur d'arrosage à chaque étape
         (en_attente, démarrage, fin, arrêt), soit une quinzaine de points internes. Les brancher
         sur l'immédiat faisait tourner un cycle complet, en ligne, DANS la tâche d'arrosage.
         """

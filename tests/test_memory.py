@@ -1761,7 +1761,7 @@ class MemoryCatalogTests(unittest.TestCase):
     def test_scarification_l_air_humide_ne_bloque_plus_l_arrosage(self) -> None:
         """Cinquième verrou « air ≥ 85 % », oublié par la 0.89.0.
 
-        L'arbitrage de Kévin (sources agronomiques) vaut pour toutes les phases : l'humidité de
+        Cet arbitrage (sources agronomiques) vaut pour toutes les phases : l'humidité de
         l'AIR ne dit rien de l'eau du sol. En Scarification elle passait encore par la politique
         (`soil_humidity_state` exigé `legerement_humide`), et sortait en « sol_non_adapte ».
         """
@@ -2006,7 +2006,7 @@ class ApplicationConstraintsAffichablesTests(unittest.TestCase):
     """Les libellés de contraintes sont AFFICHÉS : ils doivent être présentables.
 
     Ils dormaient dans le payload sans jamais sortir. Le jour où la carte les a affichés
-    (0.33.0), l'écran de Kévin a montré, sur son vrai catalogue :
+    (0.33.0), l'écran observé a montré, sur un vrai catalogue :
       ⏳ Réapplication attendue jusqu'au **2026-08-12**   ← date ISO brute
       ⏳ Réapplication attendue jusqu'au 12/08/2026.      ← le MÊME fait, deux fois
     Reproduit ici sur le scénario réel : Kick Pro, appliqué le 22/07, délai 21 jours.

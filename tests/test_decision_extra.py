@@ -1025,7 +1025,7 @@ class TestDecisionSnapshotMowing(unittest.TestCase):
         consigne à 6,0 → l'herbe repart de 5,5 mais devait atteindre 6,1 pour débloquer, soit
         ~2,5 jours imposés après chaque tonte alors que le robot est fait pour raser peu et
         souvent. Et obéir à la consigne aggravait le cas : lame à 6,0 → déblocage à 6,1, donc
-        1 mm coupé. Arbitré par Kévin : la lame réelle fait foi.
+        1 mm coupé. Arbitré : la lame réelle fait foi.
         """
         def _bundle(hauteur_gazon, coupe_mm):
             ctx = decision.DecisionContext.from_legacy_args(
@@ -1996,7 +1996,7 @@ class TestDecisionSnapshotMowing(unittest.TestCase):
         )
 
         # 4,0 depuis la 0.87.0 (5,5-6,5 avant). Avril en pleine pousse = la hauteur de pousse,
-        # que Kévin a choisie à 4 cm et que les sources européennes placent à 3,5-4,5 cm.
+        # qu'on a choisie à 4 cm et que les sources européennes placent à 3,5-4,5 cm.
         # Les 5 mm de pluie de la veille ne la montent plus : ils disent QUAND tondre.
         self.assertEqual(snapshot["hauteur_tonte_recommandee_cm"], 4.0)
 
@@ -2017,7 +2017,7 @@ class TestDecisionSnapshotMowing(unittest.TestCase):
 
         # Par 34 °C, monter la coupe ombrage le sol et limite l'évaporation : c'est l'effet
         # recherché, et il reste (+1,0). Mais 6,5 et non plus 7,5 depuis la 0.87.0 : la base de
-        # juillet passe de 6,2 à 5,0 (choix de Kévin, 4 cm de pousse + 1 cm de relèvement d'été),
+        # juillet passe de 6,2 à 5,0 (choix retenu, 4 cm de pousse + 1 cm de relèvement d'été),
         # et l'arrondi ne monte plus d'un cran au moindre dixième. Le « 7,5 à 10 cm » invoqué
         # en 0.27.0 vient des fiches américaines ; le corpus européen place l'été à 4,5-5,5 cm.
         # 5,0 + 1,0 (chaleur) + 0,3 (air sec à 30 %, sans registre du sol) = 6,3 → 6,5.
@@ -2341,7 +2341,7 @@ class TestEtpComputation(unittest.TestCase):
         self.assertGreaterEqual(etp, 8.0)
 
     def test_compute_etp_prefers_measured_humidity_and_wind_over_weather(self) -> None:
-        # Demandé par Kévin (2026-06-22) : si des capteurs mesurés (humidite/vent) sont fournis,
+        # Demandé (2026-06-22) : si des capteurs mesurés (humidite/vent) sont fournis,
         # l'ET0 doit les utiliser EN PRIORITÉ sur l'entité météo (weather_profile), elle-même
         # simple repli avant les valeurs par défaut.
         base_wp = {
@@ -2634,7 +2634,7 @@ class TestEstimatedGrassHeight(unittest.TestCase):
         self.assertEqual(bundle["gazon_hauteur_estimee_cm"], 4.5)
 
     def test_la_fenetre_du_soir_suit_le_coucher_du_soleil(self) -> None:
-        """Demandé par Kévin : « il peut tondre plus tard, comme le soleil se couche plus tard ».
+        """Demandé : « il peut tondre plus tard, comme le soleil se couche plus tard ».
 
         Le créneau du soir valait 17-19 h TOUTE L'ANNÉE. En juillet il s'arrêtait 2 h 45 avant
         le coucher ; en décembre il tombait entièrement APRÈS la nuit.
@@ -2653,8 +2653,8 @@ class TestEstimatedGrassHeight(unittest.TestCase):
 
         # Coucher à 21 h 30 (fin juillet) : 19 h devient tondable, ce qu'il n'était pas.
         self.assertEqual(fenetre(21 * 60 + 30, 19), "acceptable", "19 h refusé alors que le soleil se couche à 21 h 30")
-        # ⚠️ ATTENDU CHANGÉ le 15/09/2026, PAR DÉCISION DE KÉVIN : ce test refusait 21 h, à 30 min du
-        # coucher, au nom de la marge de séchage de 90 min. Kévin a choisi d'étendre la fenêtre
+        # ⚠️ ATTENDU CHANGÉ le 15/09/2026, PAR DÉCISION EXPLICITE : ce test refusait 21 h, à 30 min du
+        # coucher, au nom de la marge de séchage de 90 min. Choix retenu : étendre la fenêtre
         # jusqu'au coucher + 30 min (cf. `TestFenetresDeTonteElargies`). Ce n'est pas un incident
         # corrigé qu'on efface, c'est une règle métier qui change.
         self.assertEqual(fenetre(21 * 60 + 30, 21), "acceptable", "21 h refusé avant le coucher + 30 min")
@@ -2709,7 +2709,7 @@ class TestEstimatedGrassHeight(unittest.TestCase):
         self.assertAlmostEqual(bundle["gazon_hauteur_estimee_cm"], 6.3, places=1)
 
     def test_la_hauteur_monte_au_fil_de_la_journee(self):
-        """Demandé par Kévin : la hauteur doit progresser dans la journée, pas sauter à minuit."""
+        """Demandé : la hauteur doit progresser dans la journée, pas sauter à minuit."""
         mesures = []
         for heure in (5, 7, 11, 15, 20, 23):
             b = self._make_bundle(
@@ -2722,7 +2722,7 @@ class TestEstimatedGrassHeight(unittest.TestCase):
         valeurs = [v for _, v, _ in mesures]
         # La progression fine se lit sur `gazon_pousse_jour_cm` : la hauteur est arrondie au
         # 0,1 cm, et par conditions freinées une journée entière ne vaut qu'un cran. C'est
-        # exactement ce que Kévin voyait comme « la hauteur ne bouge pas ».
+        # exactement ce qui était observé comme « la hauteur ne bouge pas ».
         pousses = [p for _, _, p in mesures]
         self.assertEqual(valeurs, sorted(valeurs), f"la hauteur recule dans la journée : {mesures}")
         # ⚠️ NE PAS réintroduire « elle ne pousse pas avant 7 h ni après 20 h » : c'était l'erreur
@@ -2734,7 +2734,7 @@ class TestEstimatedGrassHeight(unittest.TestCase):
         self.assertGreater(pousses[3], pousses[2], "elle ne progresse pas entre 11 h et 15 h")
 
     def test_la_canicule_arrete_la_pousse(self):
-        """Kévin : « à certain moment la hauteur peut ne pas bouger et c'est normal »."""
+        """Remarque : « à certain moment la hauteur peut ne pas bouger et c'est normal »."""
         doux = self._make_bundle(
             history=[{"type": "tonte", "date": "2026-06-03"}],
             today=date(2026, 6, 7),
@@ -2981,7 +2981,7 @@ class TestNormalRainReductionPropagation(unittest.TestCase):
 
         ⚠️ Ce chemin vit dans `decision_watering`, PAS dans `guidance` : le garde posé en
         0.37.0 ne le couvrait pas. Le même motif de blocage venait de deux endroits, un seul
-        était protégé. Arbitrage de Kévin : « la pluie prévue n'est jamais sûre ».
+        était protégé. Arbitrage retenu : « la pluie prévue n'est jamais sûre ».
         """
         snap = self._snapshot(soil_balance={"reserve_mm": 6.0}, etp_capteur=8.0, pluie_demain=2.0)
 
@@ -4192,7 +4192,7 @@ class ActionGuidanceEveningGuardsTests(unittest.TestCase):
 class TestPousseMemorisee(unittest.TestCase):
     """La pousse acquise est mémorisée — sinon le frein de conditions saute à minuit.
 
-    Défaut repéré par Kévin le 30/07/2026 (« la hauteur ne bouge pas ») : les journées
+    Défaut repéré le 30/07/2026 (« la hauteur ne bouge pas ») : les journées
     révolues étaient recomptées au taux NOMINAL alors que la journée en cours était freinée
     par la chaleur. À 00 h 00, tout ce que la chaleur avait retiré était rendu d'un coup :
     +0,30 cm par 30-35 °C. Le frein, raison d'être du modèle, était annulé chaque nuit.
@@ -4288,7 +4288,7 @@ class TestPousseMemorisee(unittest.TestCase):
 class TestRisqueGazonSurReserve(unittest.TestCase):
     """Le risque se décide sur la RÉSERVE DU SOL, plus sur le bilan de la journée.
 
-    Question de Kévin le 31/07/2026 : « pourquoi risque gazon élevé ? ». Réponse : parce que
+    Question posée le 31/07/2026 : « pourquoi risque gazon élevé ? ». Réponse : parce que
     `bilan_hydrique_mm` est le bilan du JOUR (pluie + arrosage − ETc du jour), donc négatif
     mécaniquement chaque nuit avant l'arrosage du matin. Ce n'était pas « ton gazon est en
     danger » mais « tu n'as pas encore arrosé aujourd'hui ». L'historique le prouvait : bascule
@@ -4443,7 +4443,7 @@ class TestRessuyageApresPluie(unittest.TestCase):
 
     `is_active_rain_weather` ne regarde que la météo de l'INSTANT : il n'existait donc AUCUN
     délai après une averse, alors qu'un arrosage en impose 180 min. Le libellé promettait
-    pourtant « pluie en cours ou récente ». Kévin : « c'est l'intégration qui gère le temps de
+    pourtant « pluie en cours ou récente ». Remarque : « c'est l'intégration qui gère le temps de
     pause de la tondeuse pendant la pluie » — elle ne le gérait qu'à moitié.
     """
 
@@ -4485,7 +4485,7 @@ class TestRessuyageApresPluie(unittest.TestCase):
 
 
 class TestRessuyageProportionnelALaLame(unittest.TestCase):
-    """⚠️ LE BLOCAGE DU 09/09/2026, ET LES TROIS CORRECTIONS QUE KÉVIN A DEMANDÉES ENSEMBLE.
+    """⚠️ LE BLOCAGE DU 09/09/2026, ET LES TROIS CORRECTIONS DEMANDÉES ENSEMBLE.
 
     À 20:12 le pluviomètre du voisin passe de 0,0 à **0,1 mm** — un basculement d'auget. Le
     garde arme aussitôt 180 minutes de ressuyage, empruntées au délai d'après-arrosage, pendant
@@ -4577,7 +4577,7 @@ class TestRessuyageProportionnelALaLame(unittest.TestCase):
                 )
 
     def test_le_plancher_ne_depasse_JAMAIS_le_reglage(self) -> None:
-        """Si Kévin descend le délai plein à 30 min, une petite pluie ne doit pas attendre 45."""
+        """Si ce délai plein descend à 30 min, une petite pluie ne doit pas attendre 45."""
         self.assertLessEqual(decision_mowing._ressuyage_effectif(30.0, 0.5), 30.0)
         self.assertEqual(decision_mowing._ressuyage_effectif(0.0, 10.0), 0.0)
 
@@ -4982,7 +4982,7 @@ class TestFreinSansBilanHydrique(unittest.TestCase):
 class TestBesoinSepareDeLaDose(unittest.TestCase):
     """« Combien il lui faut » ≠ « combien je vais verser ».
 
-    Signalé par Kévin le 01/08/2026 : l'entité « Objectif d'arrosage » affichait 0,0 mm
+    Signalé le 01/08/2026 : l'entité « Objectif d'arrosage » affichait 0,0 mm
     pendant que ses PROPRES attributs annonçaient `depletion_mm: 7,8` et une réserve 1,8 mm
     sous le seuil de déclenchement. Cause : `if block_reason is not None: mm_cible = 0.0`,
     écrit dans les deux branches. Zéro est juste pour la DOSE — un arrosage bloqué verse bien
@@ -5052,7 +5052,7 @@ class TestBesoinSepareDeLaDose(unittest.TestCase):
 
 
 class TestLHumiditeDeLAirNeBloquePlusLArrosage(unittest.TestCase):
-    """Arbitrage de Kévin, 15/09/2026 : l'air humide ne bloque plus un arrosage demandé.
+    """Arbitrage du 15/09/2026 : l'air humide ne bloque plus un arrosage demandé.
 
     `humidite >= 85` bloquait sans regarder la soif du sol. Or, à l'aube, l'air est
     naturellement proche de la saturation. Le 13/09, l'humidité est restée entre 88 et 93 % de
@@ -5457,7 +5457,7 @@ class LePlancherDemainCouvreLaFenetreEcouleeTests(unittest.TestCase):
 class RecommandationDeHauteurTests(unittest.TestCase):
     """0.87.0 — la recommandation de hauteur suit les mois, pas les matins humides.
 
-    Question de Kévin le 11/09/2026 : « elle a toujours été à 6 cm ». Trois causes empilées :
+    Question posée le 11/09/2026 : « elle a toujours été à 6 cm ». Trois causes empilées :
     une table qui ne descendait jamais sous 5 cm, un stress « fort » lu dans un déficit PROJETÉ
     (armé en permanence sur un gazon arrosé, +1,0), et un arrondi vers le haut qui montait d'un
     cran au moindre +0,1 de rosée ou de pluie. Chaque mécanisme a ici son test : les six termes
@@ -5633,7 +5633,7 @@ class RecommandationDeHauteurTests(unittest.TestCase):
     # ─── Constats de la revue adversariale de la 0.87.0 ───────────────────────────────────
 
     def test_le_soir_la_prevision_restante_ne_refroidit_pas_la_journee(self) -> None:
-        # Relevé chez Kévin le 10/09 : 22,5 °C prévus à 14 h, 15,8 à 23 h 40 — le fournisseur donne
+        # Relevé sur cette installation le 10/09 : 22,5 °C prévus à 14 h, 15,8 à 23 h 40 — le fournisseur donne
         # le maximum des heures RESTANTES. Le cliquet garde le maximum vu depuis minuit.
         memoire = {"hauteur_tonte_temperature_jour": {"date": "2026-04-15", "max": 14.0}}
         soir = self._reco(date(2026, 4, 15), hour_of_day=23, temperature=7.0,
@@ -6158,7 +6158,7 @@ class LesApplicationsAHorlogeReelleTests(unittest.TestCase):
 
 
 class TestFenetresDeTonteElargies(unittest.TestCase):
-    """Choix de Kévin, 15/09/2026 : tondre plus tard plutôt qu'avancer l'arrosage.
+    """Choix retenu, 15/09/2026 : tondre plus tard plutôt qu'avancer l'arrosage.
 
     L'arrosage finit désormais 15 min avant le lever du soleil, et le ressuyage retient la tonte
     4 à 6 h ensuite. Les fenêtres s'élargissent : idéale 10:00 → 14:00, soir de 5 h avant le coucher
@@ -6338,7 +6338,7 @@ class TestPasseLaFenetreDuMatinCestDemainMatin(unittest.TestCase):
 
 
 class SursemisDansUnGazonEnPlaceTests(unittest.TestCase):
-    """Deux modes de semis depuis le 16/09/2026 (arbitrage de Kévin).
+    """Deux modes de semis depuis le 16/09/2026 (arbitrage retenu).
 
     « Semis » (sol nu) garde le comportement historique : tonte interdite 25 jours, pousse nulle,
     planchers 7,5 → 5,0 cm. « Sursemis » (gazon en place) arrose pareil, mais le gazon en place

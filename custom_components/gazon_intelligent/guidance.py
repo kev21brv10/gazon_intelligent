@@ -54,7 +54,7 @@ EVENING_END_HOUR = 20
 # Marge de séchage : un arrosage du soir doit finir au moins ce nombre de minutes avant
 # le coucher du soleil, pour que l'herbe sèche avant la nuit (sinon risque fongique).
 # NB : appliquée hors canicule. En canicule, le rafraîchissement vise le coucher du soleil
-# (cf. EVENING_COOLING_START_BEFORE_SUNSET_MIN) — choix assumé de Kévin : arroser au frais
+# (cf. EVENING_COOLING_START_BEFORE_SUNSET_MIN) — choix assumé : arroser au frais
 # (moins d'évaporation) plutôt que de garantir le séchage avant la nuit.
 EVENING_DRYING_MARGIN_MIN = 90
 # Rafraîchissement du soir (canicule) : démarre ce nombre de minutes AVANT le coucher du soleil
@@ -73,10 +73,10 @@ EVENING_COOLING_MM = 3.0
 EVENING_COOLING_MIN_TEMP = 32.0
 
 # FRACTIONNEMENT EN PHASE NORMAL — dose au-delà de laquelle l'arrosage est coupé en deux passages.
-# Porté de 6 à 10 mm le 29/07/2026 sur une base agronomique EXPLICITE : le régime manuel éprouvé de
-# Kévin appliquait 8,8 à 10,0 mm en UN SEUL passage (35-40 min par zone à 14/14/17 mm/h), trois fois
+# Porté de 6 à 10 mm le 29/07/2026 sur une base agronomique EXPLICITE : le régime manuel éprouvé
+# appliquait déjà 8,8 à 10,0 mm en UN SEUL passage (35-40 min par zone à 14/14/17 mm/h), trois fois
 # par semaine, avec un gazon en pleine forme et sans ruissellement observé. Un seuil à 6 mm était
-# donc plus prudent que sa pratique démontrée : il coupait en deux des doses qui passent sans
+# donc plus prudent que cette pratique démontrée : il coupait en deux des doses qui passent sans
 # problème, doublant la durée de séance pour rien.
 FRACTIONNEMENT_NORMAL_SEUIL_MM = 10.0
 
@@ -312,7 +312,7 @@ def _latest_watering_datetime(history: list[dict[str, Any]]) -> datetime | None:
             "post_application",
         ):
             continue
-        # Choix explicite (Kévin, 25/06/2026) : les arrosages EXTERNES (`zone_session`) sont
+        # Choix explicite (25/06/2026) : les arrosages EXTERNES (`zone_session`) sont
         # totalement ignorés → ils n'arment PAS non plus le cooldown 24 h (l'intégration pilote
         # son auto-arrosage indépendamment des arrosages manuels/Assist/Node-RED).
         if _is_external_watering(item):
@@ -1658,7 +1658,7 @@ def _evaluer_risque_gazon(
 ) -> tuple[str, list[str]]:
     """Niveau de risque du gazon, ET les raisons qui l'expliquent.
 
-    ⚠️ CORRIGÉ le 31/07/2026, sur une question de Kévin (« pourquoi risque élevé ? »).
+    ⚠️ CORRIGÉ le 31/07/2026, sur une question posée (« pourquoi risque élevé ? »).
 
     Le risque se décidait sur `bilan_hydrique_mm`, qui est le bilan de la JOURNÉE EN COURS
     (pluie + arrosage du jour − ETc du jour). À 2 h du matin, rien n'a encore été arrosé et
@@ -1971,7 +1971,7 @@ def _build_watering_ctx(
         delta_hours = (now - local_last).total_seconds() / 3600.0
         if delta_hours >= 0:
             cooldown_24h_hours = delta_hours
-            # « UNE FOIS PAR JOUR », et non « 24 h glissantes » (arbitrage de Kévin, 30/07/2026).
+            # « UNE FOIS PAR JOUR », et non « 24 h glissantes » (arbitrage du 30/07/2026).
             #
             # Le compte à rebours partait de la FIN du cycle. Comme le cycle dure ~1 h, l'heure
             # autorisée reculait d'autant CHAQUE JOUR : mesuré sur l'install, fin à 06:36 le 28,
@@ -1982,7 +1982,7 @@ def _build_watering_ctx(
             # La règle des 24 h faisait deux métiers : empêcher un second arrosage (voulu) ET
             # fixer l'heure du suivant (effet secondaire non voulu). On ne garde que le premier.
             # La fenêtre du matin rouvre à 04:00 chaque jour → retour à l'aube, conforme à la
-            # règle de Kévin « toujours arroser à l'aube ».
+            # règle retenue : « toujours arroser à l'aube ».
             #
             # Comparaison sur la date LOCALE : en UTC, tout ce qui se produit entre minuit et 2 h
             # (heure d'été) porte la date de la veille — l'arrosage du matin serait vu comme
@@ -2545,7 +2545,7 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
     # que le même cycle publiait `reserve_actuelle_mm: 1,2 sur 12`, `hydric_state: critique`,
     # `hydric_strategy: arroser rapidement en profondeur` et 34,5 °C prévus. Il est tombé
     # 3,2 mm effectifs pour 4,8 mm consommés : la réserve a touché ZÉRO à 12 h 09.
-    # Arbitrage de Kévin, 02/08/2026 : « la pluie prévue n'est jamais sûre, je préfère arroser ».
+    # Arbitrage du 02/08/2026 : « la pluie prévue n'est jamais sûre, je préfère arroser ».
     # Le seuil retenu est le MAD — le même que celui qui déclenche l'arrosage. Autrement dit :
     # tant que le sol est confortable, une pluie annoncée fait encore économiser un cycle ;
     # dès qu'il réclame, la prévision ne décide plus à sa place.
@@ -2561,7 +2561,7 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
         block_reason = "cooldown_24h"
     elif ctx.saturation_block and not _ledger_demande_eau:
         block_reason = "sol_deja_humide"
-    # ⚠️ L'HUMIDITÉ DE L'AIR NE BLOQUE PLUS L'ARROSAGE (arbitrage de Kévin, 15/09/2026).
+    # ⚠️ L'HUMIDITÉ DE L'AIR NE BLOQUE PLUS L'ARROSAGE (arbitrage du 15/09/2026).
     # `ctx.humidite >= 85` bloquait ici sans regarder la soif du sol, et à l'aube l'air est
     # naturellement proche de la saturation. Le 13/09, l'humidité du jardin est restée entre 88
     # et 93 % de 03:30 à 08:57 : l'arrosage « de l'aube » est parti à 08:58, trois secondes après
@@ -2665,7 +2665,7 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
             # rendrait la soif projetée ~30 % plus petite, donc le seuil MAD atteint plus tard,
             # donc l'arrosage déclenché plus tard : c'est un changement AGRONOMIQUE, et le
             # CLAUDE.md du projet interdit de toucher à la dose ou au seuil MAD de
-            # `_profile_for_normal` sans raison agronomique explicite. À trancher par Kévin.
+            # `_profile_for_normal` sans raison agronomique explicite. À trancher explicitement.
             # Le biais actuel va dans le sens prudent (on projette plus de soif qu'il n'en
             # vient) — mais c'est la cause directe de la date de prochain arrosage qui recule.
             _etc_projection = ctx.water_balance.get("etc_mm")
@@ -2673,7 +2673,7 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
                 _etc_projection = float(ctx.water_balance.get("et0_mm") or 0.0) * _GUARDRAIL_KC_TYPIQUE
             # ⚠️ ET CORRIGÉE PAR LE BIAIS MESURÉ. `etc_biais_mesure` est le rapport médian
             # « ETc mesurée / ETc estimée » des dernières journées COMPLÈTES du registre
-            # (cf. `soil_balance.biais_etc_mesure`) : chez Kévin il vaut ~0,68, le modèle
+            # (cf. `soil_balance.biais_etc_mesure`) : sur cette installation il vaut ~0,68, le modèle
             # journalier sur-estimant d'environ 30 % ce que le sol perd réellement.
             # `None` tant qu'il n'y a pas trois journées exploitables → le modèle seul reprend
             # la main, comportement d'avant. Une correction apprise sur deux points serait une
@@ -2692,7 +2692,7 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
             # BESOIN DU SOL, avant toute politique. `mm_cible` va ensuite être rogné par le
             # garde-fou hebdomadaire puis remis à zéro par un éventuel blocage : la question
             # « combien il lui faut » n'aurait plus aucune réponse lisible. C'est exactement ce
-            # que Kévin a vu le 01/08/2026 — l'entité « Objectif d'arrosage » affichait 0,0 mm
+            # observé le 01/08/2026 — l'entité « Objectif d'arrosage » affichait 0,0 mm
             # pendant que ses propres attributs annonçaient 7,8 mm de déplétion.
             besoin_mm = mm_cible
             weekly_room = max(0.0, guardrail_max_effective - ctx.recent_watering_mm_7j)
@@ -2840,7 +2840,7 @@ def _profile_for_normal(ctx: _WateringCtx) -> dict[str, Any]:
         # pas de fractionnement. Un seul passage = relief rapide + fin plus tôt (meilleure
         # marge de séchage avant la nuit). On annule la règle anti-ruissellement ci-dessus.
         passages = 1
-    # LA PAUSE LONGUE EST RÉSERVÉE AUX GROSSES DOSES (demande de Kévin, 29/07/2026).
+    # LA PAUSE LONGUE EST RÉSERVÉE AUX GROSSES DOSES (demande du 29/07/2026).
     # Elle existe pour laisser le premier passage S'INFILTRER avant le second — un enjeu de
     # ruissellement, qui ne se pose que sur un volume conséquent. Or le fractionnement peut aussi
     # être déclenché pour de tout autres raisons (session maximale dépassée, budget hebdo saturé

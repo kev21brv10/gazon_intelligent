@@ -3,7 +3,7 @@
 Signalé le 19/09/2026 (« pourquoi ma page bouge tout seul » puis « la page descend petit à
 petit jusqu'au bas de la page », sur toutes les pages de réglages) : ce bandeau est nourri par
 le moteur de décision, recalculé à chaque cycle du coordinateur (~2 min). Sans figeage, chaque
-petit changement de contenu au-dessus de ce que Kévin regarde plus bas décale toute la page,
+petit changement de contenu au-dessus de ce que l'utilisateur regarde plus bas décale toute la page,
 cycle après cycle, sans qu'il ait touché à rien.
 """
 

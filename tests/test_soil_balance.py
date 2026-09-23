@@ -178,7 +178,7 @@ class SoilBalanceHourlyAccumulationTests(unittest.TestCase):
         self.assertAlmostEqual(apres, 4.0, places=3)
 
     def test_un_redemarrage_ne_fait_pas_chuter_la_reserve(self) -> None:
-        """Signalé par Kévin le 30/07/2026 : « à chaque fois que je redémarre la réserve descend ».
+        """Signalé le 30/07/2026 : « à chaque fois que je redémarre la réserve descend ».
 
         Le capteur d'ET horaire décroche systématiquement au redémarrage de Home Assistant. Le
         repli faisait alors `max(prorata, cumul)` : la mesure fine était remplacée par
@@ -459,7 +459,7 @@ class BiaisEtcMesureTests(unittest.TestCase):
         02/09   mesurée 2,991 mm   estimée 4,6 mm   → 0,65
         03/09   mesurée 2,886 mm   estimée 4,2 mm   → 0,69
 
-    Arbitré par Kévin le 04/09/2026 : aligner la projection sur la mesure.
+    Arbitré le 04/09/2026 : aligner la projection sur la mesure.
     """
 
     def _jour(self, date_str, estimee, mesuree, *, derniere_heure="23:59:30"):
