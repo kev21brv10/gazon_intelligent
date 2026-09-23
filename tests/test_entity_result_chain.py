@@ -3286,6 +3286,37 @@ class ProchainArrosageSensorTests(unittest.TestCase):
         capteur = self._sensor(status="auto", objectif_mm=6.0, target_date="")
         self.assertEqual(capteur.native_value, "Aujourd\'hui")
 
+    def test_arrosage_en_cours_prime_sur_la_fenetre_theorique(self) -> None:
+        # ⚠️ Relevé en conditions réelles le 23/09/2026 : une session active à 14 h, et ce
+        # capteur annonçait toujours « Maintenant » / « Arrosage possible maintenant », comme si
+        # rien n'avait encore démarré. La fenêtre théorique ne sait pas qu'elle est déjà atteinte.
+        capteur = self._sensor(status="autorise", objectif_mm=6.0, target_date="")
+        started_at = datetime(2026, 9, 23, 14, 0, tzinfo=timezone.utc)
+        capteur.coordinator._watering_session = {
+            "started_at": started_at,
+            "last_activity_at": started_at,
+            "last_inactive_at": None,
+            "zones": {
+                "switch.zone_1": {
+                    "order": 1,
+                    "zone": "switch.zone_1",
+                    "entity_id": "switch.zone_1",
+                    "rate_mm_h": 10.0,
+                    "duration_seconds": 180.0,
+                    "mm": 0.5,
+                    "started_at": started_at,
+                    "ended_at": None,
+                }
+            },
+            "active_zones": {"switch.zone_1": started_at},
+            "zone_order": 1,
+        }
+        self.assertEqual(capteur.native_value, "En cours")
+        attrs = capteur.extra_state_attributes
+        self.assertEqual(attrs.get("source_status"), "en_cours")
+        self.assertEqual(attrs.get("summary"), "Arrosage en cours")
+        self.assertNotIn("next_action", attrs)
+
     def test_le_motif_accompagne_toujours_l_etat_bloque(self) -> None:
         # Cohérence : quand l'état dit « Bloqué », le motif doit être exposé pour l'expliquer,
         # sinon la carte affiche un blocage sans raison.
