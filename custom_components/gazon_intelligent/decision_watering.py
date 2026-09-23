@@ -201,7 +201,7 @@ def build_water_bundle(
         # (02/09 : 2,991 mesurée contre 4,6 estimée ; 03/09 : 2,886 contre 4,2).
         # On ne peut pas mesurer le futur — à l'aube la fraction écoulée est quasi nulle. On
         # corrige donc le modèle par le biais qu'il a montré sur les journées DÉJÀ CLOSES.
-        # Arbitré par Kévin le 04/09/2026 : aligner la projection sur la mesure.
+        # Arbitré le 04/09/2026 : aligner la projection sur la mesure.
         balance_snapshot["etc_biais_mesure"] = _biais_etc
     # ⚠️ CALCULÉ UNE SEULE FOIS, ICI. Le palier d'ET0 du score de stress est amorti par une
     # bande morte (cf. `palier_et0_stress`) : c'est lui qui oscillait et faisait clignoter
@@ -2015,7 +2015,7 @@ def build_watering_bundle(
             # Mesuré le 02/08/2026 à 22 h 40 : le profil calculait 12,0 mm (`besoin_mm: 12`,
             # `mm_final: 12` jusque dans `evening_cooling_debug`) et l'entité publiait **9,6** —
             # soit 12 × 0,8, la réduction déclenchée par 2,9 mm annoncés. Sur un sol à ZÉRO.
-            # Arbitrage de Kévin : « la pluie prévue n'est jamais sûre, je préfère arroser ».
+            # Arbitrage retenu : « la pluie prévue n'est jamais sûre, je préfère arroser ».
             # Contrepartie assumée : si la pluie tombe pour de vrai, on aura versé un peu trop —
             # l'excédent draine sous les racines. Le sol reste borné par sa capacité, jamais
             # au-delà. Seuil retenu : le MAD, le même que le déclenchement.

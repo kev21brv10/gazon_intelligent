@@ -1392,10 +1392,10 @@ ha-icon { --mdc-icon-size: 20px; display: inline-flex; width: var(--mdc-icon-siz
 }
 
 /* ── Contenu ── */
-/* PLEINE LARGEUR (Kévin, 16/09/2026) : sur un grand écran, la page prend toute la largeur et range
+/* PLEINE LARGEUR (16/09/2026) : sur un grand écran, la page prend toute la largeur et range
    ses blocs en colonnes plutôt que de s'étirer vers le bas. */
 .contenu { padding: 16px 24px 120px; display: flex; flex-direction: column; gap: 16px; }
-/* LA MOSAÏQUE (Kévin, 16/09/2026 : « adapte la taille de chaque cadre, ils sont tous à la même
+/* LA MOSAÏQUE (16/09/2026, sur demande : « adapte la taille de chaque cadre, ils sont tous à la même
    dimension »). Douze colonnes. Chaque cadre prend un COULOIR choisi pour son contenu : une jauge
    reste étroite, une frise s'étale. Sa hauteur est mesurée et convertie en rangées de 4 px, si bien
    que les cadres d'un même couloir s'empilent sans trou. Sur téléphone, tout s'empile dans l'ordre. */
@@ -2965,7 +2965,7 @@ class GazonIntelligentPanel extends HTMLElement {
     };
     // ⚠️ NI PENDANT UN DÉFILEMENT (0.94.1). Une position remise pendant que le doigt, la molette
     // ou l'élan fait défiler ne tient pas : un rendu à ce moment-là laissait la page tout en haut
-    // (Kévin, 17/09, onglet Météo redessiné à chaque relevé de la station). Le rendu attend que
+    // (17/09, onglet Météo redessiné à chaque relevé de la station). Le rendu attend que
     // rien n'ait bougé depuis 400 ms.
     this._defilementEnCours = false;
     this._page.addEventListener("scroll", () => {
@@ -3469,7 +3469,7 @@ class GazonIntelligentPanel extends HTMLElement {
 
   // Figé tant que `_donnees` ne change pas (chargement, changement de pelouse, sauvegarde) :
   // sinon ce bandeau, nourri par le moteur de décision, se redessine à chaque cycle (~2 min) même
-  // pendant que Kévin règle un curseur plus bas, et décale toute la page sans qu'il ait touché à
+  // pendant que l'utilisateur règle un curseur plus bas, et décale toute la page sans qu'il ait touché à
   // rien (rapporté le 19/09/2026 : « pourquoi ma page bouge tout seul », sur toutes les pages de
   // réglages puisqu'il est commun à tous les onglets).
   _introReglagesHtml() {

@@ -92,7 +92,7 @@ def _plan_du_moteur(c: dict):
 
 def _cas() -> list[dict]:
     doses = [0, -2, 0.1, 0.25, 0.5, 1, 2, 2.5, 4.9, 5, 5.2, 5.25, 5.3, 6.8, 7.5, 10, 10.01, 12, 15, 30, 100, 1000]
-    # Débits réels de Kévin (14 / 14 / 17), des débits ronds, et des cas limites (nul, négatif, minuscule).
+    # Débits réels observés (14 / 14 / 17), des débits ronds, et des cas limites (nul, négatif, minuscule).
     installations = [
         [("z1", 14.0), ("z2", 14.0), ("z3", 17.0)],
         [("z1", 12.0), ("z2", 12.0)],

@@ -84,7 +84,7 @@ SUBPHASE_RULES: dict[str, list[tuple[int, str]]] = {
 
 SIGNIFICANT_WATERING_THRESHOLD_MM = 2.0
 
-# DEUX MODES DE SEMIS (16/09/2026, arbitrage de Kévin) :
+# DEUX MODES DE SEMIS (16/09/2026, arbitrage retenu) :
 #   · « Semis » : terrain NU. Il n'y a que des plantules ; le comportement historique du mode
 #     « Sursemis » (tonte interdite 25 jours, pousse nulle, planchers 7,5 → 5,0 cm) y est conservé.
 #   · « Sursemis » : graines semées DANS un gazon en place, qui continue de pousser. L'arrosage

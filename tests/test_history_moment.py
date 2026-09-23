@@ -94,7 +94,7 @@ class HorodatageHistoriquePartageTests(unittest.TestCase):
         )
 
     def test_une_declaration_du_jour_meme_garde_son_heure(self) -> None:
-        # Arbitrage de Kévin : « le déclarer à l'heure où l'arrosage a été déclaré ».
+        # Arbitrage retenu : « le déclarer à l'heure où l'arrosage a été déclaré ».
         item = {"type": "arrosage", "date": "2026-07-28", "declared_at": "2026-07-28T07:40:00+00:00"}
         self.assertEqual(
             water.resolve_history_moment(item),
@@ -111,7 +111,7 @@ class HorodatageHistoriquePartageTests(unittest.TestCase):
         self.assertEqual(resolu.hour, water.HISTORY_DATE_ONLY_FALLBACK_HOUR)
 
     def test_une_date_seule_retombe_a_l_aube_pas_a_minuit(self) -> None:
-        # 06:00 et non 00:00 : la règle de Kévin est d'arroser à l'aube. Repli plus proche du
+        # 06:00 et non 00:00 : la règle retenue est d'arroser à l'aube. Repli plus proche du
         # réel, et plus prudent — le cooldown 24 h dure 6 h de plus au lieu de 6 h de moins.
         resolu = water.resolve_history_moment({"type": "arrosage", "date": "2026-07-28"})
         self.assertEqual(resolu, datetime(2026, 7, 28, 6, 0, tzinfo=timezone.utc))
@@ -137,7 +137,7 @@ class BornesDeHauteurSuiventLaConfigTests(unittest.TestCase):
       EN SILENCE (un réglage 3,0-6,0 devenait 4,0-6,0), et l'attribut publiait quand même la
       config — il mentait donc deux fois ;
     - 0.25.0 : les bornes publiées deviennent celles appliquées, le rognage devient visible ;
-    - 0.27.0 : les planchers fixes sont RETIRÉS (arbitrage de Kévin, « pour la tondeuse il
+    - 0.27.0 : les planchers fixes sont RETIRÉS (arbitrage retenu, « pour la tondeuse il
       devrait se fier au min max »). Ce qui protège du scalp est la RÈGLE DU TIERS, dynamique,
       qui suit la hauteur réelle du gazon au lieu d'un seuil figé.
 
@@ -166,7 +166,7 @@ class BornesDeHauteurSuiventLaConfigTests(unittest.TestCase):
         self.assertEqual(snap["hauteur_tonte_min_cm"], 3.0, "un plancher fixe a été réintroduit")
         self.assertEqual(snap["hauteur_tonte_max_cm"], 8.0, "un plafond fixe a été réintroduit")
 
-    def test_la_config_de_kevin_est_respectee_telle_quelle(self) -> None:
+    def test_la_config_de_l_installation_est_respectee_telle_quelle(self) -> None:
         snap = self._snapshot(3.0, 6.0)
         self.assertEqual(snap["hauteur_tonte_min_cm"], 3.0)
         self.assertEqual(snap["hauteur_tonte_max_cm"], 6.0)
@@ -197,7 +197,7 @@ class BornesDeHauteurSuiventLaConfigTests(unittest.TestCase):
 
 
 class PalierDeHauteurTests(unittest.TestCase):
-    """Exigence de Kévin (30/07/2026) : toutes les hauteurs sont des paliers de 0,5 cm.
+    """Exigence du 30/07/2026 : toutes les hauteurs sont des paliers de 0,5 cm.
 
     Vaut pour la consigne, les bornes publiées, et la descente progressive d'une tonte à
     l'autre. Le pas est unique et fixe (`_MOWER_STEP_CM`) : il ne dépend PAS de la tondeuse

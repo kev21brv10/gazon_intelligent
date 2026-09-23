@@ -1,6 +1,6 @@
 """Recherche des réglages, tous onglets confondus (0.96.4).
 
-Demande de Kévin (18/09/2026) : « dans les réglages, range tout correctement, j'ai du mal à
+Demande du 18/09/2026 : « dans les réglages, range tout correctement, j'ai du mal à
 m'y retrouver et à savoir à quoi ça correspond, même si c'est déjà bien fait ». Le registre
 range déjà chaque réglage dans un onglet et une section précise (`DISPOSITION`), mais avec 7
 onglets et ~55 réglages, il fallait un moyen de retrouver directement l'un d'eux, où qu'il

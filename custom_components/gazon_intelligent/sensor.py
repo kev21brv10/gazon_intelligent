@@ -662,7 +662,7 @@ def _hydric_balance_level(balance_mm: float | None, deficit_3j: float | None, de
     seul l'information : ne PAS lui passer la réserve brute (≥ 0), les branches négatives
     redeviendraient inertes.
 
-    ⚠️ VETO PAR CUMUL RETIRÉ le 29/07/2026 (arbitrage de Kévin), NE PAS LE REMETTRE.
+    ⚠️ VETO PAR CUMUL RETIRÉ le 29/07/2026 (arbitrage retenu), NE PAS LE REMETTRE.
     Les quatre seuils sont à l'échelle d'un déficit JOURNALIER, mais `deficit_3j` / `deficit_7j`
     sont des CUMULS (12 à 42 mm en pleine saison) : le veto était donc toujours armé.
     Mesuré sur une grille ET0 2-7 mm/j : **2 niveaux sur 5 seulement** étaient atteignables —
@@ -5027,8 +5027,8 @@ class GazonRisqueGazonSensor(_RecorderLeanSensorMixin, GazonEntityBase, SensorEn
         data = getattr(self.coordinator, "data", None) or {}
         attrs: dict = {}
         # ⚠️ Le capteur n'expliquait PAS son niveau : il n'exposait que le risque FONGIQUE,
-        # si bien qu'un état « élevé » était incompréhensible sans lire le code (question de
-        # Kévin le 31/07/2026 : « pourquoi risque gazon élevé ? » — il a fallu vingt minutes
+        # si bien qu'un état « élevé » était incompréhensible sans lire le code (question
+        # posée le 31/07/2026 : « pourquoi risque gazon élevé ? » — il a fallu vingt minutes
         # de lecture pour répondre). Les raisons viennent en tête, avant le détail fongique.
         # ⚠️ `_decision_value` et NON `data.get` : `coordinator.data` ne porte que les champs
         # injectés APRÈS le snapshot (risque fongique, santé des capteurs). Les raisons, elles,

@@ -100,7 +100,7 @@ def appliquer_cliquet_pluie(
 ) -> tuple[float, float, bool]:
     """Cliquet intra-journée du pluviomètre. Rend (valeur retenue, pic du jour, remise à zéro).
 
-    ⚠️ SOURCE UNIQUE DE LA RÈGLE — arbitrée par Kévin le 06/08/2026. Le pluviomètre journalier
+    ⚠️ SOURCE UNIQUE DE LA RÈGLE — arbitrée le 06/08/2026. Le pluviomètre journalier
     BAISSE en cours de journée : mesuré 10 fois le 04/08/2026 (00:48 1,0 → 03:11 2,6 → 04:08
     2,5 → 04:20 3,5 → 04:44 2,7 → 17:17 4,2 → 19:08 3,4 → 20:11 4,0 → 21:50 2,9 → 23:52 3,1).
     Un compteur du jour ne peut pas décroître : ces baisses sont du bruit, et la lecture brute
@@ -268,7 +268,7 @@ def normalize_soil_balance_state(state: dict[str, Any] | None) -> dict[str, Any]
 # Le modèle sur-estime donc d'environ 30 %, quatre jours d'affilée — ce n'est pas du bruit.
 # On ne peut pas mesurer le futur : à l'aube la fraction écoulée est quasi nulle et la
 # projection vaut « toute l'ETc du jour ». Ce qu'on peut faire, c'est corriger le modèle par le
-# biais qu'il a RÉELLEMENT montré sur les journées déjà closes, mesurées chez Kévin.
+# biais qu'il a RÉELLEMENT montré sur les journées déjà closes, mesurées sur cette installation.
 _BIAIS_ETC_JOURS = 7
 _BIAIS_ETC_MIN_JOURS = 3
 # ⚠️ Bornes ASYMÉTRIQUES, et c'est voulu. Plafond à 1,0 : le biais ne peut que RÉDUIRE la
@@ -400,7 +400,7 @@ def _accumulate_elapsed_etp(
     if rate is None or not isfinite(rate) or rate < 0.0 or now is None:
         # REPLI — le taux horaire manque. Deux situations très différentes, longtemps confondues.
         #
-        # ⚠️ DÉFAUT CORRIGÉ le 30/07/2026 (signalé par Kévin : « à chaque fois que je redémarre
+        # ⚠️ DÉFAUT CORRIGÉ le 30/07/2026 (signalé : « à chaque fois que je redémarre
         # la réserve du sol descend »). Ce repli faisait `max(prorata, cumul)` dans TOUS les cas.
         # Or tout redémarrage de Home Assistant rend le capteur d'ET horaire indisponible le temps
         # du démarrage — c'est le redémarrage qui le prive de données, pas le capteur qui défaille :

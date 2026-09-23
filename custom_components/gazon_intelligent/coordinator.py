@@ -864,7 +864,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _rafraichir_apres_action_utilisateur(self) -> None:
         """Rafraîchissement IMMÉDIAT : quelqu'un vient d'agir, il attend devant son écran.
 
-        ⚠️ POURQUOI CETTE MÉTHODE EXISTE — mesuré le 10/09/2026, Kévin : « quand je clique j'ai
+        ⚠️ POURQUOI CETTE MÉTHODE EXISTE — mesuré le 10/09/2026 : « quand je clique j'ai
         quelques secondes avant que ça se mette à jour ». Le coordinateur s'initialise sans
         debouncer personnalisé, il hérite donc de celui de Home Assistant :
 
@@ -1046,7 +1046,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if retour_arrosage_sensor is not None and retour_arrosage_sensor > 0:
             retour_arrosage = retour_arrosage_sensor
         else:
-            # Choix explicite (Kévin, 25/06/2026) : arrosages EXTERNES (`zone_session`) totalement
+            # Choix explicite (25/06/2026) : arrosages EXTERNES (`zone_session`) totalement
             # ignorés → ils ne reviennent pas non plus par le « retour d'arrosage » (qui alimente
             # le modèle déficit). Seuls les arrosages pilotés par l'intégration sont pris en compte.
             retour_arrosage_today = compute_recent_watering_mm(
@@ -3555,7 +3555,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     # ⚠️ CHEMIN MIXTE : NE PAS y mettre le rafraîchissement immédiat. Relevé par la revue
     # adversariale du 10/09/2026. Cette méthode sert le service `declare_watering` (une action
-    # de Kévin) MAIS elle est aussi appelée par l'exécuteur d'arrosage — fin de session, arrêt,
+    # utilisateur) MAIS elle est aussi appelée par l'exécuteur d'arrosage — fin de session, arrêt,
     # reprise — soit une quinzaine de points internes. Les brancher sur l'immédiat ferait
     # tourner un cycle complet, en ligne, à l'intérieur de la tâche d'arrosage. C'est le
     # POINT D'ENTRÉE utilisateur qui rafraîchit, pas cette méthode : voir
@@ -5196,7 +5196,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return False, "startup_guard"
         if not self.auto_irrigation_enabled:
             return False, "auto_irrigation_disabled"
-        # `auto_irrigation_user_confirmed` a été RETIRÉE ici le 29/07/2026 (arbitrage de Kévin) :
+        # `auto_irrigation_user_confirmed` a été RETIRÉE ici le 29/07/2026 (arbitrage retenu) :
         # jamais écrite dans les 39 modules ni présente dans le stockage réel, elle valait toujours
         # None et cette garde ne s'est donc jamais déclenchée. L'interrupteur « arrosage
         # automatique » (`self.auto_irrigation_enabled`, vérifié juste au-dessus) remplit
@@ -5302,7 +5302,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return True, "post_application_ready"
 
         # Rafraîchissement du soir (canicule) = petit arrosage TECHNIQUE → EXEMPTÉ du cooldown
-        # anti-relance (sinon une recharge normale récente le bloquerait, cf. demande Kévin).
+        # anti-relance (sinon une recharge normale récente le bloquerait, cf. demande utilisateur).
         # Garde anti-boucle dédiée à la place : il ne part qu'UNE fois par soir (déjà enregistré
         # en `rafraichissement_soir` aujourd'hui → on ne relance pas). Avec la fenêtre étroite
         # coucher-30→coucher, ça suffit à empêcher toute boucle.
@@ -5369,7 +5369,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         elif not (window_start <= current_minutes < window_end):
             return False, "outside_window"
         else:
-            # ÉTAPE 2 (arbitrage de Kévin, 15/09/2026) : dans la fenêtre du matin, on ne part plus à
+            # ÉTAPE 2 (arbitrage du 15/09/2026) : dans la fenêtre du matin, on ne part plus à
             # l'ouverture (03:45) mais pour FINIR 15 min avant le lever du soleil (cf.
             # `plan_morning_departure`). La nuit l'ET est quasi nulle : partir à 06:15 plutôt qu'à
             # 03:45 ne coûte rien au sol. Les exemptions vivent dans `_morning_departure`.
@@ -5791,7 +5791,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # ⚠️ DÉBUT ET FIN, tous les deux. `started_at` servait uniquement à calculer la durée
             # puis était jeté : l'historique ne gardait que l'instant de FIN, et l'affichage
             # annonçait donc « arrosé à 05:18 » pour un cycle parti à 03:45:13 — treize secondes
-            # après l'ouverture de la fenêtre. Signalé par Kévin le 04/08/2026, vérifié sur les
+            # après l'ouverture de la fenêtre. Signalé le 04/08/2026, vérifié sur les
             # vannes : Z1 03:45→04:18, Z2 04:18→04:51, Z3 04:51→05:18.
             "started_at": started_at,
             "ended_at": ended_at,
@@ -5888,7 +5888,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._async_save_state()
         await self._async_refresh_all_coordinators()
         # ⚠️ OUBLIÉS AU PREMIER JET — relevé par la revue. Enregistrer ou retirer un produit est
-        # une action de Kévin comme une autre, mais elle passe par `_async_refresh_all_coordinators`
+        # une action utilisateur comme une autre, mais elle passe par `_async_refresh_all_coordinators`
         # qui, lui, doit rester débouncé : il touche les AUTRES instances, pas seulement la
         # sienne. On rafraîchit donc la sienne en plus, immédiatement.
         await self._rafraichir_apres_action_utilisateur()

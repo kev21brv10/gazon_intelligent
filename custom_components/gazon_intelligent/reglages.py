@@ -258,7 +258,7 @@ REGLAGES: tuple[Reglage, ...] = (
         for numero in range(1, 6)
     ),
     # Découpage d'une grosse dose (mode Normal). Valeurs du 29/07/2026, tirées du régime manuel
-    # éprouvé de Kévin : 8,8 à 10 mm d'un seul passage, sans ruissellement.
+    # éprouvé : 8,8 à 10 mm d'un seul passage, sans ruissellement.
     Reglage(
         "arrosage_decoupage_seuil", "arrosage",
         "Au-delà de combien d'eau l'arrosage se fait-il en deux fois ?",

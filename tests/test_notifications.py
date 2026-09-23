@@ -1143,7 +1143,7 @@ class CoordinateurAlertesTests(unittest.TestCase):
         self.assertEqual([(d, s) for d, s, _, _ in services.appels], [("persistent_notification", "create")])
 
     def test_conseiller_gazon_personnalise_le_telephone_et_garde_la_trace_factuelle(self) -> None:
-        services = _Services(ia={"data": "Message personnalisé pour Kevin."})
+        services = _Services(ia={"data": "Message personnalisé pour l'utilisateur."})
         hass = types.SimpleNamespace(services=services)
         entree = _FakeEntry(entry_id="e", options={
             "notification_cibles": ["notify.iphone"],
@@ -1161,7 +1161,7 @@ class CoordinateurAlertesTests(unittest.TestCase):
         )
         self.assertEqual(services.appels[0][2]["message"], "Vérifie la vanne Zone 1.")
         self.assertEqual(services.appels[2][2]["title"], "Vanne bloquée")
-        self.assertEqual(services.appels[2][2]["message"], "Message personnalisé pour Kevin.")
+        self.assertEqual(services.appels[2][2]["message"], "Message personnalisé pour l'utilisateur.")
         self.assertIn("Phase : Sursemis.", services.appels[1][2]["instructions"])
 
     def test_conseiller_gazon_retombe_sur_le_message_integration_si_l_ia_echoue(self) -> None:
