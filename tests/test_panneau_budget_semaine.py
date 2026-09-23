@@ -53,7 +53,7 @@ const sorties = cas.map((c) => {
       "sensor.prochain": { state: "Maintenant", attributes: { block_reason: c.blockReason || "" } },
     },
   };
-  p._donnees = { entites: { reserve: "sensor.reserve", fenetre_optimale: "sensor.fenetre", phase: "sensor.phase", mode: "sensor.mode", prochain_arrosage: "sensor.prochain" } };
+  p._donnees = { entites: { reserve: "sensor.reserve", fenetre_optimale: "sensor.fenetre", phase: c.phaseAbsente ? "sensor.phase_absente" : "sensor.phase", mode: "sensor.mode", prochain_arrosage: "sensor.prochain" } };
   return { html: p._budgetHtml(), retenu: p._retenuParLeBudget() };
 });
 process.stdout.write(JSON.stringify(sorties));
@@ -150,6 +150,42 @@ class BudgetSemaineTests(unittest.TestCase):
                 self.assertNotIn("informatif", _sans_balises(html))
                 self.assertIn("var(--gz-rouge)", html)
                 self.assertTrue(sortie["retenu"])
+
+    def test_un_capteur_de_phase_vraiment_absent_reste_aussi_une_vraie_limite(self) -> None:
+        # ⚠️ Trouvé en revue (PR #63, contre-revue du 23/09/2026 22:00) : le test ci-dessus ne
+        # couvrait que des ÉTATS textuels non reconnus (`unavailable`, `unknown`…), pas le cas où
+        # l'entité de phase elle-même est absente de `hass.states` (capteur désactivé, pas encore
+        # chargé) — le harnais retombait alors sur `c.phase || "Normal"`, donc sur un vrai
+        # `"Normal"`, sans jamais exercer le chemin où `_s("phase")` rend littéralement `null`. Ce
+        # test pointe `_donnees.entites.phase` vers un id absent de `hass.states`, reproduisant le
+        # cas réel : `_entite("phase")` retourne `undefined`, `_s("phase")` retourne `null`.
+        [sortie] = _rendre([{"phaseAbsente": True, "utilise": 29.9, "plafond": 17.4}])
+        html = sortie["html"]
+        self.assertNotIn("informatif", _sans_balises(html))
+        self.assertIn("var(--gz-rouge)", html)
+        self.assertTrue(sortie["retenu"])
+
+    def test_le_texte_informatif_cite_la_phase_pas_le_mode(self) -> None:
+        # ⚠️ Trouvé en contre-revue (PR #63, 23/09/2026 22:00) : la note disait « Hors du mode
+        # Normal » alors que `_budgetEstInformatifSeul()` lit exclusivement `_s("phase")`, jamais
+        # `mode` — les deux peuvent diverger (voir `test_mode_declare_traitement_avec_phase_
+        # normale_reste_une_vraie_limite` ci-dessus). Nommer le mauvais champ induit en erreur
+        # sur ce qui pilote réellement l'affichage.
+        [sortie] = _rendre([{"phase": "Sursemis", "utilise": 10.0, "plafond": 25.0}])
+        texte = _sans_balises(sortie["html"])
+        self.assertNotIn("mode Normal", texte)
+        self.assertIn("phase Normal", texte)
+
+    def test_le_sous_titre_informatif_ne_promet_pas_une_dose_mesuree(self) -> None:
+        # ⚠️ Trouvé en contre-revue (PR #63, 23/09/2026 22:00) : le sous-titre disait « sans effet
+        # sur la dose appliquée pendant cette phase ». Les millimètres publiés restent une
+        # estimation calculée (débit configuré × durée), jamais une mesure physique, et la carte
+        # informe sur une décision de plafonnement, pas sur une dose délivrée. Reformulé pour ne
+        # pas laisser croire à une dose mesurée.
+        [sortie] = _rendre([{"phase": "Sursemis", "utilise": 10.0, "plafond": 25.0}])
+        texte = _sans_balises(sortie["html"])
+        self.assertNotIn("dose appliquée", texte)
+        self.assertIn("sans limiter l'arrosage prévu", texte)
 
     def test_le_texte_informatif_ne_nomme_pas_les_graines_hors_semis(self) -> None:
         # ⚠️ Trouvé en revue (PR #63) : le texte informatif nommait toujours « Semis/Sursemis »
