@@ -3,10 +3,11 @@
 ## 1.0.0-rc.7
 
 - **Réglage dédié pour la reprise de tonte en Semis** : nouveau réglage `semis_reprise_tonte_jours`
-  (groupe Semis, 25 jours par défaut, réglable de 14 à 40), indépendant de
-  `graines_fin_enracinement` qui continue de piloter uniquement l'arrosage. Il aligne
-  l'autorisation de tonte, la fréquence affichée, la croissance estimée, l'espacement minimal
-  et la prochaine date projetée.
+  (groupe Semis, 25 jours par défaut, réglable de 14 à 40), qui découple l'AUTORISATION et la
+  FRÉQUENCE de tonte de `graines_fin_enracinement`. Ce dernier continue de régler l'arrosage des
+  graines et reste par ailleurs la borne des sous-phases affichées, dont dépend la hauteur de
+  tonte recommandée pendant le Semis (`_plancher_semis`) : les deux réglages restent donc liés
+  sur ce point précis, pas totalement indépendants.
 - **Date de reprise corrigée en Sursemis** : le panneau annonçait un jour de moins que ce que le
   moteur autorise réellement ; la zone d'attente et la date affichée suivent maintenant la même
   échéance.
@@ -16,6 +17,20 @@
 - **Bandeau d'accueil aligné sur le même statut** : le titre « En ce moment » affichait la même
   généralisation optimiste que le bulletin ; il distingue maintenant tonte possible, possible
   avec précaution et à surveiller.
+- **Surface du gazon réellement modifiable** : le réglage de surface était déclaré mais invisible
+  dans l'onglet Installation ; son édition n'alimentait pas le compteur de brouillon ni le bouton
+  « Annuler les changements » de l'onglet. Les trois trous sont corrigés.
+- **Préparation du sol propagée par le service public** : une déclaration de Semis/Sursemis via le
+  service (pas seulement via le changement de mode direct) enregistre désormais la préparation du
+  sol associée, pour un historique cohérent quel que soit le chemin emprunté.
+- **Capteur de consommation d'eau plus honnête après un échec du coordinateur** : il ne se fiait
+  qu'à la surface configurée et pouvait donc rester « disponible », avec le dernier total calculé,
+  même après un rafraîchissement en échec.
+- **Conseil de tonte qui ne se fait plus masquer par un texte d'arrosage générique** : l'« Action
+  recommandée » affichait un blocage d'arrosage sans motif (ou un texte d'arrosage par ailleurs
+  spécifique mais non pertinent, ex. prochain cycle graines programmé) alors qu'un conseil de
+  tonte plus informatif était déjà calculé ailleurs sur la page. Un motif d'arrosage nommé
+  (ex. « Sol déjà humide ») reste prioritaire comme avant.
 - **Vérifié** : suite complète avec 2 198 tests et 3 233 sous-tests, verte.
 
 ## 1.0.0-rc.6
