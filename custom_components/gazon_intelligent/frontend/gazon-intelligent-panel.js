@@ -4521,13 +4521,18 @@ class GazonIntelligentPanel extends HTMLElement {
     return utilise !== null && plafond !== null && plafond > 0 && utilise >= plafond;
   }
 
-  // Le plafond hebdomadaire du profil Normal n'est jamais appliqué pendant le Semis/Sursemis :
-  // les micro-arrosages des graines suivent leurs propres garde-fous (fenêtre, pluie, saturation
-  // estimée), pas ce cumul. Le présenter comme une limite bloquante promettrait une sécurité qui
-  // n'existe pas à ce stade.
+  // ⚠️ `_profile_for_normal` (`guidance.py`) est le SEUL profil où `guardrail_max_effective`
+  // borne réellement `mm_cible`. Tous les autres (`_profile_for_sursemis`, `_profile_for_
+  // traitement`, `_profile_for_agro_phases` — Fertilisation/Biostimulant/Agent Mouillant/
+  // Scarification —, `_profile_for_generic`, `_profile_for_blocked` pour l'Hivernage) ne font
+  // que faire traverser `guardrail_min_mm`/`guardrail_max_mm` dans le payload sans jamais les
+  // utiliser pour décider — vérifié dans les cinq fonctions, pas seulement Semis/Sursemis (revue
+  // du 23/09/2026 sur la PR #63 : la première version de ce garde blanchissait Semis/Sursemis
+  // seuls et traitait Traitement comme une vraie limite, alors qu'il ne l'est pas davantage).
+  // Présenter ce plafond comme une limite bloquante hors phase Normal promettrait donc une
+  // sécurité qui n'existe pas.
   _budgetEstInformatifSeul() {
-    const phase = this._s("phase");
-    return phase === "Semis" || phase === "Sursemis";
+    return this._s("phase") !== "Normal";
   }
 
   // L'orange est une ALERTE : un blocage sain (déjà arrosé, pluie prévue) reste calme.
