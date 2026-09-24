@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.0-rc.9
+
+- **Page « Réglages » réorganisée sur grand écran** : chaque carte de réglage est repliable
+  depuis longtemps, mais restait forcée ouverte en permanence sur ordinateur quel que soit
+  le nombre de réglages. Avec 69 réglages aujourd'hui, chaque onglet (Tonte, Arrosage,
+  Sursemis, Semis, Installation, Entités) déballait toutes ses cartes d'un coup à chaque
+  visite. Les cartes se replient désormais par défaut sur grand écran comme sur mobile ; une
+  carte contenant un réglage personnalisé (différent du conseil) ou en cours de modification
+  reste ouverte. Dans les onglets Semis et Sursemis, un bandeau distingue maintenant
+  clairement « Arrosage des graines » (commun aux deux modes) de la tonte propre à la phase,
+  jusque-là mêlés dans une seule liste.
+- **Vérifié** : suite complète avec 2 218 tests et 3 242 sous-tests, verte.
+
 ## 1.0.0-rc.8
 
 - **Plafond hebdomadaire d'arrosage plus honnête hors phase Normal** : la carte « L'eau de la
