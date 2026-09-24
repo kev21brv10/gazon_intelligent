@@ -168,9 +168,19 @@ class CycleDeGrainesEnRetardTests(unittest.TestCase):
         alertes, _ = _evaluer(heure="16:25", progression=_progression(prevu="15:12", faits=3), vent_kmh=3.0)
         message = alertes[0].message
         self.assertIn("La fenêtre des graines a fermé à 16:00 avant qu'il puisse partir.", message)
-        self.assertIn("Aucun départ automatique n'est possible pour l'instant", message)
-        self.assertIn("Si la météo rouvre la fenêtre, le cycle pourra encore partir", message)
+        self.assertIn("Aucun départ automatique n'est possible dans la fenêtre actuelle", message)
         self.assertNotIn("ne partira plus aujourd'hui", message)
+
+    def test_fermeture_reglee_ne_promet_pas_de_reouverture_meteo(self) -> None:
+        alertes, _ = _evaluer(
+            heure="17:25",
+            fin_fenetre_minute=17 * 60,
+            progression=_progression(prevu="16:02", faits=3),
+            vent_kmh=3.0,
+        )
+        message = alertes[0].message
+        self.assertIn("Aucun départ automatique n'est possible dans la fenêtre actuelle", message)
+        self.assertNotIn("la météo rouvre", message)
 
     def test_cycle_prevu_apres_la_fermeture(self) -> None:
         # Défaut connu du moteur : à 1,8 mm, le 4ᵉ cycle tombe après la fin de la fenêtre.

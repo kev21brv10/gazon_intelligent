@@ -244,8 +244,8 @@ def pourquoi_le_cycle_attend(
         else:
             pourquoi = f"La fenêtre des graines a fermé à {fin} avant qu'il puisse partir."
         return pourquoi, (
-            "Aucun départ automatique n'est possible pour l'instant. Si la météo rouvre "
-            "la fenêtre, le cycle pourra encore partir ; sinon un arrosage à la main reste possible."
+            "Aucun départ automatique n'est possible dans la fenêtre actuelle. "
+            "Vérifiez le prochain créneau ; un arrosage à la main reste possible."
         )
     if (
         vent_kmh is not None
