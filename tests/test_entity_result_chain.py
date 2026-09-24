@@ -1928,6 +1928,49 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertIn("Démarré", progress_sensor.extra_state_attributes["detail"])
         self.assertTrue(progress_sensor.extra_state_attributes["summary"].startswith("Arrosage en cours"))
 
+    def test_watering_progress_sensor_exposes_per_zone_target_distinct_from_average(self) -> None:
+        # ⚠️ Trouvé en revue (24/09/2026, capture HA réelle) : `target_mm` de la session est
+        # `plan.planned_surface_mm`, une MOYENNE entre zones tirée vers le bas par toute zone en
+        # réduction d'ombre (zone 3, 40 % ici) — jamais la cible d'une zone précise. Sans zone
+        # cible propre exposée, le panneau comparait chaque zone à cette moyenne et faisait
+        # paraître une zone sans réduction (zone 1/2) en dépassement (1,3 / 1,1 mm affichés en
+        # conditions réelles) alors qu'elle atteignait tout juste SA propre cible planifiée.
+        started_at = datetime(2026, 3, 21, 8, 0, tzinfo=timezone.utc)
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=None, history=[], memory={})
+        coordinator._watering_session = {
+            "started_at": started_at,
+            "last_activity_at": started_at,
+            "last_inactive_at": None,
+            "active_zones": {"switch.zone_1": started_at},
+            "target_mm": 1.1,
+            "plan": {
+                "objective_mm": 1.3,
+                "surface_mm": 1.1,
+                "zones": [
+                    {"zone": "switch.zone_1", "rate_mm_h": 14.0, "duration_s": 330, "mm": 1.3},
+                    {"zone": "switch.zone_2", "rate_mm_h": 14.0, "duration_s": 330, "mm": 1.3},
+                    {
+                        "zone": "switch.zone_3",
+                        "rate_mm_h": 17.0,
+                        "duration_s": 180,
+                        "mm": 0.8,
+                        "water_reduction_pct": 40.0,
+                    },
+                ],
+            },
+        }
+
+        attrs = sensor.GazonArrosageEnCoursSensor(coordinator).extra_state_attributes
+
+        self.assertEqual(attrs["target_mm"], 1.1)
+        self.assertEqual(
+            attrs["zone_target_mm"],
+            {"switch.zone_1": 1.3, "switch.zone_2": 1.3, "switch.zone_3": 0.8},
+        )
+        # La cible de zone 1 doit être SA cible propre (1.3), pas la moyenne de session (1.1) :
+        # c'est exactement l'écart qui faisait paraître zone 1 en dépassement à tort.
+        self.assertNotEqual(attrs["zone_target_mm"]["switch.zone_1"], attrs["target_mm"])
+
     def test_watering_progress_sensor_computes_live_reserve_and_surplus(self) -> None:
         # Régression : la réserve live doit venir du DecisionResult (coordinator.result, via
         # _decision_value), PAS de coordinator.data — sinon live_reserve_mm / live_surplus_mm

@@ -3837,6 +3837,25 @@ class GazonArrosageEnCoursSensor(GazonEntityBase, SensorEntity):
         else:
             plan = session.get("plan")
             zone_count = len(plan.get("zones", [])) if isinstance(plan, dict) else active_zone_count
+        # ⚠️ `target_mm` (plus bas) est `plan.planned_surface_mm` : une MOYENNE entre zones, tirée
+        # vers le bas par toute zone en réduction d'ombre — jamais la cible d'une zone en
+        # particulier. Comparer une zone à cette moyenne peut la faire paraître en dépassement
+        # alors qu'elle atteint tout juste SA propre cible (`ZonePlan.mm`, avant moyennage).
+        # Exposée à part pour que le panneau compare chaque zone à sa propre dose planifiée.
+        zone_target_mm: dict[str, float] = {}
+        plan_for_targets = session.get("plan")
+        if isinstance(plan_for_targets, dict):
+            for zone_entry in plan_for_targets.get("zones") or []:
+                if not isinstance(zone_entry, dict):
+                    continue
+                entity_id = zone_entry.get("zone") or zone_entry.get("entity_id")
+                zone_mm = zone_entry.get("mm")
+                if not entity_id or zone_mm is None:
+                    continue
+                try:
+                    zone_target_mm[str(entity_id)] = float(zone_mm)
+                except (TypeError, ValueError):
+                    continue
         started_text = _human_datetime_text(started_at) if isinstance(started_at, datetime) else None
         last_activity = _human_datetime_text(session.get("last_activity_at")) if isinstance(session, dict) else None
         planned_total_seconds = 0.0
@@ -3890,6 +3909,7 @@ class GazonArrosageEnCoursSensor(GazonEntityBase, SensorEntity):
             "last_activity_at_utc": _last_activity.isoformat() if isinstance(_last_activity, datetime) else None,
             "active_zones": active_zone_names,
             "target_mm": session.get("target_mm"),
+            "zone_target_mm": zone_target_mm,
             **live_state,
         }
 
