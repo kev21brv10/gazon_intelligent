@@ -42,7 +42,7 @@ REGISTRE = reglages.exporter()
 SCRIPT = r"""
 const fs = require("fs");
 const vm = require("vm");
-const { chemin, registre } = JSON.parse(fs.readFileSync(0, "utf8"));
+const { chemin, registre, valeurs } = JSON.parse(fs.readFileSync(0, "utf8"));
 const ctx = {
   HTMLElement: class {},
   customElements: { get: () => undefined, define: (nom, classe) => { ctx.Classe = classe; } },
@@ -52,7 +52,7 @@ ctx.window = ctx;
 vm.createContext(ctx);
 vm.runInContext(fs.readFileSync(chemin, "utf8"), ctx);
 const p = Object.create(ctx.Classe.prototype);
-p._donnees = { registre, valeurs: {} };
+p._donnees = { registre, valeurs: valeurs || {} };
 p._brouillon = {};
 p._hass = { user: { is_admin: true }, states: {} };
 p._ligneHtml = (r) => `<div class="ligne" data-cle="${r.cle}"></div>`;
@@ -70,11 +70,11 @@ process.stdout.write(JSON.stringify({ ...bureau, bureau, mobile }));
 """
 
 
-def _rendre() -> dict[str, str]:
+def _rendre(valeurs: dict | None = None) -> dict[str, str]:
     assert NODE
     sortie = subprocess.run(
         [NODE, "-e", SCRIPT],
-        input=json.dumps({"chemin": str(PANNEAU), "registre": REGISTRE}),
+        input=json.dumps({"chemin": str(PANNEAU), "registre": REGISTRE, "valeurs": valeurs or {}}),
         capture_output=True,
         text=True,
         check=True,
@@ -123,17 +123,30 @@ class ProgrammesSemisTests(unittest.TestCase):
         self.assertNotIn('Semis: [["graines", "Graines"]', source)
         self.assertNotIn('Sursemis: [["graines", "Graines"]', source)
 
-    def test_les_groupes_sont_ouverts_sur_grand_ecran(self) -> None:
+    def test_les_groupes_sont_replies_par_defaut_sur_grand_ecran(self) -> None:
+        # Avant 1.0.0-rc.9 : forcés ouverts sur grand écran, quel que soit le nombre de
+        # réglages. Avec 69 réglages ça déballait chaque onglet d'un coup (signalé le
+        # 24/09/2026). Repliés par défaut, comme sur mobile ; une section personnalisée
+        # reste ouverte (voir le test suivant).
         for onglet in ("semis", "sursemis", "tonte"):
             details = re.findall(r"<details[^>]*>", self.rendu["bureau"][onglet])
             self.assertTrue(details, onglet)
-            self.assertTrue(all(" open" in detail for detail in details), onglet)
+            self.assertTrue(all(" open" not in detail for detail in details), onglet)
 
     def test_les_groupes_sont_replies_sur_mobile(self) -> None:
         for onglet in ("semis", "sursemis", "tonte"):
             details = re.findall(r"<details[^>]*>", self.rendu["mobile"][onglet])
             self.assertTrue(details, onglet)
             self.assertTrue(all(" open" not in detail for detail in details), onglet)
+
+    def test_une_section_personnalisee_reste_ouverte(self) -> None:
+        # Un réglage qui s'écarte du conseil est probablement celui qu'on vient consulter :
+        # sa section reste ouverte, les autres restent repliées.
+        rendu = _rendre(valeurs={"sursemis_ecart_tontes": 3})
+        details = re.findall(r"<details[^>]*>", rendu["sursemis"])
+        ouvertes = [d for d in details if " open" in d]
+        self.assertEqual(len(ouvertes), 1)
+        self.assertIn('data-programme-groupe="La tondeuse et les jeunes pousses"', ouvertes[0])
 
     def test_le_voyage_sursemis_affiche_la_reprise_apres_le_dernier_jour_d_attente(self) -> None:
         source = PANNEAU.read_text(encoding="utf-8")

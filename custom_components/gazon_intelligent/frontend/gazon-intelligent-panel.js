@@ -3683,9 +3683,9 @@ class GazonIntelligentPanel extends HTMLElement {
     const cles = [...new Set([...commun, ...propre].flatMap((s) => s.cles))];
     const aRevenir = cles.some((cle) => !egal(this._valeur(cle), this._defaut(cle)));
     const section = (s, estCommune) => {
-      const ouverte = s.cles.some((cle) => Object.hasOwn(this._brouillon, cle));
+      const ouverte = s.cles.some((cle) => Object.hasOwn(this._brouillon, cle) || !egal(this._valeur(cle), this._defaut(cle)));
       const dessin = s.dessin ? `<div class="dessin" data-dessin="${s.dessin}">${this._dessinHtml(s.dessin)}</div>` : "";
-      return `<details class="programme-groupe" data-programme-groupe="${esc(s.titre)}" ${!this._narrow || ouverte ? "open" : ""}>
+      return `<details class="programme-groupe" data-programme-groupe="${esc(s.titre)}" ${ouverte ? "open" : ""}>
         <summary>
           <span class="garage-scenario-icone ${estCommune ? "programme-commun" : ""}"><ha-icon icon="${estCommune ? "mdi:water-outline" : g.icone}"></ha-icon></span>
           <span class="garage-scenario-texte"><b>${esc(s.titre)}</b><small>${estCommune ? "Commun Semis / Sursemis · " : ""}${esc(this._resumeProgrammeSection(s))}</small></span>
@@ -3704,7 +3704,9 @@ class GazonIntelligentPanel extends HTMLElement {
         </button>
       </div>
       <div class="programme-reglages">
+        <div class="reglage-tout"><div class="groupe-installation"><ha-icon icon="mdi:water-outline"></ha-icon><h2>Arrosage des graines</h2></div></div>
         ${commun.map((s) => section(s, true)).join("")}
+        <div class="reglage-tout"><div class="groupe-installation"><ha-icon icon="${esc(g.icone)}"></ha-icon><h2>Tonte du ${esc(g.titre.toLowerCase())}</h2></div></div>
         ${propre.map((s) => section(s, false)).join("")}
       </div>`;
   }
@@ -3836,7 +3838,7 @@ class GazonIntelligentPanel extends HTMLElement {
       || Object.hasOwn(this._brouillonEntites || {}, cle)
       || Object.hasOwn(this._brouillonChoix || {}, cle)
       || Object.hasOwn(this._brouillonAlertes || {}, cle));
-    return `<details class="section programme-groupe reglage-groupe ${esc(classes)}" ${attributs} ${!this._narrow || modifiee || ouverte ? "open" : ""}>
+    return `<details class="section programme-groupe reglage-groupe ${esc(classes)}" ${attributs} ${modifiee || ouverte ? "open" : ""}>
       <summary>
         <span class="garage-scenario-icone"><ha-icon icon="${esc(icone)}"></ha-icon></span>
         <span class="garage-scenario-texte"><b>${esc(titre)}</b>${phrase ? `<small>${esc(phrase)}</small>` : ""}</span>
@@ -3850,11 +3852,13 @@ class GazonIntelligentPanel extends HTMLElement {
     const dessin = s.dessin ? `<div class="dessin" data-dessin="${s.dessin}">${this._dessinHtml(s.dessin)}</div>` : "";
     const corps = `${dessin}${s.cles.length ? `<div class="lignes">${s.cles.map((cle) => this._ligneHtml(this._reglage(cle))).join("")}</div>` : ""}`;
     const premier = s.cles.map((cle) => this._reglage(cle)).find(Boolean);
+    const personnalisee = s.cles.some((cle) => !egal(this._valeur(cle), this._defaut(cle)));
     return this._sectionReglageHtml({
       titre: s.titre,
       phrase: s.phrase || "",
       icone: premier ? iconeDe(premier) : "mdi:tune-variant",
       cles: s.cles,
+      ouverte: personnalisee,
       corps,
     });
   }
@@ -7346,8 +7350,8 @@ class GazonIntelligentPanel extends HTMLElement {
       ouverte: change,
     });
     const scenario = (titre, icone, resume, cles) => {
-      const ouvert = cles.some((cle) => Object.hasOwn(this._brouillon, cle));
-      return `<details class="garage-groupe" data-garage-groupe="${esc(titre)}" ${!this._narrow || ouvert ? "open" : ""}>
+      const ouvert = cles.some((cle) => Object.hasOwn(this._brouillon, cle) || !egal(this._valeur(cle), this._defaut(cle)));
+      return `<details class="garage-groupe" data-garage-groupe="${esc(titre)}" ${ouvert ? "open" : ""}>
         <summary>
           <span class="garage-scenario-icone"><ha-icon icon="${icone}"></ha-icon></span>
           <span class="garage-scenario-texte"><b>${esc(titre)}</b><small>${esc(resume)}</small></span>
