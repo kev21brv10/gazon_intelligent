@@ -231,7 +231,8 @@ def pourquoi_le_cycle_attend(
 ) -> tuple[str, str]:
     """(pourquoi, que faire) pour un cycle de graines dû qui n'est pas parti.
 
-    L'ordre compte : une fenêtre fermée est définitive pour la journée, le vent ne l'est pas.
+    L'ordre compte : la fenêtre actuellement fermée prime sur le vent, mais la météo
+    peut la rouvrir avant la fin du créneau réglé.
     Le vent n'est nommé que si la mesure du jardin dépasse vraiment la limite réglée : une
     fausse piste ferait chercher au mauvais endroit.
     """
@@ -242,7 +243,10 @@ def pourquoi_le_cycle_attend(
             pourquoi = f"Il tombait après la fermeture de la fenêtre des graines ({fin})."
         else:
             pourquoi = f"La fenêtre des graines a fermé à {fin} avant qu'il puisse partir."
-        return pourquoi, "Il ne partira plus aujourd'hui : un arrosage à la main reste possible."
+        return pourquoi, (
+            "Aucun départ automatique n'est possible pour l'instant. Si la météo rouvre "
+            "la fenêtre, le cycle pourra encore partir ; sinon un arrosage à la main reste possible."
+        )
     if (
         vent_kmh is not None
         and vent_max_kmh is not None
