@@ -5246,21 +5246,29 @@ class GazonIntelligentPanel extends HTMLElement {
     </div>`;
   }
 
-  // Pendant un arrosage : combien chaque zone a déjà reçu, sur la dose visée. Que des valeurs
-  // publiées par l'intégration, aucune reconstruction.
+  // Pendant un arrosage : combien chaque zone a déjà reçu, sur SA PROPRE dose planifiée. ⚠️
+  // Trouvé en revue (24/09/2026) : `target_mm` de la session est `plan.planned_surface_mm`, une
+  // MOYENNE entre zones (tirée vers le bas par toute zone en réduction d'ombre, ex. zone 3) —
+  // jamais la cible d'une zone précise. Comparer chaque zone à cette moyenne faisait paraître une
+  // zone sans réduction en dépassement (ex. 1,3 / 1,1 mm) alors qu'elle atteignait tout juste SA
+  // propre cible (`ZonePlan.mm`, publiée par zone via `zone_target_mm`, avant moyennage). Que des
+  // valeurs publiées par l'intégration, aucune reconstruction ; repli sur la moyenne de session
+  // si une zone n'a pas de cible propre publiée (anciennes sessions, ou zone hors plan courant).
   _avancementZonesHtml() {
     const a = (k) => this._a("arrosage_en_cours", k);
-    const cible = nombreOuNul(a("target_mm"));
+    const cibleMoyenne = nombreOuNul(a("target_mm"));
+    const ciblesParZone = a("zone_target_mm") && typeof a("zone_target_mm") === "object" ? a("zone_target_mm") : {};
     const verses = a("zone_mm_applied") && typeof a("zone_mm_applied") === "object" ? a("zone_mm_applied") : {};
     const arrosees = new Set(this._zonesAvecDebit().map((z) => z.switch));
     const zones = this._zones().filter((z) => arrosees.has(z.switch) || this._zoneActive(z) || nombreOuNul(verses[z.switch]) !== null);
-    if (cible === null || cible <= 0 || !zones.length) return "";
+    if (cibleMoyenne === null || cibleMoyenne <= 0 || !zones.length) return "";
     const passages = nombreOuNul(a("passage_count")) ?? 1;
     const passage = nombreOuNul(a("current_passage"));
     const actives = zones.filter((z) => this._zoneActive(z));
     // Pendant la pause, le moteur annonce déjà le passage suivant et ne garde aucune vanne ouverte.
     const enPause = this._sessionActive() && passages > 1 && (passage ?? 1) > 1 && !actives.length;
     const lignes = zones.map((z) => {
+      const cible = nombreOuNul(ciblesParZone[z.switch]) ?? cibleMoyenne;
       const mm = nombreOuNul(verses[z.switch]) ?? 0;
       const fait = mm >= cible - 0.05;
       const active = this._zoneActive(z);
