@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.0.0-rc.8
+
+- **Plafond hebdomadaire d'arrosage plus honnête hors phase Normal** : la carte « L'eau de la
+  semaine » présentait le cumul des 7 derniers jours comme une limite bloquante (barre rouge,
+  « pour ne pas trop arroser ») quelle que soit la phase active, alors que le moteur de décision
+  ne cappe réellement la dose sur ce plafond que pendant la phase Normal — Semis, Sursemis,
+  Traitement, Fertilisation, Biostimulant, Agent Mouillant, Scarification et Hivernage ne le
+  font jamais. La carte distingue maintenant une vraie limite (phase Normal, ou motif de
+  blocage explicitement nommé par le moteur) d'un simple repère informatif pour les autres
+  phases, avec un texte neutre plutôt que ciblé sur une seule phase. Une phase indisponible ou
+  non reconnue reste traitée comme une vraie limite par défaut, pour ne jamais masquer un
+  plafond qui s'applique réellement.
+- **Capteur « prochain arrosage » qui ne ment plus pendant une session active** : il affichait
+  encore une cible théorique (heure, date, fenêtre) parfois déjà passée pendant qu'un cycle
+  d'arrosage tournait. Pendant une session active, il indique maintenant « En cours » et
+  n'expose plus aucun attribut de cible périmée.
+- **Vérifié** : suite complète avec 2 212 tests et 3 242 sous-tests, verte.
+
 ## 1.0.0-rc.7
 
 - **Réglage dédié pour la reprise de tonte en Semis** : nouveau réglage `semis_reprise_tonte_jours`
