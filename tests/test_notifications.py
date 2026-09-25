@@ -49,6 +49,7 @@ def _progression(
     prevu: str = "12:58",
     etat: str = "ready",
     fin_dernier: str | None = "10:58",
+    semis_meteo_ajustement: str | None = None,
 ) -> dict[str, object]:
     return {
         "state": etat,
@@ -58,6 +59,7 @@ def _progression(
         "daily_cycles_target": cible,
         # Comme en production : `recorded_at` est en UTC.
         "last_cycle_at": _a(fin_dernier).astimezone(timezone.utc) if fin_dernier else None,
+        "semis_meteo_ajustement": semis_meteo_ajustement,
     }
 
 
@@ -92,6 +94,23 @@ class CycleDeGrainesEnRetardTests(unittest.TestCase):
         self.assertIn("limite de 15 km/h", alerte.message)
         self.assertIn("jusqu'à 16:00", alerte.message)
         self.assertIn("Cycles faits aujourd'hui : 1 sur 4.", alerte.message)
+
+    def test_ajustement_meteo_explique_pourquoi_la_cible_a_change(self) -> None:
+        # Signalé le 25/09/2026 : « 1 sur 4 » sans explication ressemblait à un bug alors que la
+        # météo du jour (chaud/sec) avait simplement ajouté un cycle au réglage de base.
+        alertes, _ = _evaluer(progression=_progression(semis_meteo_ajustement="chaud_sec"))
+        self.assertEqual(len(alertes), 1)
+        self.assertIn(
+            "Cycles faits aujourd'hui : 1 sur 4 (un cycle de plus à cause de la chaleur ou de l'air sec).",
+            alertes[0].message,
+        )
+
+    def test_ajustement_humide_frais(self) -> None:
+        alertes, _ = _evaluer(progression=_progression(semis_meteo_ajustement="humide_frais"))
+        self.assertIn(
+            "Cycles faits aujourd'hui : 1 sur 4 (un cycle de moins car le sol reste humide).",
+            alertes[0].message,
+        )
 
     def test_rien_avant_vingt_minutes_de_retard(self) -> None:
         alertes, _ = _evaluer(maintenant=_a("12:58") + timedelta(minutes=19, seconds=59))
@@ -844,6 +863,27 @@ class ResumeDuGazonTests(unittest.TestCase):
 
     def test_rien_ne_casse_sur_un_etat_vide(self) -> None:
         self.assertEqual(notifications.resume_du_gazon({}, maintenant=_a("11:00")), [])
+
+    def test_ajustement_meteo_explique_pourquoi_la_cible_a_change(self) -> None:
+        # Signalé le 25/09/2026 : « 3 sur 4 » sans explication ressemblait à un bug alors que la
+        # météo du jour (chaud/sec) avait simplement ajouté un cycle au réglage de base.
+        snapshot = {**self.SNAPSHOT, "semis_meteo_ajustement": "chaud_sec"}
+        lignes = notifications.resume_du_gazon(snapshot, maintenant=_a("11:00"))
+        ligne_cycles = next(l for l in lignes if l.startswith("Cycles de graines"))
+        self.assertEqual(
+            ligne_cycles,
+            "Cycles de graines faits aujourd'hui : 2 sur 4 "
+            "(1,2 mm chacun · un cycle de plus à cause de la chaleur ou de l'air sec), "
+            "prochain vers 12:58.",
+        )
+
+    def test_ajustement_neutre_ne_change_rien(self) -> None:
+        snapshot = {**self.SNAPSHOT, "semis_meteo_ajustement": "neutre"}
+        lignes = notifications.resume_du_gazon(snapshot, maintenant=_a("11:00"))
+        ligne_cycles = next(l for l in lignes if l.startswith("Cycles de graines"))
+        self.assertEqual(
+            ligne_cycles, "Cycles de graines faits aujourd'hui : 2 sur 4 (1,2 mm chacun), prochain vers 12:58.",
+        )
 
 
 class OptionsTests(unittest.TestCase):

@@ -1845,6 +1845,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "objective_scope": objective_scope,
             "watering_stage": stage_name,
             "cycle_slots_minutes": tuple(cycle_slots_minutes),
+            "semis_meteo_ajustement": snapshot.get("semis_meteo_ajustement"),
         }
 
     def _get_float_conf(self, key: str, default: float | None = None) -> float | None:
