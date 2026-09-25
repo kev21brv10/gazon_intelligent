@@ -813,6 +813,14 @@ const TONS_TONTE = {
   autorisee: "ok", autorisee_avec_precaution: "ok", a_surveiller: "attention", deconseillee: "attention", interdite: "arret",
 };
 
+// Le moteur ajuste déjà le nombre de cycles de graines visé selon la météo du jour
+// (guidance._ajustement_meteo_graines) sans jamais le dire ailleurs que dans l'avertissement du
+// réglage : « 3 sur 4 » sans explication ressemblait à un bug (signalé le 25/09/2026).
+const AJUSTEMENT_METEO_GRAINES = {
+  chaud_sec: "un cycle de plus à cause de la chaleur ou de l'air sec",
+  humide_frais: "un cycle de moins car le sol reste humide",
+};
+
 const DECLARATIONS = {
   declaree: "Tonte inscrite", deja_declaree: "Déjà inscrite aujourd'hui",
   travail_en_cours: "Pas encore : travail pas fini", travail_au_repos: "Pas de travail à inscrire",
@@ -4626,6 +4634,7 @@ class GazonIntelligentPanel extends HTMLElement {
       faits: nombreOuNul(f("semis_cycles_completed_today")),
       prevus: nombreOuNul(f("semis_daily_cycles_target") ?? f("daily_cycles_target")),
       dose: nombreOuNul(f("surface_cycle_mm")),
+      ajustement: f("semis_meteo_ajustement") || null,
       heure: echeance ? heureFr(partiesLocales(new Date(echeance), this._fuseau()).minute) : "",
       ouverture: ouverture !== null ? heureFr(ouverture) : "",
       jour: iso ? dateHumaine(iso, c.maintenant, this._fuseau()) : "",
@@ -4680,10 +4689,15 @@ class GazonIntelligentPanel extends HTMLElement {
     return puces;
   }
 
-  // Les mots des graines, pour la tuile, le bulletin et l'onglet Arrosage.
+  // Les mots des graines, pour la tuile, le bulletin et l'onglet Arrosage. Le moteur ajuste déjà
+  // le nombre de cycles visé selon la météo (guidance._ajustement_meteo_graines) sans jamais le
+  // dire ailleurs que dans l'avertissement du réglage : « 3 sur 4 » sans explication ressemblait
+  // à un bug (signalé le 25/09/2026), alors que la météo du jour a simplement ajouté un cycle.
   _motsGraines(g) {
     const fait = g.faits === null ? "" : g.faits === 1 ? "1 cycle fait" : `${nombreFr(g.faits, 0)} cycles faits`;
     const sur = fait && g.prevus !== null && g.faits < g.prevus ? ` sur ${nombreFr(g.prevus, 0)}` : "";
+    const raisonAjustement = sur ? AJUSTEMENT_METEO_GRAINES[g.ajustement] || "" : "";
+    const ajustement = raisonAjustement ? ` (${raisonAjustement})` : "";
     const dose = g.dose !== null && g.dose > 0 ? `${mmFr(g.dose)} par cycle` : "";
     const des = g.ouverture ? ` dès ${g.ouverture}` : "";
     if (g.fini) {
@@ -4699,10 +4713,10 @@ class GazonIntelligentPanel extends HTMLElement {
       const vers = g.heure ? `vers ${g.heure}` : "bientôt";
       return {
         titre: `Prochain cycle de graines ${vers}`,
-        texte: [fait ? `${majuscule(fait)}${sur} aujourd'hui.` : "", dose ? `${majuscule(dose)}.` : ""].filter(Boolean).join(" "),
+        texte: [fait ? `${majuscule(fait)}${sur} aujourd'hui${ajustement}.` : "", dose ? `${majuscule(dose)}.` : ""].filter(Boolean).join(" "),
         valeur: majuscule(vers),
         sous: ["graines", fait ? `${fait}${sur}` : dose].filter(Boolean).join(" · "),
-        phrase: `Graines : prochain cycle <b>${esc(vers)}</b>${fait ? ` (${esc(fait)}${esc(sur)} aujourd'hui)` : ""}.`,
+        phrase: `Graines : prochain cycle <b>${esc(vers)}</b>${fait ? ` (${esc(fait)}${esc(sur)} aujourd'hui${raisonAjustement ? ` · ${esc(raisonAjustement)}` : ""})` : ""}.`,
       };
     }
     const quand = g.jour || "bientôt";
@@ -4710,7 +4724,7 @@ class GazonIntelligentPanel extends HTMLElement {
     const desQuand = quand === "aujourd'hui" || quand === "bientôt" ? "" : des;
     return {
       titre: `Prochain cycle de graines : ${quand}${desQuand}`,
-      texte: [fait ? `${majuscule(fait)}${sur} aujourd'hui.` : "", dose ? `${majuscule(dose)}, selon la météo.` : ""].filter(Boolean).join(" "),
+      texte: [fait ? `${majuscule(fait)}${sur} aujourd'hui${ajustement}.` : "", dose ? `${majuscule(dose)}, selon la météo.` : ""].filter(Boolean).join(" "),
       valeur: `${majuscule(quand)}${desQuand}`,
       sous: ["graines", dose].filter(Boolean).join(" · "),
       phrase: `Graines : prochain cycle <b>${esc(quand)}${esc(desQuand)}</b>.`,

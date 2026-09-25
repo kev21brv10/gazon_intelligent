@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.0-rc.12
+
+- **La météo explique pourquoi elle a changé le nombre d'arrosages des graines** : le moteur
+  ajoute ou retire déjà un cycle par temps chaud/sec ou humide/frais, mais ne le disait nulle
+  part ailleurs que dans l'avertissement du réglage — « 3 sur 4 » sans explication ressemblait
+  à un bug. Les notifications et la page affichent maintenant la raison (« un cycle de plus à
+  cause de la chaleur ou de l'air sec », « un cycle de moins car le sol reste humide ») quand
+  elle s'applique.
+- **Vérifié** : suite complète avec 2 224 tests et 3 242 sous-tests, verte.
+
 ## 1.0.0-rc.11
 
 - **Cartes de débit par zone compactées, dans Installation** : avec 4-5 zones, la carte

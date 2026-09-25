@@ -1480,6 +1480,7 @@ _CLES_SUIVI_GRAINES = (
     "semis_cycle_spacing_minutes",
     "semis_last_cycle_at",
     "semis_last_cycle_display",
+    "semis_meteo_ajustement",
 )
 
 class GazonArrosageAutoBlocageSensor(GazonEntityBase, SensorEntity):
@@ -4668,6 +4669,7 @@ class GazonFenetreOptimaleSensor(_RecorderLeanSensorMixin, GazonEntityBase, Sens
             "semis_cycle_spacing_minutes",
             "semis_last_cycle_at",
             "semis_last_cycle_display",
+            "semis_meteo_ajustement",
             "mm_requested",
             "mm_applied",
             "mm_detected",
@@ -4733,6 +4735,7 @@ class GazonFenetreOptimaleSensor(_RecorderLeanSensorMixin, GazonEntityBase, Sens
             "semis_cycle_spacing_minutes",
             "semis_last_cycle_at",
             "semis_last_cycle_display",
+            "semis_meteo_ajustement",
             "mm_requested",
             "mm_applied",
             "mm_detected",

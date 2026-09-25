@@ -199,6 +199,20 @@ def _decimal(valeur: float) -> str:
     return f"{arrondi:.1f}".replace(".", ",")
 
 
+# Le moteur ajuste déjà `daily_cycles_target` (guidance._ajustement_meteo_graines) sans jamais
+# le dire ailleurs que dans l'avertissement du réglage : « 3 sur 4 » sans explication ressemblait
+# à un bug (signalé le 25/09/2026), alors que la météo du jour a simplement ajouté un cycle.
+_LIBELLES_AJUSTEMENT_METEO_GRAINES = {
+    "chaud_sec": "un cycle de plus à cause de la chaleur ou de l'air sec",
+    "humide_frais": "un cycle de moins car le sol reste humide",
+}
+
+
+def _texte_ajustement_meteo(valeur: Any) -> str:
+    libelle = _LIBELLES_AJUSTEMENT_METEO_GRAINES.get(str(valeur or "").strip())
+    return f" ({libelle})" if libelle else ""
+
+
 def _heure_iso(valeur: Any, reference: datetime) -> str | None:
     """« 12:58 » pour un instant sérialisé (ISO, UTC) lu à l'heure de la maison."""
     if isinstance(valeur, datetime):
@@ -631,6 +645,7 @@ def evaluer_alertes(
     faits = _entier(progression.get("cycles_completed_today"))
     cible = _entier(progression.get("daily_cycles_target"), defaut=faits)
     restants = _entier(progression.get("cycles_remaining_today"), defaut=max(0, cible - faits))
+    ajustement_meteo = _texte_ajustement_meteo(progression.get("semis_meteo_ajustement"))
 
     # 3. Rattrapages : un cycle signalé en retard a fini par avoir lieu.
     fin_dernier = _heure(_dans_le_fuseau(progression.get("last_cycle_at"), maintenant))
@@ -647,7 +662,7 @@ def evaluer_alertes(
                 titre="🌱 Graines : cycle rattrapé",
                 message=(
                     f"Le cycle prévu à {suivi.get('prevu') or '?'} a bien eu lieu{fin_texte}. "
-                    f"Cycles faits aujourd'hui : {faits} sur {cible}."
+                    f"Cycles faits aujourd'hui : {faits} sur {cible}{ajustement_meteo}."
                 ),
                 persistante=False,
                 resolue=True,
@@ -680,7 +695,7 @@ def evaluer_alertes(
                     message=(
                         f"Le moteur a suspendu le cycle de {heure_prevue}{motif} : le sol n'en a "
                         f"pas besoin pour l'instant. Rien à faire. Cycles faits aujourd'hui : "
-                        f"{faits} sur {cible}."
+                        f"{faits} sur {cible}{ajustement_meteo}."
                     ),
                     persistante=False,
                     niveau="information",
@@ -705,7 +720,7 @@ def evaluer_alertes(
         Alerte(
             sujet=SUJET_GRAINES,
             titre=f"🌱 Graines : le cycle de {heure_prevue} n'est pas parti",
-            message=f"{pourquoi} {que_faire} Cycles faits aujourd'hui : {faits} sur {cible}.",
+            message=f"{pourquoi} {que_faire} Cycles faits aujourd'hui : {faits} sur {cible}{ajustement_meteo}.",
         )
     )
     return alertes, etat
@@ -842,9 +857,12 @@ def resume_du_gazon(
     if cible > 0:
         faits = _entier(snapshot.get("semis_cycles_completed_today"))
         dose = _nombre(snapshot.get("surface_cycle_mm"))
+        ajustement = _LIBELLES_AJUSTEMENT_METEO_GRAINES.get(str(snapshot.get("semis_meteo_ajustement") or "").strip())
         texte = f"Cycles de graines faits aujourd'hui : {faits} sur {cible}"
-        if dose:
-            texte += f" ({_decimal(dose)} mm chacun)"
+        precisions = [f"{_decimal(dose)} mm chacun" if dose else "", ajustement or ""]
+        precisions = [p for p in precisions if p]
+        if precisions:
+            texte += f" ({' · '.join(precisions)})"
         prochain = _heure_iso(snapshot.get("semis_followup_due_at"), maintenant)
         if faits < cible and prochain:
             texte += f", prochain vers {prochain}"

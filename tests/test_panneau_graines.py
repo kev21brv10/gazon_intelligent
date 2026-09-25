@@ -203,6 +203,32 @@ class LeProchainArrosageDesGrainesTests(unittest.TestCase):
         self.assertIn("2 cycles faits sur 3 aujourd'hui. 1,2 mm par cycle.", s["bandeau"])
         self.assertNotIn("bloqué", s["bandeau"].lower())
 
+    def test_ajustement_meteo_explique_pourquoi_la_cible_a_change(self) -> None:
+        # Signalé le 25/09/2026 : « 3 sur 4 » sans explication ressemblait à un bug alors que la
+        # météo du jour (chaud/sec) avait simplement ajouté un cycle au réglage de base.
+        attente = {**GRAINES, "seeding_block_reason": "semis_cycle_pending", "semis_followup_state": "waiting",
+                   "daily_cycles_target": 4, "semis_cycles_completed_today": 3,
+                   "semis_followup_due_at": "2026-09-17T10:30:00+00:00", "semis_meteo_ajustement": "chaud_sec"}
+        [s] = _rendre([_cas("Bloqué", {"block_reason_label": "Arrosage bloqué", "block_reason": "semis_cycle_pending"},
+                            attente, maintenant="2026-09-17T09:00:00+00:00")])
+        self.assertIn(
+            "3 cycles faits sur 4 aujourd'hui (un cycle de plus à cause de la chaleur ou de l'air sec)",
+            s["bandeau"],
+        )
+
+    def test_ajustement_neutre_ou_absent_ne_change_rien(self) -> None:
+        sans_ajustement = {**GRAINES, "seeding_block_reason": "semis_cycle_pending", "semis_followup_state": "waiting",
+                            "semis_cycles_completed_today": 2, "semis_followup_due_at": "2026-09-17T10:30:00+00:00"}
+        neutre = {**sans_ajustement, "semis_meteo_ajustement": "neutre"}
+        [s_sans, s_neutre] = _rendre([
+            _cas("Bloqué", {"block_reason_label": "Arrosage bloqué"}, sans_ajustement, maintenant="2026-09-17T09:00:00+00:00"),
+            _cas("Bloqué", {"block_reason_label": "Arrosage bloqué"}, neutre, maintenant="2026-09-17T09:00:00+00:00"),
+        ])
+        for s in (s_sans, s_neutre):
+            self.assertIn("2 cycles faits sur 3 aujourd'hui.", s["bandeau"])
+            self.assertNotIn("chaleur", s["bandeau"])
+            self.assertNotIn("humide", s["bandeau"])
+
     def test_un_vrai_blocage_reste_un_blocage(self) -> None:
         vent = {**GRAINES, "seeding_block_reason": "vent_trop_fort"}
         [s] = _rendre([_cas("Bloqué", {"block_reason_label": "Vent trop fort pour les graines."}, vent)])
