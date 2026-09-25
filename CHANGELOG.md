@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.0-rc.11
+
+- **Cartes de débit par zone compactées, dans Installation** : avec 4-5 zones, la carte
+  « Arroseurs » alignait une question complète, son aide et un curseur pleine largeur pour
+  chaque zone — répété presque à l'identique zone par zone. Chaque zone tient maintenant en
+  une ligne compacte (nom, valeur, curseur), sans perdre l'ajustement fin par +/- ou par
+  glissement. Le renvoi individuel à la valeur enregistrée disparaît de chaque ligne (le
+  bouton « Annuler les changements » de l'onglet couvre toujours ce cas).
+- **Vérifié** : suite complète avec 2 225 tests et 3 242 sous-tests, verte ; vérifié
+  visuellement dans l'aperçu local (affichage, +/-, glissement du curseur).
+
 ## 1.0.0-rc.10
 
 - **Page du gazon de nouveau défilable** : depuis peu, la page ne défilait plus du tout au-delà

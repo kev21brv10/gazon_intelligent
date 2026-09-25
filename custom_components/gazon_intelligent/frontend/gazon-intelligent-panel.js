@@ -1549,6 +1549,14 @@ ha-icon { --mdc-icon-size: 20px; display: inline-flex; width: var(--mdc-icon-siz
 .ligne { --bulle: 104px; }
 .bulle-haut { display: none; }
 .bulle-bas { min-width: 94px; }
+/* Ligne compacte (zones de débit, Installation) : la valeur reste à côté du nom, quelle que
+   soit la largeur — inverse de la bascule mobile/ordinateur ci-dessus, spécificité (deux
+   classes) l'emporte dans les deux cas sur .bulle-haut/.bulle-bas seules. */
+.ligne-compacte .bulle-haut { display: inline-flex; min-width: 64px; font-size: 15px; padding: 4px 10px; }
+.ligne-compacte .bulle-bas { display: none; }
+.ligne-compacte { padding-bottom: 10px; }
+.ligne-compacte .ligne-tete { align-items: center; }
+.ligne-compacte .ligne-textes h4 { margin: 0; font-size: 14.5px; }
 .reglette { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
 .pas-btn {
   width: 40px; height: 40px; border-radius: 50%; flex: none;
@@ -7717,6 +7725,32 @@ class GazonIntelligentPanel extends HTMLElement {
       </div>`;
     }
     const r = this._reglageEntite(l, a);
+    if (numero) {
+      // Zones de débit : une ligne compacte par zone (nom + valeur + curseur), sans la question
+      // et l'aide complètes répétées à chaque zone — le titre de la carte les explique déjà une
+      // seule fois. Le curseur (`.reglette`) garde exactement le même balisage que la ligne
+      // complète ci-dessous : `_rafraichirApresChangement` le repère par ses classes pendant un
+      // glissement, quelle que soit la ligne qui l'entoure.
+      const nomCourt = zone ? zone.nom : `Zone ${numero}`;
+      return `<div class="ligne ligne-compacte ${enAttente ? "change" : ""}" data-cle="${esc(l.cle)}" data-entite="1">
+        <div class="ligne-tete">
+          <span class="ligne-icone"><ha-icon icon="${esc(l.icone)}"></ha-icon></span>
+          <div class="ligne-textes"><h4>${esc(nomCourt)}</h4></div>
+          <output class="bulle bulle-haut">${indisponible || v === undefined ? "—" : esc(valeurFr(r, v))}</output>
+          ${enAttente ? `<span class="a-enregistrer">à enregistrer</span>` : ""}
+        </div>
+        <div class="reglette">
+          <button class="pas-btn" data-action="moins" aria-label="Moins, ${esc(nomCourt)}" ${lecture || indisponible || v <= r.minimum ? "disabled" : ""}><ha-icon icon="mdi:minus"></ha-icon></button>
+          <div class="curseur-zone">
+            <input type="range" min="${r.minimum}" max="${r.maximum}" step="${r.pas}" value="${v ?? r.minimum}"
+              style="--rempli:${pourcent(v ?? r.minimum, r.minimum, r.maximum)}%"
+              aria-label="${esc(nomCourt)}" aria-valuetext="${esc(valeurFr(r, v))}" ${lecture || indisponible ? "disabled" : ""}>
+          </div>
+          <button class="pas-btn" data-action="plus" aria-label="Plus, ${esc(nomCourt)}" ${lecture || indisponible || v >= r.maximum ? "disabled" : ""}><ha-icon icon="mdi:plus"></ha-icon></button>
+          <output class="bulle bulle-bas" aria-hidden="true">${indisponible || v === undefined ? "—" : esc(valeurFr(r, v))}</output>
+        </div>
+      </div>`;
+    }
     const ligneErreur = this._erreurEntite(l.cle);
     return `<div class="ligne ${enAttente ? "change" : ""} ${ligneErreur ? "en-erreur" : ""}" data-cle="${esc(l.cle)}" data-entite="1">
       ${enAttente ? `<span class="a-enregistrer">à enregistrer</span>` : ""}
