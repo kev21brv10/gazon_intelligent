@@ -3838,7 +3838,11 @@ class GazonIntelligentPanel extends HTMLElement {
       || Object.hasOwn(this._brouillonEntites || {}, cle)
       || Object.hasOwn(this._brouillonChoix || {}, cle)
       || Object.hasOwn(this._brouillonAlertes || {}, cle));
-    return `<details class="section programme-groupe reglage-groupe ${esc(classes)}" ${attributs} ${modifiee || ouverte ? "open" : ""}>
+    const personnalisee = Boolean(this._donnees?.registre?.reglages) && cles.some((cle) => {
+      const reglage = this._reglage(cle);
+      return Boolean(reglage) && !egal(this._valeur(cle), reglage.defaut);
+    });
+    return `<details class="section programme-groupe reglage-groupe ${esc(classes)}" ${attributs} ${modifiee || personnalisee || ouverte ? "open" : ""}>
       <summary>
         <span class="garage-scenario-icone"><ha-icon icon="${esc(icone)}"></ha-icon></span>
         <span class="garage-scenario-texte"><b>${esc(titre)}</b>${phrase ? `<small>${esc(phrase)}</small>` : ""}</span>
@@ -3852,13 +3856,11 @@ class GazonIntelligentPanel extends HTMLElement {
     const dessin = s.dessin ? `<div class="dessin" data-dessin="${s.dessin}">${this._dessinHtml(s.dessin)}</div>` : "";
     const corps = `${dessin}${s.cles.length ? `<div class="lignes">${s.cles.map((cle) => this._ligneHtml(this._reglage(cle))).join("")}</div>` : ""}`;
     const premier = s.cles.map((cle) => this._reglage(cle)).find(Boolean);
-    const personnalisee = s.cles.some((cle) => !egal(this._valeur(cle), this._defaut(cle)));
     return this._sectionReglageHtml({
       titre: s.titre,
       phrase: s.phrase || "",
       icone: premier ? iconeDe(premier) : "mdi:tune-variant",
       cles: s.cles,
-      ouverte: personnalisee,
       corps,
     });
   }
@@ -7387,6 +7389,10 @@ class GazonIntelligentPanel extends HTMLElement {
       phrase,
       icone: "mdi:garage-variant",
       corps,
+      cles: choisie ? [
+        "tondeuse_garage_ouvrir_avant_depart", "tondeuse_garage_ouverture_min", "tondeuse_garage_avance_ouverture",
+        "tondeuse_garage_ouvrir_pour_retour", "tondeuse_garage_fermer_apres_retour", "tondeuse_garage_delai_fermeture",
+      ] : [],
       attributs: 'data-garage-tondeuse="1"',
       ouverte: change,
     });
