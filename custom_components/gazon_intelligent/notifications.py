@@ -203,8 +203,8 @@ def _decimal(valeur: float) -> str:
 # le dire ailleurs que dans l'avertissement du réglage : « 3 sur 4 » sans explication ressemblait
 # à un bug (signalé le 25/09/2026), alors que la météo du jour a simplement ajouté un cycle.
 _LIBELLES_AJUSTEMENT_METEO_GRAINES = {
-    "chaud_sec": "un cycle de plus à cause de la chaleur ou de l'air sec",
-    "humide_frais": "un cycle de moins car le sol reste humide",
+    "chaud_sec": "objectif adapté à une météo chaude ou desséchante",
+    "humide_frais": "objectif adapté à une météo humide ou fraîche",
 }
 
 

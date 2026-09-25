@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.0-rc.13
+
+- **Explication météo des graines sans conclusion non mesurée** : les textes n'attribuent plus
+  l'ajustement à une humidité du sol non mesurée et ne promettent plus un cycle ajouté ou
+  retiré lorsque la cible est bornée par le minimum ou le maximum du programme. Les doses
+  et les règles d'arrosage ne changent pas.
+
 ## 1.0.0-rc.12
 
 - **La météo explique pourquoi elle a changé le nombre d'arrosages des graines** : le moteur

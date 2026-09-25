@@ -101,16 +101,21 @@ class CycleDeGrainesEnRetardTests(unittest.TestCase):
         alertes, _ = _evaluer(progression=_progression(semis_meteo_ajustement="chaud_sec"))
         self.assertEqual(len(alertes), 1)
         self.assertIn(
-            "Cycles faits aujourd'hui : 1 sur 4 (un cycle de plus à cause de la chaleur ou de l'air sec).",
+            "Cycles faits aujourd'hui : 1 sur 4 (objectif adapté à une météo chaude ou desséchante).",
             alertes[0].message,
         )
 
-    def test_ajustement_humide_frais(self) -> None:
-        alertes, _ = _evaluer(progression=_progression(semis_meteo_ajustement="humide_frais"))
+    def test_ajustement_humide_frais_ne_pretend_pas_mesurer_le_sol_ou_retirer_un_cycle(self) -> None:
+        # Quand le programme vise déjà son minimum d'un cycle, la météo ne peut pas en retirer un.
+        alertes, _ = _evaluer(progression=_progression(
+            faits=0, cible=1, fin_dernier=None, semis_meteo_ajustement="humide_frais",
+        ))
         self.assertIn(
-            "Cycles faits aujourd'hui : 1 sur 4 (un cycle de moins car le sol reste humide).",
+            "Cycles faits aujourd'hui : 0 sur 1 (objectif adapté à une météo humide ou fraîche).",
             alertes[0].message,
         )
+        self.assertNotIn("sol reste humide", alertes[0].message)
+        self.assertNotIn("un cycle de moins", alertes[0].message)
 
     def test_rien_avant_vingt_minutes_de_retard(self) -> None:
         alertes, _ = _evaluer(maintenant=_a("12:58") + timedelta(minutes=19, seconds=59))
@@ -873,7 +878,7 @@ class ResumeDuGazonTests(unittest.TestCase):
         self.assertEqual(
             ligne_cycles,
             "Cycles de graines faits aujourd'hui : 2 sur 4 "
-            "(1,2 mm chacun · un cycle de plus à cause de la chaleur ou de l'air sec), "
+            "(1,2 mm chacun · objectif adapté à une météo chaude ou desséchante), "
             "prochain vers 12:58.",
         )
 
