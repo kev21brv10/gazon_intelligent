@@ -212,9 +212,19 @@ class LeProchainArrosageDesGrainesTests(unittest.TestCase):
         [s] = _rendre([_cas("Bloqué", {"block_reason_label": "Arrosage bloqué", "block_reason": "semis_cycle_pending"},
                             attente, maintenant="2026-09-17T09:00:00+00:00")])
         self.assertIn(
-            "3 cycles faits sur 4 aujourd'hui (un cycle de plus à cause de la chaleur ou de l'air sec)",
+            "3 cycles faits sur 4 aujourd'hui (objectif adapté à une météo chaude ou desséchante)",
             s["bandeau"],
         )
+
+    def test_humide_frais_ne_pretend_pas_mesurer_le_sol_ou_retirer_un_cycle(self) -> None:
+        attente = {**GRAINES, "seeding_block_reason": "semis_cycle_pending", "semis_followup_state": "waiting",
+                   "daily_cycles_target": 1, "semis_cycles_completed_today": 0,
+                   "semis_followup_due_at": "2026-09-17T10:30:00+00:00", "semis_meteo_ajustement": "humide_frais"}
+        [s] = _rendre([_cas("Bloqué", {"block_reason_label": "Arrosage bloqué", "block_reason": "semis_cycle_pending"},
+                            attente, maintenant="2026-09-17T09:00:00+00:00")])
+        self.assertIn("0 cycles faits sur 1 aujourd'hui (objectif adapté à une météo humide ou fraîche)", s["bandeau"])
+        self.assertNotIn("sol reste humide", s["bandeau"])
+        self.assertNotIn("un cycle de moins", s["bandeau"])
 
     def test_ajustement_neutre_ou_absent_ne_change_rien(self) -> None:
         sans_ajustement = {**GRAINES, "seeding_block_reason": "semis_cycle_pending", "semis_followup_state": "waiting",
