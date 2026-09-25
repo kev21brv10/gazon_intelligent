@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.0-rc.10
+
+- **Page du gazon de nouveau défilable** : depuis peu, la page ne défilait plus du tout au-delà
+  du premier écran, quel que soit l'onglet — y compris Accueil, jamais concerné par le
+  réaménagement de rc.9. En cause : la page dépendait d'une hauteur transmise par l'enrobage de
+  Home Assistant (`ha-panel-custom` / `partial-panel-resolver`) pour savoir où faire défiler
+  son propre contenu ; cette hauteur n'était plus fournie. La page se dimensionne maintenant
+  directement sur la hauteur de la fenêtre, sans dépendre de cet enrobage.
+- **Vérifié** : suite complète avec 2 218 tests et 3 242 sous-tests, verte ; défilement
+  revérifié en conditions réelles sur l'instance Home Assistant.
+
 ## 1.0.0-rc.9
 
 - **Page « Réglages » réorganisée sur grand écran** : chaque carte de réglage est repliable

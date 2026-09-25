@@ -1333,7 +1333,13 @@ const STYLES = `
 :host {
   display: block;
   position: relative;
-  height: 100%;
+  /* height: 100% seul dépend de l'ancêtre HA (ha-panel-custom / partial-panel-resolver)
+     pour fournir une hauteur définie ; quand il ne le fait pas (25/09/2026, HA 2026.9.3),
+     .page se dimensionne sur son propre contenu au lieu du viewport et son
+     overflow-y: auto ne déclenche jamais de défilement. 100dvh fixe une hauteur
+     définie indépendamment de l'ancêtre : la page défile de nouveau, sur ordinateur
+     comme sur mobile. */
+  height: 100dvh;
   --gz-accent: var(--gazon-accent, #10b981);
   --gz-accent-fort: #059669;
   --gz-accent-doux: color-mix(in srgb, var(--gz-accent) 14%, transparent);
