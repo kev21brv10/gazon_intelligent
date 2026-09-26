@@ -1477,6 +1477,9 @@ _CLES_SUIVI_GRAINES = (
     "semis_cycles_completed_today",
     "semis_cycles_remaining_today",
     "semis_daily_cycles_target",
+    "semis_weather_cycles_target",
+    "semis_cycles_limited_by_window",
+    "semis_cycles_limit_reason",
     "semis_cycle_spacing_minutes",
     "semis_last_cycle_at",
     "semis_last_cycle_display",
@@ -4666,6 +4669,9 @@ class GazonFenetreOptimaleSensor(_RecorderLeanSensorMixin, GazonEntityBase, Sens
             "semis_cycles_completed_today",
             "semis_cycles_remaining_today",
             "semis_daily_cycles_target",
+            "semis_weather_cycles_target",
+            "semis_cycles_limited_by_window",
+            "semis_cycles_limit_reason",
             "semis_cycle_spacing_minutes",
             "semis_last_cycle_at",
             "semis_last_cycle_display",
@@ -4693,7 +4699,10 @@ class GazonFenetreOptimaleSensor(_RecorderLeanSensorMixin, GazonEntityBase, Sens
         if attrs:
             # Le suivi des graines vit dans les données du coordinateur, pas dans la décision :
             # sans cet ajout, `_attrs_from_result` l'ignorait dès qu'une décision existait (0.96.1).
-            return {**attrs, **(self._attrs_from_data(*_CLES_SUIVI_GRAINES) or {})}
+            suivi = self._attrs_from_data(*_CLES_SUIVI_GRAINES) or {}
+            if suivi.get("semis_cycles_limited_by_window") and suivi.get("semis_daily_cycles_target") is not None:
+                attrs["daily_cycles_target"] = suivi["semis_daily_cycles_target"]
+            return {**attrs, **suivi}
         return self._attrs_from_data(
             "watering_cause",
             "next_action_date",
@@ -4732,6 +4741,9 @@ class GazonFenetreOptimaleSensor(_RecorderLeanSensorMixin, GazonEntityBase, Sens
             "semis_cycles_completed_today",
             "semis_cycles_remaining_today",
             "semis_daily_cycles_target",
+            "semis_weather_cycles_target",
+            "semis_cycles_limited_by_window",
+            "semis_cycles_limit_reason",
             "semis_cycle_spacing_minutes",
             "semis_last_cycle_at",
             "semis_last_cycle_display",
