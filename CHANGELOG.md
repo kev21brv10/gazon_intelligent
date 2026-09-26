@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.0-rc.14
+
+- **Objectif quotidien des graines borné à la fin réelle de la fenêtre** : un créneau tombant
+  pile sur la borne de fin (fenêtre resserrée par la météo) comptait encore dans l'objectif du
+  jour, ce qui pouvait annoncer un cycle après l'heure où plus aucun arrosage n'était censé
+  avoir lieu. L'objectif se limite désormais aux créneaux strictement avant cette borne, et se
+  referme au nombre déjà fait une fois l'heure de fermeture configurée dépassée.
+- **Motif affiché quand l'objectif du jour est réduit** : la fiche et le bandeau précisent
+  maintenant si la réduction vient de la météo, des créneaux disponibles ou de la fermeture de
+  la fenêtre.
+- **Vérifié** : suite complète avec 2 235 tests et 3 242 sous-tests, ruff et mypy (53 fichiers)
+  verts.
+
 ## 1.0.0-rc.13
 
 - **Explication météo des graines sans conclusion non mesurée** : les textes n'attribuent plus

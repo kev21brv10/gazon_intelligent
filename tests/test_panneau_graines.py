@@ -135,11 +135,11 @@ class LeProchainArrosageDesGrainesTests(unittest.TestCase):
         }
         rendu_sursemis, rendu_semis = _rendre([sursemis, semis])
         self.assertIn("Germination · J3", rendu_sursemis["programme"])
-        self.assertIn("1,2 mm par cycle · objectif météo 3", rendu_sursemis["programme"])
+        self.assertIn("1,2 mm par cycle · objectif du jour 3", rendu_sursemis["programme"])
         self.assertIn("8 h 30 → 16 h 00", rendu_sursemis["programme"])
         self.assertIn("Tonte interdite · 4 cm conseillés", rendu_sursemis["programme"])
         self.assertIn("Enracinement · J12", rendu_semis["programme"])
-        self.assertIn("3 mm par cycle · objectif météo 1", rendu_semis["programme"])
+        self.assertIn("3 mm par cycle · objectif du jour 1", rendu_semis["programme"])
         self.assertIn("Tonte interdite · 7 cm conseillés", rendu_semis["programme"])
         for rendu in (rendu_sursemis, rendu_semis):
             self.assertNotIn("aube", rendu["programme"])
@@ -158,6 +158,19 @@ class LeProchainArrosageDesGrainesTests(unittest.TestCase):
         for texte in (s["tuile"], s["bandeau"]):
             self.assertNotIn("aube", texte)
             self.assertNotIn("sur 3", texte, "4 faits pour 3 prévus : pas de « 4 sur 3 »")
+
+    def test_la_cible_reduite_par_la_fenetre_meteo_est_expliquee(self) -> None:
+        fenetre = {
+            **GRAINES, "daily_cycles_target": 2, "semis_daily_cycles_target": 1,
+            "semis_weather_cycles_target": 2, "semis_cycles_limited_by_window": True,
+            "semis_cycles_limit_reason": "weather", "semis_cycles_completed_today": 1,
+            "semis_followup_state": "complete",
+        }
+        [rendu] = _rendre([_cas(fenetre=fenetre) | {"semis": {"mode": "Sursemis", "age": 9}}])
+        self.assertIn("objectif du jour 1 (fenêtre météo réduite)", rendu["programme"])
+        fenetre["semis_cycles_limit_reason"] = "closed"
+        [termine] = _rendre([_cas(fenetre=fenetre) | {"semis": {"mode": "Sursemis", "age": 9}}])
+        self.assertIn("objectif du jour 1 (fenêtre du jour terminée)", termine["programme"])
 
     def test_le_bulletin_parle_des_graines(self) -> None:
         fini = {**GRAINES, "semis_followup_state": "complete", "semis_cycles_completed_today": 4}

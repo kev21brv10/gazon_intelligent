@@ -4633,6 +4633,8 @@ class GazonIntelligentPanel extends HTMLElement {
       enAttente: etat === "waiting" || motif === "semis_cycle_pending",
       faits: nombreOuNul(f("semis_cycles_completed_today")),
       prevus: nombreOuNul(f("semis_daily_cycles_target") ?? f("daily_cycles_target")),
+      fenetreReduite: f("semis_cycles_limited_by_window") === true,
+      limiteMotif: f("semis_cycles_limit_reason"),
       dose: nombreOuNul(f("surface_cycle_mm")),
       ajustement: f("semis_meteo_ajustement") || null,
       heure: echeance ? heureFr(partiesLocales(new Date(echeance), this._fuseau()).minute) : "",
@@ -4658,7 +4660,9 @@ class GazonIntelligentPanel extends HTMLElement {
     const puces = [];
     if (etape) puces.push(`<span class="puce" data-programme-graines="etape"><ha-icon icon="mdi:seed-outline"></ha-icon><b>${esc(etape)}</b> · J${esc(String(c.semis.age))}</span>`);
     if (suivi && (suivi.dose !== null || suivi.prevus !== null)) {
-      const eau = [suivi.dose !== null ? `${mmFr(suivi.dose)} par cycle` : "", suivi.prevus !== null ? `objectif météo ${nombreFr(suivi.prevus, 0)}` : ""].filter(Boolean).join(" · ");
+      const motif = suivi.limiteMotif === "closed" ? " (fenêtre du jour terminée)" : suivi.limiteMotif === "schedule" ? " (créneaux du jour limités)" : suivi.fenetreReduite ? " (fenêtre météo réduite)" : "";
+      const cible = suivi.prevus !== null ? `objectif du jour ${nombreFr(suivi.prevus, 0)}${motif}` : "";
+      const eau = [suivi.dose !== null ? `${mmFr(suivi.dose)} par cycle` : "", cible].filter(Boolean).join(" · ");
       puces.push(`<span class="puce" data-programme-graines="eau"><ha-icon icon="mdi:water-outline"></ha-icon>${esc(eau)}</span>`);
     }
     if (fenetre) puces.push(`<span class="puce" data-programme-graines="fenetre"><ha-icon icon="mdi:clock-outline"></ha-icon>${esc(fenetre)}</span>`);

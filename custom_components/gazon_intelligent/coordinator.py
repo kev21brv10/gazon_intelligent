@@ -355,6 +355,9 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "semis_cycles_completed_today",
     "semis_cycles_remaining_today",
     "semis_daily_cycles_target",
+    "semis_weather_cycles_target",
+    "semis_cycles_limited_by_window",
+    "semis_cycles_limit_reason",
     "semis_cycle_spacing_minutes",
     "semis_last_cycle_at",
     "semis_last_cycle_display",
@@ -1673,6 +1676,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "semis_cycles_completed_today": semis_progress.get("cycles_completed_today") if semis_progress else None,
             "semis_cycles_remaining_today": semis_progress.get("cycles_remaining_today") if semis_progress else None,
             "semis_daily_cycles_target": semis_progress.get("daily_cycles_target") if semis_progress else None,
+            "semis_weather_cycles_target": semis_progress.get("weather_cycles_target") if semis_progress else None,
+            "semis_cycles_limited_by_window": semis_progress.get("window_limited_cycles") if semis_progress else None,
+            "semis_cycles_limit_reason": semis_progress.get("window_limit_reason") if semis_progress else None,
             "semis_cycle_spacing_minutes": semis_progress.get("cycle_spacing_minutes") if semis_progress else None,
             "semis_last_cycle_at": self._serialize_runtime_value(
                 semis_progress.get("last_cycle_at") if semis_progress else None
@@ -1751,10 +1757,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         watering_stage = str(snapshot.get("watering_stage") or "").strip()
         transition_ready = bool(snapshot.get("seeding_transition_ready") or False)
+        reglages = self._reglages_instance()
         stage_name, stage_program = resolve_semis_stage_program(
             watering_stage,
             transition_ready=transition_ready,
-            reglages=self._reglages_instance(),
+            reglages=reglages,
         )
         # La valeur du snapshot peut provenir d'une ancienne version ou d'un réglage
         # incomplet. L'exécuteur reste la dernière barrière : jamais moins que le minimum
@@ -1767,7 +1774,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             repartir_creneaux_semis(
                 stage_program,
                 daily_cycles_target,
-                reglages=self._reglages_instance(),
+                reglages=reglages,
             )
         )
         if len(cycle_slots_minutes) < daily_cycles_target:
@@ -1778,7 +1785,37 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 else:
                     cycle_slots_minutes.append(cycle_slots_minutes[-1] + fallback_spacing)
 
+        weather_cycles_target = daily_cycles_target
         cycles_completed_today = len(self._semis_cycle_history_items())
+        now = self._current_datetime()
+        window_end = snapshot.get("watering_window_acceptable_end_minute")
+        effective_end: float | None = None
+        if window_end is not None:
+            try:
+                effective_end = float(window_end)
+            except (TypeError, ValueError):
+                pass
+            if effective_end is not None:
+                daily_cycles_target = min(
+                    daily_cycles_target,
+                    sum(slot < effective_end for slot in cycle_slots_minutes),
+                )
+        try:
+            closing_minutes = float(reglages.get("graines_fenetre_fin", 17 * 60))
+        except (TypeError, ValueError):
+            closing_minutes = None
+        window_limit_reason = None
+        if daily_cycles_target < weather_cycles_target:
+            window_limit_reason = (
+                "weather"
+                if closing_minutes is None or (effective_end is not None and effective_end < closing_minutes)
+                else "schedule"
+            )
+        if closing_minutes is not None and now.hour * 60 + now.minute >= closing_minutes:
+            daily_cycles_target = min(daily_cycles_target, cycles_completed_today)
+            if daily_cycles_target < weather_cycles_target:
+                window_limit_reason = "closed"
+
         cycles_remaining_today = max(0, daily_cycles_target - cycles_completed_today)
         last_cycle_at: datetime | None = None
         history_items = self._semis_cycle_history_items()
@@ -1792,7 +1829,6 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             last_cycle_at = self._parse_datetime_value(cycle_started_at)
 
-        now = self._current_datetime()
         next_due_at: datetime | None = None
         if cycles_remaining_today > 0:
             slot_index = min(cycles_completed_today, len(cycle_slots_minutes) - 1)
@@ -1837,6 +1873,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "cycles_completed_today": cycles_completed_today,
             "cycles_remaining_today": cycles_remaining_today,
             "daily_cycles_target": daily_cycles_target,
+            "weather_cycles_target": weather_cycles_target,
+            "window_limited_cycles": daily_cycles_target < weather_cycles_target,
+            "window_limit_reason": window_limit_reason,
             "cycle_spacing_minutes": cycle_spacing_minutes,
             "last_cycle_at": last_cycle_at,
             "last_cycle_display": self._local_datetime_text(last_cycle_at) if last_cycle_at is not None else None,

@@ -868,6 +868,48 @@ class WateringSessionMonitoringTests(unittest.TestCase):
         self.assertEqual(progress["last_cycle_at"], datetime(2026, 4, 27, 10, 0, tzinfo=timezone.utc))
         self.assertEqual(progress["next_due_at"], datetime(2026, 4, 27, 12, 0, tzinfo=timezone.utc))
 
+    def test_borne_meteo_exclusive_ne_promet_pas_un_cycle_a_16h(self) -> None:
+        coordinator = _build_coordinator()
+        current = datetime(2026, 9, 26, 12, 0, tzinfo=timezone.utc)
+        coordinator._current_datetime = lambda: current
+        coordinator._current_utc_datetime = lambda: current
+        coordinator._current_date = lambda: current.date()
+        coordinator.history = [{
+            "type": "arrosage", "date": "2026-09-26",
+            "started_at": "2026-09-26T10:00:00+00:00",
+            "watering_strategy": "semis_frequent", "objective_scope": "surface_cycle",
+        }]
+        snapshot = {
+            "watering_strategy": "semis_frequent", "objective_scope": "surface_cycle",
+            "watering_stage": "germination", "surface_cycle_mm": 0.7,
+            "daily_cycles_target": 2, "cycle_spacing_minutes": 120,
+            "watering_window_end_minute": 960,
+            "watering_window_acceptable_end_minute": 960,
+        }
+        progress = coordinator._semis_cycle_progress(snapshot)
+        assert progress is not None
+        self.assertEqual(progress["cycle_slots_minutes"], (600, 960))
+        self.assertEqual(progress["daily_cycles_target"], 1)
+        self.assertEqual(progress["weather_cycles_target"], 2)
+        self.assertEqual(progress["window_limit_reason"], "weather")
+        self.assertEqual(progress["state"], "complete")
+        self.assertEqual(progress["next_due_at"], datetime(2026, 9, 27, 10, 0, tzinfo=timezone.utc))
+        published = coordinator._suivi_des_graines(snapshot)
+        self.assertEqual(published["semis_daily_cycles_target"], 1)
+        self.assertEqual(published["semis_weather_cycles_target"], 2)
+
+        snapshot["watering_window_acceptable_end_minute"] = 1020
+        reopened = coordinator._semis_cycle_progress(snapshot)
+        assert reopened is not None
+        self.assertEqual(reopened["daily_cycles_target"], 2)
+        self.assertEqual(reopened["next_due_at"], datetime(2026, 9, 26, 16, 0, tzinfo=timezone.utc))
+
+        coordinator._current_datetime = lambda: datetime(2026, 9, 26, 20, 38, tzinfo=timezone.utc)
+        closed = coordinator._semis_cycle_progress(snapshot)
+        assert closed is not None
+        self.assertEqual(closed["daily_cycles_target"], 1)
+        self.assertEqual(closed["window_limit_reason"], "closed")
+
     def test_un_redemarrage_pendant_l_attente_garde_le_vrai_prochain_cycle(self) -> None:
         """Le suivi est reconstruit depuis l'historique persisté, pas depuis un minuteur en RAM."""
         snapshot = {
