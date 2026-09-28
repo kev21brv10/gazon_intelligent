@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.0-rc.16
+
+- **Répartition des motifs de blocage de la tonte, sur les 7 derniers jours** : la page ne
+  disait jusqu'ici que le motif de blocage de l'instant présent — impossible de savoir, sans
+  rejouer l'historique à la main, si une semaine « toujours bloquée » l'était surtout par la
+  météo, surtout par l'espacement minimum entre deux tontes, ou par un mélange des deux. Une
+  nouvelle carte sur l'onglet Tonte affiche maintenant cette répartition. Le blocage lui-même
+  ne change pas : rien n'est assoupli, seule la lisibilité de ce qui bloque déjà s'améliore.
+- **Vérifié** : suite complète avec 2 260 tests et 3 242 sous-tests, ruff et mypy (53 fichiers)
+  verts, rendu du nouveau panneau vérifié par le harnais JS existant.
+
 ## 1.0.0-rc.15
 
 - **Une pluie active ne fait plus perdre le programme des graines, en Semis/Sursemis** : le

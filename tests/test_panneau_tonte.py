@@ -193,6 +193,38 @@ class PastilleTonteTests(unittest.TestCase):
         self.assertNotIn("Ce mois-ci", semis)
         self.assertNotIn("Ce mois-ci", sursemis)
 
+    def test_les_motifs_de_blocage_de_la_semaine_sont_affiches(self) -> None:
+        cas = [
+            {
+                "statut": "interdite", "gazon": False, "machine": True,
+                "attrs": {
+                    "mowing_block_summary_7j": {
+                        "days_covered": 7,
+                        "total_minutes": 168.0,
+                        "top_reasons": [
+                            {"code": "machine_unavailable", "label": "Robot indisponible", "minutes": 49.4, "pct": 29.4},
+                            {"code": "mowing_night", "label": "mowing night", "minutes": 8.9, "pct": 5.3},
+                        ],
+                    },
+                },
+            },
+        ]
+        sortie = subprocess.run(
+            [NODE, "-e", SCRIPT],
+            input=json.dumps({"chemin": str(PANNEAU), "cas": cas}),
+            capture_output=True, text=True, check=True, timeout=60,
+        )
+        [html] = json.loads(sortie.stdout)
+        self.assertIn("Motifs de blocage", html)
+        self.assertIn("7 derniers jours", html)
+        self.assertIn("Robot indisponible", html)
+        self.assertIn("29 %", html)
+        self.assertIn("mowing night", html)
+
+    def test_la_carte_des_motifs_est_absente_sans_historique(self) -> None:
+        autorisee, _, _ = _rendre()
+        self.assertNotIn("Motifs de blocage", autorisee)
+
 
 SCRIPT_MAINTENANT = r"""
 const fs = require("fs");

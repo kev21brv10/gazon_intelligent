@@ -624,6 +624,41 @@ class GazonBrain:
         self._append_history(item)
         return item
 
+    def record_mowing_block_summary(
+        self,
+        date_action: date,
+        reasons_minutes: dict[str, float],
+    ) -> dict[str, Any] | None:
+        """Archive, pour un jour déjà clos, les minutes cumulées par motif de blocage tonte.
+
+        ⚠️ UNE LIGNE PAR JOUR, PAS UNE LIGNE PAR CHANGEMENT DE MOTIF (même dédup que
+        `record_mowing`, même raison : `mowing_block_reason_code` change en moyenne toutes les
+        heures, un historique par événement saturerait les 300 entrées de `self.history` — un
+        registre partagé avec l'arrosage et les produits — en quelques jours. Le coordinateur
+        n'appelle cette méthode qu'une fois, à son constat que la date a changé (cf.
+        `coordinator._suivre_motifs_blocage_tonte`), pour le jour qui vient de se terminer.
+        """
+        jour = date_action.isoformat()
+        reasons = {str(k): round(float(v), 1) for k, v in reasons_minutes.items() if v}
+        if not reasons:
+            return None
+        item: dict[str, Any] = {
+            "type": "mowing_block_daily",
+            "date": jour,
+            "reasons": reasons,
+            "total_minutes": round(sum(reasons.values()), 1),
+        }
+        for existant in reversed(self.history):
+            if (
+                isinstance(existant, dict)
+                and existant.get("type") == "mowing_block_daily"
+                and existant.get("date") == jour
+            ):
+                existant.update(item)
+                return existant
+        self._append_history(item)
+        return item
+
     def record_watering(
         self,
         date_action: date | None = None,

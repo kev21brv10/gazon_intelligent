@@ -1167,6 +1167,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         snapshot.update(_fungal)
         snapshot["fungal_wetness_status"] = _fungal_wetness.get("status")
+        self._suivre_motifs_blocage_tonte(snapshot)
         if runtime_context.get("active_irrigation_session") is None:
             await self._finalize_pending_irrigation_user_action(
                 execution=runtime_context.get("last_irrigation_execution"),
@@ -2498,6 +2499,60 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             }
         except Exception:  # noqa: BLE001 - un compteur ne doit jamais casser un cycle
             return vide
+
+    def _suivre_motifs_blocage_tonte(self, snapshot: dict[str, Any]) -> None:
+        """Cumule, par motif public (`mowing_block_reason_code`), les minutes de blocage de
+        tonte de la journée ; archive la veille dans l'historique dès que la date change.
+
+        ⚠️ Même piège que `_suivre_fiabilite_tondeuse` (0.50.0) : sans ce cumul, la page ne
+        montrait que le motif de blocage de l'INSTANT présent, jamais sa répartition réelle sur
+        plusieurs jours — impossible de distinguer une semaine bloquée surtout par la pluie
+        d'une semaine bloquée surtout par l'espacement minimum entre deux tontes sans rejouer
+        l'historique à la main. Relevé le 28/09/2026 sur 7 jours d'historique HA (recorder) pour
+        trancher une plainte « bloquée pour la moindre chose » : `phase_sursemis` 35 % (un seul
+        épisode, la levée), `machine_unavailable` 29 % (surtout pause pluie), le reste fragmenté
+        entre arrosage/espacement/nuit — aucune cause isolée à corriger, mais rien de tout ça
+        n'était lisible depuis la page elle-même.
+
+        ⚠️ Le cumul suit le motif PUBLIC final (`mowing_block_reason_code`), pas la fiabilité
+        machine (`mower_health`, qui répond à une question différente : le ROBOT est-il en
+        panne, pas pourquoi l'INTÉGRATION n'autorise pas un départ).
+        """
+        try:
+            maintenant = self._current_datetime()
+            aujourd_hui = self._current_date().isoformat()
+            etat = self._runtime_state.get("mowing_block_tally")
+            if not isinstance(etat, dict) or not etat.get("date"):
+                etat = {"date": aujourd_hui, "reasons": {}, "last_seen_at": None, "last_code": None}
+            else:
+                # ⚠️ CRÉDITER AVANT DE VÉRIFIER LE CHANGEMENT DE JOUR, pas après : les minutes
+                # écoulées depuis le dernier cycle appartiennent à la journée qui vient de finir
+                # (le motif y était actif jusqu'à minuit), sinon l'écart entre le dernier cycle
+                # d'hier et le premier d'aujourd'hui disparaît purement et simplement — la
+                # journée archivée sous-compte exactement le temps du dernier motif observé.
+                dernier_code = etat.get("last_code")
+                if dernier_code is not None:
+                    ecoule = self._minutes_creditables(etat.get("last_seen_at"), maintenant)
+                    if ecoule > 0.0:
+                        reasons = etat.setdefault("reasons", {})
+                        reasons[dernier_code] = round(float(reasons.get(dernier_code) or 0.0) + ecoule, 2)
+                if etat.get("date") != aujourd_hui:
+                    if etat.get("reasons"):
+                        try:
+                            jour_precedent = date.fromisoformat(str(etat["date"]))
+                        except ValueError:
+                            jour_precedent = None
+                        if jour_precedent is not None:
+                            self.brain.record_mowing_block_summary(jour_precedent, etat["reasons"])
+                    etat = {"date": aujourd_hui, "reasons": {}, "last_seen_at": None, "last_code": None}
+
+            bloque = bool(snapshot.get("mowing_blocked"))
+            code = str(snapshot.get("mowing_block_reason_code") or "").strip()
+            etat["last_seen_at"] = maintenant.isoformat()
+            etat["last_code"] = code if (bloque and code) else "aucun_blocage"
+            self._runtime_state["mowing_block_tally"] = etat
+        except Exception:  # noqa: BLE001 - un compteur ne doit jamais casser un cycle
+            _LOGGER.debug("Suivi des motifs de blocage tonte indisponible", exc_info=True)
 
     def _passe_tondeuse_ouverte(self) -> bool:
         """Une passe est-elle en cours ? C'est la mémoire de « sortie et pas revenue ».
@@ -4670,6 +4725,12 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "mower_health": self._serialize_runtime_value(
                 self._runtime_state.get("mower_health")
             ),
+            # Même piège, même remède : le cumul des motifs de blocage tonte (0.99.0) est aussi
+            # un compteur de la JOURNÉE en cours — perdu au redémarrage, il archiverait une
+            # journée tronquée dans `self.history` au lieu de la vraie répartition du jour.
+            "mowing_block_tally": self._serialize_runtime_value(
+                self._runtime_state.get("mowing_block_tally")
+            ),
             # Même piège, même remède : le carnet de passes s'accumule sur des SEMAINES.
             # Non persisté, il repartirait vide à chaque redémarrage et n'apprendrait
             # jamais rien — un carnet qui oublie est pire qu'un carnet absent.
@@ -4775,6 +4836,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # Symétrique de la sérialisation : sans cette ligne le cumul du jour serait écrit
             # sur le disque puis ignoré au rechargement — pire qu'absent, car invisible.
             "mower_health": runtime.get("mower_health"),
+            "mowing_block_tally": runtime.get("mowing_block_tally"),
             "mower_passes": runtime.get("mower_passes"),
             "mower_control": runtime.get("mower_control"),
             "pluie_mesuree": runtime.get("pluie_mesuree"),

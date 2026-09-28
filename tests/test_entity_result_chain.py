@@ -2884,6 +2884,71 @@ class DecisionResultChainTests(unittest.TestCase):
         self.assertFalse(tonte_binary_sensor.extra_state_attributes["machine_permet_tonte"])
         self.assertFalse(tonte_binary_sensor.extra_state_attributes["action_possible"])
 
+    def test_mowing_block_history_entries_filters_sorts_and_limits(self) -> None:
+        history = [
+            {"type": "arrosage", "date": "2026-09-24"},
+            {"type": "mowing_block_daily", "date": "2026-09-25", "reasons": {"mowing_night": 10.0}, "total_minutes": 10.0},
+            {"type": "mowing_block_daily", "date": "2026-09-26", "reasons": {}, "total_minutes": 0.0},
+            {"type": "mowing_block_daily", "date": "2026-09-27", "reasons": {"machine_unavailable": 49.4}, "total_minutes": 49.4},
+        ]
+        entries = sensor._mowing_block_history_entries(history, n=1)
+        self.assertEqual(len(entries), 1, "un jour sans motif ('reasons' vide) ne compte pas")
+        self.assertEqual(entries[0]["date"], "2026-09-27", "le plus récent d'abord")
+
+    def test_mowing_block_history_entries_tolerates_bad_input(self) -> None:
+        self.assertEqual(sensor._mowing_block_history_entries(None), [])
+        self.assertEqual(sensor._mowing_block_history_entries("pas une liste"), [])
+
+    def test_mowing_block_summary_aggregates_and_sorts(self) -> None:
+        entries = [
+            {"date": "2026-09-27", "reasons": {"machine_unavailable": 40.0, "mowing_night": 5.0}},
+            {"date": "2026-09-26", "reasons": {"machine_unavailable": 9.4, "watering_cooldown": 17.5}},
+        ]
+        summary = sensor._mowing_block_summary(entries)
+        self.assertEqual(summary["days_covered"], 2)
+        self.assertAlmostEqual(summary["total_minutes"], 71.9, places=1)
+        top = summary["top_reasons"]
+        self.assertEqual(top[0]["code"], "machine_unavailable")
+        self.assertAlmostEqual(top[0]["minutes"], 49.4, places=1)
+        self.assertAlmostEqual(top[0]["pct"], 100.0 * 49.4 / 71.9, places=1)
+        # Libellé lu dans la table UNIQUE (`const.BLOCK_REASON_DISPLAY_LABELS`), pas une copie
+        # locale : cf. `test_assistant.UneSeuleTableDeLibellesDeMotifsTests`.
+        self.assertEqual(top[0]["label"], "Robot indisponible")
+
+    def test_mowing_block_summary_falls_back_to_snake_case_for_unknown_reasons(self) -> None:
+        """Repli de `const.block_reason_display_label` : tirets bas remplacés par des espaces,
+        jamais un plantage pour un motif encore absent de la table."""
+        summary = sensor._mowing_block_summary([{"reasons": {"motif_inconnu_futur": 3.0}}])
+        self.assertEqual(summary["top_reasons"][0]["label"], "motif inconnu futur")
+
+    def test_mowing_block_summary_is_none_when_empty(self) -> None:
+        self.assertIsNone(sensor._mowing_block_summary([]))
+        self.assertIsNone(sensor._mowing_block_summary([{"reasons": {}}]))
+
+    def test_tonte_state_sensor_exposes_the_weekly_block_summary(self) -> None:
+        result = _make_result()
+        history = [
+            {
+                "type": "mowing_block_daily", "date": "2026-09-27",
+                "reasons": {"pluie_en_cours": 30.0}, "total_minutes": 30.0,
+            },
+        ]
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=result, history=history)
+
+        tonte_state_sensor = sensor.GazonTonteEtatSensor(coordinator)
+
+        summary = tonte_state_sensor.extra_state_attributes["mowing_block_summary_7j"]
+        self.assertEqual(summary["top_reasons"][0]["code"], "pluie_en_cours")
+
+    def test_tonte_state_sensor_omits_the_summary_without_history(self) -> None:
+        result = _make_result()
+        coordinator = _FakeCoordinator(entry=_FakeEntry(), data={}, result=result, history=[])
+
+        tonte_state_sensor = sensor.GazonTonteEtatSensor(coordinator)
+
+        attrs = tonte_state_sensor.extra_state_attributes or {}
+        self.assertNotIn("mowing_block_summary_7j", attrs)
+
     def test_irrigation_entities_expose_mower_block_reason(self) -> None:
         result = _make_result()
         result.arrosage_recommande = True
