@@ -6572,7 +6572,11 @@ class LesMotifsDeBlocageDeLaTonteSontCumulesTests(unittest.TestCase):
         etat = coord._runtime_state["mowing_block_tally"]
         self.assertAlmostEqual(etat["reasons"]["aucun_blocage"], 8.0, places=1)
 
-    def test_le_changement_de_jour_credite_puis_archive_la_veille(self) -> None:
+    def test_un_ecart_qui_enjambe_minuit_se_partage_entre_les_deux_jours(self) -> None:
+        """Un cycle à 23:55 suivi du suivant à 00:05 est un écart créditable de 10 min, mais
+        seules 5 appartiennent à la veille (23:55 → minuit) ; les 5 autres sont déjà dans la
+        nouvelle journée. Tout créditer à la veille gonflerait son archive et ferait repartir
+        la journée suivante avec un compteur vide qu'elle n'aurait pas dû avoir."""
         t0 = datetime(2026, 9, 27, 23, 55, tzinfo=timezone.utc)
         coord = self._coord(t0)
         coord._suivre_motifs_blocage_tonte(self._snap(bloque=True, code="machine_unavailable"))
@@ -6582,15 +6586,32 @@ class LesMotifsDeBlocageDeLaTonteSontCumulesTests(unittest.TestCase):
         coord._suivre_motifs_blocage_tonte(self._snap(bloque=True, code="mowing_night"))
 
         archive = [h for h in coord.brain.history if h.get("type") == "mowing_block_daily"]
-        self.assertEqual(len(archive), 1, "les 10 min avant minuit doivent atterrir dans l'archive de la veille")
+        self.assertEqual(len(archive), 1)
         self.assertEqual(archive[0]["date"], "2026-09-27")
-        self.assertAlmostEqual(archive[0]["reasons"]["machine_unavailable"], 10.0, places=1)
-        self.assertAlmostEqual(archive[0]["total_minutes"], 10.0, places=1)
+        self.assertAlmostEqual(archive[0]["reasons"]["machine_unavailable"], 5.0, places=1,
+                               msg="seules les minutes AVANT minuit appartiennent à la veille")
+        self.assertAlmostEqual(archive[0]["total_minutes"], 5.0, places=1)
 
         etat = coord._runtime_state["mowing_block_tally"]
         self.assertEqual(etat["date"], "2026-09-28")
-        self.assertEqual(etat["reasons"], {}, "la nouvelle journée repart vide")
+        self.assertAlmostEqual(
+            etat["reasons"]["machine_unavailable"], 5.0, places=1,
+            msg="le reste de l'écart (après minuit) doit être reporté dans la nouvelle journée, "
+                "sous le motif qui était actif à ce moment-là",
+        )
         self.assertEqual(etat["last_code"], "mowing_night")
+
+    def test_un_ecart_qui_ne_touche_pas_minuit_nest_pas_partage(self) -> None:
+        """Non-régression : le partage ne doit s'activer QUE si le jour a vraiment changé entre
+        les deux échantillons, pas à chaque cycle du soir."""
+        t0 = datetime(2026, 9, 27, 20, 0, tzinfo=timezone.utc)
+        coord = self._coord(t0)
+        coord._suivre_motifs_blocage_tonte(self._snap(bloque=True, code="mowing_night"))
+        coord._current_datetime = lambda: t0 + timedelta(minutes=10)
+        coord._current_date = lambda: (t0 + timedelta(minutes=10)).date()
+        coord._suivre_motifs_blocage_tonte(self._snap(bloque=True, code="mowing_night"))
+        etat = coord._runtime_state["mowing_block_tally"]
+        self.assertAlmostEqual(etat["reasons"]["mowing_night"], 10.0, places=1)
 
     def test_un_gros_trou_ne_credite_rien_mais_narchive_pas_deux_fois(self) -> None:
         """Même garde que `_suivre_fiabilite_tondeuse` : au-delà du plafond, ce n'est pas une

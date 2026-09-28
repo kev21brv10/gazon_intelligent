@@ -2517,6 +2517,13 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         ⚠️ Le cumul suit le motif PUBLIC final (`mowing_block_reason_code`), pas la fiabilité
         machine (`mower_health`, qui répond à une question différente : le ROBOT est-il en
         panne, pas pourquoi l'INTÉGRATION n'autorise pas un départ).
+
+        ⚠️ UN ÉCART QUI ENJAMBE MINUIT SE PARTAGE ENTRE LES DEUX JOURS, il n'est pas tout entier
+        crédité à la veille (relu en revue le 28/09/2026) : un cycle à 23:55 suivi du suivant à
+        00:05 est un écart créditable de 10 min, mais seules 5 lui appartiennent avant minuit —
+        les 5 autres sont déjà dans la nouvelle journée. Sans ce partage, la journée archivée
+        gonfle de quelques minutes à chaque redémarrage/cycle à cheval sur minuit, et le début
+        de la journée suivante démarre à tort avec un compteur vide.
         """
         try:
             maintenant = self._current_datetime()
@@ -2526,25 +2533,53 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 etat = {"date": aujourd_hui, "reasons": {}, "last_seen_at": None, "last_code": None}
             else:
                 # ⚠️ CRÉDITER AVANT DE VÉRIFIER LE CHANGEMENT DE JOUR, pas après : les minutes
-                # écoulées depuis le dernier cycle appartiennent à la journée qui vient de finir
-                # (le motif y était actif jusqu'à minuit), sinon l'écart entre le dernier cycle
-                # d'hier et le premier d'aujourd'hui disparaît purement et simplement — la
-                # journée archivée sous-compte exactement le temps du dernier motif observé.
+                # écoulées depuis le dernier cycle appartiennent (au moins en partie) à la
+                # journée qui vient de finir, sinon l'écart entre le dernier cycle d'hier et le
+                # premier d'aujourd'hui disparaît purement et simplement — la journée archivée
+                # sous-compte exactement le temps du dernier motif observé.
+                jour_precedent = etat.get("date")
                 dernier_code = etat.get("last_code")
+                report_lendemain = 0.0
                 if dernier_code is not None:
                     ecoule = self._minutes_creditables(etat.get("last_seen_at"), maintenant)
                     if ecoule > 0.0:
-                        reasons = etat.setdefault("reasons", {})
-                        reasons[dernier_code] = round(float(reasons.get(dernier_code) or 0.0) + ecoule, 2)
-                if etat.get("date") != aujourd_hui:
+                        avant_minuit = ecoule
+                        if jour_precedent != aujourd_hui:
+                            depart = self._parse_datetime_value(etat.get("last_seen_at"))
+                            if depart is not None:
+                                # ⚠️ `_parse_datetime_value` normalise en UTC : reconvertir dans le
+                                # fuseau de `maintenant` avant de calculer minuit, sinon la
+                                # frontière calculée (UTC) ne correspond plus au jour LOCAL que
+                                # compare `aujourd_hui` — décalée d'1 à 2 h en Europe/Paris.
+                                depart_local = depart.astimezone(maintenant.tzinfo)
+                                minuit = datetime.combine(
+                                    depart_local.date() + timedelta(days=1),
+                                    datetime.min.time(),
+                                    tzinfo=depart_local.tzinfo,
+                                )
+                                avant_minuit = max(
+                                    0.0, min(ecoule, (minuit - depart_local).total_seconds() / 60.0)
+                                )
+                            report_lendemain = round(ecoule - avant_minuit, 2)
+                        if avant_minuit > 0.0:
+                            reasons = etat.setdefault("reasons", {})
+                            reasons[dernier_code] = round(
+                                float(reasons.get(dernier_code) or 0.0) + avant_minuit, 2
+                            )
+                if jour_precedent != aujourd_hui:
                     if etat.get("reasons"):
                         try:
-                            jour_precedent = date.fromisoformat(str(etat["date"]))
+                            date_a_archiver = date.fromisoformat(str(jour_precedent))
                         except ValueError:
-                            jour_precedent = None
-                        if jour_precedent is not None:
-                            self.brain.record_mowing_block_summary(jour_precedent, etat["reasons"])
-                    etat = {"date": aujourd_hui, "reasons": {}, "last_seen_at": None, "last_code": None}
+                            date_a_archiver = None
+                        if date_a_archiver is not None:
+                            self.brain.record_mowing_block_summary(date_a_archiver, etat["reasons"])
+                    nouvel_etat: dict[str, Any] = {
+                        "date": aujourd_hui, "reasons": {}, "last_seen_at": None, "last_code": None,
+                    }
+                    if dernier_code is not None and report_lendemain > 0.0:
+                        nouvel_etat["reasons"][dernier_code] = report_lendemain
+                    etat = nouvel_etat
 
             bloque = bool(snapshot.get("mowing_blocked"))
             code = str(snapshot.get("mowing_block_reason_code") or "").strip()
