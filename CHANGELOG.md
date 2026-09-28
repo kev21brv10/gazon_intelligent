@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.0-rc.15
+
+- **Une pluie active ne fait plus perdre le programme des graines, en Semis/Sursemis** : le
+  court-circuit générique qui bloque l'arrosage pendant une pluie active passait avant le test de
+  phase. La stratégie `semis_frequent` disparaissait donc le temps de l'averse, et la page
+  retombait sur l'estimation de recharge du régime Normal (un « prochain arrosage » annoncé
+  plusieurs jours plus tard) au lieu du suivi des micro-cycles de graines, qui reprennent pourtant
+  dès le lendemain. Le blocage par pluie active reste inchangé ; seule son identité de phase est
+  désormais conservée.
+- **Vérifié** : suite complète avec 2 236 tests et 3 242 sous-tests, ruff et mypy (53 fichiers)
+  verts.
+
 ## 1.0.0-rc.14
 
 - **Objectif quotidien des graines borné à la fin réelle de la fenêtre** : un créneau tombant
