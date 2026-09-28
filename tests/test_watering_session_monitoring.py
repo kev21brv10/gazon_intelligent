@@ -6530,6 +6530,110 @@ class LaFiabiliteDeLaTondeuseEstSuivieTests(unittest.TestCase):
         })
 
 
+class LesMotifsDeBlocageDeLaTonteSontCumulesTests(unittest.TestCase):
+    """Sans ce cumul, la page ne montre que le motif de blocage de l'INSTANT présent, jamais sa
+    répartition réelle sur plusieurs jours — impossible de distinguer une semaine bloquée surtout
+    par la pluie d'une semaine bloquée surtout par l'espacement minimum entre deux tontes sans
+    rejouer l'historique à la main (relevé le 28/09/2026 sur 7 jours d'historique HA réel)."""
+
+    def _coord(self, instant):
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord._runtime_state = {}
+        coord._current_datetime = lambda: instant
+        coord._current_date = lambda: instant.date()
+        coord._parse_datetime_value = (
+            coordinator_mod.GazonIntelligentCoordinator._parse_datetime_value.__get__(coord)
+        )
+        coord.brain = brain_mod.GazonBrain()
+        return coord
+
+    def _snap(self, *, bloque=False, code=None):
+        return {"mowing_blocked": bloque, "mowing_block_reason_code": code}
+
+    def test_le_temps_est_credite_au_motif_precedent(self) -> None:
+        t0 = datetime(2026, 9, 28, 10, 0, tzinfo=timezone.utc)
+        coord = self._coord(t0)
+        coord._suivre_motifs_blocage_tonte(self._snap(bloque=True, code="pluie_en_cours"))
+        coord._current_datetime = lambda: t0 + timedelta(minutes=10)
+        coord._current_date = lambda: (t0 + timedelta(minutes=10)).date()
+        coord._suivre_motifs_blocage_tonte(self._snap(bloque=True, code="mowing_spacing"))
+        etat = coord._runtime_state["mowing_block_tally"]
+        self.assertAlmostEqual(etat["reasons"]["pluie_en_cours"], 10.0, places=1)
+        self.assertNotIn("mowing_spacing", etat["reasons"], "le motif courant n'est crédité qu'au cycle suivant")
+        self.assertEqual(etat["last_code"], "mowing_spacing")
+
+    def test_l_absence_de_blocage_est_aussi_cumulee(self) -> None:
+        t0 = datetime(2026, 9, 28, 10, 0, tzinfo=timezone.utc)
+        coord = self._coord(t0)
+        coord._suivre_motifs_blocage_tonte(self._snap(bloque=False, code=None))
+        coord._current_datetime = lambda: t0 + timedelta(minutes=8)
+        coord._current_date = lambda: (t0 + timedelta(minutes=8)).date()
+        coord._suivre_motifs_blocage_tonte(self._snap(bloque=True, code="wet_grass"))
+        etat = coord._runtime_state["mowing_block_tally"]
+        self.assertAlmostEqual(etat["reasons"]["aucun_blocage"], 8.0, places=1)
+
+    def test_le_changement_de_jour_credite_puis_archive_la_veille(self) -> None:
+        t0 = datetime(2026, 9, 27, 23, 55, tzinfo=timezone.utc)
+        coord = self._coord(t0)
+        coord._suivre_motifs_blocage_tonte(self._snap(bloque=True, code="machine_unavailable"))
+        apres_minuit = t0 + timedelta(minutes=10)  # 2026-09-28 00:05 UTC
+        coord._current_datetime = lambda: apres_minuit
+        coord._current_date = lambda: apres_minuit.date()
+        coord._suivre_motifs_blocage_tonte(self._snap(bloque=True, code="mowing_night"))
+
+        archive = [h for h in coord.brain.history if h.get("type") == "mowing_block_daily"]
+        self.assertEqual(len(archive), 1, "les 10 min avant minuit doivent atterrir dans l'archive de la veille")
+        self.assertEqual(archive[0]["date"], "2026-09-27")
+        self.assertAlmostEqual(archive[0]["reasons"]["machine_unavailable"], 10.0, places=1)
+        self.assertAlmostEqual(archive[0]["total_minutes"], 10.0, places=1)
+
+        etat = coord._runtime_state["mowing_block_tally"]
+        self.assertEqual(etat["date"], "2026-09-28")
+        self.assertEqual(etat["reasons"], {}, "la nouvelle journée repart vide")
+        self.assertEqual(etat["last_code"], "mowing_night")
+
+    def test_un_gros_trou_ne_credite_rien_mais_narchive_pas_deux_fois(self) -> None:
+        """Même garde que `_suivre_fiabilite_tondeuse` : au-delà du plafond, ce n'est pas une
+        durée, c'est un arrêt de Home Assistant — rien à créditer, mais on archive quand même
+        la journée d'hier avec ce qu'elle contenait déjà avant le trou."""
+        t0 = datetime(2026, 9, 27, 12, 0, tzinfo=timezone.utc)
+        coord = self._coord(t0)
+        coord._suivre_motifs_blocage_tonte(self._snap(bloque=True, code="pluie_en_cours"))
+        coord._current_datetime = lambda: t0 + timedelta(minutes=5)
+        coord._current_date = lambda: (t0 + timedelta(minutes=5)).date()
+        coord._suivre_motifs_blocage_tonte(self._snap(bloque=True, code="pluie_en_cours"))
+        # Redémarrage de plusieurs heures, à cheval sur minuit.
+        lendemain = datetime(2026, 9, 28, 6, 0, tzinfo=timezone.utc)
+        coord._current_datetime = lambda: lendemain
+        coord._current_date = lambda: lendemain.date()
+        coord._suivre_motifs_blocage_tonte(self._snap(bloque=True, code="mowing_night"))
+
+        archive = [h for h in coord.brain.history if h.get("type") == "mowing_block_daily"]
+        self.assertEqual(len(archive), 1)
+        self.assertAlmostEqual(archive[0]["reasons"]["pluie_en_cours"], 5.0, places=1,
+                               msg="le trou de redémarrage ne doit rien ajouter au-delà des 5 min déjà créditées")
+
+    def test_une_meme_journee_rejouee_deux_fois_ne_double_pas_larchive(self) -> None:
+        """Dédup par date, comme `record_mowing` : un redémarrage à cheval sur minuit ne doit
+        pas produire deux entrées pour le même jour."""
+        t0 = datetime(2026, 9, 27, 23, 50, tzinfo=timezone.utc)
+        coord = self._coord(t0)
+        coord._suivre_motifs_blocage_tonte(self._snap(bloque=True, code="mowing_spacing"))
+        jour_suivant = t0 + timedelta(minutes=10)
+        coord._current_datetime = lambda: jour_suivant
+        coord._current_date = lambda: jour_suivant.date()
+        coord._suivre_motifs_blocage_tonte(self._snap(bloque=True, code="mowing_night"))
+        # Un second appel le même jour ne doit pas re-déclencher d'archivage.
+        coord._suivre_motifs_blocage_tonte(self._snap(bloque=True, code="mowing_night"))
+
+        archive = [h for h in coord.brain.history if h.get("type") == "mowing_block_daily"]
+        self.assertEqual(len(archive), 1)
+
+    def test_un_compteur_ne_casse_jamais_un_cycle(self) -> None:
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord._suivre_motifs_blocage_tonte({"mowing_blocked": True, "mowing_block_reason_code": "wet_grass"})
+
+
 class LaBandeMorteDEt0SurvitAuRedemarrageTests(unittest.TestCase):
     """La mémoire de la bande morte doit faire l'aller-retour complet jusqu'au disque.
 
@@ -6707,6 +6811,52 @@ class LeCumulTondeuseSurvitAuRedemarrageTests(unittest.TestCase):
         coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
         coord._restore_runtime_state({})
         self.assertIsNone(coord._runtime_state.get("mower_health"))
+
+
+class LeCumulDesMotifsDeBlocageSurvitAuRedemarrageTests(unittest.TestCase):
+    """Même piège, même remède que `mower_health` : sans liste blanche, ce cumul de la journée
+    repartirait vide à chaque redémarrage, et la journée archivée serait tronquée."""
+
+    ETAT = {
+        "date": "2026-09-27", "reasons": {"machine_unavailable": 49.4, "watering_cooldown": 17.5},
+        "last_seen_at": "2026-09-27T22:00:00+00:00", "last_code": "machine_unavailable",
+    }
+
+    def _coord(self):
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord._runtime_state = {
+            "active_irrigation_session": None,
+            "last_irrigation_execution": None,
+            "last_auto_irrigation_reason": None,
+            "last_auto_irrigation_completed_at": None,
+            "auto_irrigation_safety_lock": False,
+            "mowing_block_tally": dict(self.ETAT),
+        }
+        coord._ensure_irrigation_runtime_bootstrap = lambda: None
+        return coord
+
+    def test_les_deux_methodes_citent_la_cle(self) -> None:
+        source = (PACKAGE_DIR / "coordinator.py").read_text(encoding="utf-8")
+        sauvegarde = source.split("def _serialized_runtime_state")[1].split("def ")[0]
+        restauration = source.split("def _restore_runtime_state")[1].split("\n    def ")[0]
+        self.assertIn("mowing_block_tally", sauvegarde, "le cumul n'est pas SAUVEGARDÉ")
+        self.assertIn("mowing_block_tally", restauration, "le cumul n'est pas RESTAURÉ")
+
+    def test_le_cumul_atteint_le_disque(self) -> None:
+        serialise = self._coord()._serialized_runtime_state()
+        self.assertIn("mowing_block_tally", serialise)
+        self.assertAlmostEqual(serialise["mowing_block_tally"]["reasons"]["machine_unavailable"], 49.4, places=1)
+
+    def test_aller_retour_complet(self) -> None:
+        serialise = self._coord()._serialized_runtime_state()
+        relu = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        relu._restore_runtime_state(serialise)
+        self.assertEqual(relu._runtime_state["mowing_block_tally"], self.ETAT)
+
+    def test_un_etat_absent_ne_casse_pas_la_restauration(self) -> None:
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord._restore_runtime_state({})
+        self.assertIsNone(coord._runtime_state.get("mowing_block_tally"))
 
 
 class AutoDeclarationTonteTests(unittest.TestCase):

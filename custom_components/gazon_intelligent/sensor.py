@@ -1177,6 +1177,67 @@ def _watering_history_entries(history: object, n: int = 7) -> list[dict[str, Any
     return result
 
 
+def _mowing_block_history_entries(history: object, n: int = 7) -> list[dict[str, Any]]:
+    """Return the last n daily mowing-block-reason summaries (`coordinator._suivre_motifs_
+    blocage_tonte` archives one entry per closed day)."""
+    if not isinstance(history, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for item in reversed(history):
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") != "mowing_block_daily":
+            continue
+        reasons = item.get("reasons")
+        if not isinstance(reasons, dict) or not reasons:
+            continue
+        result.append({
+            "date": item.get("date"),
+            "reasons": reasons,
+            "total_minutes": item.get("total_minutes"),
+        })
+        if len(result) >= n:
+            break
+    return result
+
+
+def _mowing_block_summary(entries: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Agrège plusieurs jours d'historique de motifs de blocage tonte en un top ordonné.
+
+    ⚠️ AGRÉGÉ ICI, UNE SEULE FOIS — pas côté page : `_mowing_block_history_entries` reste la
+    donnée brute (un dict par jour) pour qui en aurait besoin, mais le tri/pourcentage/libellé
+    ne doivent exister qu'à un seul endroit, sinon deux calculs de la même chose finissent par
+    diverger (même défaut que documenté ailleurs dans ce fichier pour les autres agrégats).
+    """
+    total_by_code: dict[str, float] = {}
+    for entry in entries:
+        reasons = entry.get("reasons")
+        if not isinstance(reasons, dict):
+            continue
+        for code, minutes in reasons.items():
+            try:
+                total_by_code[str(code)] = total_by_code.get(str(code), 0.0) + float(minutes)
+            except (TypeError, ValueError):
+                continue
+    total = sum(total_by_code.values())
+    if total <= 0:
+        return None
+    top = sorted(total_by_code.items(), key=lambda kv: kv[1], reverse=True)
+    return {
+        "days_covered": len(entries),
+        "total_minutes": round(total, 1),
+        "top_reasons": [
+            {
+                "code": code,
+                "label": _block_reason_display_label(code) or code,
+                "minutes": round(minutes, 1),
+                "pct": round(100.0 * minutes / total, 1),
+            }
+            for code, minutes in top[:5]
+        ],
+    }
+
+
 def _application_history_entries(history: object) -> list[dict[str, Any]]:
     if not isinstance(history, list):
         return []
@@ -4075,6 +4136,14 @@ class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):
         possible_values = self._possible_values_attr("tonte_statut")
         if possible_values:
             attrs.update(possible_values)
+        # Répartition des motifs de blocage sur les derniers jours (0.99.0) : sans requête
+        # d'historique, pour distinguer une semaine bloquée surtout par la météo d'une semaine
+        # bloquée surtout par l'espacement minimum entre deux tontes.
+        block_summary = _mowing_block_summary(
+            _mowing_block_history_entries(getattr(self.coordinator, "history", None))
+        )
+        if block_summary:
+            attrs["mowing_block_summary_7j"] = block_summary
         attrs = _apply_public_mower_aliases(attrs)
         return attrs or None
 

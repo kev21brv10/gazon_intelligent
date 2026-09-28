@@ -2012,6 +2012,9 @@ input[type="range"][disabled] { cursor: default; opacity: .5; }
 .progression i { display: block; height: 100%; border-radius: inherit; background: var(--gz-accent); transition: width .4s ease; }
 .progression.repos i { background: var(--gz-doux); }
 .progression.eau i { background: var(--gz-eau); }
+.motifs-blocage { display: flex; flex-direction: column; gap: 10px; padding: 2px 20px 16px; }
+.motif-blocage-tete { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--gz-doux); margin-bottom: 4px; }
+.motif-blocage-tete b { color: var(--gz-texte); font-weight: 600; }
 
 /* ── Zones ── */
 .zone { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-top: 1px solid var(--gz-trait); }
@@ -6150,7 +6153,30 @@ class GazonIntelligentPanel extends HTMLElement {
       [this._travailHtml(), "milieu", "large"],
       [this._hauteursHtml(c), "milieu", "etroit"],
       [this._pousseHtml(), "droite", "etroit"],
+      [this._motifsBlocageTonteHtml(), "droite", "etroit"],
     ]);
+  }
+
+  // Répartition des motifs de blocage sur les derniers jours (relevé HA, 28/09/2026) : sans
+  // cette carte, la page ne dit que le motif de l'INSTANT présent — impossible de voir qu'une
+  // semaine « toujours bloquée » l'est surtout par la météo, ou surtout par l'espacement
+  // minimum entre deux tontes, sans rejouer l'historique à la main.
+  _motifsBlocageTonteHtml() {
+    const resume = this._a("tonte_etat", "mowing_block_summary_7j");
+    const motifs = Array.isArray(resume?.top_reasons) ? resume.top_reasons : [];
+    if (!motifs.length) return "";
+    const jours = nombreOuNul(resume.days_covered);
+    const lignes = motifs.map((m) => {
+      const pct = nombreOuNul(m.pct) ?? 0;
+      return `<div class="motif-blocage">
+        <div class="motif-blocage-tete"><span>${esc(m.label || m.code || "")}</span><b>${nombreFr(pct, 0)} %</b></div>
+        <div class="progression"><i style="width:${Math.max(0, Math.min(100, pct))}%"></i></div>
+      </div>`;
+    }).join("");
+    return `<section class="section">
+      <div class="section-tete"><h3>Motifs de blocage</h3><p>Répartition sur les ${jours !== null ? `${nombreFr(jours, 0)} derniers jours` : "derniers jours"}.</p></div>
+      <div class="motifs-blocage">${lignes}</div>
+    </section>`;
   }
 
   // Le travail de la tondeuse. Chaque valeur n'est montrée que si elle EXISTE : null = injoignable.

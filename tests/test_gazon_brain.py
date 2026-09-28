@@ -1117,6 +1117,51 @@ class GazonBrainTests(unittest.TestCase):
         )
 
 
+class RecordMowingBlockSummaryTests(unittest.TestCase):
+    """Une ligne par jour, sur le modèle de `record_mowing` — pas une ligne par changement de
+    motif, sinon les 300 entrées du registre partagé (arrosage, produits, tonte) seraient
+    saturées en quelques jours."""
+
+    def test_archive_un_jour_avec_ses_motifs(self) -> None:
+        brain = GazonBrain()
+        item = brain.record_mowing_block_summary(
+            date(2026, 9, 27), {"machine_unavailable": 49.4, "watering_cooldown": 17.5}
+        )
+        self.assertEqual(item["type"], "mowing_block_daily")
+        self.assertEqual(item["date"], "2026-09-27")
+        self.assertEqual(item["reasons"], {"machine_unavailable": 49.4, "watering_cooldown": 17.5})
+        self.assertAlmostEqual(item["total_minutes"], 66.9, places=1)
+        self.assertEqual(brain.history, [item])
+
+    def test_un_second_appel_le_meme_jour_remplace_au_lieu_de_dupliquer(self) -> None:
+        brain = GazonBrain()
+        brain.record_mowing_block_summary(date(2026, 9, 27), {"mowing_night": 10.0})
+        brain.record_mowing_block_summary(date(2026, 9, 27), {"mowing_night": 10.0, "wet_grass": 5.0})
+        entries = [h for h in brain.history if h.get("type") == "mowing_block_daily"]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["reasons"], {"mowing_night": 10.0, "wet_grass": 5.0})
+
+    def test_deux_jours_distincts_donnent_deux_entrees(self) -> None:
+        brain = GazonBrain()
+        brain.record_mowing_block_summary(date(2026, 9, 26), {"mowing_night": 10.0})
+        brain.record_mowing_block_summary(date(2026, 9, 27), {"mowing_night": 8.0})
+        entries = [h for h in brain.history if h.get("type") == "mowing_block_daily"]
+        self.assertEqual(len(entries), 2)
+
+    def test_un_jour_sans_motif_ne_cree_rien(self) -> None:
+        brain = GazonBrain()
+        result = brain.record_mowing_block_summary(date(2026, 9, 27), {})
+        self.assertIsNone(result)
+        self.assertEqual(brain.history, [])
+
+    def test_les_motifs_a_zero_sont_ignores(self) -> None:
+        brain = GazonBrain()
+        item = brain.record_mowing_block_summary(
+            date(2026, 9, 27), {"mowing_night": 0.0, "wet_grass": 3.2}
+        )
+        self.assertEqual(item["reasons"], {"wet_grass": 3.2})
+
+
 class FungalRiskTests(unittest.TestCase):
     def _wetness_after(self, hours: float) -> dict:
         state = None
