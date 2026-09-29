@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from dataclasses import dataclass
 import asyncio
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 import sys
 import types
@@ -2891,9 +2891,32 @@ class DecisionResultChainTests(unittest.TestCase):
             {"type": "mowing_block_daily", "date": "2026-09-26", "reasons": {}, "total_minutes": 0.0},
             {"type": "mowing_block_daily", "date": "2026-09-27", "reasons": {"machine_unavailable": 49.4}, "total_minutes": 49.4},
         ]
-        entries = sensor._mowing_block_history_entries(history, n=1)
-        self.assertEqual(len(entries), 1, "un jour sans motif ('reasons' vide) ne compte pas")
+        entries = sensor._mowing_block_history_entries(history, n=7, today=date(2026, 9, 27))
+        self.assertEqual(len(entries), 2, "un jour sans motif ('reasons' vide) ne compte pas")
         self.assertEqual(entries[0]["date"], "2026-09-27", "le plus récent d'abord")
+
+    def test_mowing_block_history_entries_excludes_days_beyond_the_calendar_window(self) -> None:
+        """Prendre aveuglément les n dernières ENTRÉES suppose qu'il y en a une par jour sans
+        trou. Si Home Assistant est resté éteint plusieurs jours, les entrées les plus proches
+        peuvent remonter à plus de n jours — elles doivent être exclues, pas juste tronquées par
+        rang (signalé en revue)."""
+        history = [
+            {"type": "mowing_block_daily", "date": "2026-08-01", "reasons": {"mowing_night": 5.0}, "total_minutes": 5.0},
+            {"type": "mowing_block_daily", "date": "2026-08-02", "reasons": {"mowing_night": 5.0}, "total_minutes": 5.0},
+            # Panne HA du 03/08 au 25/09 : aucune entrée archivée dans cet intervalle.
+            {"type": "mowing_block_daily", "date": "2026-09-26", "reasons": {"pluie_en_cours": 30.0}, "total_minutes": 30.0},
+        ]
+        entries = sensor._mowing_block_history_entries(history, n=7, today=date(2026, 9, 27))
+        self.assertEqual(len(entries), 1, "les entrées d'août sont hors de la fenêtre de 7 jours, malgré l'absence de trou récent")
+        self.assertEqual(entries[0]["date"], "2026-09-26")
+
+    def test_mowing_block_history_entries_window_is_inclusive_of_today(self) -> None:
+        history = [
+            {"type": "mowing_block_daily", "date": "2026-09-20", "reasons": {"mowing_night": 5.0}, "total_minutes": 5.0},
+            {"type": "mowing_block_daily", "date": "2026-09-21", "reasons": {"mowing_night": 5.0}, "total_minutes": 5.0},
+        ]
+        entries = sensor._mowing_block_history_entries(history, n=7, today=date(2026, 9, 27))
+        self.assertEqual({e["date"] for e in entries}, {"2026-09-21"}, "n=7 remonte jusqu'à J-6 inclus")
 
     def test_mowing_block_history_entries_tolerates_bad_input(self) -> None:
         self.assertEqual(sensor._mowing_block_history_entries(None), [])
@@ -2927,9 +2950,14 @@ class DecisionResultChainTests(unittest.TestCase):
 
     def test_tonte_state_sensor_exposes_the_weekly_block_summary(self) -> None:
         result = _make_result()
+        # Daté de la veille de l'horloge FIGÉE de ce fichier (`dt_mod.now` ci-dessus, 04/04/2026)
+        # — pas d'une date en dur indépendante — pour rester dans la fenêtre de 7 jours quel que
+        # soit le jour réel où la suite tourne, depuis que `_mowing_block_history_entries`
+        # filtre par date calendaire plutôt que par rang.
+        hier = (date(2026, 4, 4) - timedelta(days=1)).isoformat()
         history = [
             {
-                "type": "mowing_block_daily", "date": "2026-09-27",
+                "type": "mowing_block_daily", "date": hier,
                 "reasons": {"pluie_en_cours": 30.0}, "total_minutes": 30.0,
             },
         ]
