@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import re
 from time import monotonic
 from typing import Any, cast
@@ -1177,11 +1177,23 @@ def _watering_history_entries(history: object, n: int = 7) -> list[dict[str, Any
     return result
 
 
-def _mowing_block_history_entries(history: object, n: int = 7) -> list[dict[str, Any]]:
-    """Return the last n daily mowing-block-reason summaries (`coordinator._suivre_motifs_
-    blocage_tonte` archives one entry per closed day)."""
+def _mowing_block_history_entries(
+    history: object, n: int = 7, *, today: date | None = None
+) -> list[dict[str, Any]]:
+    """Return the daily mowing-block-reason summaries from the last n CALENDAR days.
+
+    ⚠️ FILTRÉ PAR DATE, PAS PAR RANG (signalé en revue, 28/09/2026) : prendre aveuglément les
+    n dernières ENTRÉES archivées suppose qu'il y en a une par jour sans trou.
+    Si Home Assistant est resté éteint un ou plusieurs jours (aucun cycle tourné, donc aucune
+    entrée archivée ces jours-là), les n dernières entrées peuvent remonter à plus de n jours
+    en arrière — la carte étiquetterait alors des données vieilles de plusieurs semaines comme
+    « 7 derniers jours ». `coordinator._suivre_motifs_blocage_tonte` archive une entrée par
+    jour clos.
+    """
     if not isinstance(history, list):
         return []
+    reference = today or dt_util.now().date()
+    borne = reference - timedelta(days=n - 1)
     result: list[dict[str, Any]] = []
     for item in reversed(history):
         if not isinstance(item, dict):
@@ -1191,13 +1203,17 @@ def _mowing_block_history_entries(history: object, n: int = 7) -> list[dict[str,
         reasons = item.get("reasons")
         if not isinstance(reasons, dict) or not reasons:
             continue
+        try:
+            jour = date.fromisoformat(str(item.get("date")))
+        except (TypeError, ValueError):
+            continue
+        if not (borne <= jour <= reference):
+            continue
         result.append({
             "date": item.get("date"),
             "reasons": reasons,
             "total_minutes": item.get("total_minutes"),
         })
-        if len(result) >= n:
-            break
     return result
 
 
