@@ -3492,6 +3492,77 @@ class LaMachineNEffacePasLeVerdictDuGazonTests(unittest.TestCase):
         )
 
 
+class LeRobotDejaEnTonteNEcrasePlusLeVraiMotifTests(unittest.TestCase):
+    """Le motif affiché pendant un rappel ne doit pas mentir sur la cause.
+
+    Constaté le 29/09/2026 : lors d'un rappel (`dock`) déclenché par un motif agronomique
+    (nuit, chaleur, herbe mouillée...), le robot signale encore « en tonte » à ce cycle précis
+    — la commande de retour n'a pas encore agi. `mowing_block_reason_label` (et donc
+    `mower_control_resume_reason` côté coordinateur) affichait alors « Robot déjà en tonte:
+    attendre la fin du cycle en cours. » au lieu de la vraie cause, sur 3 rappels sur 4 dans la
+    nuit auditée. Le VERDICT (`tonte_autorisee`) restait correct — protégé depuis l'audit du
+    06/08/2026 (cf. `LaMachineNEffacePasLeVerdictDuGazonTests`) — seul l'AFFICHAGE mentait.
+    """
+
+    MOWING = {
+        "mower_operation_state": "tonte",
+        "mower_is_mowing": True,
+        "tondeuse_connectee": True,
+        "tondeuse_prete": True,
+        "mower_coordination_ready": True,
+    }
+
+    def _bundle(self, *, hour, mower_context=None, temperature=22.0, history=None):
+        ctx = decision.DecisionContext.from_legacy_args(
+            history=history if history is not None else [
+                {"type": "tonte", "date": "2026-07-28"},
+            ],
+            today=date(2026, 8, 6),
+            hour_of_day=hour,
+            temperature=temperature,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=55,
+            type_sol="limoneux",
+            etp_capteur=4.0,
+        )
+        if mower_context is not None:
+            ctx.mower_context = dict(mower_context)
+        phase = decision.build_phase_bundle(ctx)
+        water = decision.build_water_bundle(ctx, phase)
+        risk = decision.build_risk_bundle(ctx, phase, water)
+        return decision.build_mowing_bundle(ctx, phase, water, risk)
+
+    def test_le_fixture_declenche_bien_machine_unavailable_mowing(self) -> None:
+        """PRÉMISSE. Sans ça, les tests ci-dessous seraient verts sans rien exercer."""
+        nuit = self._bundle(hour=23, mower_context=self.MOWING, history=[])
+        self.assertTrue(nuit.get("mowing_blocked"))
+        self.assertEqual(nuit.get("mowing_machine_unavailable_detail"), "mowing")
+
+    def test_la_nuit_reste_affichee_meme_si_le_robot_signale_encore_en_tonte(self) -> None:
+        """21:38 ou 23h, robot pas encore rentré : la NUIT doit s'afficher, pas « déjà en tonte »."""
+        nuit = self._bundle(hour=23, mower_context=self.MOWING, history=[])
+        self.assertEqual(nuit.get("mowing_block_reason_code"), "mowing_night")
+        self.assertIn("Nuit", nuit.get("mowing_block_reason_label") or "")
+        self.assertNotIn("déjà en tonte", nuit.get("mowing_block_reason_label") or "")
+
+    def test_sans_autre_motif_le_texte_robot_deja_en_tonte_reste_affiche(self) -> None:
+        """Garde-fou inverse : si RIEN d'autre ne bloque, le texte machine d'origine reste."""
+        journee = self._bundle(hour=11, temperature=20.0, mower_context=self.MOWING)
+        self.assertEqual(journee.get("mowing_block_reason_code"), "machine_unavailable")
+        self.assertIn("déjà en tonte", journee.get("mowing_block_reason_label") or "")
+
+    def test_le_verdict_du_gazon_est_inchange_par_ce_correctif(self) -> None:
+        """Le correctif ne touche que l'affichage : `tonte_autorisee` doit rester identique."""
+        avec_correctif = self._bundle(hour=23, mower_context=self.MOWING, history=[])
+        sans_motif_machine = self._bundle(hour=23, history=[])
+        self.assertEqual(
+            avec_correctif["tonte_autorisee"],
+            sans_motif_machine["tonte_autorisee"],
+            "le verdict d'autorisation a changé alors que seul le libellé devait bouger",
+        )
+
+
 class LHeurePasseAvantLesVerdictsAEviterTests(unittest.TestCase):
     """`_resolve_mowing_window` : un « à éviter » ne doit pas couvrir un refus ferme.
 
