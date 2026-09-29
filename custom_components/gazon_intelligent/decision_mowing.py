@@ -2835,12 +2835,35 @@ def build_mowing_bundle(
     # encore 180 min », et la panne restait cachée jusqu'à 3 h dans un attribut secondaire.
     # Un délai se résout tout seul, pas une panne — c'est elle qu'il faut montrer.
     machine_failure_first = bool(mowing_blocked) and mowing_block_reason_code == "machine_unavailable"
-    if machine_failure_first:
+    # ⚠️ « ROBOT DÉJÀ EN TONTE » N'EST PAS UNE PANNE, CONTRAIREMENT AUX AUTRES DÉTAILS MACHINE.
+    # Le rappel envoyé par l'intégration pour un motif agronomique (nuit, chaleur, herbe
+    # mouillée...) voit le robot encore signalé « en tonte » le temps que la commande de retour
+    # agisse — ce n'est ni une panne ni une indisponibilité, juste le dernier état connu avant
+    # effet. Sans cette exception, ce détail écrasait le vrai motif déjà calculé juste au-dessus
+    # (`selected_reason_code`, indépendant de l'état machine) : le motif de reprise affiché
+    # (`mower_control_resume_reason`) mentait sur la cause. Constaté 3 rappels sur 4 le
+    # 29/09/2026 (chaleur, herbe mouillée, nuit), tous affichés « Robot déjà en tonte: attendre
+    # la fin du cycle en cours. ». Les autres détails machine (hors ligne, en charge, en
+    # erreur...) restent prioritaires à l'affichage : eux SONT un vrai problème à signaler.
+    machine_busy_not_broken = (
+        machine_failure_first
+        and mowing_machine_unavailable_detail == "mowing"
+        and selected_reason_code is not None
+    )
+    if machine_failure_first and not machine_busy_not_broken:
         mowing_blocked_by_watering = False
         mowing_block_reason = mowing_block_reason_code
         if reason_code not in {"phase_sursemis", "phase_traitement", "phase_hivernage"}:
             reason = mowing_block_reason_label or reason
             reason_code = mowing_block_reason_code
+        height_rule_blocked = False
+    elif machine_busy_not_broken:
+        mowing_blocked_by_watering = False
+        mowing_block_reason = mowing_block_reason_code
+        mowing_block_reason_code = selected_reason_code
+        mowing_block_reason_label = selected_reason
+        reason = selected_reason
+        reason_code = selected_reason_code
         height_rule_blocked = False
     elif post_application_active:
         reason = post_application_label

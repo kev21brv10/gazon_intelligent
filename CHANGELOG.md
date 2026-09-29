@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.0-rc.17
+
+- **Le motif affiché pendant un rappel de tonte dit enfin la vraie cause** : quand
+  l'intégration rappelait le robot pour un motif agronomique (nuit, chaleur, herbe mouillée...),
+  celui-ci signalait encore « en tonte » le temps que la commande de retour agisse — et ce détail
+  écrasait systématiquement le vrai motif par un générique « Robot déjà en tonte : attendre la
+  fin du cycle en cours. », y compris dans le motif de reprise affiché sur le panneau. Vérifié
+  sur une nuit réelle : 3 rappels sur 4 affichaient ce texte trompeur au lieu de la cause. La
+  décision d'autorisation elle-même (`tonte_autorisee`) restait correcte ; seul l'affichage
+  mentait, et c'est corrigé sans y toucher.
+- **Vérifié** : suite complète avec 2 267 tests et 3 242 sous-tests, ruff et mypy (53 fichiers)
+  verts.
+
 ## 1.0.0-rc.16
 
 - **Répartition des motifs de blocage de la tonte, sur les 7 derniers jours** : la page ne
