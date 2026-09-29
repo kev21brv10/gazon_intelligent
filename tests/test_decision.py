@@ -3540,17 +3540,49 @@ class LeRobotDejaEnTonteNEcrasePlusLeVraiMotifTests(unittest.TestCase):
         self.assertEqual(nuit.get("mowing_machine_unavailable_detail"), "mowing")
 
     def test_la_nuit_reste_affichee_meme_si_le_robot_signale_encore_en_tonte(self) -> None:
-        """21:38 ou 23h, robot pas encore rentré : la NUIT doit s'afficher, pas « déjà en tonte »."""
+        """21:38 ou 23h, robot pas encore rentré : la NUIT doit s'afficher, pas « déjà en tonte ».
+
+        Les TROIS champs publiés doivent s'accorder — pas seulement le libellé. Signalé en
+        revue le 30/09/2026 : un désaccord entre `mowing_block_reason` (resté
+        `machine_unavailable`) et `mowing_block_reason_code`/`_label` (déjà corrigés) sur ce
+        cas précis : les trois doivent maintenant pointer sur le même motif.
+        """
         nuit = self._bundle(hour=23, mower_context=self.MOWING, history=[])
         self.assertEqual(nuit.get("mowing_block_reason_code"), "mowing_night")
+        self.assertEqual(nuit.get("mowing_block_reason"), "mowing_night")
         self.assertIn("Nuit", nuit.get("mowing_block_reason_label") or "")
         self.assertNotIn("déjà en tonte", nuit.get("mowing_block_reason_label") or "")
+
+    def test_la_chaleur_reste_affichee_meme_si_le_robot_signale_encore_en_tonte(self) -> None:
+        """Même mécanisme, motif chaleur : les trois champs doivent s'accorder."""
+        chaud = self._bundle(hour=13, temperature=31.0, mower_context=self.MOWING, history=[])
+        self.assertEqual(chaud.get("mowing_block_reason_code"), "stress_thermique")
+        self.assertEqual(chaud.get("mowing_block_reason"), "stress_thermique")
+        self.assertIn("thermique", chaud.get("mowing_block_reason_label") or "")
+        self.assertNotIn("déjà en tonte", chaud.get("mowing_block_reason_label") or "")
 
     def test_sans_autre_motif_le_texte_robot_deja_en_tonte_reste_affiche(self) -> None:
         """Garde-fou inverse : si RIEN d'autre ne bloque, le texte machine d'origine reste."""
         journee = self._bundle(hour=11, temperature=20.0, mower_context=self.MOWING)
         self.assertEqual(journee.get("mowing_block_reason_code"), "machine_unavailable")
+        self.assertEqual(journee.get("mowing_block_reason"), "machine_unavailable")
         self.assertIn("déjà en tonte", journee.get("mowing_block_reason_label") or "")
+
+    def test_une_vraie_panne_garde_sa_priorite_meme_la_nuit(self) -> None:
+        """Garde-fou : une VRAIE panne (erreur robot) ne doit jamais céder face à un motif
+        agronomique — seul « en tonte » (qui n'est pas un problème) doit s'effacer."""
+        en_panne = dict(self.MOWING)
+        en_panne["mower_operation_state"] = "error"
+        en_panne["tondeuse_erreur"] = "blade_blocked"
+        en_panne["mower_reason_label"] = "Moteur de lame bloqué"
+        nuit_en_panne = self._bundle(hour=23, mower_context=en_panne, history=[])
+        self.assertEqual(nuit_en_panne.get("mowing_machine_unavailable_detail"), "error")
+        # Le CODE public d'une panne machine reste `machine_unavailable` (inchangé, comme avant
+        # ce correctif) — seul le LIBELLÉ porte le détail précis. C'est le cas « mowing » seul
+        # qui, lui, doit maintenant céder la place au motif agronomique.
+        self.assertEqual(nuit_en_panne.get("mowing_block_reason_code"), "machine_unavailable")
+        self.assertEqual(nuit_en_panne.get("mowing_block_reason"), "machine_unavailable")
+        self.assertIn("erreur", nuit_en_panne.get("mowing_block_reason_label") or "")
 
     def test_le_verdict_du_gazon_est_inchange_par_ce_correctif(self) -> None:
         """Le correctif ne touche que l'affichage : `tonte_autorisee` doit rester identique."""

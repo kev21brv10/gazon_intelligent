@@ -9,8 +9,10 @@
   fin du cycle en cours. », y compris dans le motif de reprise affiché sur le panneau. Vérifié
   sur une nuit réelle : 3 rappels sur 4 affichaient ce texte trompeur au lieu de la cause. La
   décision d'autorisation elle-même (`tonte_autorisee`) restait correcte ; seul l'affichage
-  mentait, et c'est corrigé sans y toucher.
-- **Vérifié** : suite complète avec 2 267 tests et 3 242 sous-tests, ruff et mypy (53 fichiers)
+  mentait, et c'est corrigé sans y toucher. La catégorie brute (`mowing_block_reason`), publiée
+  telle quelle sur plusieurs entités, suit désormais le même motif que le code et le libellé —
+  les trois pouvaient afficher trois versions différentes de la même minute.
+- **Vérifié** : suite complète avec 2 269 tests et 3 242 sous-tests, ruff et mypy (53 fichiers)
   verts.
 
 ## 1.0.0-rc.16

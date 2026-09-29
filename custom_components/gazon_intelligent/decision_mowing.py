@@ -2858,10 +2858,16 @@ def build_mowing_bundle(
             reason_code = mowing_block_reason_code
         height_rule_blocked = False
     elif machine_busy_not_broken:
+        # ⚠️ `mowing_block_reason` (la catégorie brute, exposée telle quelle sur plusieurs
+        # entités) doit suivre le MÊME motif que `_code`/`_label` ci-dessous — pas l'ancienne
+        # valeur `machine_unavailable` qu'on vient justement d'écarter pour l'affichage.
+        # Publier les trois en désaccord (`machine_unavailable` / `mowing_night` / « Nuit:
+        # attendre le lever du soleil. ») serait aussi trompeur que le défaut d'origine
+        # (signalé en revue, 30/09/2026).
         mowing_blocked_by_watering = False
-        mowing_block_reason = mowing_block_reason_code
         mowing_block_reason_code = selected_reason_code
         mowing_block_reason_label = selected_reason
+        mowing_block_reason = selected_reason_code
         reason = selected_reason
         reason_code = selected_reason_code
         height_rule_blocked = False
