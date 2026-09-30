@@ -10,8 +10,12 @@
   à compter l'eau reçue depuis. Une saisie rétroactive pouvait donc fausser une vraie décision
   d'arrosage, pas seulement l'étiquette « Dernière application ». Corrigé en comparant la date
   réelle de chaque entrée ; à date égale, le dernier déclaré l'emporte toujours (seul ordre
-  connu entre deux applications du même jour).
-- **Vérifié** : suite complète avec 2 273 tests et 3 242 sous-tests, ruff et mypy (53 fichiers)
+  connu entre deux applications du même jour). Deux cas limites relus et couverts en plus :
+  une application pré-déclarée pour une date future ne peut plus passer pour « la dernière » et
+  masquer celle réellement faite aujourd'hui ; et l'eau reçue depuis l'application est désormais
+  comptée par date réelle, pas par position dans l'historique — un arrosage antidaté inséré
+  après l'application ne compte plus à tort comme reçu depuis.
+- **Vérifié** : suite complète avec 2 275 tests et 3 242 sous-tests, ruff et mypy (53 fichiers)
   verts.
 
 ## 1.0.0-rc.17
