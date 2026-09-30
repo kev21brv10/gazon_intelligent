@@ -3568,6 +3568,54 @@ class LeRobotDejaEnTonteNEcrasePlusLeVraiMotifTests(unittest.TestCase):
         self.assertEqual(journee.get("mowing_block_reason"), "machine_unavailable")
         self.assertIn("déjà en tonte", journee.get("mowing_block_reason_label") or "")
 
+    def test_le_matin_trop_tot_reste_affiche_sans_motif_agronomique_ni_nuit(self) -> None:
+        """Signalé en revue (30/09/2026) : `_select_mowing_block_reason` ne connaît que la
+        NUIT, pas les autres bornes de la fenêtre horaire (« Matin trop tôt »). Sans repli sur
+        le motif de fenêtre d'ORIGINE, ce cas retombait sur « Robot déjà en tonte »."""
+        matin = self._bundle(hour=8, mower_context=self.MOWING, history=[])
+        self.assertEqual(
+            matin.get("mowing_window_state"), "blocked",
+            "prémisse : à 8 h, hors nuit, la fenêtre doit être bloquée (Matin trop tôt)",
+        )
+        self.assertEqual(matin.get("mowing_block_reason_code"), "mowing_window_blocked")
+        self.assertEqual(matin.get("mowing_block_reason"), "mowing_window_blocked")
+        self.assertIn("Matin trop tôt", matin.get("mowing_block_reason_label") or "")
+        self.assertNotIn("déjà en tonte", matin.get("mowing_block_reason_label") or "")
+
+    def test_un_motif_leve_par_le_retard_ne_sert_pas_de_motif_affiche(self) -> None:
+        """Signalé en revue (30/09/2026) : `stress_thermique`/`conditions_defavorables`
+        peuvent être levés par le retard accumulé (`overdue_relaxed_baseline`) — les publier
+        comme motif de blocage serait incohérent avec un verdict qui pourrait dire
+        « autorisée » ailleurs dans ce même calcul.
+
+        30,0 °C pile (pas 31) : au-dessus de `chaleur_bloquee` (30), la FENÊTRE elle-même
+        bloquerait déjà (veto que le retard ne lève jamais) — ça isolerait le mauvais
+        mécanisme. À 30,0 pile, `_select_mowing_block_reason` déclenche `stress_thermique`
+        (seuil `>= 30`) sans que la fenêtre, elle, ne bloque (son seuil est `> 30`).
+
+        3 jours depuis la dernière tonte : ni espacement minimum (2 j) ni retard (cible ~2,3 j
+        l'été, facteur < 1,5) — isole `stress_thermique` seul. 97 jours : très en retard, avec
+        des scores qui rendraient `overdue_relaxed_baseline` vrai si ce motif restait affiché
+        tel quel — exactement le cas que le correctif doit couvrir.
+        """
+        recent = self._bundle(
+            hour=13, temperature=30.0, mower_context=self.MOWING,
+            history=[{"type": "tonte", "date": "2026-08-03"}],
+        )
+        en_retard = self._bundle(
+            hour=13, temperature=30.0, mower_context=self.MOWING,
+            history=[{"type": "tonte", "date": "2026-05-01"}],
+        )
+        self.assertEqual(
+            recent.get("mowing_block_reason_code"), "stress_thermique",
+            "prémisse : sans retard, la chaleur doit s'afficher normalement (mécanisme déjà "
+            "prouvé par l'autre test) — sert de contraste pour celui-ci",
+        )
+        self.assertEqual(en_retard.get("mowing_block_reason_code"), "machine_unavailable")
+        self.assertEqual(en_retard.get("mowing_block_reason"), "machine_unavailable")
+        self.assertNotIn("thermique", en_retard.get("mowing_block_reason_label") or "")
+        self.assertIn("déjà en tonte", en_retard.get("mowing_block_reason_label") or "")
+
     def test_une_vraie_panne_garde_sa_priorite_meme_la_nuit(self) -> None:
         """Garde-fou : une VRAIE panne (erreur robot) ne doit jamais céder face à un motif
         agronomique — seul « en tonte » (qui n'est pas un problème) doit s'effacer."""

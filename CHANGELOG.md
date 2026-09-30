@@ -11,8 +11,12 @@
   décision d'autorisation elle-même (`tonte_autorisee`) restait correcte ; seul l'affichage
   mentait, et c'est corrigé sans y toucher. La catégorie brute (`mowing_block_reason`), publiée
   telle quelle sur plusieurs entités, suit désormais le même motif que le code et le libellé —
-  les trois pouvaient afficher trois versions différentes de la même minute.
-- **Vérifié** : suite complète avec 2 269 tests et 3 242 sous-tests, ruff et mypy (53 fichiers)
+  les trois pouvaient afficher trois versions différentes de la même minute. Deux cas limites
+  relus et couverts en plus : une borne horaire hors nuit (« Matin trop tôt ») que le motif
+  agronomique ne connaissait pas encore, et un motif (chaleur/conditions défavorables) que le
+  retard accumulé peut lever ailleurs dans le calcul — celui-ci n'est jamais affiché comme un
+  blocage actif s'il ne l'est plus réellement.
+- **Vérifié** : suite complète avec 2 271 tests et 3 242 sous-tests, ruff et mypy (53 fichiers)
   verts.
 
 ## 1.0.0-rc.16

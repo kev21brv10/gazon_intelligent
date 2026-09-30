@@ -2803,6 +2803,13 @@ def build_mowing_bundle(
     # robot suffisaient à publier « tonte autorisée aujourd'hui » alors que le modèle disait
     # « repos jusqu'au 08/08 ».
     mowing_window_blocked_by_clock = mowing_window_state == "blocked"
+    # Capturé AVANT l'écrasement juste en dessous : la borne horaire (ex. « Matin trop tôt »,
+    # distincte de la NUIT que `_select_mowing_block_reason` connaît déjà via `_est_la_nuit`)
+    # n'a sinon plus aucune trace une fois `mowing_window_reason` réécrit par le motif machine.
+    # Sert de repli plus bas quand cette borne est le SEUL motif réel disponible (signalé en
+    # revue le 30/09/2026 : après le lever du soleil, fenêtre encore fermée, robot toujours
+    # signalé « en tonte » — sans ceci le motif publié restait « Robot déjà en tonte »).
+    mowing_window_reason_before_override = mowing_window_reason
     if mowing_blocked:
         mowing_window_state = "blocked"
         mowing_window_reason = mowing_block_reason_label
@@ -2845,17 +2852,52 @@ def build_mowing_bundle(
     # 29/09/2026 (chaleur, herbe mouillée, nuit), tous affichés « Robot déjà en tonte: attendre
     # la fin du cycle en cours. ». Les autres détails machine (hors ligne, en charge, en
     # erreur...) restent prioritaires à l'affichage : eux SONT un vrai problème à signaler.
+    # `selected_reason_code` n'est un motif SÛR à afficher que s'il reste un veto effectif.
+    # `_OVERDUE_SOFT_OVERRIDE_CODES` ({"conditions_defavorables", "stress_thermique"}) peut être
+    # levé par le retard accumulé (`overdue_relaxed_baseline`, calculé plus bas d'ordinaire —
+    # avancé ici, sans effet de bord, `_mowing_overdue_state` ne lit que `context`/`phase_bundle`)
+    # alors que le verdict dirait « Tonte recommandée » : publier ce motif comme s'il bloquait
+    # encore serait aussi trompeur que le défaut d'origine (signalé en revue, 30/09/2026). Cette
+    # même valeur sert plus bas pour `overdue_relaxed_baseline` — pas recalculée deux fois.
+    mowing_is_overdue, overdue_factor, overdue_days = _mowing_overdue_state(context, phase_bundle)
+    selected_reason_would_be_overdue_relaxed = False
+    if selected_reason_code in _OVERDUE_SOFT_OVERRIDE_CODES and mowing_is_overdue:
+        _extended_threshold_preview = 65 if overdue_factor < 2.0 else 70
+        selected_reason_would_be_overdue_relaxed = (
+            score_tonte < _extended_threshold_preview and score_stress < 70
+        )
     machine_busy_not_broken = (
         machine_failure_first
         and mowing_machine_unavailable_detail == "mowing"
         and selected_reason_code is not None
+        and not selected_reason_would_be_overdue_relaxed
     )
-    if machine_failure_first and not machine_busy_not_broken:
+    # Repli : quand AUCUN motif agronomique n'est trouvé (`_select_mowing_block_reason` ignore
+    # les bornes horaires hors nuit) mais que la FENÊTRE elle-même bloque (ex. « Matin trop
+    # tôt », avant le lever effectif de la fenêtre idéale) — signalé en revue le 30/09/2026.
+    # Toujours un veto effectif : `tonte_ok` exige `not mowing_window_blocked_by_clock`, que le
+    # retard accumulé ne peut pas lever (contrairement à `_OVERDUE_SOFT_OVERRIDE_CODES`).
+    machine_busy_window_only = (
+        machine_failure_first
+        and mowing_machine_unavailable_detail == "mowing"
+        and not machine_busy_not_broken
+        and mowing_window_blocked_by_clock
+        and bool(mowing_window_reason_before_override)
+    )
+    if machine_failure_first and not machine_busy_not_broken and not machine_busy_window_only:
         mowing_blocked_by_watering = False
         mowing_block_reason = mowing_block_reason_code
         if reason_code not in {"phase_sursemis", "phase_traitement", "phase_hivernage"}:
             reason = mowing_block_reason_label or reason
             reason_code = mowing_block_reason_code
+        height_rule_blocked = False
+    elif machine_busy_window_only:
+        mowing_blocked_by_watering = False
+        mowing_block_reason_code = "mowing_window_blocked"
+        mowing_block_reason_label = mowing_window_reason_before_override
+        mowing_block_reason = "mowing_window_blocked"
+        reason = mowing_window_reason_before_override
+        reason_code = "mowing_window_blocked"
         height_rule_blocked = False
     elif machine_busy_not_broken:
         # ⚠️ `mowing_block_reason` (la catégorie brute, exposée telle quelle sur plusieurs
@@ -2971,7 +3013,6 @@ def build_mowing_bundle(
     }
     soil_wet_is_permissive = reason_code == "soil_wet" and _has_recent_watering_history(context)
 
-    mowing_is_overdue, overdue_factor, overdue_days = _mowing_overdue_state(context, phase_bundle)
     overdue_relaxed_baseline = False
     # `reason_code is None` couvre le blocage par SCORE SEUL : entre le seuil baseline (55) et le
     # seuil « conditions défavorables » (65), la tonte est refusée sans qu'aucun code agronomique
