@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.0-rc.18
+
+- **La « dernière application » suit enfin la vraie date, pas l'ordre de déclaration** : une
+  application déclarée rétroactivement (par exemple un apport du 16/09 saisi après celui du
+  28/09) était prise pour « la dernière », simplement parce qu'elle était la plus récente dans
+  l'historique — pas parce qu'elle datait d'après. Ce n'était pas qu'un problème d'affichage :
+  cette valeur sert aussi à décider si un arrosage technique après application est encore dû et
+  à compter l'eau reçue depuis. Une saisie rétroactive pouvait donc fausser une vraie décision
+  d'arrosage, pas seulement l'étiquette « Dernière application ». Corrigé en comparant la date
+  réelle de chaque entrée ; à date égale, le dernier déclaré l'emporte toujours (seul ordre
+  connu entre deux applications du même jour).
+- **Vérifié** : suite complète avec 2 273 tests et 3 242 sous-tests, ruff et mypy (53 fichiers)
+  verts.
+
 ## 1.0.0-rc.17
 
 - **Le motif affiché pendant un rappel de tonte dit enfin la vraie cause** : quand

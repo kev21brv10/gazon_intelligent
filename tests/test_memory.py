@@ -305,6 +305,69 @@ class MemoryCatalogTests(unittest.TestCase):
         self.assertFalse(yesterday["application_post_watering_pending"])
         self.assertFalse(yesterday["application_post_watering_ready"])
 
+    def test_latest_application_item_prefers_real_date_over_insertion_order(self) -> None:
+        """Signalé en revue (30/09/2026) : une application plus ancienne déclarée APRÈS une
+        plus récente (rétroactivement) ne doit pas passer pour « la dernière », ni dans
+        `_latest_application_item` seule ni dans les décisions qui en découlent."""
+        history = [
+            {
+                "type": "Fertilisation",
+                "date": "2026-09-28",
+                "declared_at": "2026-09-28T08:00:00+00:00",
+                "produit": "Humuslight",
+                "application_type": "sol",
+                "application_requires_watering_after": True,
+                "application_post_watering_mm": 5.0,
+                "application_irrigation_block_hours": 0.0,
+                "application_irrigation_delay_minutes": 0.0,
+                "application_irrigation_mode": "auto",
+            },
+            {
+                # Déclaré APRÈS le Humuslight (dernier de la liste), mais daté d'AVANT :
+                # l'ancien code le prenait quand même pour « la dernière application ».
+                "type": "Fertilisation",
+                "date": "2026-09-16",
+                "declared_at": "2026-09-30T08:00:00+00:00",
+                "produit": "Engrais racinaire Team Green",
+                "application_type": "sol",
+                "application_requires_watering_after": False,
+            },
+        ]
+
+        idx, item = memory._latest_application_item(history)
+        self.assertEqual(idx, 0)
+        self.assertEqual(item["produit"], "Humuslight")
+
+        state = memory.compute_application_state(
+            history, now=memory.datetime(2026, 9, 28, 9, 0, tzinfo=memory.timezone.utc)
+        )
+        self.assertEqual(state["date_action"], "2026-09-28")
+        self.assertEqual(state["derniere_application"]["produit"], "Humuslight")
+        self.assertTrue(state["application_requires_watering_after"])
+        self.assertEqual(state["application_post_watering_mm"], 5.0)
+        self.assertTrue(state["application_post_watering_pending"])
+
+    def test_latest_application_item_same_date_keeps_last_inserted(self) -> None:
+        """Garde-fou inverse : à date égale, le comportement historique (dernier inséré)
+        doit survivre — c'est le seul ordre connu entre deux applications du même jour."""
+        history = [
+            {
+                "type": "Fertilisation",
+                "date": "2026-09-28",
+                "produit": "Premier apport du jour",
+                "application_requires_watering_after": False,
+            },
+            {
+                "type": "Fertilisation",
+                "date": "2026-09-28",
+                "produit": "Second apport du jour",
+                "application_requires_watering_after": False,
+            },
+        ]
+        idx, item = memory._latest_application_item(history)
+        self.assertEqual(idx, 1)
+        self.assertEqual(item["produit"], "Second apport du jour")
+
     def test_compute_application_state_marks_completed_post_watering(self) -> None:
         state = memory.compute_application_state(
             [

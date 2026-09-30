@@ -354,11 +354,31 @@ def _is_application_relevant_item(item: dict[str, Any]) -> bool:
 def _latest_application_item(
     history: list[dict[str, Any]],
 ) -> tuple[int | None, dict[str, Any] | None]:
-    for idx in range(len(history) - 1, -1, -1):
-        item = history[idx]
-        if _is_application_relevant_item(item):
-            return idx, item
-    return None, None
+    """La plus RÉCENTE par date, pas la dernière insérée dans l'historique.
+
+    ⚠️ Une déclaration rétroactive (un apport du 16/09 enregistré après celui du 28/09) se
+    retrouve après lui dans l'historique, alors qu'elle date d'avant. L'ancien code prenait le
+    dernier élément pertinent de la LISTE et affichait cet apport plus ancien comme « la
+    dernière application » — et `compute_application_state` s'en sert pour de vraies décisions
+    (arrosage post-application encore dû, eau comptée depuis cet index), pas seulement pour
+    l'affichage (signalé en revue, 30/09/2026). On compare désormais la date réelle de chaque
+    entrée ; à date égale (ou toutes deux sans date exploitable), la dernière insérée l'emporte
+    encore — c'est le seul ordre connu entre deux entrées du même jour.
+    """
+    best_idx: int | None = None
+    best_item: dict[str, Any] | None = None
+    best_date: date | None = None
+    for idx, item in enumerate(history):
+        if not _is_application_relevant_item(item):
+            continue
+        item_date = _application_date(item)
+        if (
+            best_item is None
+            or (item_date is not None and (best_date is None or item_date >= best_date))
+            or (item_date is None and best_date is None)
+        ):
+            best_idx, best_item, best_date = idx, item, item_date
+    return best_idx, best_item
 
 
 def _application_runtime_fields(item: dict[str, Any]) -> dict[str, Any]:
