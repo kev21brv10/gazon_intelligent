@@ -132,6 +132,21 @@ REGLAGES: tuple[Reglage, ...] = (
         source="decision_mowing._MOWING_EVENING_END_AFTER_SUNSET_MIN (fin du crépuscule civil)",
     ),
     Reglage(
+        "tonte_soir_ideal_debut_avant_coucher", "tonte",
+        "Dans ce créneau du soir, combien de temps avant le coucher commence le meilleur moment ?",
+        "Un sous-créneau du soir compté aussi « idéal », pour qu'un départ réglé sur "
+        "« créneaux de départ : idéal seulement » n'attende pas forcément le lendemain matin.",
+        "duree", 120, 30, 240, 15,
+        source="decision_mowing._MOWING_EVENING_IDEAL_START_BEFORE_SUNSET_MIN",
+    ),
+    Reglage(
+        "tonte_soir_ideal_fin_avant_coucher", "tonte",
+        "Et jusqu'à combien de temps avant le coucher ?",
+        "Pas jusqu'au coucher lui-même : même marge de séchage que la fin du créneau acceptable.",
+        "duree", 30, 0, 120, 5,
+        source="decision_mowing._MOWING_EVENING_IDEAL_END_BEFORE_SUNSET_MIN",
+    ),
+    Reglage(
         "tonte_vent_a_eviter", "tonte",
         "À partir de quel vent vaut-il mieux attendre ?",
         "Avec du vent, l'herbe coupée s'envole et la coupe est moins nette.",
@@ -681,6 +696,8 @@ CHOIX: tuple[Choix, ...] = (
 CONTRAINTES: tuple[Contrainte, ...] = (
     Contrainte("tonte_fenetre_ideale_debut", "tonte_fenetre_ideale_fin",
                "Le début du meilleur moment doit venir avant sa fin."),
+    Contrainte("tonte_soir_ideal_fin_avant_coucher", "tonte_soir_ideal_debut_avant_coucher",
+               "La fenêtre idéale du soir doit se terminer plus près du coucher qu'elle ne commence."),
     Contrainte("tonte_vent_a_eviter", "tonte_vent_bloque",
                "Le vent « à éviter » doit être plus faible que le vent « interdit »."),
     Contrainte("tonte_temperature_a_eviter", "tonte_temperature_bloquee",

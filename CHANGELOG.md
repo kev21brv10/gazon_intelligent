@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.0-rc.19
+
+- **Un sous-créneau « idéal » le soir, pour les nouveaux départs réglés sur « idéal
+  seulement »** : ce réglage ne laissait partir un nouveau cycle que dans la fenêtre du
+  matin (10h-14h) — une tondeuse prête, autorisée, par ailleurs disponible, attendait le
+  lendemain matin même si une bonne partie de soirée dégagée restait disponible. Un
+  sous-créneau « idéal » du soir, par défaut de 2h à 30 min avant le coucher du soleil
+  (ancré sur le coucher réel, comme le créneau acceptable existant), lui donne désormais
+  le même statut que le matin sans changer le créneau acceptable plus large qui l'englobe.
+  Réglable (`tonte_soir_ideal_debut_avant_coucher` / `tonte_soir_ideal_fin_avant_coucher`,
+  page Gazon → Réglages → Tonte). Les blocages existants (vent, chaleur, pluie, soirée
+  chaude d'été) gardent la priorité, comme pour le créneau acceptable.
+- **Vérifié** : suite complète avec 2 280 tests et 3 258 sous-tests, ruff et mypy (53
+  fichiers) verts.
+
 ## 1.0.0-rc.17
 
 - **Le motif affiché pendant un rappel de tonte dit enfin la vraie cause** : quand

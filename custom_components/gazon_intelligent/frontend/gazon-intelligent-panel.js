@@ -82,7 +82,7 @@ const DISPOSITION = {
       titre: "Le soir",
       phrase: "Quand le soleil baisse, la tondeuse peut ressortir. Ces heures suivent le coucher du soleil.",
       dessin: "soir_tonte",
-      cles: ["tonte_soir_avant_coucher", "tonte_soir_apres_coucher"],
+      cles: ["tonte_soir_avant_coucher", "tonte_soir_apres_coucher", "tonte_soir_ideal_debut_avant_coucher", "tonte_soir_ideal_fin_avant_coucher"],
       place: ["gauche", "large"],
     },
     {
@@ -591,6 +591,7 @@ const ONGLET_ENTITES = {
 const PROFIL_GAZON_COMMUN = {
   tonte_fenetre_ideale_debut: 600, tonte_fenetre_ideale_fin: 840,
   tonte_soir_avant_coucher: 300, tonte_soir_apres_coucher: 30,
+  tonte_soir_ideal_debut_avant_coucher: 120, tonte_soir_ideal_fin_avant_coucher: 30,
   tonte_vent_a_eviter: 20, tonte_vent_bloque: 40,
   tonte_temperature_a_eviter: 25, tonte_temperature_bloquee: 30,
   tonte_humidite_bloquee: 90, tonte_max_par_jour: 2,
@@ -1143,6 +1144,11 @@ function classeTonte(min, v, soleil) {
   if (min < v.tonte_fenetre_ideale_fin) return "ideal";
   const soirDebut = soleil ? soleil.coucher - v.tonte_soir_avant_coucher : 17 * 60;
   const soirFin = soleil ? soleil.coucher + v.tonte_soir_apres_coucher : 19 * 60;
+  if (soleil) {
+    const soirIdealDebut = soleil.coucher - v.tonte_soir_ideal_debut_avant_coucher;
+    const soirIdealFin = soleil.coucher - v.tonte_soir_ideal_fin_avant_coucher;
+    if (min >= soirIdealDebut && min < soirIdealFin) return "ideal";
+  }
   if (min >= soirDebut && min < soirFin) return "possible";
   if (min < 22 * 60) return "eviter";
   return "nuit";
@@ -4370,11 +4376,13 @@ class GazonIntelligentPanel extends HTMLElement {
     }
     const debut = c.soleil.coucher - v.tonte_soir_avant_coucher;
     const fin = c.soleil.coucher + v.tonte_soir_apres_coucher;
+    const idealDebut = c.soleil.coucher - v.tonte_soir_ideal_debut_avant_coucher;
+    const idealFin = c.soleil.coucher - v.tonte_soir_ideal_fin_avant_coucher;
     // Quand l'ouverture tombe avant la fin du meilleur moment, c'est lui qui passe le relais.
     const relais = debut <= v.tonte_fenetre_ideale_fin;
     return `<div class="goutte-carte soir">
         <ha-icon icon="mdi:weather-sunset-down"></ha-icon>
-        <p>Aujourd'hui, le soleil se couche à <b>${heureFr(c.soleil.coucher)}</b> : la tondeuse peut tondre de <b>${heureFr(relais ? v.tonte_fenetre_ideale_fin : debut)}</b> à <b>${heureFr(fin)}</b>.${relais ? " (Le soir commence dès la fin du meilleur moment.)" : ""}</p>
+        <p>Aujourd'hui, le soleil se couche à <b>${heureFr(c.soleil.coucher)}</b> : la tondeuse peut tondre de <b>${heureFr(relais ? v.tonte_fenetre_ideale_fin : debut)}</b> à <b>${heureFr(fin)}</b>, dont de <b>${heureFr(idealDebut)}</b> à <b>${heureFr(idealFin)}</b> en créneau idéal.${relais ? " (Le soir commence dès la fin du meilleur moment.)" : ""}</p>
       </div>`;
   }
 

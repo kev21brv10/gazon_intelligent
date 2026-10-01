@@ -194,6 +194,8 @@ class LesValeursParDefautSontCellesDuMoteurTests(unittest.TestCase):
             "tonte_fenetre_ideale_fin": dm._MOWING_WINDOW_IDEAL_END * 60,
             "tonte_soir_avant_coucher": dm._MOWING_EVENING_START_BEFORE_SUNSET_MIN,
             "tonte_soir_apres_coucher": dm._MOWING_EVENING_END_AFTER_SUNSET_MIN,
+            "tonte_soir_ideal_debut_avant_coucher": dm._MOWING_EVENING_IDEAL_START_BEFORE_SUNSET_MIN,
+            "tonte_soir_ideal_fin_avant_coucher": dm._MOWING_EVENING_IDEAL_END_BEFORE_SUNSET_MIN,
             "tonte_vent_a_eviter": dm._MOWING_WINDOW_DISCOURAGED_WIND,
             "tonte_vent_bloque": dm._MOWING_WINDOW_BLOCK_WIND,
             "tonte_temperature_a_eviter": dm._MOWING_WINDOW_DISCOURAGED_TEMP_MIN,

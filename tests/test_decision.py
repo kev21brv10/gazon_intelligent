@@ -3769,6 +3769,83 @@ class LHeurePasseAvantLesVerdictsAEviterTests(unittest.TestCase):
         self.assertIn("trop élevée", motif)
 
 
+class FenetreIdealeDuSoirTests(unittest.TestCase):
+    """Sous-créneau « idéal » du soir, demande du 01/10/2026 : le réglage
+    « créneaux de départ : idéal seulement » ne laissait partir un nouveau cycle que
+    10h-14h, forçant la tondeuse à attendre le lendemain matin même par belle soirée
+    dégagée. Bornes par défaut : de 2h à 30 min avant le coucher du soleil.
+
+    Coucher fixé à 20:00 (minute 1200) pour tout ce bloc : fenêtre idéale du soir
+    attendue 18:00 → 19:30 (minutes 1080 → 1170).
+    """
+
+    SUNSET = 1200  # 20:00
+
+    def _fenetre(self, *, hour, temperature=None, vent=None, sunset=SUNSET, today=date(2026, 9, 1)):
+        ctx = decision_mowing.DecisionContext(
+            history=[], today=today, hour_of_day=hour,
+            temperature=temperature, vent=vent,
+        )
+        weather_profile = {} if sunset is None else {"sunset_minute": sunset}
+        return decision_mowing._resolve_mowing_window(ctx, weather_profile=weather_profile)
+
+    def test_a_l_interieur_de_la_sous_fenetre_cest_ideal(self) -> None:
+        etat, motif = self._fenetre(hour=18.5, temperature=20.0, vent=5.0)  # 18:30
+        self.assertEqual(etat, "ideal")
+        self.assertIn("idéale", motif)
+        self.assertIn("journée", motif, "le motif doit se distinguer de « Fenêtre idéale du matin »")
+
+    def test_juste_avant_la_sous_fenetre_reste_acceptable(self) -> None:
+        # 17:59, une minute avant l'ouverture de la sous-fenêtre idéale (18:00).
+        etat, motif = self._fenetre(hour=17 + 59 / 60, temperature=20.0, vent=5.0)
+        self.assertEqual(etat, "acceptable")
+        self.assertIn("acceptable", motif)
+
+    def test_juste_apres_la_sous_fenetre_redevient_acceptable(self) -> None:
+        # 19:30 pile : borne exclue (comme la fenêtre idéale du matin).
+        etat, motif = self._fenetre(hour=19.5, temperature=20.0, vent=5.0)
+        self.assertEqual(etat, "acceptable")
+        self.assertIn("acceptable", motif)
+
+    def test_la_borne_de_debut_est_incluse(self) -> None:
+        etat, _ = self._fenetre(hour=18.0, temperature=20.0, vent=5.0)
+        self.assertEqual(etat, "ideal")
+
+    def test_sans_coucher_connu_pas_de_sous_fenetre_ideale(self) -> None:
+        """Repli : sans soleil, on reste sur le simple « acceptable » du repli fixe
+        (17h-19h), comme avant ce réglage — pas de plage idéale inventée."""
+        etat, motif = self._fenetre(hour=18.0, temperature=20.0, vent=5.0, sunset=None)
+        self.assertEqual(etat, "acceptable")
+        self.assertIn("acceptable", motif)
+
+    def test_la_chaleur_deconseille_avant_meme_la_sous_fenetre_ideale(self) -> None:
+        """Garde-fou : le verdict « à éviter » de la chaleur (déjà vérifié AVANT les bornes
+        horaires, cf. `LHeurePasseAvantLesVerdictsAEviterTests`) garde la priorité sur la
+        nouvelle sous-fenêtre idéale du soir — même ordre que pour l'acceptable existant,
+        la sous-fenêtre ne doit jamais court-circuiter un « à éviter » déjà posé."""
+        etat, motif = self._fenetre(hour=18.5, temperature=28.5, vent=5.0)
+        self.assertEqual(etat, "discouraged")
+        self.assertIn("Température élevée", motif)
+
+    def test_reglages_inverses_naffichent_jamais_ideal(self) -> None:
+        """Garde-fou : si `fin_avant_coucher` dépasse `debut_avant_coucher` (réglage
+        incohérent, que la contrainte de reglages.py empêche normalement), la plage est vide
+        et ne doit jamais se déclencher — jamais de crash, jamais un « ideal » inventé."""
+        ctx = decision_mowing.DecisionContext(
+            history=[], today=date(2026, 9, 1), hour_of_day=18.5,
+            temperature=20.0, vent=5.0,
+        )
+        ctx.reglages = {
+            "tonte_soir_ideal_debut_avant_coucher": 30,
+            "tonte_soir_ideal_fin_avant_coucher": 120,
+        }
+        etat, motif = decision_mowing._resolve_mowing_window(
+            ctx, weather_profile={"sunset_minute": self.SUNSET}
+        )
+        self.assertEqual(etat, "acceptable")
+        self.assertIn("acceptable", motif)
+
+
 class AmortissementDuRisqueTests(unittest.TestCase):
     """⚠️ QUATORZE BASCULES `faible ↔ modere` le 31/08/2026, dont six entre 16 h et 18 h.
 
