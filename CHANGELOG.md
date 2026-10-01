@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.0.0-rc.18
+
+- **Garde-fou sur le conseil IA ajouté aux notifications** : quand la source des notifications
+  est « Conseiller Gazon », le texte renvoyé par l'IA remplaçait intégralement le message
+  factuel de l'intégration, borné seulement en longueur. Un conseil qui invente un prénom, un
+  nouveau nombre, un nouvel horaire ou un ordre direct (« fermez la vanne ») passait donc tel
+  quel. La notification affiche désormais le conseil de l'IA en complément du fait vérifié
+  (« Conseil IA : … » suivi de « Faits vérifiés : … »), et rejette le conseil — retombant sur le
+  seul message factuel — s'il contient un nombre, un horaire ou un nom propre absent des faits et
+  du contexte fournis, un ordre direct, une salutation ou un saut de ligne. Le contexte transmis
+  à l'IA est aussi désormais filtré par catégorie d'alerte (tonte, graines, arrosage…) au lieu de
+  lui donner tout l'état du gazon pour chaque notification.
+- **Deux bascules simultanées (erreur + changement d'état) de la tondeuse ou du garage
+  redeviennent deux notifications** : la résolution d'une erreur de commande et le changement
+  d'état réel (retour à la station, ouverture du garage) partageaient la même branche `elif` et
+  s'excluaient donc mutuellement — seule la résolution de l'erreur était annoncée, le retour à la
+  station silencieusement perdu.
+- **Une tondeuse en `idle` hors de sa station n'est plus confondue avec un retour** : cet état
+  intermédiaire (mi-tonte, en pause) tombait dans le même groupe que `docked`/`charging` et
+  déclenchait une fausse notification « tondeuse rentrée ».
+- **Vérifié** : suite complète avec 2 277 tests et 3 251 sous-tests, ruff et mypy (53 fichiers)
+  verts. Chaque correctif vérifié par mutation (code restauré à l'ancien comportement → le test
+  dédié échoue comme attendu, puis repasse).
+
 ## 1.0.0-rc.17
 
 - **Le motif affiché pendant un rappel de tonte dit enfin la vraie cause** : quand
