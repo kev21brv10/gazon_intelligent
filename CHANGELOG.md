@@ -14,8 +14,11 @@
   une application pré-déclarée pour une date future ne peut plus passer pour « la dernière » et
   masquer celle réellement faite aujourd'hui ; et l'eau reçue depuis l'application est désormais
   comptée par date réelle, pas par position dans l'historique — un arrosage antidaté inséré
-  après l'application ne compte plus à tort comme reçu depuis.
-- **Vérifié** : suite complète avec 2 275 tests et 3 242 sous-tests, ruff et mypy (53 fichiers)
+  après l'application ne compte plus à tort comme reçu depuis. Troisième cas limite relu :
+  le même jour, quand l'heure exacte des deux événements est connue (pas seulement leur date),
+  c'est elle qui tranche — un arrosage du matin ne compte plus à tort comme reçu après une
+  application de l'après-midi du même jour.
+- **Vérifié** : suite complète avec 2 276 tests et 3 242 sous-tests, ruff et mypy (53 fichiers)
   verts.
 
 ## 1.0.0-rc.17

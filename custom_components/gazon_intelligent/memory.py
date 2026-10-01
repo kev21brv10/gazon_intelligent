@@ -39,7 +39,12 @@ from .const import (
     PRODUCT_USAGE_MODES,
 )
 from .phases import PHASE_DURATIONS_DAYS, SIGNIFICANT_WATERING_THRESHOLD_MM
-from .water import _watering_item_mm, compute_recent_watering_mm, resolve_history_moment
+from .water import (
+    _watering_item_mm,
+    compute_recent_watering_mm,
+    history_moment_is_precise,
+    resolve_history_moment,
+)
 
 APPLICATION_DEFAULTS: dict[str, dict[str, Any]] = {
     "Traitement": {
@@ -1017,17 +1022,34 @@ def compute_application_state(
     # un arrosage inséré AVANT cet index peut très bien avoir eu lieu APRÈS l'application (ex.
     # application déclarée en retard), et inversement un arrosage antidaté inséré après elle
     # peut être plus ancien qu'elle. `history[latest_index + 1:]` ne le distinguerait pas.
-    # Comparaison au jour (pas à l'instant `resolve_history_moment`) pour la même raison que
-    # dans `_latest_application_item` : un arrosage du jour même sans horodatage fin ne doit
-    # pas être exclu par la seule heure de repli arbitraire (6 h UTC).
+    #
+    # ⚠️ MÊME JOUR : L'INSTANT EXACT PRIME QUAND LES DEUX CÔTÉS LE CONNAISSENT (contre-exemple
+    # en revue, 30/09/2026) — deuxième jet. Comparer au jour seul comptait À TORT un arrosage de
+    # 08 h comme reçu après une application de 10 h le même jour. Mais comparer systématiquement
+    # à l'instant exact (`resolve_history_moment`) avait cassé un autre cas : son heure de repli
+    # arbitraire (6 h UTC) pour une entrée SANS horodatage fin n'est pas une preuve d'ordre face
+    # à l'instant exact d'une autre entrée. Les deux jours différents restent tranchés au jour
+    # (fiable des deux côtés) ; à jour égal, l'instant exact ne tranche que si `_precise` est vrai
+    # des DEUX côtés — sinon on reste permissif, comme avant ce correctif.
     water_after_application = 0.0
     if jour_derniere is not None:
+        application_moment = resolve_history_moment(latest_item)
+        application_precise = history_moment_is_precise(latest_item)
         for item in history:
             if item.get("type") != "arrosage":
                 continue
             watering_date = _application_date(item)
-            if watering_date is not None and watering_date >= jour_derniere:
+            if watering_date is None or watering_date < jour_derniere:
+                continue
+            if watering_date > jour_derniere:
                 water_after_application += float(_watering_item_mm(item) or 0.0)
+                continue
+            # Même jour : trancher à l'instant exact seulement si les deux côtés sont précis.
+            if application_precise and application_moment is not None and history_moment_is_precise(item):
+                watering_moment = resolve_history_moment(item)
+                if watering_moment is not None and watering_moment <= application_moment:
+                    continue  # précisément antérieur ou simultané : ne compte pas
+            water_after_application += float(_watering_item_mm(item) or 0.0)
     elif latest_index is not None:
         # Repli : application sans aucune date exploitable (donnée dégradée). Aucun ordre
         # fiable n'est connu — on garde l'ancien comportement plutôt que de tout ignorer.

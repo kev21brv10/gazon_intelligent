@@ -438,6 +438,39 @@ class MemoryCatalogTests(unittest.TestCase):
         self.assertTrue(state["application_post_watering_pending"])
         self.assertEqual(state["application_post_watering_remaining_mm"], 5.0)
 
+    def test_water_before_application_same_day_with_known_instants_not_counted(self) -> None:
+        """Contre-exemple signalé en revue (30/09/2026) : un arrosage à 8 h et une
+        application à 10 h, LE MÊME JOUR, avec les deux instants exacts connus. La
+        comparaison au jour seul comptait à tort ces 5 mm comme reçus APRÈS l'application
+        (fausse l'incorporation) — les deux instants exacts doivent trancher quand ils sont
+        tous les deux connus, pas seulement le jour civil."""
+        history = [
+            {
+                "type": "arrosage",
+                "date": "2026-09-30",
+                "declared_at": "2026-09-30T08:00:00+00:00",
+                "total_mm": 5.0,
+                "source": "manual",
+            },
+            {
+                "type": "Fertilisation",
+                "date": "2026-09-30",
+                "declared_at": "2026-09-30T10:00:00+00:00",
+                "produit": "Engrais racinaire",
+                "application_type": "sol",
+                "application_requires_watering_after": True,
+                "application_post_watering_mm": 5.0,
+                "application_irrigation_delay_minutes": 0.0,
+            },
+        ]
+        reference_now = memory.datetime(2026, 9, 30, 11, 0, tzinfo=memory.timezone.utc)
+        state = memory.compute_application_state(history, now=reference_now)
+        self.assertEqual(state["derniere_application"]["produit"], "Engrais racinaire")
+        # Les 5 mm ont précédé le produit : l'incorporation reste due.
+        self.assertTrue(state["application_post_watering_pending"])
+        self.assertEqual(state["application_post_watering_remaining_mm"], 5.0)
+        self.assertNotEqual(state["application_post_watering_status"], "termine")
+
     def test_compute_application_state_marks_completed_post_watering(self) -> None:
         state = memory.compute_application_state(
             [
