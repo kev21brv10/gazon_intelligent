@@ -3887,6 +3887,84 @@ class CoordinatorMowerResolutionTests(unittest.TestCase):
         self.assertIn("sensor.esperance_jr_prochain_programme", source_ids)
         self.assertIn("number.esperance_jr_hauteur_de_coupe", source_ids)
 
+    def _coord_drapeau_pluie_de_la_station(self):
+        """Le « pluie en cours » de la station est allumé, le détecteur du robot est éteint."""
+        instant = datetime(2026, 10, 2, 10, 30, tzinfo=timezone.utc)
+        return self._build_coordinator(
+            entry_data={"capteur_tondeuse_pluie": "binary_sensor.station_meteo_jardin_pluie_en_cours"},
+            mower_states=[
+                _FakeMowerState(entity_id="lawn_mower.esperance_jr", state="docked", name="Esperance Jr"),
+            ],
+            entity_states={
+                "lawn_mower.esperance_jr": _FakeState("docked", instant),
+                "sensor.esperance_jr_batterie": _FakeState("100", instant),
+                "binary_sensor.esperance_jr_en_charge": _FakeState("off", instant),
+                "binary_sensor.esperance_jr_capteur_de_pluie": _FakeState("off", instant),
+                "binary_sensor.station_meteo_jardin_pluie_en_cours": _FakeState("on", instant),
+                "sensor.esperance_jr_erreur": _FakeState("no_error", instant),
+            },
+        )
+
+    def test_un_drapeau_pluie_allume_dans_le_vide_n_immobilise_plus_la_tondeuse(self) -> None:
+        """Relevé le 02/10/2026 : `rain_status` allumé depuis 23:39, 12 h 30 de « pause pluie »
+        pour 0,2 mm cumulés, une intensité à 0 et une station qui annonçait « sunny »."""
+        coord = self._coord_drapeau_pluie_de_la_station()
+        snapshot = coord._build_mower_snapshot({
+            "pluie_mesuree_minutes_depuis_hausse": 270.0,
+            "pluie_mesuree_active": False,
+            "pluie_actuelle_active": False,
+        })
+        self.assertTrue(snapshot["tondeuse_pluie_ignoree"])
+        self.assertFalse(snapshot["tondeuse_pluie"])
+        self.assertNotEqual(snapshot["tondeuse_statut"], "pluie")
+        self.assertTrue(snapshot["tondeuse_prete"])
+
+    def test_une_pluie_recente_garde_la_tondeuse_en_pause(self) -> None:
+        coord = self._coord_drapeau_pluie_de_la_station()
+        snapshot = coord._build_mower_snapshot({
+            "pluie_mesuree_minutes_depuis_hausse": 20.0,
+            "pluie_actuelle_active": False,
+        })
+        self.assertFalse(snapshot["tondeuse_pluie_ignoree"])
+        self.assertTrue(snapshot["tondeuse_pluie"])
+        self.assertEqual(snapshot["tondeuse_statut"], "pluie")
+        self.assertFalse(snapshot["tondeuse_prete"])
+
+    def test_sans_profil_meteo_le_comportement_d_avant_est_conserve(self) -> None:
+        coord = self._coord_drapeau_pluie_de_la_station()
+        for profil in (None, {}):
+            with self.subTest(profil=profil):
+                snapshot = coord._build_mower_snapshot(profil)
+                self.assertEqual(snapshot["tondeuse_statut"], "pluie")
+                self.assertFalse(snapshot["tondeuse_pluie_ignoree"])
+
+    def test_une_pluie_instantanee_ou_prevue_garde_le_drapeau_valide(self) -> None:
+        coord = self._coord_drapeau_pluie_de_la_station()
+        base = {"pluie_mesuree_minutes_depuis_hausse": 600.0}
+        for nom, extra in (
+            ("intensité > 0", {"pluie_actuelle_active": True}),
+            ("hausse récente du pluviomètre", {"pluie_mesuree_active": True}),
+            ("prévision de pluie", {"weather_condition": "rainy"}),
+        ):
+            with self.subTest(source=nom):
+                snapshot = coord._build_mower_snapshot({**base, **extra})
+                self.assertEqual(snapshot["tondeuse_statut"], "pluie")
+                self.assertFalse(snapshot["tondeuse_pluie_ignoree"])
+
+    def test_le_drapeau_ecarte_n_est_journalise_qu_une_fois_par_episode(self) -> None:
+        coord = self._coord_drapeau_pluie_de_la_station()
+        perime = {"pluie_mesuree_minutes_depuis_hausse": 270.0, "pluie_actuelle_active": False}
+        recent = {"pluie_mesuree_minutes_depuis_hausse": 5.0, "pluie_actuelle_active": False}
+        with self.assertLogs("custom_components.gazon_intelligent.coordinator", level="INFO") as journal:
+            coord._build_mower_snapshot(perime)
+            coord._build_mower_snapshot(perime)
+            coord._build_mower_snapshot(recent)
+            coord._build_mower_snapshot(recent)
+        messages = [m for m in journal.output if "capteur de pluie de la tondeuse" in m]
+        self.assertEqual(len(messages), 2, messages)
+        self.assertIn("WARNING", messages[0])
+        self.assertIn("INFO", messages[1])
+
     def _coord_idle_dans_le_jardin(self):
         """Le robot annonce `idle`, sans code d'erreur, batterie à 52 % et pas en charge."""
         instant = datetime(2026, 9, 2, 21, 54, tzinfo=timezone.utc)

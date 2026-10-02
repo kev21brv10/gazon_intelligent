@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.0.0-rc.20
+
+- **Un capteur de pluie resté allumé dans le vide n'immobilise plus la tondeuse** : le
+  drapeau « pluie en cours » de la station du jardin était la seule source de la « pause
+  pluie » de la tondeuse. Relevé le 02/10/2026 : passé à `on` à 23 h 39, il n'est jamais
+  retombé — 12 h 30 plus tard la tondeuse était toujours indisponible, alors que le cumul
+  n'avait monté que de 0,2 mm, que l'intensité valait 0, que la station annonçait elle-même
+  « sunny » et que le détecteur de la tondeuse était éteint. Le drapeau est maintenant écarté
+  quand TOUT concorde : il est allumé, aucune autre source ne conclut à une pluie en ce moment
+  (intensité, hausse récente du pluviomètre, prévision), et le pluviomètre n'a pas monté depuis
+  3 h. Une mesure absente (station muette, premier cycle) ne prouve rien : le drapeau reste
+  alors respecté, comme avant. Le drapeau écarté reste visible (`tondeuse_pluie_ignoree`) et
+  une trace est écrite au journal, une seule fois par épisode.
+- **Vérifié** : suite complète avec 2 284 tests et 3 247 sous-tests, ruff et mypy (53 fichiers)
+  verts ; cinq mutations de la garde (drapeau jamais écarté, source concordante ignorée, mesure
+  absente acceptée, pluie instantanée oubliée, borne exclue) sont toutes tuées par les tests.
+
 ## 1.0.0-rc.17
 
 - **Le motif affiché pendant un rappel de tonte dit enfin la vraie cause** : quand

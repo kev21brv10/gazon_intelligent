@@ -35,7 +35,12 @@ dt_module = types.ModuleType("homeassistant.util.dt")
 dt_module.now = lambda: datetime(2026, 4, 4, 14, 15, tzinfo=TEST_TZ)  # type: ignore[attr-defined]
 sys.modules.setdefault("homeassistant.util.dt", dt_module)
 
-from custom_components.gazon_intelligent.mower_adapter import build_mower_context, derive_related_entity_id
+from custom_components.gazon_intelligent.mower_adapter import (
+    RAIN_FLAG_STALE_MINUTES,
+    build_mower_context,
+    derive_related_entity_id,
+    rain_flag_is_stale,
+)
 
 
 class MowerAdapterTests(unittest.TestCase):
@@ -258,3 +263,58 @@ class LErreurEnToutesLettresEstNormaliseeTests(unittest.TestCase):
         self.assertIsNotNone(detail)
         self.assertEqual(detail[0], "rain_delayed")
         self.assertNotIn("erreur", detail[1].lower())
+
+
+class UnDrapeauPluieAllumeDansLeVideEstEcarteTests(unittest.TestCase):
+    """Relevé le 02/10/2026 : le drapeau `rain_status` de la station est resté `on` 12 h 30
+    (depuis 23:39) alors que le cumul n'avait monté que de 0,2 mm, que l'intensité valait 0 et
+    que la station annonçait « sunny » — la tondeuse restait « en pause pluie »."""
+
+    def _perime(self, rain=True, minutes=240.0, ailleurs=False):
+        return rain_flag_is_stale(
+            rain, minutes_since_rain_rise=minutes, rain_active_elsewhere=ailleurs
+        )
+
+    def test_allume_et_aucune_goutte_depuis_longtemps_est_perime(self) -> None:
+        self.assertTrue(self._perime(minutes=240.0))
+
+    def test_la_borne_est_incluse(self) -> None:
+        self.assertTrue(self._perime(minutes=RAIN_FLAG_STALE_MINUTES))
+        self.assertFalse(self._perime(minutes=RAIN_FLAG_STALE_MINUTES - 0.1))
+
+    def test_une_pluie_recente_garde_le_drapeau_valide(self) -> None:
+        self.assertFalse(self._perime(minutes=30.0))
+
+    def test_une_autre_source_qui_conclut_a_la_pluie_garde_le_drapeau_valide(self) -> None:
+        """Pluie instantanée, hausse récente ou prévision : le drapeau n'est pas écarté."""
+        self.assertFalse(self._perime(minutes=600.0, ailleurs=True))
+
+    def test_une_mesure_absente_ne_prouve_rien(self) -> None:
+        """Station muette ou premier cycle : on respecte le drapeau, comme avant."""
+        self.assertFalse(self._perime(minutes=None))
+        self.assertFalse(self._perime(minutes="inconnu"))
+
+    def test_un_booleen_n_est_pas_une_duree(self) -> None:
+        self.assertFalse(self._perime(minutes=True))
+
+    def test_un_drapeau_eteint_ou_inconnu_n_est_jamais_dit_perime(self) -> None:
+        self.assertFalse(self._perime(rain=False))
+        self.assertFalse(self._perime(rain=None))
+
+    def test_le_contexte_porte_la_trace_du_drapeau_ecarte(self) -> None:
+        brut = build_mower_context(
+            entity_id="lawn_mower.robot", entity_name="Robot", raw_state="docked",
+            available=True, rain=True,
+        )
+        ecarte = build_mower_context(
+            entity_id="lawn_mower.robot", entity_name="Robot", raw_state="docked",
+            available=True, rain=False, rain_ignored=True,
+        )
+        self.assertEqual(brut["tondeuse_statut"], "pluie")
+        self.assertFalse(brut["tondeuse_prete"])
+        self.assertFalse(brut["tondeuse_pluie_ignoree"])
+        self.assertNotEqual(ecarte["tondeuse_statut"], "pluie")
+        self.assertTrue(ecarte["tondeuse_prete"])
+        self.assertTrue(ecarte["tondeuse_pluie_ignoree"])
+        self.assertFalse(ecarte["tondeuse_pluie"])
+

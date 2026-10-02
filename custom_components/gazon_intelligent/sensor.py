@@ -4063,6 +4063,7 @@ class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):
             "tondeuse_raison",
             "tondeuse_en_charge",
             "tondeuse_pluie",
+            "tondeuse_pluie_ignoree",
             "tondeuse_erreur",
             "tondeuse_erreur_libelle",
             "tondeuse_batterie",
