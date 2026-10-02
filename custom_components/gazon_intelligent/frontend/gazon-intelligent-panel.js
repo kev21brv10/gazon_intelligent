@@ -1144,12 +1144,13 @@ function classeTonte(min, v, soleil) {
   if (min < v.tonte_fenetre_ideale_fin) return "ideal";
   const soirDebut = soleil ? soleil.coucher - v.tonte_soir_avant_coucher : 17 * 60;
   const soirFin = soleil ? soleil.coucher + v.tonte_soir_apres_coucher : 19 * 60;
-  if (soleil) {
-    const soirIdealDebut = soleil.coucher - v.tonte_soir_ideal_debut_avant_coucher;
-    const soirIdealFin = soleil.coucher - v.tonte_soir_ideal_fin_avant_coucher;
-    if (min >= soirIdealDebut && min < soirIdealFin) return "ideal";
+  if (min >= soirDebut && min < soirFin) {
+    // Comme le moteur : le créneau idéal du soir vit DANS la fenêtre acceptable, jamais au-delà.
+    if (soleil
+      && min >= soleil.coucher - v.tonte_soir_ideal_debut_avant_coucher
+      && min < soleil.coucher - v.tonte_soir_ideal_fin_avant_coucher) return "ideal";
+    return "possible";
   }
-  if (min >= soirDebut && min < soirFin) return "possible";
   if (min < 22 * 60) return "eviter";
   return "nuit";
 }
@@ -4376,13 +4377,19 @@ class GazonIntelligentPanel extends HTMLElement {
     }
     const debut = c.soleil.coucher - v.tonte_soir_avant_coucher;
     const fin = c.soleil.coucher + v.tonte_soir_apres_coucher;
-    const idealDebut = c.soleil.coucher - v.tonte_soir_ideal_debut_avant_coucher;
-    const idealFin = c.soleil.coucher - v.tonte_soir_ideal_fin_avant_coucher;
     // Quand l'ouverture tombe avant la fin du meilleur moment, c'est lui qui passe le relais.
     const relais = debut <= v.tonte_fenetre_ideale_fin;
+    const ouverture = relais ? v.tonte_fenetre_ideale_fin : debut;
+    // Le créneau idéal ne dépasse jamais la fenêtre du soir (même intersection que le moteur) ;
+    // si les réglages le font tomber hors de cette fenêtre, il n'existe pas : on ne l'annonce pas.
+    const idealDebut = Math.max(c.soleil.coucher - v.tonte_soir_ideal_debut_avant_coucher, ouverture);
+    const idealFin = Math.min(c.soleil.coucher - v.tonte_soir_ideal_fin_avant_coucher, fin);
+    const ideal = idealDebut < idealFin
+      ? `, dont de <b>${heureFr(idealDebut)}</b> à <b>${heureFr(idealFin)}</b> en créneau idéal`
+      : "";
     return `<div class="goutte-carte soir">
         <ha-icon icon="mdi:weather-sunset-down"></ha-icon>
-        <p>Aujourd'hui, le soleil se couche à <b>${heureFr(c.soleil.coucher)}</b> : la tondeuse peut tondre de <b>${heureFr(relais ? v.tonte_fenetre_ideale_fin : debut)}</b> à <b>${heureFr(fin)}</b>, dont de <b>${heureFr(idealDebut)}</b> à <b>${heureFr(idealFin)}</b> en créneau idéal.${relais ? " (Le soir commence dès la fin du meilleur moment.)" : ""}</p>
+        <p>Aujourd'hui, le soleil se couche à <b>${heureFr(c.soleil.coucher)}</b> : la tondeuse peut tondre de <b>${heureFr(ouverture)}</b> à <b>${heureFr(fin)}</b>${ideal}.${relais ? " (Le soir commence dès la fin du meilleur moment.)" : ""}</p>
       </div>`;
   }
 
