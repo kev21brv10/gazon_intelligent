@@ -12,13 +12,19 @@
   Réglable (`tonte_soir_ideal_debut_avant_coucher` / `tonte_soir_ideal_fin_avant_coucher`,
   page Gazon → Réglages → Tonte). Les blocages existants (vent, chaleur, pluie, soirée
   chaude d'été) gardent la priorité, comme pour le créneau acceptable.
+- **Les réglages de l'idéal du soir se règlent sur la carte « Quand la tondeuse peut-elle
+  travailler ? »** : c'est elle qui dessine la journée avec le lever et le coucher du soleil,
+  donc le meilleur moment du matin et celui du soir se règlent au même endroit (la carte « Le
+  soir » garde l'ouverture et la fin du créneau du soir). Libellés reformulés pour se lire
+  seuls : « Le soir, combien de temps avant le coucher du soleil commence le meilleur
+  moment ? ». La recherche de réglages amène à cette carte.
 - **La page dessine le même créneau idéal que le moteur** : le sous-créneau idéal ne vit
   qu'à l'intérieur de la fenêtre acceptable du soir. Avec des réglages non par défaut (soir
   resserré à 1 h, idéal de 2 h à 30 min), l'aperçu de la page Tonte et sa phrase annonçaient
   un idéal dès 18 h alors que le moteur ne le publiait qu'à partir de 19 h ; quand le
   sous-créneau tombe entièrement hors de la fenêtre du soir, la page ne l'annonce plus du
   tout. Comparé minute par minute au moteur, sur plusieurs jeux de réglages.
-- **Vérifié** : suite complète avec 2 285 tests et 6 860 sous-tests, ruff et mypy (53
+- **Vérifié** : suite complète avec 2 289 tests et 6 862 sous-tests, ruff et mypy (53
   fichiers) verts.
 
 ## 1.0.0-rc.17

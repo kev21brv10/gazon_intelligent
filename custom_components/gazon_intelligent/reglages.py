@@ -133,7 +133,7 @@ REGLAGES: tuple[Reglage, ...] = (
     ),
     Reglage(
         "tonte_soir_ideal_debut_avant_coucher", "tonte",
-        "Dans ce créneau du soir, combien de temps avant le coucher commence le meilleur moment ?",
+        "Le soir, combien de temps avant le coucher du soleil commence le meilleur moment ?",
         "Un sous-créneau du soir compté aussi « idéal », pour qu'un départ réglé sur "
         "« créneaux de départ : idéal seulement » n'attende pas forcément le lendemain matin.",
         "duree", 120, 30, 240, 15,
@@ -141,7 +141,7 @@ REGLAGES: tuple[Reglage, ...] = (
     ),
     Reglage(
         "tonte_soir_ideal_fin_avant_coucher", "tonte",
-        "Et jusqu'à combien de temps avant le coucher ?",
+        "Le soir, jusqu'à combien de temps avant le coucher dure-t-il ?",
         "Pas jusqu'au coucher lui-même : même marge de séchage que la fin du créneau acceptable.",
         "duree", 30, 0, 120, 5,
         source="decision_mowing._MOWING_EVENING_IDEAL_END_BEFORE_SUNSET_MIN",

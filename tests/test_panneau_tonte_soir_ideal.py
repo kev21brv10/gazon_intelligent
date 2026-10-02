@@ -79,6 +79,21 @@ const sorties = cas.map((c) => {
 process.stdout.write(JSON.stringify(sorties));
 """
 
+SCRIPT_DISPOSITION = r"""
+const fs = require("fs");
+const vm = require("vm");
+const { chemin } = JSON.parse(fs.readFileSync(0, "utf8"));
+const ctx = {
+  HTMLElement: class {},
+  customElements: { get: () => undefined, define: () => {} },
+  console, structuredClone,
+};
+ctx.window = ctx;
+vm.createContext(ctx);
+vm.runInContext(fs.readFileSync(chemin, "utf8"), ctx);
+process.stdout.write(JSON.stringify(vm.runInContext("DISPOSITION.tonte", ctx)));
+"""
+
 DEFAUTS = {
     "tonte_fenetre_ideale_debut": dm._MOWING_WINDOW_IDEAL_START * 60,
     "tonte_fenetre_ideale_fin": dm._MOWING_WINDOW_IDEAL_END * 60,
@@ -200,6 +215,42 @@ class LeCreneauIdealDuSoirDeLaPageSuitLeMoteurTests(unittest.TestCase):
         self.assertIn(f"de <b>{_h(14 * 60)}</b> à <b>{_h(20 * 60 + 30)}</b>", texte)
         self.assertIn(f"dont de <b>{_h(14 * 60)}</b> à <b>{_h(19 * 60 + 30)}</b> en créneau idéal", texte)
 
+
+@unittest.skipUnless(NODE, "Node n'est pas installé")
+class LesReglagesIdeauxDuSoirSontSurLaCarteDuDessinTests(unittest.TestCase):
+    """Les réglages de l'idéal du soir se règlent là où le dessin de la journée les montre."""
+
+    CLES_IDEALES = [
+        "tonte_fenetre_ideale_debut",
+        "tonte_fenetre_ideale_fin",
+        "tonte_soir_ideal_debut_avant_coucher",
+        "tonte_soir_ideal_fin_avant_coucher",
+    ]
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        sortie = subprocess.run(
+            [NODE, "-e", SCRIPT_DISPOSITION],
+            input=json.dumps({"chemin": str(PANNEAU)}),
+            capture_output=True, text=True, check=True, timeout=60,
+        )
+        cls.cartes = json.loads(sortie.stdout)
+
+    def _carte(self, dessin: str) -> dict:
+        return next(c for c in self.cartes if c.get("dessin") == dessin)
+
+    def test_la_carte_du_dessin_de_la_journee_porte_les_quatre_reglages_ideaux(self) -> None:
+        carte = self._carte("journee_tonte")
+        self.assertEqual(carte["titre"], "Quand la tondeuse peut-elle travailler ?")
+        self.assertEqual(carte["cles"], self.CLES_IDEALES)
+
+    def test_la_carte_du_soir_garde_seulement_l_ouverture_et_la_fin_du_soir(self) -> None:
+        carte = self._carte("soir_tonte")
+        self.assertEqual(carte["cles"], ["tonte_soir_avant_coucher", "tonte_soir_apres_coucher"])
+
+    def test_aucun_reglage_n_est_place_dans_deux_cartes(self) -> None:
+        cles = [cle for carte in self.cartes for cle in carte["cles"]]
+        self.assertEqual(len(cles), len(set(cles)))
 
 if __name__ == "__main__":
     unittest.main()

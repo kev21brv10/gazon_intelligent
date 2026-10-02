@@ -75,14 +75,14 @@ const DISPOSITION = {
       titre: "Quand la tondeuse peut-elle travailler ?",
       phrase: "Le dessin montre la journée en cours, avec le lever et le coucher du soleil réels.",
       dessin: "journee_tonte",
-      cles: ["tonte_fenetre_ideale_debut", "tonte_fenetre_ideale_fin"],
+      cles: ["tonte_fenetre_ideale_debut", "tonte_fenetre_ideale_fin", "tonte_soir_ideal_debut_avant_coucher", "tonte_soir_ideal_fin_avant_coucher"],
       place: ["gauche", "large"],
     },
     {
       titre: "Le soir",
       phrase: "Quand le soleil baisse, la tondeuse peut ressortir. Ces heures suivent le coucher du soleil.",
       dessin: "soir_tonte",
-      cles: ["tonte_soir_avant_coucher", "tonte_soir_apres_coucher", "tonte_soir_ideal_debut_avant_coucher", "tonte_soir_ideal_fin_avant_coucher"],
+      cles: ["tonte_soir_avant_coucher", "tonte_soir_apres_coucher"],
       place: ["gauche", "large"],
     },
     {
