@@ -86,7 +86,7 @@ from .decision_risk import (
 )
 from .memory import compute_application_state
 from .decision_mowing import _NO_ERROR_CODES
-from .mower_adapter import build_mower_context, derive_related_entity_id
+from .mower_adapter import build_mower_context, derive_related_entity_id, rain_flag_is_stale
 from .mower_coordination import build_mower_coordination_context
 from .mower_control import evaluate_mower_control
 from .entity_ids import public_entity_id, resolve_entry_instance_slug
@@ -98,7 +98,7 @@ from .reglages import nettoyer as nettoyer_reglages
 from . import ia
 from . import notifications
 from . import sources as sources_meteo
-from .guidance import SEMIS_VENT_MAX_KMH
+from .guidance import SEMIS_VENT_MAX_KMH, is_active_rain_weather
 from .coordinator_constants import (
     AUTO_IRRIGATION_AUTO_SOURCES,
     AUTO_IRRIGATION_CHECK_INTERVAL,
@@ -250,6 +250,7 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "tondeuse_raison",
     "tondeuse_en_charge",
     "tondeuse_pluie",
+    "tondeuse_pluie_ignoree",
     "tondeuse_erreur",
     "tondeuse_erreur_libelle",
     "tondeuse_batterie",
@@ -1066,7 +1067,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             CONF_HAUTEUR_MAX_TONDEUSE_CM,
             DEFAULT_HAUTEUR_MAX_TONDEUSE_CM,
         )
-        mower_context = self._build_mower_snapshot()
+        mower_context = self._build_mower_snapshot(weather_profile)
         mower_context.update(self._suivre_fiabilite_tondeuse(mower_context))
         mower_context.update(self._suivre_passes_tondeuse(mower_context))
         mower_context.update(self._suivre_recommandation_ignoree(mower_context))
@@ -1534,7 +1535,24 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return manual_height
         return configured_height
 
-    def _build_mower_snapshot(self) -> dict[str, Any]:
+    def _journaliser_pluie_tondeuse_perimee(
+        self, ignoree: bool, weather_profile: dict[str, Any] | None
+    ) -> None:
+        """Une trace à CHAQUE changement d'état, jamais à chaque cycle (le cycle tourne ~2 min)."""
+        precedent = self._runtime_state.get("tondeuse_pluie_perimee") is True
+        if ignoree == precedent:
+            return
+        self._runtime_state["tondeuse_pluie_perimee"] = ignoree
+        if ignoree:
+            _LOGGER.warning(
+                "Le capteur de pluie de la tondeuse indique « pluie » mais aucune goutte n'est "
+                "mesurée depuis %s min : il est ignoré tant que la mesure ne le confirme pas.",
+                (weather_profile or {}).get("pluie_mesuree_minutes_depuis_hausse"),
+            )
+        else:
+            _LOGGER.info("Le capteur de pluie de la tondeuse n'est plus ignoré.")
+
+    def _build_mower_snapshot(self, weather_profile: dict[str, Any] | None = None) -> dict[str, Any]:
         """Normalise les signaux d'un robot tondeuse Home Assistant."""
         mower_selection = self._resolve_mower_selection()
         mower_entity_id = mower_selection.get("entity_id")
@@ -1599,6 +1617,28 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         raw_state = str(mower_state.state or "").strip()
         available = raw_state.lower() not in {"unavailable", "unknown"}
+        rain_raw = self._get_bool_state(
+            self._resolve_mower_related_entity_id(
+                mower_entity_id,
+                CONF_CAPTEUR_TONDEUSE_PLUIE,
+                "binary_sensor",
+                "capteur_de_pluie",
+            )
+        )
+        # ⚠️ Un drapeau « pluie » allumé dans le vide ne doit pas immobiliser la machine : voir
+        # `mower_adapter.rain_flag_is_stale` (relevé du 02/10/2026, 12 h 30 de pause fantôme).
+        rain_ignored = rain_flag_is_stale(
+            rain_raw,
+            minutes_since_rain_rise=(weather_profile or {}).get("pluie_mesuree_minutes_depuis_hausse"),
+            # La pluie INSTANTANÉE (intensité > 0) n'entre pas encore dans `is_active_rain_weather`
+            # (observation seule, cf. `_lire_pluie_actuelle`) : elle est pourtant la preuve la plus
+            # directe qu'il pleut, et le drapeau doit alors rester respecté.
+            rain_active_elsewhere=(
+                is_active_rain_weather(weather_profile)
+                or (weather_profile or {}).get("pluie_actuelle_active") is True
+            ),
+        )
+        self._journaliser_pluie_tondeuse_perimee(rain_ignored, weather_profile)
         raw_context = build_mower_context(
             entity_id=mower_entity_id,
             entity_name=getattr(mower_state, "name", None),
@@ -1612,14 +1652,8 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "en_charge",
                 )
             ),
-            rain=self._get_bool_state(
-                self._resolve_mower_related_entity_id(
-                    mower_entity_id,
-                    CONF_CAPTEUR_TONDEUSE_PLUIE,
-                    "binary_sensor",
-                    "capteur_de_pluie",
-                )
-            ),
+            rain=False if rain_ignored else rain_raw,
+            rain_ignored=rain_ignored,
             error_raw=self._get_text_state(
                 self._resolve_mower_related_entity_id(
                     mower_entity_id,
