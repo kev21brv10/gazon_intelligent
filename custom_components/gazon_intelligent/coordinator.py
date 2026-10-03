@@ -1067,10 +1067,15 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             DEFAULT_HAUTEUR_MAX_TONDEUSE_CM,
         )
         mower_context = self._build_mower_snapshot()
+        # ⚠️ LA PROGRESSION DU TRAVAIL AVANT LE CARNET DE PASSES. `_suivre_passes_tondeuse` lit
+        # `mower_job_progress_pct` pour savoir si un travail s'est terminé pendant la passe ; lue
+        # après, il recevait toujours `None` (signalé en revue de la PR #80, 03/10/2026) et son
+        # correctif n'avait aucun effet en production, alors que ses tests, qui injectent la
+        # progression à la main, restaient verts.
+        mower_context.update(self._lire_progression_tonte())
         mower_context.update(self._suivre_fiabilite_tondeuse(mower_context))
         mower_context.update(self._suivre_passes_tondeuse(mower_context))
         mower_context.update(self._suivre_recommandation_ignoree(mower_context))
-        mower_context.update(self._lire_progression_tonte())
         # Déclarée AVANT `compute_snapshot` : le retard de tonte est alors corrigé dès ce
         # cycle-ci. La placer après repousserait la correction de deux minutes pour rien.
         mower_context.update(self._declarer_tonte_du_jour(mower_context))

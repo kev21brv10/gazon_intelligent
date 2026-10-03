@@ -9490,6 +9490,101 @@ class PasseTravailTermineTests(unittest.TestCase):
         self.assertEqual(sortie["mower_last_pass_end_reason"], "retour_autonome")
         self.assertEqual(sortie["mower_autonomous_return_battery_median"], 58.0)
 
+class PasseTravailTermineParLeVraiRafraichissementTests(unittest.TestCase):
+    """Le même cas, mais par le VRAI cycle `_async_update_data` — pas en injectant la progression.
+
+    ⚠️ POURQUOI. `_suivre_passes_tondeuse` est appelé AVANT `_lire_progression_tonte` dans le
+    cycle : à la livraison, il recevait toujours `None` et le correctif n'agissait jamais en
+    production, alors que les tests qui lui passent la progression à la main restaient verts
+    (signalé en revue de la PR #80). Ce test fixe l'ORDRE d'appel, en faisant tourner le cycle.
+    """
+
+    def _coord(self):
+        coordinator = _build_coordinator()
+        coordinator._loaded = True
+        coordinator._auto_irrigation_task = None
+        coordinator._auto_irrigation_scheduler_task = None
+
+        async def _load_state():
+            return None
+
+        async def _save_state():
+            return None
+
+        async def _forecast_summary(entity_id):  # noqa: ARG001
+            return {}
+
+        coordinator._async_load_state = _load_state
+        coordinator._async_save_state = _save_state
+        coordinator._get_weather_forecast_summary = _forecast_summary
+        coordinator._get_weather_profile = lambda entity_id: {}  # noqa: ARG005
+        coordinator._get_float_state = lambda entity_id: None  # noqa: ARG005
+        coordinator._get_conf = lambda key: None  # noqa: ARG005
+        coordinator._get_float_conf = lambda key, default: default
+        coordinator._estimate_rosee = lambda *a, **k: 0.0  # noqa: ARG005
+
+        class _Brain:
+            memory: dict = {}
+            last_result = types.SimpleNamespace(tonte_autorisee=True)
+
+            def compute_snapshot(self, **kwargs):  # noqa: ARG002
+                return {
+                    "mode": "Normal", "phase_active": "Normal", "objectif_mm": 0.0,
+                    "tonte_autorisee": True, "tonte_statut": "autorisee",
+                    "arrosage_recommande": False, "type_arrosage": "auto",
+                    "conseil_principal": "ok", "action_recommandee": "ok", "action_a_eviter": "ok",
+                    "niveau_action": "surveiller", "fenetre_optimale": "matin",
+                    "risque_gazon": "faible", "phase_dominante": "Normal",
+                    "phase_dominante_source": "historique", "sous_phase": "Germination",
+                    "sous_phase_detail": "Germination", "sous_phase_age_days": 1,
+                    "sous_phase_progression": "early",
+                }
+
+        coordinator.brain = _Brain()
+        coordinator.history = []
+        return coordinator
+
+    def _cycle(self, coordinator, *, tonte, garage, batterie, progression, autorisee):
+        """Un cycle complet : la tondeuse et le capteur de progression sont ce que HA publierait ;
+        tout le reste du cycle tourne pour de vrai."""
+        coordinator.brain.last_result = types.SimpleNamespace(tonte_autorisee=autorisee)
+        coordinator._build_mower_snapshot = lambda *a, **k: {  # noqa: ARG005
+            "tondeuse_connectee": True, "tondeuse_erreur": None,
+            "mower_is_mowing": tonte, "mower_is_docked": garage, "mower_battery": batterie,
+        }
+        coordinator._lire_progression_tonte = lambda: {
+            "mower_job_progress_pct": progression, "mower_job_id": "tache-1",
+            "mower_job_status_raw": 1,
+        }
+        asyncio.run(coordinator._async_update_data())
+
+    def test_la_progression_arrive_au_carnet_dans_le_vrai_cycle(self) -> None:
+        coordinator = self._coord()
+        etapes = [
+            dict(tonte=True, garage=False, batterie=95, progression=43, autorisee=True),
+            dict(tonte=True, garage=False, batterie=70, progression=90, autorisee=True),
+            # 100 % ET l'autorisation retirée dans le même cycle (espacement), puis rentrée.
+            dict(tonte=False, garage=False, batterie=61, progression=100, autorisee=False),
+            dict(tonte=False, garage=True, batterie=58, progression=100, autorisee=False),
+        ]
+        # Le cycle crédite le temps écoulé entre deux échantillons : on avance l'horloge.
+        t0 = datetime(2026, 10, 2, 18, 40, tzinfo=timezone.utc)
+        for i, etape in enumerate(etapes):
+            instant = t0 + timedelta(minutes=10 * i)
+            coordinator._current_datetime = lambda t=instant: t
+            coordinator._current_date = lambda t=instant: t.date()
+            self._cycle(coordinator, **etape)
+            if i == 2:
+                en_cours = coordinator._runtime_state["mower_passes"]["en_cours"]
+                self.assertIs(
+                    en_cours["travail_termine_vu"], True,
+                    "la progression n'est pas parvenue au carnet : ordre d'appel du cycle",
+                )
+        journal = coordinator._runtime_state["mower_passes"]["journal"]
+        self.assertEqual(journal[-1]["fin_motif"], "retour_autonome")
+        self.assertIs(journal[-1]["travail_termine"], True)
+
+
 class ProgressionTonteTests(unittest.TestCase):
     """La progression du TRAVAIL, publiée sans qu'elle décide de rien.
 

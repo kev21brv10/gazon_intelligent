@@ -14,9 +14,11 @@
   départ, ou une progression figée à 100, n'en est pas un) ; une vraie passe rappelée, la
   batterie vide et les passes bloquées gardent leur étiquette. Le fait brut est conservé au
   carnet (`travail_termine`).
-- **Vérifié** : suite complète avec 2 279 tests et 3 242 sous-tests, ruff et mypy (53
+- **Vérifié** : suite complète avec 2 280 tests et 3 242 sous-tests, ruff et mypy (53
   fichiers) verts ; le classement est rejoué sur le scénario réel et sur six variantes cassées
-  volontairement, toutes détectées.
+  volontairement, toutes détectées. Le cycle lit désormais la progression du travail AVANT le
+  carnet de passes (elle lui arrivait vide), et un test fait tourner le vrai cycle pour le
+  garantir.
 
 ## 1.0.0-rc.17
 
