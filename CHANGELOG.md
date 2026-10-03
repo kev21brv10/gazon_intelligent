@@ -22,6 +22,10 @@
   on ne peut plus confirmer un ordre sur un volet affiché et en commander un autre — ou rien, au
   premier branchement. Un volet en mouvement refuse aussi l'ordre inverse d'une confirmation
   demandée avant le mouvement ; seul l'arrêt passe.
+- **Ouvrir et Fermer respectent les capacités du volet** : un volet qui ne sait pas s'ouvrir ou
+  se fermer (bits `OPEN` / `CLOSE` de `supported_features`, comme l'arrêt teste le sien) n'a pas
+  le bouton correspondant, avec le motif au survol, et l'ordre est refusé à l'envoi. Un attribut
+  absent ne bloque rien : on ne refuse pas sur ce qu'on ne sait pas.
 - **Dernière commande et prochaine action du pilote** : la carte du garage et le bloc
   « Pilotage » de l'onglet Tonte disent ce que le pilote a envoyé en dernier (« départ,
   aujourd'hui à 20 h 02 ») ; la carte du garage annonce aussi la prochaine action prévue du
@@ -31,9 +35,9 @@
 - **Libellé corrigé** : « Ouvrir automatiquement le garage pour le retour ? » devient « …dès que
   la tondeuse est dehors ou rentre ? » — ce réglage ouvre aussi le volet pour un départ lancé
   depuis l'appli, ce que l'ancien libellé ne disait pas.
-- **Vérifié** : suite complète avec 2 324 tests et 3 259 sous-tests, ruff et mypy (53
+- **Vérifié** : suite complète avec 2 333 tests et 3 261 sous-tests, ruff et mypy (53
   fichiers) verts ; la carte est rendue dans chaque état du volet, les clics sont rejoués (y
-  compris l'état qui change entre les deux clics), avec trente variantes cassées
+  compris l'état qui change entre les deux clics), avec trente-cinq variantes cassées
   volontairement, toutes détectées.
 
 ## 1.0.0-rc.17

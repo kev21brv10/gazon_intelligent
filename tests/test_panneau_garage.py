@@ -78,7 +78,7 @@ function fabriquer(c) {
     config: { time_zone: "Europe/Paris" },
     user: { is_admin: c.admin !== false },
     states: {
-      "cover.garage": { state: c.volet, attributes: { friendly_name: "Garage - Tondeuse", supported_features: 15, current_position: c.position ?? 0 } },
+      "cover.garage": { state: c.volet, attributes: { friendly_name: "Garage - Tondeuse", ...(c.fonctions === null ? {} : { supported_features: c.fonctions ?? 15 }), current_position: c.position ?? 0 } },
       "sensor.etat": { state: "a_surveiller", attributes: etat },
     },
   };
@@ -488,6 +488,63 @@ class VoletEnMouvementTests(unittest.TestCase):
         (sortie,) = _rendre([{
             "type": "course", "verbe": "fermer", "nom": "garage-fermer", "volet": "open", "position": 100, "attributs": DOCKEE,
         }])
+        self.assertEqual(sortie["appels"][0][1], "close_cover")
+
+
+@unittest.skipUnless(NODE, "Node n'est pas installé")
+class CapacitesDuVoletTests(unittest.TestCase):
+    """Ouvrir et Fermer testent les capacités publiées par le volet, comme Arrêter teste son bit
+    (signalé en revue de la PR #81) : un volet qui ne sait pas faire l'ordre ne le reçoit pas.
+    OPEN = 1, CLOSE = 2, STOP = 8."""
+
+    def _commandes(self, fonctions, volet: str = "open", **extra) -> str:
+        (sortie,) = _rendre([{"type": "commandes", "volet": volet, "position": 100, "fonctions": fonctions,
+                              "attributs": DOCKEE, **extra}])
+        return sortie["html"]
+
+    def test_un_volet_qui_ne_sait_que_s_ouvrir_n_a_pas_de_bouton_fermer(self) -> None:
+        html = self._commandes(1, volet="closed")
+        self.assertNotIn("disabled", _bouton(html, 'data-garage-demander="ouvrir"'))
+        self.assertIn("disabled", _bouton(html, 'data-garage-demander="fermer"'))
+
+    def test_un_volet_qui_ne_sait_que_se_fermer_n_a_pas_de_bouton_ouvrir(self) -> None:
+        html = self._commandes(2, volet="open")
+        self.assertIn("disabled", _bouton(html, 'data-garage-demander="ouvrir"'))
+        self.assertNotIn("disabled", _bouton(html, 'data-garage-demander="fermer"'))
+
+    def test_un_volet_complet_garde_les_deux_boutons(self) -> None:
+        html = self._commandes(15, volet="closed")
+        self.assertNotIn("disabled", _bouton(html, 'data-garage-demander="ouvrir"'))
+
+    def test_un_volet_sans_aucune_capacite_n_a_aucun_ordre_mais_l_arret_suit_son_bit(self) -> None:
+        html = self._commandes(0, volet="closed")
+        self.assertIn("disabled", _bouton(html, 'data-garage-demander="ouvrir"'))
+        self.assertIn("disabled", _bouton(html, 'data-garage-demander="fermer"'))
+        self.assertNotIn('data-commande="garage-arreter"', html, "pas de bit STOP : pas de bouton Arrêter")
+
+    def test_le_motif_du_refus_est_dit_au_survol(self) -> None:
+        html = self._commandes(1, volet="closed")
+        self.assertIn("Ce volet ne sait pas se fermer.", _bouton(html, 'data-garage-demander="fermer"'))
+
+    def test_un_attribut_absent_ne_bloque_pas(self) -> None:
+        """On ne bloque pas sur ce qu'on ne sait pas : sans `supported_features`, les ordres restent possibles."""
+        html = self._commandes(None, volet="open")
+        self.assertNotIn("disabled", _bouton(html, 'data-garage-demander="fermer"'))
+
+    def test_la_confirmation_est_annulee_si_la_capacite_manque(self) -> None:
+        html = self._commandes(1, volet="open", confirmation="fermer")
+        self.assertNotIn('data-commande="garage-fermer"', html)
+        self.assertIn("ne sait pas se fermer", html)
+
+    def test_l_envoi_est_refuse_pour_un_ordre_non_pris_en_charge(self) -> None:
+        for nom, fonctions, volet in (("garage-fermer", 1, "open"), ("garage-ouvrir", 2, "closed")):
+            with self.subTest(commande=nom):
+                (sortie,) = _rendre([{"type": "commande", "nom": nom, "volet": volet, "fonctions": fonctions, "attributs": DOCKEE}])
+                self.assertEqual(sortie["appels"], [])
+                self.assertIn("ne sait pas", sortie["toasts"][0][0])
+
+    def test_l_envoi_part_quand_la_capacite_est_la(self) -> None:
+        (sortie,) = _rendre([{"type": "commande", "nom": "garage-fermer", "volet": "open", "fonctions": 2, "attributs": DOCKEE}])
         self.assertEqual(sortie["appels"][0][1], "close_cover")
 
 

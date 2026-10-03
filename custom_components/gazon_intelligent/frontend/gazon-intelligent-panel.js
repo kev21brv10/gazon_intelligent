@@ -7516,6 +7516,12 @@ class GazonIntelligentPanel extends HTMLElement {
     if (!etat) return "Le volet n'est pas disponible.";
     const brut = String(etat.state || "").toLowerCase();
     if (brut === "unavailable" || brut === "unknown") return "Le volet ne répond pas.";
+    // Capacités publiées par le volet (OPEN = 1, CLOSE = 2) : un volet qui ne sait pas faire l'ordre
+    // ne le reçoit pas — comme l'arrêt, qui teste son bit (STOP = 8). Un attribut ABSENT ne dit rien :
+    // on ne bloque pas sur ce qu'on ne sait pas.
+    const fonctions = Number(etat.attributes?.supported_features);
+    if (commande === "garage-ouvrir" && Number.isFinite(fonctions) && !(fonctions & 1)) return "Ce volet ne sait pas s'ouvrir.";
+    if (commande === "garage-fermer" && Number.isFinite(fonctions) && !(fonctions & 2)) return "Ce volet ne sait pas se fermer.";
     // ⚠️ Une confirmation ouverte AVANT un mouvement survit à ce mouvement : l'ordre inverse enverrait
     // le volet repartir dans l'autre sens. Seul l'arrêt (jamais jugé ici) passe pendant un mouvement.
     if (brut === "opening" || brut === "closing") return "Le volet est en mouvement : attendre la fin ou l'arrêter.";
@@ -7568,7 +7574,7 @@ class GazonIntelligentPanel extends HTMLElement {
     }
     const refus = { ouvrir: this._refusVolet("garage-ouvrir"), fermer: this._refusVolet("garage-fermer") };
     const inactif = (verbe) => !admin || indisponible || enMouvement || Boolean(refus[verbe]);
-    const bouton = (verbe) => `<button class="bouton-contour" data-garage-demander="${verbe}" ${inactif(verbe) ? "disabled" : ""}><ha-icon icon="${demandes[verbe].icone}"></ha-icon>${esc(demandes[verbe].texte)}</button>`;
+    const bouton = (verbe) => `<button class="bouton-contour" data-garage-demander="${verbe}" ${inactif(verbe) ? `disabled${refus[verbe] ? ` title="${esc(refus[verbe])}"` : ""}` : ""}><ha-icon icon="${demandes[verbe].icone}"></ha-icon>${esc(demandes[verbe].texte)}</button>`;
     const arret = (fonctions & 8) !== 0
       ? `<button class="bouton-blanc" data-commande="garage-arreter" data-volet="${esc(entityId)}" ${admin && enMouvement && !occupe("garage-arreter") ? "" : "disabled"}><ha-icon icon="mdi:stop-circle-outline"></ha-icon>Arrêter</button>`
       : "";
