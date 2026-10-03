@@ -98,6 +98,21 @@ class LeRegistreEstCoherentTests(unittest.TestCase):
         self.assertEqual(reglages.valider({cle: -95}), {cle: "Sélectionner une valeur entre -90 et 120."})
         self.assertIn(cle, reglages.valider({cle: -62}))
 
+    def test_l_ideal_du_soir_ne_commence_pas_avant_l_ouverture_du_soir(self) -> None:
+        debut, ouverture = "tonte_soir_ideal_debut_avant_coucher", "tonte_soir_avant_coucher"
+        # Réglages d'un exemple relevé en revue : soir ouvert 1 h avant le coucher, idéal dès 4 h.
+        erreurs = reglages.valider({ouverture: 60, debut: 240})
+        self.assertIn("avant l'ouverture du soir", erreurs[debut])
+        # Égalité permise (l'idéal occupe alors tout le début du soir) ; inférieur aussi.
+        self.assertEqual(reglages.valider({ouverture: 120, debut: 120}), {})
+        self.assertEqual(reglages.valider({ouverture: 300, debut: 210}), {})
+        # Juger la modification d'un SEUL des deux contre l'autre valeur en vigueur (défaut 300) :
+        # fermer le soir à 1 h alors que l'idéal commence encore à 2 h doit être refusé aussi.
+        self.assertIn(debut, reglages.valider({ouverture: 60}))
+        # Les valeurs par défaut restent cohérentes entre elles.
+        valeurs = reglages.valeurs_par_defaut()
+        self.assertLessEqual(valeurs[debut], valeurs[ouverture])
+
     def test_une_contrainte_violee_est_refusee_en_clair(self) -> None:
         erreurs = reglages.valider({"tonte_fenetre_ideale_debut": 14 * 60})
         self.assertIn("avant sa fin", erreurs["tonte_fenetre_ideale_debut"])

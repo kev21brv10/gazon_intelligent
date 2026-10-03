@@ -700,6 +700,11 @@ CONTRAINTES: tuple[Contrainte, ...] = (
                "Le début du meilleur moment doit venir avant sa fin."),
     Contrainte("tonte_soir_ideal_fin_avant_coucher", "tonte_soir_ideal_debut_avant_coucher",
                "La fenêtre idéale du soir doit se terminer plus près du coucher qu'elle ne commence."),
+    # Le moteur ne rend « idéal » qu'à l'intérieur de la fenêtre acceptable du soir : un idéal qui
+    # commencerait avant l'ouverture du soir serait écrêté en silence (voire disparaîtrait).
+    Contrainte("tonte_soir_ideal_debut_avant_coucher", "tonte_soir_avant_coucher",
+               "Le meilleur moment du soir ne peut pas commencer avant l'ouverture du soir.",
+               stricte=False),
     Contrainte("tonte_vent_a_eviter", "tonte_vent_bloque",
                "Le vent « à éviter » doit être plus faible que le vent « interdit »."),
     Contrainte("tonte_temperature_a_eviter", "tonte_temperature_bloquee",

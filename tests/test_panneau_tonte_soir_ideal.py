@@ -49,6 +49,7 @@ _ensure_package("custom_components.gazon_intelligent", PACKAGE_DIR)
 _install_homeassistant_dt_stub()
 
 dm = __import__("custom_components.gazon_intelligent.decision_mowing", fromlist=["_"])
+reglages = __import__("custom_components.gazon_intelligent.reglages", fromlist=["_"])
 
 PANNEAU = ROOT / "custom_components" / "gazon_intelligent" / "frontend" / "gazon-intelligent-panel.js"
 NODE = shutil.which("node")
@@ -107,6 +108,21 @@ ctx.window = ctx;
 vm.createContext(ctx);
 vm.runInContext(fs.readFileSync(chemin, "utf8"), ctx);
 process.stdout.write(JSON.stringify(valeurs.map((v) => ctx.valeurFr({ cle, genre: "duree" }, v))));
+"""
+
+SCRIPT_VALIDATION = r"""
+const fs = require("fs");
+const vm = require("vm");
+const { chemin, registre, valeurs } = JSON.parse(fs.readFileSync(0, "utf8"));
+const ctx = {
+  HTMLElement: class {},
+  customElements: { get: () => undefined, define: () => {} },
+  console, structuredClone,
+};
+ctx.window = ctx;
+vm.createContext(ctx);
+vm.runInContext(fs.readFileSync(chemin, "utf8"), ctx);
+process.stdout.write(JSON.stringify(ctx.valider(registre, valeurs)));
 """
 
 DEFAUTS = {
@@ -316,6 +332,36 @@ class LaFinDeLIdealSAfficheParRapportAuCoucherTests(unittest.TestCase):
             self._valeurs("tonte_soir_ideal_debut_avant_coucher", [120, 30]),
             [f"2{nbsp}h", f"30{nbsp}min"],
         )
+
+
+@unittest.skipUnless(NODE, "Node n'est pas installé")
+class LaPageRefuseUnIdealQuiCommenceAvantLeSoirTests(unittest.TestCase):
+    def _valider(self, changements: dict) -> dict:
+        sortie = subprocess.run(
+            [NODE, "-e", SCRIPT_VALIDATION],
+            input=json.dumps({
+                "chemin": str(PANNEAU),
+                "registre": reglages.exporter(),
+                "valeurs": {**reglages.valeurs_par_defaut(), **changements},
+            }),
+            capture_output=True, text=True, check=True, timeout=60,
+        )
+        return json.loads(sortie.stdout)
+
+    def test_la_page_refuse_et_montre_le_message_des_deux_cotes(self) -> None:
+        rendu = self._valider({"tonte_soir_avant_coucher": 60, "tonte_soir_ideal_debut_avant_coucher": 240})
+        message = "Le meilleur moment du soir ne peut pas commencer avant l'ouverture du soir."
+        self.assertEqual(rendu["erreurs"]["tonte_soir_ideal_debut_avant_coucher"], message)
+        self.assertEqual(rendu["affichees"]["tonte_soir_ideal_debut_avant_coucher"], message)
+        self.assertEqual(rendu["affichees"]["tonte_soir_avant_coucher"], message)
+
+    def test_la_page_accepte_les_reglages_de_l_installation(self) -> None:
+        # 3 h 30 avant le coucher (210) pour un soir ouvert 5 h avant (300), fin APRÈS le coucher.
+        rendu = self._valider({
+            "tonte_soir_ideal_debut_avant_coucher": 210,
+            "tonte_soir_ideal_fin_avant_coucher": -60,
+        })
+        self.assertEqual(rendu["erreurs"], {})
 
 
 if __name__ == "__main__":

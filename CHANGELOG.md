@@ -18,6 +18,13 @@
   soir » garde l'ouverture et la fin du créneau du soir). Libellés reformulés pour se lire
   seuls : « Le soir, combien de temps avant le coucher du soleil commence le meilleur
   moment ? ». La recherche de réglages amène à cette carte.
+- **Un idéal du soir ne peut plus commencer avant l'ouverture du soir** : le moteur ne rend
+  « idéal » qu'à l'intérieur de la fenêtre acceptable du soir, donc un idéal réglé plus tôt
+  que l'ouverture du soir (par exemple soir ouvert 1 h avant le coucher et idéal dès 4 h) était
+  écrêté en silence, voire disparaissait, et un départ réglé sur « idéal seulement » ne sortait
+  jamais le soir. Le réglage est maintenant refusé en clair, sur la page comme côté serveur
+  (« Le meilleur moment du soir ne peut pas commencer avant l'ouverture du soir. »). Les
+  valeurs par défaut (idéal dès 2 h, soir ouvert 5 h avant) sont inchangées.
 - **Le créneau idéal du soir peut finir après le coucher du soleil** : sa fin se règle
   maintenant de 2 h avant à 1 h 30 après le coucher (`tonte_soir_ideal_fin_avant_coucher`,
   valeurs négatives = après le coucher ; affichée « 30 min avant le coucher », « au coucher »,
@@ -33,7 +40,7 @@
   un idéal dès 18 h alors que le moteur ne le publiait qu'à partir de 19 h ; quand le
   sous-créneau tombe entièrement hors de la fenêtre du soir, la page ne l'annonce plus du
   tout. Comparé minute par minute au moteur, sur plusieurs jeux de réglages.
-- **Vérifié** : suite complète avec 2 302 tests et 8 308 sous-tests, ruff et mypy (53
+- **Vérifié** : suite complète avec 2 305 tests et 8 310 sous-tests, ruff et mypy (53
   fichiers) verts.
 
 ## 1.0.0-rc.17
