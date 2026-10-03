@@ -16,6 +16,12 @@
   final disparaît et aucun ordre ne part (idem pour un volet devenu fermé, ouvert ou
   indisponible entre-temps). L'arrêt n'est jamais refusé ; ouvrir reste possible tondeuse
   dehors, c'est ce qu'il faut pour son retour.
+- **Les commandes visent le volet ENREGISTRÉ, et lui seul** : les boutons ne s'affichent que pour le
+  volet déjà enregistré (un autre volet choisi sans enregistrer dit « le choix n'est pas
+  enregistré »), chaque bouton porte l'identité du volet qu'il commande, et l'envoi la revérifie :
+  on ne peut plus confirmer un ordre sur un volet affiché et en commander un autre — ou rien, au
+  premier branchement. Un volet en mouvement refuse aussi l'ordre inverse d'une confirmation
+  demandée avant le mouvement ; seul l'arrêt passe.
 - **Dernière commande et prochaine action du pilote** : la carte du garage et le bloc
   « Pilotage » de l'onglet Tonte disent ce que le pilote a envoyé en dernier (« départ,
   aujourd'hui à 20 h 02 ») ; la carte du garage annonce aussi la prochaine action prévue du
@@ -25,9 +31,9 @@
 - **Libellé corrigé** : « Ouvrir automatiquement le garage pour le retour ? » devient « …dès que
   la tondeuse est dehors ou rentre ? » — ce réglage ouvre aussi le volet pour un départ lancé
   depuis l'appli, ce que l'ancien libellé ne disait pas.
-- **Vérifié** : suite complète avec 2 309 tests et 3 254 sous-tests, ruff et mypy (53
+- **Vérifié** : suite complète avec 2 324 tests et 3 259 sous-tests, ruff et mypy (53
   fichiers) verts ; la carte est rendue dans chaque état du volet, les clics sont rejoués (y
-  compris l'état qui change entre les deux clics), avec vingt-deux variantes cassées
+  compris l'état qui change entre les deux clics), avec trente variantes cassées
   volontairement, toutes détectées.
 
 ## 1.0.0-rc.17

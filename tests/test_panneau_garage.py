@@ -66,6 +66,11 @@ ctx.window = ctx;
 vm.createContext(ctx);
 vm.runInContext(fs.readFileSync(chemin, "utf8"), ctx);
 
+// Le volet que PORTE le bouton cliqué (`data-volet`) : par défaut le volet enregistré.
+function boutonDe(c) {
+  return { dataset: c.bouton_volet === null ? {} : { volet: c.bouton_volet || "cover.garage" } };
+}
+
 function fabriquer(c) {
   const p = Object.create(ctx.Classe.prototype);
   const etat = c.attributs || {};
@@ -77,7 +82,8 @@ function fabriquer(c) {
       "sensor.etat": { state: "a_surveiller", attributes: etat },
     },
   };
-  p._donnees = { entites: { tonte_etat: "sensor.etat" }, garage_tondeuse: { choisie: "cover.garage", volets: [] } };
+  p._donnees = { entites: { tonte_etat: "sensor.etat" }, garage_tondeuse: { choisie: c.enregistre === undefined ? "cover.garage" : c.enregistre, volets: [] } };
+  if (c.brouillon !== undefined) p._brouillonGarageTondeuse = c.brouillon;
   p._commandesEnCours = new Set();
   p._garageConfirmation = c.confirmation;
   p._fenetre = { contains: () => false };
@@ -90,6 +96,19 @@ function fabriquer(c) {
   return p;
 }
 
+// La carte COMPLÈTE : registre réel, valeurs par défaut, volet enregistré (et brouillon éventuel).
+function carte(p, c) {
+  p._donnees.registre = c.registre;
+  p._donnees.valeurs = c.valeurs;
+  p._donnees.garage_tondeuse = {
+    choisie: c.enregistre === undefined ? "cover.garage" : c.enregistre,
+    volets: [{ entity_id: "cover.garage", nom: "Garage - Tondeuse" }, { entity_id: "cover.autre", nom: "Autre volet" }],
+  };
+  p._brouillon = {};
+  p._brouillonChoix = {};
+  return p._garageTondeuseHtml();
+}
+
 function clic(p, selecteurs) {
   const cible = { closest: (sel) => selecteurs[sel] || null };
   p._surClicAccueil({ target: cible });
@@ -98,6 +117,7 @@ function clic(p, selecteurs) {
 const sorties = cas.map((c) => {
   const p = fabriquer(c);
   if (c.type === "commandes") return { html: p._commandesGarageHtml("cover.garage") };
+  if (c.type === "carte") return { html: carte(p, c) };
   if (c.type === "etat") return { html: p._etatGarageTondeuseHtml("cover.garage") };
   if (c.type === "pilote") return { html: p._garagePiloteHtml() };
   if (c.type === "bloc_pilote") return { html: p._pilotageTondeuseEtatHtml() };
@@ -121,7 +141,7 @@ const sorties = cas.map((c) => {
     const c = cas[i];
     if (c.type !== "commande") continue;
     const p = fabriquer(c);
-    await p._commande(c.nom, { dataset: {} });
+    await p._commande(c.nom, boutonDe(c));
     sorties[i] = { appels: p.appels, toasts: p.toasts, confirmation: p._garageConfirmation === undefined ? "aucune" : p._garageConfirmation };
   }
   for (let i = 0; i < cas.length; i++) {
@@ -134,7 +154,7 @@ const sorties = cas.map((c) => {
     Object.assign(p._hass.states["sensor.etat"].attributes, c.changement_attributs || {});
     if (c.changement_volet) p._hass.states["cover.garage"].state = c.changement_volet;
     const html = p._commandesGarageHtml("cover.garage");
-    await p._commande(c.nom, { dataset: {} });
+    await p._commande(c.nom, boutonDe(c));
     sorties[i] = { demande, html, appels: p.appels, toasts: p.toasts, confirmation: p._garageConfirmation === undefined ? "aucune" : p._garageConfirmation };
   }
   process.stdout.write(JSON.stringify(sorties));
@@ -151,6 +171,14 @@ def _rendre(cas: list[dict]) -> list[dict]:
         capture_output=True, text=True, check=True, timeout=60,
     )
     return json.loads(sortie.stdout)
+
+
+def _carte(volet: str = "open", attributs: dict | None = None, **extra) -> str:
+    (sortie,) = _rendre([{
+        "type": "carte", "volet": volet, "position": 100, "attributs": attributs or {},
+        "registre": reglages.exporter(), "valeurs": reglages.valeurs_par_defaut(), **extra,
+    }])
+    return sortie["html"]
 
 
 def _bouton(html: str, repere: str) -> str:
@@ -352,6 +380,115 @@ class GardeDeLaFermetureTests(unittest.TestCase):
         (sortie,) = _rendre([{"type": "commande", "nom": "garage-arreter", "volet": "closing", "attributs": DEHORS}])
         self.assertEqual(sortie["appels"][0][1], "stop_cover")
         self.assertEqual(sortie["toasts"], [])
+
+
+@unittest.skipUnless(NODE, "Node n'est pas installé")
+class VoletEnregistreSeulementTests(unittest.TestCase):
+    """⚠️ Les commandes visent le volet ENREGISTRÉ, jamais celui d'un choix pas encore enregistré.
+
+    La carte dessinait les boutons du volet du brouillon, tandis que l'envoi lisait le volet
+    enregistré : on pouvait confirmer un ordre sur un volet affiché et commander l'autre (ou rien,
+    au premier branchement) — signalé en revue de la PR #81.
+    """
+
+    def test_un_autre_volet_choisi_sans_enregistrer_n_a_aucun_bouton(self) -> None:
+        html = _carte(brouillon="cover.autre", attributs=DOCKEE)
+        self.assertNotIn("data-garage-demander", html)
+        self.assertNotIn('data-commande="garage-', html)
+        self.assertIn("pas enregistré", html)
+
+    def test_le_choix_enregistre_a_ses_boutons(self) -> None:
+        html = _carte(attributs=DOCKEE)
+        self.assertIn('data-garage-demander="fermer"', html)
+        self.assertNotIn("pas enregistré", html)
+
+    def test_revenir_au_volet_enregistre_remet_les_boutons(self) -> None:
+        html = _carte(brouillon="cover.garage", attributs=DOCKEE)
+        self.assertIn('data-garage-demander="ouvrir"', html)
+
+    def test_au_premier_branchement_rien_n_est_commandable_avant_l_enregistrement(self) -> None:
+        html = _carte(enregistre="", brouillon="cover.garage", attributs=DOCKEE)
+        self.assertNotIn("data-garage-demander", html)
+        self.assertIn("pas enregistré", html)
+
+    def test_les_boutons_portent_l_identite_du_volet_enregistre(self) -> None:
+        (sortie,) = _rendre([{"type": "commandes", "volet": "open", "position": 100, "confirmation": "fermer", "attributs": DOCKEE}])
+        self.assertIn('data-commande="garage-fermer" data-volet="cover.garage"', sortie["html"])
+        (sortie,) = _rendre([{"type": "commandes", "volet": "opening", "position": 40, "attributs": DOCKEE}])
+        self.assertIn('data-commande="garage-arreter" data-volet="cover.garage"', sortie["html"])
+
+    def _envoyer(self, nom: str, **extra) -> dict:
+        (sortie,) = _rendre([{"type": "commande", "nom": nom, "volet": "open", "attributs": DOCKEE, **extra}])
+        return sortie
+
+    def test_un_bouton_d_un_autre_volet_n_envoie_rien(self) -> None:
+        """Le brouillon a changé entre le rendu du bouton et le clic final."""
+        for nom in ("garage-fermer", "garage-ouvrir", "garage-arreter"):
+            with self.subTest(commande=nom):
+                sortie = self._envoyer(nom, bouton_volet="cover.autre")
+                self.assertEqual(sortie["appels"], [])
+                self.assertIn("n'est plus celui qui est enregistré", sortie["toasts"][0][0])
+                self.assertTrue(sortie["toasts"][0][1])
+
+    def test_un_bouton_sans_identite_n_envoie_rien(self) -> None:
+        sortie = self._envoyer("garage-fermer", bouton_volet=None)
+        self.assertEqual(sortie["appels"], [])
+        self.assertEqual(len(sortie["toasts"]), 1)
+
+    def test_aucun_volet_enregistre_aucun_ordre(self) -> None:
+        sortie = self._envoyer("garage-fermer", enregistre="", bouton_volet="cover.garage")
+        self.assertEqual(sortie["appels"], [])
+
+    def test_l_identite_correspondante_envoie_au_bon_volet(self) -> None:
+        sortie = self._envoyer("garage-fermer", bouton_volet="cover.garage")
+        self.assertEqual(sortie["appels"][0][:3], ["cover", "close_cover", {"entity_id": "cover.garage"}])
+        self.assertEqual(sortie["toasts"], [])
+
+    def test_le_volet_enregistre_a_change_entre_les_deux_clics(self) -> None:
+        """Le bouton portait cover.garage ; l'utilisateur a enregistré cover.autre entre-temps."""
+        sortie = self._envoyer("garage-fermer", bouton_volet="cover.garage", enregistre="cover.autre")
+        self.assertEqual(sortie["appels"], [])
+
+
+@unittest.skipUnless(NODE, "Node n'est pas installé")
+class VoletEnMouvementTests(unittest.TestCase):
+    """⚠️ Une confirmation ouverte AVANT un mouvement survit à ce mouvement : l'ordre inverse enverrait
+    le volet repartir dans l'autre sens (signalé en revue de la PR #81). Seul l'arrêt passe."""
+
+    def _course(self, verbe: str, nom: str, volet: str, mouvement: str) -> dict:
+        (sortie,) = _rendre([{
+            "type": "course", "verbe": verbe, "nom": nom, "volet": volet, "position": 100 if volet == "open" else 0,
+            "attributs": DOCKEE, "changement_volet": mouvement,
+        }])
+        return sortie
+
+    def test_fermer_confirme_puis_le_volet_se_met_a_s_ouvrir(self) -> None:
+        sortie = self._course("fermer", "garage-fermer", "open", "opening")
+        self.assertEqual(sortie["appels"], [])
+        self.assertIn("en mouvement", sortie["toasts"][0][0])
+        self.assertNotIn('data-commande="garage-fermer"', sortie["html"])
+        self.assertIn("La confirmation est annulée", sortie["html"])
+
+    def test_ouvrir_confirme_puis_le_volet_se_met_a_se_fermer(self) -> None:
+        sortie = self._course("ouvrir", "garage-ouvrir", "closed", "closing")
+        self.assertEqual(sortie["appels"], [])
+        self.assertIn("en mouvement", sortie["toasts"][0][0])
+
+    def test_fermer_confirme_puis_le_volet_se_ferme_deja_pas_de_double_ordre(self) -> None:
+        sortie = self._course("fermer", "garage-fermer", "open", "closing")
+        self.assertEqual(sortie["appels"], [])
+
+    def test_l_arret_part_pendant_un_mouvement(self) -> None:
+        for mouvement in ("opening", "closing"):
+            with self.subTest(mouvement=mouvement):
+                (sortie,) = _rendre([{"type": "commande", "nom": "garage-arreter", "volet": mouvement, "position": 50, "attributs": DEHORS}])
+                self.assertEqual(sortie["appels"][0][1], "stop_cover")
+
+    def test_sans_mouvement_l_ordre_confirme_part_toujours(self) -> None:
+        (sortie,) = _rendre([{
+            "type": "course", "verbe": "fermer", "nom": "garage-fermer", "volet": "open", "position": 100, "attributs": DOCKEE,
+        }])
+        self.assertEqual(sortie["appels"][0][1], "close_cover")
 
 
 @unittest.skipUnless(NODE, "Node n'est pas installé")

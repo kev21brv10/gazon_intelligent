@@ -7230,8 +7230,11 @@ class GazonIntelligentPanel extends HTMLElement {
       } else if (nom === "garage-ouvrir" || nom === "garage-fermer" || nom === "garage-arreter") {
         const volet = this._donnees?.garage_tondeuse?.choisie;
         this._garageConfirmation = undefined;
-        // Rejugé ICI, avec l'état d'AUJOURD'HUI : la confirmation date d'un clic précédent.
-        const refus = nom === "garage-arreter" ? "" : this._refusVolet(nom);
+        // Rejugé ICI, avec l'état d'AUJOURD'HUI : la confirmation date d'un clic précédent. Et le volet
+        // que le bouton MONTRAIT doit être celui qu'on commande : sinon on n'envoie rien.
+        const refus = bouton?.dataset?.volet !== volet
+          ? "Le volet affiché n'est plus celui qui est enregistré."
+          : nom === "garage-arreter" ? "" : this._refusVolet(nom);
         if (refus) {
           this._afficherToast(`Commande annulée : ${refus}`, true);
         } else if (volet) {
@@ -7467,7 +7470,14 @@ class GazonIntelligentPanel extends HTMLElement {
     const phrase = choisie
       ? `Le passage est protégé par ${volets.find((v) => v.entity_id === choisie)?.nom || choisie}. Chaque étape reste indépendante.`
       : "Aucun volet n'est branché.";
-    const corps = `${choisie ? this._etatGarageTondeuseHtml(choisie) + this._commandesGarageHtml(choisie) + this._garagePiloteHtml() : ""}
+    // ⚠️ Les commandes visent le volet ENREGISTRÉ, jamais celui d'un choix pas encore enregistré :
+    // sinon le bouton montrerait un volet et ordonnerait l'autre (ou rien, au premier branchement).
+    const enregistre = c.choisie || "";
+    const commandes = !choisie ? ""
+      : choisie !== enregistre
+        ? `<div class="commandes-garage"><p class="note"><ha-icon icon="mdi:information-outline"></ha-icon><span>Le choix du volet n'est pas enregistré : l'enregistrer avant de le commander.</span></p></div>`
+        : this._commandesGarageHtml(enregistre);
+    const corps = `${choisie ? this._etatGarageTondeuseHtml(choisie) + commandes + this._garagePiloteHtml() : ""}
       ${choisie ? `<div class="garage-reglages">
         ${scenario("Avant le départ", "mdi:garage-open-variant", `${ouvertureAuto ? "Ouverture automatique" : "Ouverture manuelle"} · passage à ${ouvertureMin} % · attente ${avance} min`, [
           "tondeuse_garage_ouvrir_avant_depart",
@@ -7506,6 +7516,9 @@ class GazonIntelligentPanel extends HTMLElement {
     if (!etat) return "Le volet n'est pas disponible.";
     const brut = String(etat.state || "").toLowerCase();
     if (brut === "unavailable" || brut === "unknown") return "Le volet ne répond pas.";
+    // ⚠️ Une confirmation ouverte AVANT un mouvement survit à ce mouvement : l'ordre inverse enverrait
+    // le volet repartir dans l'autre sens. Seul l'arrêt (jamais jugé ici) passe pendant un mouvement.
+    if (brut === "opening" || brut === "closing") return "Le volet est en mouvement : attendre la fin ou l'arrêter.";
     if (commande === "garage-ouvrir" && brut === "open") return "Le volet est déjà ouvert.";
     if (commande === "garage-fermer") {
       if (brut === "closed") return "Le volet est déjà fermé.";
@@ -7549,7 +7562,7 @@ class GazonIntelligentPanel extends HTMLElement {
       return `<div class="commandes-garage">
         <p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>${esc(d.question)}</span></p>
         <div class="rangee-boutons">
-          <button class="bouton-plein" data-commande="${d.commande}" ${occupe(d.commande) ? "disabled" : ""}><ha-icon icon="${d.icone}"></ha-icon>${esc(d.texte)} maintenant</button>
+          <button class="bouton-plein" data-commande="${d.commande}" data-volet="${esc(entityId)}" ${occupe(d.commande) ? "disabled" : ""}><ha-icon icon="${d.icone}"></ha-icon>${esc(d.texte)} maintenant</button>
           <button class="bouton-contour" data-garage-annuler>Annuler</button>
         </div></div>`;
     }
@@ -7557,7 +7570,7 @@ class GazonIntelligentPanel extends HTMLElement {
     const inactif = (verbe) => !admin || indisponible || enMouvement || Boolean(refus[verbe]);
     const bouton = (verbe) => `<button class="bouton-contour" data-garage-demander="${verbe}" ${inactif(verbe) ? "disabled" : ""}><ha-icon icon="${demandes[verbe].icone}"></ha-icon>${esc(demandes[verbe].texte)}</button>`;
     const arret = (fonctions & 8) !== 0
-      ? `<button class="bouton-blanc" data-commande="garage-arreter" ${admin && enMouvement && !occupe("garage-arreter") ? "" : "disabled"}><ha-icon icon="mdi:stop-circle-outline"></ha-icon>Arrêter</button>`
+      ? `<button class="bouton-blanc" data-commande="garage-arreter" data-volet="${esc(entityId)}" ${admin && enMouvement && !occupe("garage-arreter") ? "" : "disabled"}><ha-icon icon="mdi:stop-circle-outline"></ha-icon>Arrêter</button>`
       : "";
     const actif = this._a("tonte_etat", "mower_control_mode") === "actif";
     const note = indisponible
