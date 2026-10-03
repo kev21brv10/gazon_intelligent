@@ -1001,6 +1001,18 @@ function partiesLocales(date, fuseau) {
   };
 }
 
+// Un instant ISO publié par l'intégration, en français et dans le fuseau de Home Assistant :
+// « aujourd'hui à 20 h 02 » ou « le 02/10 à 16 h 08 ». Chaîne vide si l'instant est illisible.
+function instantFr(iso, fuseau, maintenant = new Date()) {
+  const d = new Date(iso);
+  if (!iso || Number.isNaN(d.getTime())) return "";
+  const p = partiesLocales(d, fuseau);
+  const n = partiesLocales(maintenant, fuseau);
+  const memeJour = p.annee === n.annee && p.mois === n.mois && p.jour === n.jour;
+  const jour = memeJour ? "aujourd'hui" : `le ${String(p.jour).padStart(2, "0")}/${String(p.mois).padStart(2, "0")}`;
+  return `${jour} à ${heureFr(p.minute)}`;
+}
+
 function jourPlus(base, jours, options = { weekday: "short", day: "numeric", month: "short" }) {
   const d = new Date(Date.UTC(base.annee, base.mois - 1, base.jour + jours));
   return d.toLocaleDateString("fr-FR", { timeZone: "UTC", ...options });
@@ -2408,6 +2420,11 @@ dialog.dialogue > form { display: flex; flex-direction: column; min-height: 0; m
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
 }
 .etat-garage .statut { flex: none; }
+.commandes-garage { padding: 0 20px 4px; }
+.commandes-garage .rangee-boutons { padding: 8px 0 4px; }
+.pilote-garage { padding: 2px 20px 6px; font-size: 13px; color: var(--gz-doux); line-height: 1.45; }
+.pilote-garage p { margin: 2px 0; }
+.pilote-garage b { color: var(--gz-texte); }
 .garage-reglages {
   margin: 10px 20px 18px; border: 1px solid var(--gz-trait); border-radius: 12px; overflow: hidden;
 }
@@ -6308,6 +6325,11 @@ class GazonIntelligentPanel extends HTMLElement {
       cycle_autonome: "Cycle autonome : recharges gérées par la tondeuse",
       reprise_attendue: "Reprise attendue après un rappel de l'intégration",
     };
+    const derniere = a("mower_control_last_action");
+    const quand = instantFr(a("mower_control_last_action_at"), this._fuseau());
+    const derniereCommande = derniere && quand
+      ? `<p>Dernière commande envoyée : <b>${esc(actions[derniere] || derniere)}</b>, ${esc(quand)}.</p>`
+      : "";
     const suiviCycle = mode === "actif" && cycles[cycle]
       ? `<p><b>${esc(cycles[cycle])}</b>${cycle === "reprise_attendue" && motifReprise ? ` · ${esc(motifReprise)}` : ""}</p>`
       : "";
@@ -6317,6 +6339,7 @@ class GazonIntelligentPanel extends HTMLElement {
           <div class="ligne-textes"><h4>${action ? `Décision : ${esc(actions[action] || action)}` : esc(etat || "En attente")}</h4><p>${esc(erreur || raison || "Le prochain cycle précisera la décision.")}</p></div>
         </div>
         ${suiviCycle}
+        ${derniereCommande}
       </div></div>
     </section>`;
   }
@@ -7204,6 +7227,17 @@ class GazonIntelligentPanel extends HTMLElement {
         await this._service("switch", "turn_off", { entity_id: id }, "Vanne fermée.");
       } else if (nom === "envoyer_etat") {
         await this._service("gazon_intelligent", "send_notification", { entity_id: entites.assistant }, "État du gazon envoyé aux appareils configurés.");
+      } else if (nom === "garage-ouvrir" || nom === "garage-fermer" || nom === "garage-arreter") {
+        const volet = this._donnees?.garage_tondeuse?.choisie;
+        this._garageConfirmation = undefined;
+        if (volet) {
+          const [service, message] = {
+            "garage-ouvrir": ["open_cover", "Ouverture du volet demandée."],
+            "garage-fermer": ["close_cover", "Fermeture du volet demandée."],
+            "garage-arreter": ["stop_cover", "Volet arrêté."],
+          }[nom];
+          await this._service("cover", service, { entity_id: volet }, message);
+        }
       } else if (nom === "pompe-marche" || nom === "pompe-arret") {
         await this._service("switch", nom === "pompe-marche" ? "turn_on" : "turn_off", { entity_id: pompe }, nom === "pompe-marche" ? "Pompe en marche." : "Pompe arrêtée.");
       }
@@ -7429,7 +7463,7 @@ class GazonIntelligentPanel extends HTMLElement {
     const phrase = choisie
       ? `Le passage est protégé par ${volets.find((v) => v.entity_id === choisie)?.nom || choisie}. Chaque étape reste indépendante.`
       : "Aucun volet n'est branché.";
-    const corps = `${choisie ? this._etatGarageTondeuseHtml(choisie) : ""}
+    const corps = `${choisie ? this._etatGarageTondeuseHtml(choisie) + this._commandesGarageHtml(choisie) + this._garagePiloteHtml() : ""}
       ${choisie ? `<div class="garage-reglages">
         ${scenario("Avant le départ", "mdi:garage-open-variant", `${ouvertureAuto ? "Ouverture automatique" : "Ouverture manuelle"} · passage à ${ouvertureMin} % · attente ${avance} min`, [
           "tondeuse_garage_ouvrir_avant_depart",
@@ -7456,6 +7490,62 @@ class GazonIntelligentPanel extends HTMLElement {
     });
   }
 
+  // Ouvrir, fermer, arrêter le volet à la main (test, dépannage). L'ordre d'ouverture ou de
+  // fermeture demande une confirmation ; l'arrêt, lui, agit tout de suite.
+  _commandesGarageHtml(entityId) {
+    const etat = this._hass.states[entityId];
+    if (!etat) return "";
+    const brut = String(etat.state || "").toLowerCase();
+    const fonctions = Number(etat.attributes?.supported_features) || 0;
+    const indisponible = brut === "unavailable" || brut === "unknown";
+    const enMouvement = brut === "opening" || brut === "closing";
+    const admin = this._estAdmin();
+    const occupe = (cle) => this._commandesEnCours.has(cle);
+    const demandes = {
+      ouvrir: { commande: "garage-ouvrir", texte: "Ouvrir", icone: "mdi:garage-open-variant", question: "Ouvrir le volet ? Vérifier que rien ne gêne le passage." },
+      fermer: { commande: "garage-fermer", texte: "Fermer", icone: "mdi:garage-variant", question: "Fermer le volet ? Vérifier que personne et rien n'est sous le volet, et que la tondeuse n'est pas dehors." },
+    };
+    const confirmation = this._garageConfirmation;
+    if (admin && demandes[confirmation]) {
+      const d = demandes[confirmation];
+      return `<div class="commandes-garage">
+        <p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>${esc(d.question)}</span></p>
+        <div class="rangee-boutons">
+          <button class="bouton-plein" data-commande="${d.commande}" ${occupe(d.commande) ? "disabled" : ""}><ha-icon icon="${d.icone}"></ha-icon>${esc(d.texte)} maintenant</button>
+          <button class="bouton-contour" data-garage-annuler>Annuler</button>
+        </div></div>`;
+    }
+    const inactif = (verbe) => !admin || indisponible || enMouvement || (verbe === "ouvrir" ? brut === "open" : brut === "closed");
+    const bouton = (verbe) => `<button class="bouton-contour" data-garage-demander="${verbe}" ${inactif(verbe) ? "disabled" : ""}><ha-icon icon="${demandes[verbe].icone}"></ha-icon>${esc(demandes[verbe].texte)}</button>`;
+    const arret = (fonctions & 8) !== 0
+      ? `<button class="bouton-blanc" data-commande="garage-arreter" ${admin && enMouvement && !occupe("garage-arreter") ? "" : "disabled"}><ha-icon icon="mdi:stop-circle-outline"></ha-icon>Arrêter</button>`
+      : "";
+    const actif = this._a("tonte_etat", "mower_control_mode") === "actif";
+    const note = indisponible
+      ? `<p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>Le volet ne répond pas : les commandes sont désactivées.</span></p>`
+      : actif
+        ? `<p class="note"><ha-icon icon="mdi:information-outline"></ha-icon><span>Pilotage actif : le pilote peut reprendre la main, par exemple refermer le volet après une rentrée confirmée.</span></p>`
+        : "";
+    return `<div class="commandes-garage"><div class="rangee-boutons">${bouton("ouvrir")}${bouton("fermer")}${arret}</div>${note}</div>`;
+  }
+
+  // Ce que le pilote a fait en dernier et ce qu'il compte faire du volet, tels que l'intégration
+  // les publie. En observation, la « prochaine action » n'est PAS envoyée : on le dit.
+  _garagePiloteHtml() {
+    const a = (cle) => this._a("tonte_etat", cle);
+    const actions = { start_mowing: "départ", dock: "retour à la base", open_cover: "ouverture du garage", close_cover: "fermeture du garage" };
+    const lignes = [];
+    const derniere = a("mower_control_last_action");
+    const quand = instantFr(a("mower_control_last_action_at"), this._fuseau());
+    if (derniere && quand) lignes.push(`Dernière commande du pilote : <b>${esc(actions[derniere] || derniere)}</b>, ${esc(quand)}.`);
+    const prevue = a("mower_control_pending_action");
+    if (prevue === "open_cover" || prevue === "close_cover") {
+      const mode = a("mower_control_mode");
+      lignes.push(`Prochaine action prévue : <b>${esc(actions[prevue])}</b>${mode === "observation" ? " (affichée seulement, pilotage en observation)" : ""}.`);
+    }
+    return lignes.length ? `<div class="pilote-garage">${lignes.map((l) => `<p>${l}</p>`).join("")}</div>` : "";
+  }
+
   _etatGarageTondeuseHtml(entityId) {
     const etat = this._hass.states[entityId];
     if (!etat) {
@@ -7465,12 +7555,16 @@ class GazonIntelligentPanel extends HTMLElement {
     const etats = {
       open: ["ok", "mdi:garage-open-variant", "ouvert"],
       opening: ["retient", "mdi:garage-alert-variant", "ouverture en cours"],
-      closed: ["retient", "mdi:garage-variant", "fermé"],
+      closed: ["neutre", "mdi:garage-variant", "fermé"],
       closing: ["retient", "mdi:garage-alert-variant", "fermeture en cours"],
       unavailable: ["retient", "mdi:alert-outline", "indisponible"],
       unknown: ["retient", "mdi:alert-outline", "état inconnu"],
     };
-    const [ton, icone, libelle] = etats[brut] || ["retient", "mdi:garage-alert-variant", valeurEtat(etat)];
+    let [ton, icone, libelle] = etats[brut] || ["retient", "mdi:garage-alert-variant", valeurEtat(etat)];
+    // Fermé est l'état NORMAL au repos ; il n'inquiète que si la tondeuse est dehors.
+    if (brut === "closed" && this._a("tonte_etat", "mower_is_outside") === true) {
+      [ton, icone, libelle] = ["retient", "mdi:garage-alert-variant", "fermé alors que la tondeuse est dehors"];
+    }
     const nom = etat.attributes?.friendly_name || entityId;
     const position = Number(etat.attributes?.current_position);
     const libelleComplet = Number.isFinite(position) && ["open", "opening", "closing"].includes(brut)
@@ -8189,6 +8283,19 @@ class GazonIntelligentPanel extends HTMLElement {
     const commande = cible.closest?.("[data-commande]");
     if (commande) {
       if (!commande.disabled) this._commande(commande.dataset.commande, commande);
+      return true;
+    }
+    const demande = cible.closest?.("[data-garage-demander]");
+    if (demande) {
+      if (!demande.disabled) {
+        this._garageConfirmation = demande.dataset.garageDemander;
+        this._rendre();
+      }
+      return true;
+    }
+    if (cible.closest?.("[data-garage-annuler]")) {
+      this._garageConfirmation = undefined;
+      this._rendre();
       return true;
     }
     const note = cible.closest?.("[data-bascule-note]");

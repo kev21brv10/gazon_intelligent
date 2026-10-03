@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.0.0-rc.22
+
+- **Ouvrir, fermer, arrêter le volet depuis la page** : la carte « Garage de la tondeuse »
+  gagne trois boutons, pour tester ou dépanner. Ouvrir et fermer demandent une confirmation
+  (« vérifier que personne et rien n'est sous le volet ») ; l'arrêt agit tout de suite. Les boutons
+  sont grisés selon l'état du volet (pas d'ouverture d'un volet ouvert, rien pendant un
+  mouvement sauf l'arrêt, rien s'il est indisponible) et réservés aux administrateurs. En
+  pilotage actif, la page prévient que le pilote peut reprendre la main.
+- **Dernière commande et prochaine action du pilote** : la carte du garage et le bloc
+  « Pilotage » de l'onglet Tonte disent ce que le pilote a envoyé en dernier (« départ,
+  aujourd'hui à 20 h 02 ») ; la carte du garage annonce aussi la prochaine action prévue du
+  volet, en précisant qu'elle n'est qu'affichée quand le pilotage est en observation.
+- **« Fermé » n'est plus un avertissement** : c'est l'état normal du volet au repos, affiché en
+  neutre. Il n'est signalé (en ambre) que si la tondeuse est dehors.
+- **Libellé corrigé** : « Ouvrir automatiquement le garage pour le retour ? » devient « …dès que
+  la tondeuse est dehors ou rentre ? » — ce réglage ouvre aussi le volet pour un départ lancé
+  depuis l'appli, ce que l'ancien libellé ne disait pas.
+- **Vérifié** : suite complète avec 2 294 tests et 3 249 sous-tests, ruff et mypy (53
+  fichiers) verts ; la carte est rendue dans chaque état du volet et les clics sont rejoués,
+  avec onze variantes cassées volontairement, toutes détectées.
+
 ## 1.0.0-rc.17
 
 - **Le motif affiché pendant un rappel de tonte dit enfin la vraie cause** : quand

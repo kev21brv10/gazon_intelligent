@@ -581,8 +581,10 @@ REGLAGES: tuple[Reglage, ...] = (
     ),
     Reglage(
         "tondeuse_garage_ouvrir_pour_retour", "installation",
-        "Ouvrir automatiquement le garage pour le retour ?",
-        "Sinon, l'intégration n'ordonne pas le retour tant que le volet n'est pas confirmé ouvert.",
+        "Ouvrir automatiquement le garage dès que la tondeuse est dehors ou rentre ?",
+        "Le volet s'ouvre dès que la tondeuse est détectée dehors : pour son retour, mais aussi pour un "
+        "départ lancé depuis l'appli. Sinon, l'intégration n'ordonne pas le retour tant que le volet n'est "
+        "pas confirmé ouvert.",
         "interrupteur", True, 0, 1, 1,
         source="mower_control_constants.DEFAULT_MOWER_GARAGE_OPEN_FOR_RETURN",
         avertissement="Réglage sensible : désactivé, le volet doit être ouvert avant qu'une autre automatisation rappelle la tondeuse.",
