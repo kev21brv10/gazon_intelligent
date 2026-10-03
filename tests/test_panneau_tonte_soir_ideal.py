@@ -94,6 +94,21 @@ vm.runInContext(fs.readFileSync(chemin, "utf8"), ctx);
 process.stdout.write(JSON.stringify(vm.runInContext("DISPOSITION.tonte", ctx)));
 """
 
+SCRIPT_VALEURS = r"""
+const fs = require("fs");
+const vm = require("vm");
+const { chemin, cle, valeurs } = JSON.parse(fs.readFileSync(0, "utf8"));
+const ctx = {
+  HTMLElement: class {},
+  customElements: { get: () => undefined, define: () => {} },
+  console, structuredClone,
+};
+ctx.window = ctx;
+vm.createContext(ctx);
+vm.runInContext(fs.readFileSync(chemin, "utf8"), ctx);
+process.stdout.write(JSON.stringify(valeurs.map((v) => ctx.valeurFr({ cle, genre: "duree" }, v))));
+"""
+
 DEFAUTS = {
     "tonte_fenetre_ideale_debut": dm._MOWING_WINDOW_IDEAL_START * 60,
     "tonte_fenetre_ideale_fin": dm._MOWING_WINDOW_IDEAL_END * 60,
@@ -163,6 +178,13 @@ class LeCreneauIdealDuSoirDeLaPageSuitLeMoteurTests(unittest.TestCase):
             "tonte_soir_ideal_debut_avant_coucher": 120,
             "tonte_soir_ideal_fin_avant_coucher": 30,
         },
+        # Fin d'idéal APRÈS le coucher (-60) : elle repousse aussi la fin du soir et la nuit.
+        "ideal apres le coucher": {"tonte_soir_ideal_fin_avant_coucher": -60},
+        # Soir réglé plus long que la fin d'idéal : l'idéal s'arrête avant la fin du soir.
+        "ideal apres le coucher, soir plus long": {
+            "tonte_soir_ideal_fin_avant_coucher": -30,
+            "tonte_soir_apres_coucher": 90,
+        },
         # Le soir ouvre avant la fin du meilleur moment : l'idéal du matin passe le relais.
         "relais du matin": {
             "tonte_soir_avant_coucher": 400,
@@ -208,6 +230,18 @@ class LeCreneauIdealDuSoirDeLaPageSuitLeMoteurTests(unittest.TestCase):
         texte = self.rendus["reglages par defaut"]["texte"]
         self.assertIn(f"dont de <b>{_h(18 * 60)}</b> à <b>{_h(19 * 60 + 30)}</b> en créneau idéal", texte)
 
+    def test_le_texte_annonce_un_ideal_qui_finit_apres_le_coucher(self) -> None:
+        # Coucher 20 h, fin d'idéal 1 h après : le soir va jusqu'à 21 h (et non 20 h 30).
+        texte = self.rendus["ideal apres le coucher"]["texte"]
+        self.assertIn(f"de <b>{_h(15 * 60)}</b> à <b>{_h(21 * 60)}</b>", texte)
+        self.assertIn(f"dont de <b>{_h(18 * 60)}</b> à <b>{_h(21 * 60)}</b> en créneau idéal", texte)
+
+    def test_le_texte_borne_l_ideal_par_un_soir_plus_long_que_lui(self) -> None:
+        # Soir jusqu'à 21 h 30 ; l'idéal s'arrête à 20 h 30 (30 min après le coucher).
+        texte = self.rendus["ideal apres le coucher, soir plus long"]["texte"]
+        self.assertIn(f"de <b>{_h(15 * 60)}</b> à <b>{_h(21 * 60 + 30)}</b>", texte)
+        self.assertIn(f"dont de <b>{_h(18 * 60)}</b> à <b>{_h(20 * 60 + 30)}</b> en créneau idéal", texte)
+
     def test_le_relais_du_matin_borne_aussi_le_creneau_annonce(self) -> None:
         # L'ouverture (13 h 20) tombe avant la fin du meilleur moment (14 h) : le soir commence
         # à 14 h, et l'idéal annoncé ne remonte pas avant.
@@ -251,6 +285,38 @@ class LesReglagesIdeauxDuSoirSontSurLaCarteDuDessinTests(unittest.TestCase):
     def test_aucun_reglage_n_est_place_dans_deux_cartes(self) -> None:
         cles = [cle for carte in self.cartes for cle in carte["cles"]]
         self.assertEqual(len(cles), len(set(cles)))
+
+@unittest.skipUnless(NODE, "Node n'est pas installé")
+class LaFinDeLIdealSAfficheParRapportAuCoucherTests(unittest.TestCase):
+    def _valeurs(self, cle: str, valeurs: list[int]) -> list[str]:
+        sortie = subprocess.run(
+            [NODE, "-e", SCRIPT_VALEURS],
+            input=json.dumps({"chemin": str(PANNEAU), "cle": cle, "valeurs": valeurs}),
+            capture_output=True, text=True, check=True, timeout=60,
+        )
+        return json.loads(sortie.stdout)
+
+    def test_avant_au_et_apres_le_coucher(self) -> None:
+        nbsp = "\u00a0"
+        self.assertEqual(
+            self._valeurs("tonte_soir_ideal_fin_avant_coucher", [30, 90, 0, -30, -60, -90]),
+            [
+                f"30{nbsp}min avant le coucher",
+                f"1{nbsp}h{nbsp}30 avant le coucher",
+                "au coucher",
+                f"30{nbsp}min après le coucher",
+                f"1{nbsp}h après le coucher",
+                f"1{nbsp}h{nbsp}30 après le coucher",
+            ],
+        )
+
+    def test_les_autres_durees_ne_changent_pas(self) -> None:
+        nbsp = "\u00a0"
+        self.assertEqual(
+            self._valeurs("tonte_soir_ideal_debut_avant_coucher", [120, 30]),
+            [f"2{nbsp}h", f"30{nbsp}min"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

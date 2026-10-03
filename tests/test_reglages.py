@@ -89,6 +89,15 @@ class LeRegistreEstCoherentTests(unittest.TestCase):
             {"sursemis_pousse_plantules": "Sélectionner une valeur entre 0,1 et 1."},
         )
 
+    def test_la_fin_de_l_ideal_du_soir_se_regle_jusqu_a_apres_le_coucher(self) -> None:
+        cle = "tonte_soir_ideal_fin_avant_coucher"
+        # Négatif = après le coucher, jusqu'à 1 h 30 ; au-delà, ou hors pas de 5 min, c'est refusé.
+        for ok in (-90, -60, -5, 0, 30, 115):
+            with self.subTest(valeur=ok):
+                self.assertEqual(reglages.valider({cle: ok}), {})
+        self.assertEqual(reglages.valider({cle: -95}), {cle: "Sélectionner une valeur entre -90 et 120."})
+        self.assertIn(cle, reglages.valider({cle: -62}))
+
     def test_une_contrainte_violee_est_refusee_en_clair(self) -> None:
         erreurs = reglages.valider({"tonte_fenetre_ideale_debut": 14 * 60})
         self.assertIn("avant sa fin", erreurs["tonte_fenetre_ideale_debut"])

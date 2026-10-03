@@ -18,13 +18,22 @@
   soir » garde l'ouverture et la fin du créneau du soir). Libellés reformulés pour se lire
   seuls : « Le soir, combien de temps avant le coucher du soleil commence le meilleur
   moment ? ». La recherche de réglages amène à cette carte.
+- **Le créneau idéal du soir peut finir après le coucher du soleil** : sa fin se règle
+  maintenant de 2 h avant à 1 h 30 après le coucher (`tonte_soir_ideal_fin_avant_coucher`,
+  valeurs négatives = après le coucher ; affichée « 30 min avant le coucher », « au coucher »,
+  « 1 h après le coucher »). Une fin d'idéal après le coucher repousse aussi la fin du soir et
+  le début de la nuit (le plus tardif des deux réglages l'emporte, dans une seule fonction
+  utilisée par la fenêtre et par la détection de la nuit) : l'idéal n'est jamais écrêté en
+  silence, et la tondeuse n'est pas rappelée avant sa fin. Valeur par défaut inchangée
+  (30 min avant le coucher). Un départ réglé sur « idéal seulement » peut ainsi partir
+  jusqu'à la fin de ce créneau.
 - **La page dessine le même créneau idéal que le moteur** : le sous-créneau idéal ne vit
   qu'à l'intérieur de la fenêtre acceptable du soir. Avec des réglages non par défaut (soir
   resserré à 1 h, idéal de 2 h à 30 min), l'aperçu de la page Tonte et sa phrase annonçaient
   un idéal dès 18 h alors que le moteur ne le publiait qu'à partir de 19 h ; quand le
   sous-créneau tombe entièrement hors de la fenêtre du soir, la page ne l'annonce plus du
   tout. Comparé minute par minute au moteur, sur plusieurs jeux de réglages.
-- **Vérifié** : suite complète avec 2 289 tests et 6 862 sous-tests, ruff et mypy (53
+- **Vérifié** : suite complète avec 2 302 tests et 8 308 sous-tests, ruff et mypy (53
   fichiers) verts.
 
 ## 1.0.0-rc.17

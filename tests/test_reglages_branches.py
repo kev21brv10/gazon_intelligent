@@ -175,6 +175,15 @@ class LaTonteSuitSesReglagesTests(_Comparaison):
                      {"mowing_window_state": "ideal"}, {"mowing_window_state": "acceptable"},
                      hour_of_day=19.75)
 
+    def test_la_sous_fenetre_ideale_du_soir_peut_finir_apres_le_coucher(self) -> None:
+        # Coucher 20:30 (défaut du harnais), soleil couché depuis 30 min (21:00) : par défaut c'est
+        # la nuit. Avec une fin d'idéal à 1 h APRÈS le coucher (-60), le soir est repoussé jusqu'à
+        # 21:30 et ce créneau est idéal.
+        self.compare({"tonte_soir_ideal_fin_avant_coucher": -60}, (),
+                     {"mowing_window_state": "blocked", "raison_blocage_code": "mowing_night"},
+                     {"mowing_window_state": "ideal"},
+                     hour_of_day=21.0, sun_context={"sun_state": "below_horizon"})
+
     def test_vent_a_eviter(self) -> None:
         self.compare({"tonte_vent_a_eviter": 12}, (),
                      {"mowing_window_state": "ideal"}, {"mowing_window_state": "discouraged"}, vent=15.0)

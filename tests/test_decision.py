@@ -3846,6 +3846,80 @@ class FenetreIdealeDuSoirTests(unittest.TestCase):
         self.assertIn("acceptable", motif)
 
 
+class FinDeLIdealApresLeCoucherTests(unittest.TestCase):
+    """Une fin d'idéal NÉGATIVE (après le coucher) prolonge aussi le soir et repousse la nuit.
+
+    Sans ce couplage, l'idéal serait écrêté en silence par la fin du soir (coucher + 30 min), ou
+    pire : la nuit tomberait avant la fin d'un créneau annoncé « idéal ».
+    """
+
+    SUNSET = 1200  # 20:00
+
+    def _contexte(self, hour, *, fin_avant=None, apres=None, soleil=None):
+        ctx = decision_mowing.DecisionContext(
+            history=[], today=date(2026, 9, 1), hour_of_day=hour, temperature=20.0, vent=5.0,
+        )
+        reglages = {}
+        if fin_avant is not None:
+            reglages["tonte_soir_ideal_fin_avant_coucher"] = fin_avant
+        if apres is not None:
+            reglages["tonte_soir_apres_coucher"] = apres
+        ctx.reglages = reglages
+        if soleil is not None:
+            ctx.sun_context = {"sun_state": soleil}
+        return ctx
+
+    def _fenetre(self, hour, **kw):
+        ctx = self._contexte(hour, **kw)
+        return decision_mowing._resolve_mowing_window(ctx, weather_profile={"sunset_minute": self.SUNSET})
+
+    def test_l_ideal_peut_continuer_apres_le_coucher(self) -> None:
+        # 20:30 = coucher + 30 min. Par défaut le soir est fini (« tardive »). Avec une fin
+        # d'idéal à 1 h APRÈS le coucher (-60), le créneau est idéal.
+        self.assertEqual(self._fenetre(20.5)[0], "discouraged")
+        etat, motif = self._fenetre(20.5, fin_avant=-60)
+        self.assertEqual(etat, "ideal")
+        self.assertIn("journée", motif)
+
+    def test_la_borne_de_fin_apres_le_coucher_est_exclue(self) -> None:
+        self.assertEqual(self._fenetre(20 + 59 / 60, fin_avant=-60)[0], "ideal")
+        self.assertNotEqual(self._fenetre(21.0, fin_avant=-60)[0], "ideal")
+
+    def test_le_reglage_apres_le_coucher_plus_long_garde_la_main(self) -> None:
+        # Fin d'idéal à 30 min après (-30) mais soir réglé à 90 min : le soir va jusqu'à 90 min,
+        # l'idéal s'arrête à 30 — la fin du soir ne rétrécit jamais.
+        self.assertEqual(self._fenetre(20 + 45 / 60, fin_avant=-30, apres=90)[0], "acceptable")
+        self.assertEqual(self._fenetre(20 + 15 / 60, fin_avant=-30, apres=90)[0], "ideal")
+
+    def test_une_fin_d_ideal_avant_le_coucher_ne_raccourcit_pas_le_soir(self) -> None:
+        # fin à 1 h AVANT le coucher (60) et soir réglé à 60 après : le soir va bien jusqu'à +60.
+        self.assertEqual(self._fenetre(20 + 45 / 60, fin_avant=60, apres=60)[0], "acceptable")
+
+    def test_la_nuit_ne_tombe_pas_avant_la_fin_d_un_ideal_apres_le_coucher(self) -> None:
+        # Soleil couché depuis 45 min. Par défaut : nuit. Avec l'idéal prolongé de 60 min : encore
+        # le jour pour tondre.
+        ctx = self._contexte(20.75, soleil="below_horizon")
+        self.assertTrue(decision_mowing._est_la_nuit(ctx, {"sunset_minute": self.SUNSET}))
+        ctx = self._contexte(20.75, fin_avant=-60, soleil="below_horizon")
+        self.assertFalse(decision_mowing._est_la_nuit(ctx, {"sunset_minute": self.SUNSET}))
+        self.assertEqual(
+            decision_mowing._resolve_mowing_window(ctx, weather_profile={"sunset_minute": self.SUNSET})[0],
+            "ideal",
+        )
+
+    def test_la_nuit_tombe_bien_apres_la_fin_prolongee(self) -> None:
+        ctx = self._contexte(21.0, fin_avant=-60, soleil="below_horizon")  # coucher + 60 min
+        self.assertTrue(decision_mowing._est_la_nuit(ctx, {"sunset_minute": self.SUNSET}))
+
+    def test_la_fin_du_soir_est_le_plus_tardif_des_deux_reglages(self) -> None:
+        fin = decision_mowing._fin_du_soir_apres_coucher
+        self.assertEqual(fin({}), 30)
+        self.assertEqual(fin({"tonte_soir_ideal_fin_avant_coucher": -60}), 60)
+        self.assertEqual(fin({"tonte_soir_ideal_fin_avant_coucher": -20}), 30)
+        self.assertEqual(fin({"tonte_soir_ideal_fin_avant_coucher": 60, "tonte_soir_apres_coucher": 45}), 45)
+        self.assertEqual(fin({"tonte_soir_ideal_fin_avant_coucher": -90, "tonte_soir_apres_coucher": 0}), 90)
+
+
 class AmortissementDuRisqueTests(unittest.TestCase):
     """⚠️ QUATORZE BASCULES `faible ↔ modere` le 31/08/2026, dont six entre 16 h et 18 h.
 

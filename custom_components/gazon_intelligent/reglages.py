@@ -141,9 +141,11 @@ REGLAGES: tuple[Reglage, ...] = (
     ),
     Reglage(
         "tonte_soir_ideal_fin_avant_coucher", "tonte",
-        "Le soir, jusqu'à combien de temps avant le coucher dure-t-il ?",
-        "Pas jusqu'au coucher lui-même : même marge de séchage que la fin du créneau acceptable.",
-        "duree", 30, 0, 120, 5,
+        "Le soir, jusqu'à quand dure le meilleur moment, par rapport au coucher du soleil ?",
+        "Avant le coucher, pour laisser sécher l'herbe coupée ; au coucher ou après, pour tondre "
+        "jusqu'à la tombée de la nuit. Une valeur négative l'étend après le coucher (jusqu'à 1 h 30) : "
+        "il repousse alors aussi la fin du soir, la tondeuse ne rentre pas avant.",
+        "duree", 30, -90, 120, 5,
         source="decision_mowing._MOWING_EVENING_IDEAL_END_BEFORE_SUNSET_MIN",
     ),
     Reglage(

@@ -955,9 +955,26 @@ function uniteAccordee(unite, valeur) {
   return UNITES_AU_PLURIEL.has(unite) && Math.abs(valeur) < 2 ? unite.slice(0, -1) : unite;
 }
 
+// Une durée comptée à partir du coucher du soleil : positive = avant, négative = après.
+const REGLAGES_RELATIFS_AU_COUCHER = new Set(["tonte_soir_ideal_fin_avant_coucher"]);
+
+function relatifAuCoucherFr(v) {
+  if (v > 0) return `${dureeFr(v)} avant le coucher`;
+  if (v < 0) return `${dureeFr(-v)} après le coucher`;
+  return "au coucher";
+}
+
+// Minutes après le coucher où finit le soir (et où commence la nuit) : MÊME règle que le moteur
+// (`decision_mowing._fin_du_soir_apres_coucher`) — le réglage « après le coucher », sauf si la
+// fin de l'idéal du soir tombe plus tard.
+function finDuSoirApresCoucher(v) {
+  return Math.max(v.tonte_soir_apres_coucher, -v.tonte_soir_ideal_fin_avant_coucher);
+}
+
 function valeurFr(r, v) {
   if (v === undefined || v === null || Number.isNaN(v)) return "—";
   if (r.genre === "heure") return heureFr(v);
+  if (r.genre === "duree" && REGLAGES_RELATIFS_AU_COUCHER.has(r.cle)) return relatifAuCoucherFr(v);
   if (r.genre === "duree") return dureeFr(v);
   if (r.genre === "jour") return `jour ${Math.round(v)}`;
   const n = nombreFr(v, Math.max(decimalesDe(r.pas), 0));
@@ -1137,13 +1154,13 @@ function planDepuisZones(zones, passages, pauseS) {
 
 function classeTonte(min, v, soleil) {
   const nuit = soleil
-    ? min < soleil.lever || min >= soleil.coucher + v.tonte_soir_apres_coucher
+    ? min < soleil.lever || min >= soleil.coucher + finDuSoirApresCoucher(v)
     : min < 7 * 60 || min >= 22 * 60;
   if (nuit) return "nuit";
   if (min < v.tonte_fenetre_ideale_debut) return "tot";
   if (min < v.tonte_fenetre_ideale_fin) return "ideal";
   const soirDebut = soleil ? soleil.coucher - v.tonte_soir_avant_coucher : 17 * 60;
-  const soirFin = soleil ? soleil.coucher + v.tonte_soir_apres_coucher : 19 * 60;
+  const soirFin = soleil ? soleil.coucher + finDuSoirApresCoucher(v) : 19 * 60;
   if (min >= soirDebut && min < soirFin) {
     // Comme le moteur : le créneau idéal du soir vit DANS la fenêtre acceptable, jamais au-delà.
     if (soleil
@@ -4376,7 +4393,7 @@ class GazonIntelligentPanel extends HTMLElement {
       return `<p class="note alerte"><ha-icon icon="mdi:weather-sunny-off"></ha-icon><span>Le soleil est inconnu : le soir se replie sur 17 h → 19 h.</span></p>`;
     }
     const debut = c.soleil.coucher - v.tonte_soir_avant_coucher;
-    const fin = c.soleil.coucher + v.tonte_soir_apres_coucher;
+    const fin = c.soleil.coucher + finDuSoirApresCoucher(v);
     // Quand l'ouverture tombe avant la fin du meilleur moment, c'est lui qui passe le relais.
     const relais = debut <= v.tonte_fenetre_ideale_fin;
     const ouverture = relais ? v.tonte_fenetre_ideale_fin : debut;
