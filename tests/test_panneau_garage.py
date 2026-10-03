@@ -82,6 +82,8 @@ function fabriquer(c) {
   p._garageConfirmation = c.confirmation;
   p._fenetre = { contains: () => false };
   p.appels = [];
+  p.toasts = [];
+  p._afficherToast = (texte, erreur) => p.toasts.push([texte, Boolean(erreur)]);
   p._service = async (domaine, service, donnees, message) => { p.appels.push([domaine, service, donnees, message]); return true; };
   p._rendre = () => {};
   p._rendreQuandLibre = () => {};
@@ -120,7 +122,20 @@ const sorties = cas.map((c) => {
     if (c.type !== "commande") continue;
     const p = fabriquer(c);
     await p._commande(c.nom, { dataset: {} });
-    sorties[i] = { appels: p.appels, confirmation: p._garageConfirmation === undefined ? "aucune" : p._garageConfirmation };
+    sorties[i] = { appels: p.appels, toasts: p.toasts, confirmation: p._garageConfirmation === undefined ? "aucune" : p._garageConfirmation };
+  }
+  for (let i = 0; i < cas.length; i++) {
+    const c = cas[i];
+    if (c.type !== "course") continue;
+    // Deux clics : « demander », puis (l'état de Home Assistant ayant changé) « confirmer ».
+    const p = fabriquer(c);
+    clic(p, { "[data-garage-demander]": { dataset: { garageDemander: c.verbe }, disabled: false } });
+    const demande = p._garageConfirmation;
+    Object.assign(p._hass.states["sensor.etat"].attributes, c.changement_attributs || {});
+    if (c.changement_volet) p._hass.states["cover.garage"].state = c.changement_volet;
+    const html = p._commandesGarageHtml("cover.garage");
+    await p._commande(c.nom, { dataset: {} });
+    sorties[i] = { demande, html, appels: p.appels, toasts: p.toasts, confirmation: p._garageConfirmation === undefined ? "aucune" : p._garageConfirmation };
   }
   process.stdout.write(JSON.stringify(sorties));
   process.exit(0);
@@ -206,14 +221,18 @@ class CommandesDuVoletTests(unittest.TestCase):
 
 @unittest.skipUnless(NODE, "Node n'est pas installé")
 class EnvoiDesCommandesTests(unittest.TestCase):
-    def _envoyer(self, nom: str) -> dict:
-        (sortie,) = _rendre([{"type": "commande", "nom": nom, "volet": "open", "confirmation": "fermer"}])
+    def _envoyer(self, nom: str, volet: str = "open", **extra) -> dict:
+        (sortie,) = _rendre([{"type": "commande", "nom": nom, "volet": volet, "confirmation": "fermer", **extra}])
         return sortie
 
     def test_la_confirmation_envoie_le_bon_service_au_bon_volet(self) -> None:
-        for nom, service in (("garage-ouvrir", "open_cover"), ("garage-fermer", "close_cover"), ("garage-arreter", "stop_cover")):
+        for nom, service, volet in (
+            ("garage-ouvrir", "open_cover", "closed"),
+            ("garage-fermer", "close_cover", "open"),
+            ("garage-arreter", "stop_cover", "opening"),
+        ):
             with self.subTest(commande=nom):
-                sortie = self._envoyer(nom)
+                sortie = self._envoyer(nom, volet)
                 self.assertEqual(len(sortie["appels"]), 1)
                 domaine, appele, donnees, _ = sortie["appels"][0]
                 self.assertEqual((domaine, appele, donnees), ("cover", service, {"entity_id": "cover.garage"}))
@@ -223,6 +242,99 @@ class EnvoiDesCommandesTests(unittest.TestCase):
         (sortie,) = _rendre([{"type": "clics", "volet": "open"}])
         self.assertEqual(sortie["trace"], ["fermer", "aucune", "ouvrir"])
         self.assertEqual(sortie["appels"], [], "demander ou annuler ne doit jamais envoyer de commande")
+
+
+DOCKEE = {"mower_is_docked": True, "mower_is_outside": False}
+DEHORS = {"mower_is_docked": False, "mower_is_outside": True}
+
+
+@unittest.skipUnless(NODE, "Node n'est pas installé")
+class GardeDeLaFermetureTests(unittest.TestCase):
+    """Fermer le volet sur une tondeuse dehors l'enfermerait dehors.
+
+    ⚠️ Jugé à l'affichage du bouton ET juste avant l'envoi : la confirmation demandée par un
+    premier clic survit aux mises à jour de Home Assistant, et la tondeuse peut sortir entre les
+    deux clics (signalé en revue de la PR #81). Le texte « vérifier que la tondeuse n'est pas
+    dehors » n'est pas une garde.
+    """
+
+    def _commandes(self, volet: str, attributs: dict, **extra) -> str:
+        (sortie,) = _rendre([{"type": "commandes", "volet": volet, "attributs": attributs, **extra}])
+        return sortie["html"]
+
+    def _course(self, **cas) -> dict:
+        (sortie,) = _rendre([{"type": "course", "verbe": "fermer", "nom": "garage-fermer", **cas}])
+        return sortie
+
+    # ---- au rendu ----
+    def test_fermer_est_grise_quand_la_tondeuse_est_dehors(self) -> None:
+        html = self._commandes("open", DEHORS, position=100)
+        self.assertIn("disabled", _bouton(html, 'data-garage-demander="fermer"'))
+        self.assertIn("La tondeuse est dehors : le volet reste ouvert pour son retour.", html)
+
+    def test_fermer_est_grise_quand_la_position_de_la_tondeuse_n_est_pas_confirmee(self) -> None:
+        html = self._commandes("open", {"mower_is_docked": False}, position=100)
+        self.assertIn("disabled", _bouton(html, 'data-garage-demander="fermer"'))
+        self.assertIn("n&#39;est pas confirmée à sa base", html)
+
+    def test_fermer_est_possible_quand_la_tondeuse_est_rentree(self) -> None:
+        html = self._commandes("open", DOCKEE, position=100)
+        self.assertNotIn("disabled", _bouton(html, 'data-garage-demander="fermer"'))
+
+    def test_sans_information_sur_la_tondeuse_fermer_reste_possible(self) -> None:
+        """Aucune donnée de présence publiée (pas de tondeuse suivie) : on ne bloque pas à l'aveugle."""
+        html = self._commandes("open", {}, position=100)
+        self.assertNotIn("disabled", _bouton(html, 'data-garage-demander="fermer"'))
+
+    def test_ouvrir_reste_possible_tondeuse_dehors(self) -> None:
+        """Ouvrir ne piège personne : c'est même ce qu'il faut pour son retour."""
+        html = self._commandes("closed", DEHORS)
+        self.assertNotIn("disabled", _bouton(html, 'data-garage-demander="ouvrir"'))
+
+    # ---- entre les deux clics ----
+    def test_la_tondeuse_sort_entre_la_demande_et_la_confirmation_pas_de_bouton_final(self) -> None:
+        sortie = self._course(volet="open", position=100, attributs=DOCKEE, changement_attributs=DEHORS)
+        self.assertEqual(sortie["demande"], "fermer", "la demande a bien été prise quand la tondeuse était rentrée")
+        self.assertNotIn('data-commande="garage-fermer"', sortie["html"])
+        self.assertIn("La confirmation est annulée", sortie["html"])
+        self.assertIn("La tondeuse est dehors", sortie["html"])
+
+    def test_la_tondeuse_sort_entre_les_deux_clics_l_ordre_n_est_jamais_envoye(self) -> None:
+        sortie = self._course(volet="open", position=100, attributs=DOCKEE, changement_attributs=DEHORS)
+        self.assertEqual(sortie["appels"], [], "aucune fermeture ne doit partir sur une tondeuse dehors")
+        self.assertEqual(len(sortie["toasts"]), 1)
+        self.assertTrue(sortie["toasts"][0][1], "l'annulation est signalée comme une erreur")
+        self.assertIn("Commande annulée : La tondeuse est dehors", sortie["toasts"][0][0])
+        self.assertEqual(sortie["confirmation"], "aucune")
+
+    def test_le_volet_s_est_deja_ferme_entre_les_deux_clics(self) -> None:
+        sortie = self._course(volet="open", position=100, attributs=DOCKEE, changement_volet="closed")
+        self.assertEqual(sortie["appels"], [])
+        self.assertIn("Le volet est déjà fermé", sortie["toasts"][0][0])
+
+    def test_le_volet_est_devenu_indisponible_entre_les_deux_clics(self) -> None:
+        sortie = self._course(volet="open", position=100, attributs=DOCKEE, changement_volet="unavailable")
+        self.assertEqual(sortie["appels"], [])
+        self.assertIn("Le volet ne répond pas", sortie["toasts"][0][0])
+
+    def test_rien_ne_change_entre_les_deux_clics_la_fermeture_part(self) -> None:
+        sortie = self._course(volet="open", position=100, attributs=DOCKEE)
+        self.assertEqual(sortie["appels"][0][:3], ["cover", "close_cover", {"entity_id": "cover.garage"}])
+        self.assertEqual(sortie["toasts"], [])
+
+    def test_l_ouverture_deja_faite_entre_les_deux_clics_n_est_pas_renvoyee(self) -> None:
+        sortie = self._course(verbe="ouvrir", nom="garage-ouvrir", volet="closed", attributs=DEHORS, changement_volet="open")
+        self.assertEqual(sortie["appels"], [])
+        self.assertIn("Le volet est déjà ouvert", sortie["toasts"][0][0])
+
+    def test_ouvrir_part_meme_tondeuse_dehors(self) -> None:
+        sortie = self._course(verbe="ouvrir", nom="garage-ouvrir", volet="closed", attributs=DEHORS)
+        self.assertEqual(sortie["appels"][0][1], "open_cover")
+
+    def test_l_arret_n_est_jamais_refuse_meme_tondeuse_dehors(self) -> None:
+        (sortie,) = _rendre([{"type": "commande", "nom": "garage-arreter", "volet": "closing", "attributs": DEHORS}])
+        self.assertEqual(sortie["appels"][0][1], "stop_cover")
+        self.assertEqual(sortie["toasts"], [])
 
 
 @unittest.skipUnless(NODE, "Node n'est pas installé")

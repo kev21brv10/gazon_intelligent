@@ -7230,7 +7230,11 @@ class GazonIntelligentPanel extends HTMLElement {
       } else if (nom === "garage-ouvrir" || nom === "garage-fermer" || nom === "garage-arreter") {
         const volet = this._donnees?.garage_tondeuse?.choisie;
         this._garageConfirmation = undefined;
-        if (volet) {
+        // Rejugé ICI, avec l'état d'AUJOURD'HUI : la confirmation date d'un clic précédent.
+        const refus = nom === "garage-arreter" ? "" : this._refusVolet(nom);
+        if (refus) {
+          this._afficherToast(`Commande annulée : ${refus}`, true);
+        } else if (volet) {
           const [service, message] = {
             "garage-ouvrir": ["open_cover", "Ouverture du volet demandée."],
             "garage-fermer": ["close_cover", "Fermeture du volet demandée."],
@@ -7490,6 +7494,31 @@ class GazonIntelligentPanel extends HTMLElement {
     });
   }
 
+  // Pourquoi un ordre de volet est REFUSÉ maintenant, ou une chaîne vide s'il peut partir.
+  // ⚠️ JUGÉ À CHAQUE FOIS, jamais mémorisé : la confirmation demandée par un premier clic survit aux
+  // mises à jour de Home Assistant, et la tondeuse peut sortir entre les deux clics. Une fermeture
+  // sur une tondeuse dehors — ou dont la position n'est pas confirmée — l'enfermerait dehors ; le
+  // texte « vérifier que la tondeuse n'est pas dehors » n'est pas une garde. Appelée à l'affichage
+  // du bouton ET juste avant l'envoi (`_commande`). L'arrêt n'est jamais refusé : il est sans risque.
+  _refusVolet(commande) {
+    const volet = this._donnees?.garage_tondeuse?.choisie;
+    const etat = volet ? this._hass?.states?.[volet] : null;
+    if (!etat) return "Le volet n'est pas disponible.";
+    const brut = String(etat.state || "").toLowerCase();
+    if (brut === "unavailable" || brut === "unknown") return "Le volet ne répond pas.";
+    if (commande === "garage-ouvrir" && brut === "open") return "Le volet est déjà ouvert.";
+    if (commande === "garage-fermer") {
+      if (brut === "closed") return "Le volet est déjà fermé.";
+      if (this._a("tonte_etat", "mower_is_outside") === true) {
+        return "La tondeuse est dehors : le volet reste ouvert pour son retour.";
+      }
+      if (this._a("tonte_etat", "mower_is_docked") === false) {
+        return "La position de la tondeuse n'est pas confirmée à sa base : le volet reste ouvert.";
+      }
+    }
+    return "";
+  }
+
   // Ouvrir, fermer, arrêter le volet à la main (test, dépannage). L'ordre d'ouverture ou de
   // fermeture demande une confirmation ; l'arrêt, lui, agit tout de suite.
   _commandesGarageHtml(entityId) {
@@ -7508,6 +7537,12 @@ class GazonIntelligentPanel extends HTMLElement {
     const confirmation = this._garageConfirmation;
     if (admin && demandes[confirmation]) {
       const d = demandes[confirmation];
+      const refus = this._refusVolet(d.commande);
+      if (refus) {
+        return `<div class="commandes-garage">
+        <p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>${esc(refus)} La confirmation est annulée.</span></p>
+        <div class="rangee-boutons"><button class="bouton-contour" data-garage-annuler>Compris</button></div></div>`;
+      }
       return `<div class="commandes-garage">
         <p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>${esc(d.question)}</span></p>
         <div class="rangee-boutons">
@@ -7515,7 +7550,8 @@ class GazonIntelligentPanel extends HTMLElement {
           <button class="bouton-contour" data-garage-annuler>Annuler</button>
         </div></div>`;
     }
-    const inactif = (verbe) => !admin || indisponible || enMouvement || (verbe === "ouvrir" ? brut === "open" : brut === "closed");
+    const refus = { ouvrir: this._refusVolet("garage-ouvrir"), fermer: this._refusVolet("garage-fermer") };
+    const inactif = (verbe) => !admin || indisponible || enMouvement || Boolean(refus[verbe]);
     const bouton = (verbe) => `<button class="bouton-contour" data-garage-demander="${verbe}" ${inactif(verbe) ? "disabled" : ""}><ha-icon icon="${demandes[verbe].icone}"></ha-icon>${esc(demandes[verbe].texte)}</button>`;
     const arret = (fonctions & 8) !== 0
       ? `<button class="bouton-blanc" data-commande="garage-arreter" ${admin && enMouvement && !occupe("garage-arreter") ? "" : "disabled"}><ha-icon icon="mdi:stop-circle-outline"></ha-icon>Arrêter</button>`
@@ -7523,7 +7559,9 @@ class GazonIntelligentPanel extends HTMLElement {
     const actif = this._a("tonte_etat", "mower_control_mode") === "actif";
     const note = indisponible
       ? `<p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>Le volet ne répond pas : les commandes sont désactivées.</span></p>`
-      : actif
+      : /tondeuse/.test(refus.fermer)
+        ? `<p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>${esc(refus.fermer)}</span></p>`
+        : actif
         ? `<p class="note"><ha-icon icon="mdi:information-outline"></ha-icon><span>Pilotage actif : le pilote peut reprendre la main, par exemple refermer le volet après une rentrée confirmée.</span></p>`
         : "";
     return `<div class="commandes-garage"><div class="rangee-boutons">${bouton("ouvrir")}${bouton("fermer")}${arret}</div>${note}</div>`;

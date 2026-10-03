@@ -8,6 +8,13 @@
   sont grisés selon l'état du volet (pas d'ouverture d'un volet ouvert, rien pendant un
   mouvement sauf l'arrêt, rien s'il est indisponible) et réservés aux administrateurs. En
   pilotage actif, la page prévient que le pilote peut reprendre la main.
+- **La fermeture à la main ne peut pas enfermer la tondeuse dehors** : « Fermer » est grisé quand
+  la tondeuse est dehors ou que sa position à la base n'est pas confirmée, et l'ordre est
+  REJUGÉ juste avant d'être envoyé. La confirmation demandée par un premier clic survit en
+  effet aux mises à jour de Home Assistant : si la tondeuse sort entre les deux clics, le bouton
+  final disparaît et aucun ordre ne part (idem pour un volet devenu fermé, ouvert ou
+  indisponible entre-temps). L'arrêt n'est jamais refusé ; ouvrir reste possible tondeuse
+  dehors, c'est ce qu'il faut pour son retour.
 - **Dernière commande et prochaine action du pilote** : la carte du garage et le bloc
   « Pilotage » de l'onglet Tonte disent ce que le pilote a envoyé en dernier (« départ,
   aujourd'hui à 20 h 02 ») ; la carte du garage annonce aussi la prochaine action prévue du
@@ -17,9 +24,10 @@
 - **Libellé corrigé** : « Ouvrir automatiquement le garage pour le retour ? » devient « …dès que
   la tondeuse est dehors ou rentre ? » — ce réglage ouvre aussi le volet pour un départ lancé
   depuis l'appli, ce que l'ancien libellé ne disait pas.
-- **Vérifié** : suite complète avec 2 294 tests et 3 249 sous-tests, ruff et mypy (53
-  fichiers) verts ; la carte est rendue dans chaque état du volet et les clics sont rejoués,
-  avec onze variantes cassées volontairement, toutes détectées.
+- **Vérifié** : suite complète avec 2 307 tests et 3 249 sous-tests, ruff et mypy (53
+  fichiers) verts ; la carte est rendue dans chaque état du volet, les clics sont rejoués (y
+  compris l'état qui change entre les deux clics), avec vingt-deux variantes cassées
+  volontairement, toutes détectées.
 
 ## 1.0.0-rc.17
 
