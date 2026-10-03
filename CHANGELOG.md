@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.0.0-rc.21
+
+- **Une passe finie parce que le travail est terminé n'est plus étiquetée « rappelée »** :
+  quand la progression du travail atteint 100 %, l'espacement minimal entre deux tontes retire
+  l'autorisation de tondre dans le même cycle. Le carnet de passes y voyait un rappel
+  (`mower_last_pass_end_reason: rappelee`) alors qu'aucune commande de retour n'avait été
+  envoyée : la tondeuse rentrait parce qu'elle avait fini. Relevé sur un vrai travail (100 % à
+  19:55, batterie 61 %). La passe sortait aussi de `mower_autonomous_return_battery_median`,
+  la mesure du niveau auquel la machine décide d'elle-même que c'est fini. Elle est maintenant
+  `retour_autonome` et compte dans cette médiane. Le travail est dit « terminé » seulement si la
+  progression a été vue sous 100 % puis atteint 100 % dans la même passe (un ancien 100 au
+  départ, ou une progression figée à 100, n'en est pas un) ; une vraie passe rappelée, la
+  batterie vide et les passes bloquées gardent leur étiquette. Le fait brut est conservé au
+  carnet (`travail_termine`).
+- **Vérifié** : suite complète avec 2 280 tests et 3 242 sous-tests, ruff et mypy (53
+  fichiers) verts ; le classement est rejoué sur le scénario réel et sur six variantes cassées
+  volontairement, toutes détectées. Le cycle lit désormais la progression du travail AVANT le
+  carnet de passes (elle lui arrivait vide), et un test fait tourner le vrai cycle pour le
+  garantir.
+
 ## 1.0.0-rc.17
 
 - **Le motif affiché pendant un rappel de tonte dit enfin la vraie cause** : quand
