@@ -75,7 +75,7 @@ const DISPOSITION = {
       titre: "Quand la tondeuse peut-elle travailler ?",
       phrase: "Le dessin montre la journée en cours, avec le lever et le coucher du soleil réels.",
       dessin: "journee_tonte",
-      cles: ["tonte_fenetre_ideale_debut", "tonte_fenetre_ideale_fin"],
+      cles: ["tonte_fenetre_ideale_debut", "tonte_fenetre_ideale_fin", "tonte_soir_ideal_debut_avant_coucher", "tonte_soir_ideal_fin_avant_coucher"],
       place: ["gauche", "large"],
     },
     {
@@ -591,6 +591,7 @@ const ONGLET_ENTITES = {
 const PROFIL_GAZON_COMMUN = {
   tonte_fenetre_ideale_debut: 600, tonte_fenetre_ideale_fin: 840,
   tonte_soir_avant_coucher: 300, tonte_soir_apres_coucher: 30,
+  tonte_soir_ideal_debut_avant_coucher: 120, tonte_soir_ideal_fin_avant_coucher: 30,
   tonte_vent_a_eviter: 20, tonte_vent_bloque: 40,
   tonte_temperature_a_eviter: 25, tonte_temperature_bloquee: 30,
   tonte_humidite_bloquee: 90, tonte_max_par_jour: 2,
@@ -954,9 +955,26 @@ function uniteAccordee(unite, valeur) {
   return UNITES_AU_PLURIEL.has(unite) && Math.abs(valeur) < 2 ? unite.slice(0, -1) : unite;
 }
 
+// Une durée comptée à partir du coucher du soleil : positive = avant, négative = après.
+const REGLAGES_RELATIFS_AU_COUCHER = new Set(["tonte_soir_ideal_fin_avant_coucher"]);
+
+function relatifAuCoucherFr(v) {
+  if (v > 0) return `${dureeFr(v)} avant le coucher`;
+  if (v < 0) return `${dureeFr(-v)} après le coucher`;
+  return "au coucher";
+}
+
+// Minutes après le coucher où finit le soir (et où commence la nuit) : MÊME règle que le moteur
+// (`decision_mowing._fin_du_soir_apres_coucher`) — le réglage « après le coucher », sauf si la
+// fin de l'idéal du soir tombe plus tard.
+function finDuSoirApresCoucher(v) {
+  return Math.max(v.tonte_soir_apres_coucher, -v.tonte_soir_ideal_fin_avant_coucher);
+}
+
 function valeurFr(r, v) {
   if (v === undefined || v === null || Number.isNaN(v)) return "—";
   if (r.genre === "heure") return heureFr(v);
+  if (r.genre === "duree" && REGLAGES_RELATIFS_AU_COUCHER.has(r.cle)) return relatifAuCoucherFr(v);
   if (r.genre === "duree") return dureeFr(v);
   if (r.genre === "jour") return `jour ${Math.round(v)}`;
   const n = nombreFr(v, Math.max(decimalesDe(r.pas), 0));
@@ -1136,14 +1154,20 @@ function planDepuisZones(zones, passages, pauseS) {
 
 function classeTonte(min, v, soleil) {
   const nuit = soleil
-    ? min < soleil.lever || min >= soleil.coucher + v.tonte_soir_apres_coucher
+    ? min < soleil.lever || min >= soleil.coucher + finDuSoirApresCoucher(v)
     : min < 7 * 60 || min >= 22 * 60;
   if (nuit) return "nuit";
   if (min < v.tonte_fenetre_ideale_debut) return "tot";
   if (min < v.tonte_fenetre_ideale_fin) return "ideal";
   const soirDebut = soleil ? soleil.coucher - v.tonte_soir_avant_coucher : 17 * 60;
-  const soirFin = soleil ? soleil.coucher + v.tonte_soir_apres_coucher : 19 * 60;
-  if (min >= soirDebut && min < soirFin) return "possible";
+  const soirFin = soleil ? soleil.coucher + finDuSoirApresCoucher(v) : 19 * 60;
+  if (min >= soirDebut && min < soirFin) {
+    // Comme le moteur : le créneau idéal du soir vit DANS la fenêtre acceptable, jamais au-delà.
+    if (soleil
+      && min >= soleil.coucher - v.tonte_soir_ideal_debut_avant_coucher
+      && min < soleil.coucher - v.tonte_soir_ideal_fin_avant_coucher) return "ideal";
+    return "possible";
+  }
   if (min < 22 * 60) return "eviter";
   return "nuit";
 }
@@ -4369,12 +4393,20 @@ class GazonIntelligentPanel extends HTMLElement {
       return `<p class="note alerte"><ha-icon icon="mdi:weather-sunny-off"></ha-icon><span>Le soleil est inconnu : le soir se replie sur 17 h → 19 h.</span></p>`;
     }
     const debut = c.soleil.coucher - v.tonte_soir_avant_coucher;
-    const fin = c.soleil.coucher + v.tonte_soir_apres_coucher;
+    const fin = c.soleil.coucher + finDuSoirApresCoucher(v);
     // Quand l'ouverture tombe avant la fin du meilleur moment, c'est lui qui passe le relais.
     const relais = debut <= v.tonte_fenetre_ideale_fin;
+    const ouverture = relais ? v.tonte_fenetre_ideale_fin : debut;
+    // Le créneau idéal ne dépasse jamais la fenêtre du soir (même intersection que le moteur) ;
+    // si les réglages le font tomber hors de cette fenêtre, il n'existe pas : on ne l'annonce pas.
+    const idealDebut = Math.max(c.soleil.coucher - v.tonte_soir_ideal_debut_avant_coucher, ouverture);
+    const idealFin = Math.min(c.soleil.coucher - v.tonte_soir_ideal_fin_avant_coucher, fin);
+    const ideal = idealDebut < idealFin
+      ? `, dont de <b>${heureFr(idealDebut)}</b> à <b>${heureFr(idealFin)}</b> en créneau idéal`
+      : "";
     return `<div class="goutte-carte soir">
         <ha-icon icon="mdi:weather-sunset-down"></ha-icon>
-        <p>Aujourd'hui, le soleil se couche à <b>${heureFr(c.soleil.coucher)}</b> : la tondeuse peut tondre de <b>${heureFr(relais ? v.tonte_fenetre_ideale_fin : debut)}</b> à <b>${heureFr(fin)}</b>.${relais ? " (Le soir commence dès la fin du meilleur moment.)" : ""}</p>
+        <p>Aujourd'hui, le soleil se couche à <b>${heureFr(c.soleil.coucher)}</b> : la tondeuse peut tondre de <b>${heureFr(ouverture)}</b> à <b>${heureFr(fin)}</b>${ideal}.${relais ? " (Le soir commence dès la fin du meilleur moment.)" : ""}</p>
       </div>`;
   }
 

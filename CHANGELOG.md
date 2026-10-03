@@ -1,5 +1,48 @@
 # Changelog
 
+## 1.0.0-rc.19
+
+- **Un sous-créneau « idéal » le soir, pour les nouveaux départs réglés sur « idéal
+  seulement »** : ce réglage ne laissait partir un nouveau cycle que dans la fenêtre du
+  matin (10h-14h) — une tondeuse prête, autorisée, par ailleurs disponible, attendait le
+  lendemain matin même si une bonne partie de soirée dégagée restait disponible. Un
+  sous-créneau « idéal » du soir, par défaut de 2h à 30 min avant le coucher du soleil
+  (ancré sur le coucher réel, comme le créneau acceptable existant), lui donne désormais
+  le même statut que le matin sans changer le créneau acceptable plus large qui l'englobe.
+  Réglable (`tonte_soir_ideal_debut_avant_coucher` / `tonte_soir_ideal_fin_avant_coucher`,
+  page Gazon → Réglages → Tonte). Les blocages existants (vent, chaleur, pluie, soirée
+  chaude d'été) gardent la priorité, comme pour le créneau acceptable.
+- **Les réglages de l'idéal du soir se règlent sur la carte « Quand la tondeuse peut-elle
+  travailler ? »** : c'est elle qui dessine la journée avec le lever et le coucher du soleil,
+  donc le meilleur moment du matin et celui du soir se règlent au même endroit (la carte « Le
+  soir » garde l'ouverture et la fin du créneau du soir). Libellés reformulés pour se lire
+  seuls : « Le soir, combien de temps avant le coucher du soleil commence le meilleur
+  moment ? ». La recherche de réglages amène à cette carte.
+- **Un idéal du soir ne peut plus commencer avant l'ouverture du soir** : le moteur ne rend
+  « idéal » qu'à l'intérieur de la fenêtre acceptable du soir, donc un idéal réglé plus tôt
+  que l'ouverture du soir (par exemple soir ouvert 1 h avant le coucher et idéal dès 4 h) était
+  écrêté en silence, voire disparaissait, et un départ réglé sur « idéal seulement » ne sortait
+  jamais le soir. Le réglage est maintenant refusé en clair, sur la page comme côté serveur
+  (« Le meilleur moment du soir ne peut pas commencer avant l'ouverture du soir. »). Les
+  valeurs par défaut (idéal dès 2 h, soir ouvert 5 h avant) sont inchangées.
+- **Le créneau idéal du soir peut finir après le coucher du soleil** : sa fin se règle
+  maintenant de 2 h avant à 1 h 30 après le coucher (`tonte_soir_ideal_fin_avant_coucher`,
+  valeurs négatives = après le coucher ; affichée « 30 min avant le coucher », « au coucher »,
+  « 1 h après le coucher »). Une fin d'idéal après le coucher repousse aussi la fin du soir et
+  le début de la nuit (le plus tardif des deux réglages l'emporte, dans une seule fonction
+  utilisée par la fenêtre et par la détection de la nuit) : l'idéal n'est jamais écrêté en
+  silence, et la tondeuse n'est pas rappelée avant sa fin. Valeur par défaut inchangée
+  (30 min avant le coucher). Un départ réglé sur « idéal seulement » peut ainsi partir
+  jusqu'à la fin de ce créneau.
+- **La page dessine le même créneau idéal que le moteur** : le sous-créneau idéal ne vit
+  qu'à l'intérieur de la fenêtre acceptable du soir. Avec des réglages non par défaut (soir
+  resserré à 1 h, idéal de 2 h à 30 min), l'aperçu de la page Tonte et sa phrase annonçaient
+  un idéal dès 18 h alors que le moteur ne le publiait qu'à partir de 19 h ; quand le
+  sous-créneau tombe entièrement hors de la fenêtre du soir, la page ne l'annonce plus du
+  tout. Comparé minute par minute au moteur, sur plusieurs jeux de réglages.
+- **Vérifié** : suite complète avec 2 305 tests et 8 310 sous-tests, ruff et mypy (53
+  fichiers) verts.
+
 ## 1.0.0-rc.17
 
 - **Le motif affiché pendant un rappel de tonte dit enfin la vraie cause** : quand

@@ -100,6 +100,19 @@ _MOWING_EVENING_START_BEFORE_SUNSET_MIN = 300
 # fin de la fenêtre. 30 min après le coucher, c'est la fin du crépuscule civil, qui dure en France
 # métropolitaine de 28 min (sud, équinoxes) à 47 min (nord, juin).
 _MOWING_EVENING_END_AFTER_SUNSET_MIN = 30
+# FENÊTRE IDÉALE DU SOIR — sous-ensemble de la fenêtre acceptable ci-dessus, demandé le
+# 01/10/2026 : le réglage « créneaux de départ : idéal seulement » (mower_control_constants)
+# ne laissait partir un nouveau cycle qu'entre `_MOWING_WINDOW_IDEAL_START` et `_END` (le
+# matin), forçant la tondeuse à attendre le lendemain matin même une bonne partie de soirée
+# dégagée. Même ancrage sur le coucher réel que la fenêtre acceptable, pas une heure figée.
+_MOWING_EVENING_IDEAL_START_BEFORE_SUNSET_MIN = 120
+# Finit 30 min avant le coucher, pas au coucher : même marge de séchage que la fin de la
+# fenêtre acceptable ci-dessus, pour une herbe coupée en fin de fenêtre idéale du soir.
+_MOWING_EVENING_IDEAL_END_BEFORE_SUNSET_MIN = 30
+# Une valeur NÉGATIVE de ce réglage place la fin de l'idéal APRÈS le coucher (demandé le
+# 03/10/2026 : « tondre idéalement jusqu'à 1 h après le coucher »). Elle repousse alors aussi la
+# fin du soir et le début de la nuit (`_fin_du_soir_apres_coucher`) : sinon l'idéal serait écrêté
+# en silence par la fin du soir, ou pire, la nuit tomberait avant la fin d'un créneau « idéal ».
 # Repli quand le coucher est inconnu (sun.sun absent au démarrage) : les anciennes bornes fixes.
 # Volontairement conservateur — cf. la falaise de minuit, où un repli optimiste a coûté cher.
 _MOWING_WINDOW_ACCEPTABLE_START = 17
@@ -603,10 +616,22 @@ def _encore_le_jour_apres_le_coucher(
     if hour is None or sunset is None:
         return False
     # Minutes entières, comme la fenêtre du soir : les deux frontières doivent tomber ensemble.
-    # Même réglage que la fin de la fenêtre du soir, pour la même raison.
+    # Même fonction que la fin de la fenêtre du soir, pour la même raison.
     minute = round(float(hour) * 60.0)
-    apres_coucher = int(lire(context.reglages, "tonte_soir_apres_coucher", _MOWING_EVENING_END_AFTER_SUNSET_MIN))
-    return 12 * 60 <= minute < sunset + apres_coucher
+    return 12 * 60 <= minute < sunset + _fin_du_soir_apres_coucher(context.reglages)
+
+
+def _fin_du_soir_apres_coucher(reglages: Any) -> int:
+    """Minutes après le coucher où finit le soir (et où commence la nuit). SOURCE UNIQUE.
+
+    Le réglage « après le coucher », sauf si la fin de l'idéal du soir tombe plus tard : un
+    créneau « idéal » ne doit jamais être coupé par la nuit ni par la fin de la fenêtre.
+    """
+    apres_coucher = int(lire(reglages, "tonte_soir_apres_coucher", _MOWING_EVENING_END_AFTER_SUNSET_MIN))
+    ideal_fin_avant = int(
+        lire(reglages, "tonte_soir_ideal_fin_avant_coucher", _MOWING_EVENING_IDEAL_END_BEFORE_SUNSET_MIN)
+    )
+    return max(apres_coucher, -ideal_fin_avant)
 
 
 def _resolve_mowing_window(
@@ -644,7 +669,13 @@ def _resolve_mowing_window(
     ideal_debut = int(lire(reglages, "tonte_fenetre_ideale_debut", _MOWING_WINDOW_IDEAL_START * 60))
     ideal_fin = int(lire(reglages, "tonte_fenetre_ideale_fin", _MOWING_WINDOW_IDEAL_END * 60))
     soir_avant_coucher = int(lire(reglages, "tonte_soir_avant_coucher", _MOWING_EVENING_START_BEFORE_SUNSET_MIN))
-    soir_apres_coucher = int(lire(reglages, "tonte_soir_apres_coucher", _MOWING_EVENING_END_AFTER_SUNSET_MIN))
+    soir_apres_coucher = _fin_du_soir_apres_coucher(reglages)
+    soir_ideal_debut_avant_coucher = int(
+        lire(reglages, "tonte_soir_ideal_debut_avant_coucher", _MOWING_EVENING_IDEAL_START_BEFORE_SUNSET_MIN)
+    )
+    soir_ideal_fin_avant_coucher = int(
+        lire(reglages, "tonte_soir_ideal_fin_avant_coucher", _MOWING_EVENING_IDEAL_END_BEFORE_SUNSET_MIN)
+    )
     vent_a_eviter = float(lire(reglages, "tonte_vent_a_eviter", _MOWING_WINDOW_DISCOURAGED_WIND))
     vent_bloque = float(lire(reglages, "tonte_vent_bloque", _MOWING_WINDOW_BLOCK_WIND))
     chaleur_a_eviter = float(lire(reglages, "tonte_temperature_a_eviter", _MOWING_WINDOW_DISCOURAGED_TEMP_MIN))
@@ -659,12 +690,19 @@ def _resolve_mowing_window(
     minute_courante = round(float(hour) * 60.0)
     soir_debut: float = _MOWING_WINDOW_ACCEPTABLE_START * 60.0
     soir_fin: float = _MOWING_WINDOW_ACCEPTABLE_END * 60.0
+    # Sous-fenêtre « idéale » du soir : seulement quand le coucher réel est connu — sans lui,
+    # rester sur le simple « acceptable » (comme avant ce réglage) plutôt qu'inventer une plage
+    # fixe de plus pour le repli.
+    soir_ideal_debut: float | None = None
+    soir_ideal_fin: float | None = None
     sunset = _minute_du_coucher(weather_profile)
     if sunset is not None:
         # Quand le coucher est tôt (décembre, ~16:55), l'ouverture calculée (11:55) tombe dans
         # l'idéale : sans effet, l'idéale est testée AVANT, et le soir prend le relais à 14:00.
         soir_debut = sunset - soir_avant_coucher
         soir_fin = sunset + soir_apres_coucher
+        soir_ideal_debut = sunset - soir_ideal_debut_avant_coucher
+        soir_ideal_fin = sunset - soir_ideal_fin_avant_coucher
 
     if is_active_rain_weather(weather_profile):
         return "blocked", "Pluie en cours ou imminente."
@@ -705,6 +743,12 @@ def _resolve_mowing_window(
     if soir_debut <= minute_courante < soir_fin:
         if month in {7, 8} and temperature is not None and float(temperature) >= 28:
             return "discouraged", "Fin de journée chaude: à éviter."
+        if (
+            soir_ideal_debut is not None
+            and soir_ideal_fin is not None
+            and soir_ideal_debut <= minute_courante < soir_ideal_fin
+        ):
+            return "ideal", "Fenêtre idéale de fin de journée."
         return "acceptable", "Fenêtre acceptable de fin de journée."
     if ideal_fin <= minute_courante < soir_debut:
         if month in {7, 8} and temperature is not None and float(temperature) >= 28:

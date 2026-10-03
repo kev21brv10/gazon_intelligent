@@ -132,6 +132,23 @@ REGLAGES: tuple[Reglage, ...] = (
         source="decision_mowing._MOWING_EVENING_END_AFTER_SUNSET_MIN (fin du crépuscule civil)",
     ),
     Reglage(
+        "tonte_soir_ideal_debut_avant_coucher", "tonte",
+        "Le soir, combien de temps avant le coucher du soleil commence le meilleur moment ?",
+        "Un sous-créneau du soir compté aussi « idéal », pour qu'un départ réglé sur "
+        "« créneaux de départ : idéal seulement » n'attende pas forcément le lendemain matin.",
+        "duree", 120, 30, 240, 15,
+        source="decision_mowing._MOWING_EVENING_IDEAL_START_BEFORE_SUNSET_MIN",
+    ),
+    Reglage(
+        "tonte_soir_ideal_fin_avant_coucher", "tonte",
+        "Le soir, jusqu'à quand dure le meilleur moment, par rapport au coucher du soleil ?",
+        "Avant le coucher, pour laisser sécher l'herbe coupée ; au coucher ou après, pour tondre "
+        "jusqu'à la tombée de la nuit. Une valeur négative l'étend après le coucher (jusqu'à 1 h 30) : "
+        "il repousse alors aussi la fin du soir, la tondeuse ne rentre pas avant.",
+        "duree", 30, -90, 120, 5,
+        source="decision_mowing._MOWING_EVENING_IDEAL_END_BEFORE_SUNSET_MIN",
+    ),
+    Reglage(
         "tonte_vent_a_eviter", "tonte",
         "À partir de quel vent vaut-il mieux attendre ?",
         "Avec du vent, l'herbe coupée s'envole et la coupe est moins nette.",
@@ -681,6 +698,13 @@ CHOIX: tuple[Choix, ...] = (
 CONTRAINTES: tuple[Contrainte, ...] = (
     Contrainte("tonte_fenetre_ideale_debut", "tonte_fenetre_ideale_fin",
                "Le début du meilleur moment doit venir avant sa fin."),
+    Contrainte("tonte_soir_ideal_fin_avant_coucher", "tonte_soir_ideal_debut_avant_coucher",
+               "La fenêtre idéale du soir doit se terminer plus près du coucher qu'elle ne commence."),
+    # Le moteur ne rend « idéal » qu'à l'intérieur de la fenêtre acceptable du soir : un idéal qui
+    # commencerait avant l'ouverture du soir serait écrêté en silence (voire disparaîtrait).
+    Contrainte("tonte_soir_ideal_debut_avant_coucher", "tonte_soir_avant_coucher",
+               "Le meilleur moment du soir ne peut pas commencer avant l'ouverture du soir.",
+               stricte=False),
     Contrainte("tonte_vent_a_eviter", "tonte_vent_bloque",
                "Le vent « à éviter » doit être plus faible que le vent « interdit »."),
     Contrainte("tonte_temperature_a_eviter", "tonte_temperature_bloquee",
