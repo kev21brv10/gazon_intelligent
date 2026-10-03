@@ -1,5 +1,45 @@
 # Changelog
 
+## 1.0.0-rc.22
+
+- **Ouvrir, fermer, arrêter le volet depuis la page** : la carte « Garage de la tondeuse »
+  gagne trois boutons, pour tester ou dépanner. Ouvrir et fermer demandent une confirmation
+  (« vérifier que personne et rien n'est sous le volet ») ; l'arrêt agit tout de suite. Les boutons
+  sont grisés selon l'état du volet (pas d'ouverture d'un volet ouvert, rien pendant un
+  mouvement sauf l'arrêt, rien s'il est indisponible) et réservés aux administrateurs. En
+  pilotage actif, la page prévient que le pilote peut reprendre la main.
+- **La fermeture à la main ne peut pas enfermer la tondeuse dehors** : « Fermer » est grisé tant
+  que la tondeuse n'est pas CONFIRMÉE rentrée à sa base (dehors, position inconnue, intégration
+  muette après un redémarrage : même refus, le volet reste commandable depuis son entité dans
+  Home Assistant), et l'ordre est REJUGÉ juste avant d'être envoyé. La confirmation demandée par un premier clic survit en
+  effet aux mises à jour de Home Assistant : si la tondeuse sort entre les deux clics, le bouton
+  final disparaît et aucun ordre ne part (idem pour un volet devenu fermé, ouvert ou
+  indisponible entre-temps). L'arrêt n'est jamais refusé ; ouvrir reste possible tondeuse
+  dehors, c'est ce qu'il faut pour son retour.
+- **Les commandes visent le volet ENREGISTRÉ, et lui seul** : les boutons ne s'affichent que pour le
+  volet déjà enregistré (un autre volet choisi sans enregistrer dit « le choix n'est pas
+  enregistré »), chaque bouton porte l'identité du volet qu'il commande, et l'envoi la revérifie :
+  on ne peut plus confirmer un ordre sur un volet affiché et en commander un autre — ou rien, au
+  premier branchement. Un volet en mouvement refuse aussi l'ordre inverse d'une confirmation
+  demandée avant le mouvement ; seul l'arrêt passe.
+- **Ouvrir et Fermer respectent les capacités du volet** : un volet qui ne sait pas s'ouvrir ou
+  se fermer (bits `OPEN` / `CLOSE` de `supported_features`, comme l'arrêt teste le sien) n'a pas
+  le bouton correspondant, avec le motif au survol, et l'ordre est refusé à l'envoi. Un attribut
+  absent ne bloque rien : on ne refuse pas sur ce qu'on ne sait pas.
+- **Dernière commande et prochaine action du pilote** : la carte du garage et le bloc
+  « Pilotage » de l'onglet Tonte disent ce que le pilote a envoyé en dernier (« départ,
+  aujourd'hui à 20 h 02 ») ; la carte du garage annonce aussi la prochaine action prévue du
+  volet, en précisant qu'elle n'est qu'affichée quand le pilotage est en observation.
+- **« Fermé » n'est plus un avertissement** : c'est l'état normal du volet au repos, affiché en
+  neutre. Il n'est signalé (en ambre) que si la tondeuse est dehors.
+- **Libellé corrigé** : « Ouvrir automatiquement le garage pour le retour ? » devient « …dès que
+  la tondeuse est dehors ou rentre ? » — ce réglage ouvre aussi le volet pour un départ lancé
+  depuis l'appli, ce que l'ancien libellé ne disait pas.
+- **Vérifié** : suite complète avec 2 333 tests et 3 261 sous-tests, ruff et mypy (53
+  fichiers) verts ; la carte est rendue dans chaque état du volet, les clics sont rejoués (y
+  compris l'état qui change entre les deux clics), avec trente-cinq variantes cassées
+  volontairement, toutes détectées.
+
 ## 1.0.0-rc.17
 
 - **Le motif affiché pendant un rappel de tonte dit enfin la vraie cause** : quand
