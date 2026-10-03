@@ -8,9 +8,10 @@
   sont grisés selon l'état du volet (pas d'ouverture d'un volet ouvert, rien pendant un
   mouvement sauf l'arrêt, rien s'il est indisponible) et réservés aux administrateurs. En
   pilotage actif, la page prévient que le pilote peut reprendre la main.
-- **La fermeture à la main ne peut pas enfermer la tondeuse dehors** : « Fermer » est grisé quand
-  la tondeuse est dehors ou que sa position à la base n'est pas confirmée, et l'ordre est
-  REJUGÉ juste avant d'être envoyé. La confirmation demandée par un premier clic survit en
+- **La fermeture à la main ne peut pas enfermer la tondeuse dehors** : « Fermer » est grisé tant
+  que la tondeuse n'est pas CONFIRMÉE rentrée à sa base (dehors, position inconnue, intégration
+  muette après un redémarrage : même refus, le volet reste commandable depuis son entité dans
+  Home Assistant), et l'ordre est REJUGÉ juste avant d'être envoyé. La confirmation demandée par un premier clic survit en
   effet aux mises à jour de Home Assistant : si la tondeuse sort entre les deux clics, le bouton
   final disparaît et aucun ordre ne part (idem pour un volet devenu fermé, ouvert ou
   indisponible entre-temps). L'arrêt n'est jamais refusé ; ouvrir reste possible tondeuse
@@ -24,7 +25,7 @@
 - **Libellé corrigé** : « Ouvrir automatiquement le garage pour le retour ? » devient « …dès que
   la tondeuse est dehors ou rentre ? » — ce réglage ouvre aussi le volet pour un départ lancé
   depuis l'appli, ce que l'ancien libellé ne disait pas.
-- **Vérifié** : suite complète avec 2 307 tests et 3 249 sous-tests, ruff et mypy (53
+- **Vérifié** : suite complète avec 2 309 tests et 3 254 sous-tests, ruff et mypy (53
   fichiers) verts ; la carte est rendue dans chaque état du volet, les clics sont rejoués (y
   compris l'état qui change entre les deux clics), avec vingt-deux variantes cassées
   volontairement, toutes détectées.

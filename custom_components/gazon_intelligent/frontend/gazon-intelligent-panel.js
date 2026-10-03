@@ -7512,7 +7512,10 @@ class GazonIntelligentPanel extends HTMLElement {
       if (this._a("tonte_etat", "mower_is_outside") === true) {
         return "La tondeuse est dehors : le volet reste ouvert pour son retour.";
       }
-      if (this._a("tonte_etat", "mower_is_docked") === false) {
+      // STRICT : sans confirmation que la tondeuse est rentrée (position inconnue, intégration qui
+      // ne publie rien, redémarrage de Home Assistant en cours), on ne ferme pas à l'aveugle. Le
+      // volet reste commandable depuis son entité dans Home Assistant.
+      if (this._a("tonte_etat", "mower_is_docked") !== true) {
         return "La position de la tondeuse n'est pas confirmée à sa base : le volet reste ouvert.";
       }
     }

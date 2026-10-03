@@ -160,6 +160,10 @@ def _bouton(html: str, repere: str) -> str:
     return html[debut:html.index(">", debut) + 1]
 
 
+DOCKEE = {"mower_is_docked": True, "mower_is_outside": False}
+DEHORS = {"mower_is_docked": False, "mower_is_outside": True}
+
+
 @unittest.skipUnless(NODE, "Node n'est pas installé")
 class CommandesDuVoletTests(unittest.TestCase):
     def _commandes(self, volet: str, **extra) -> str:
@@ -173,7 +177,7 @@ class CommandesDuVoletTests(unittest.TestCase):
         self.assertIn("disabled", _bouton(html, 'data-commande="garage-arreter"'))
 
     def test_ouvert_on_peut_fermer_pas_ouvrir(self) -> None:
-        html = self._commandes("open", position=100)
+        html = self._commandes("open", position=100, attributs=DOCKEE)
         self.assertIn("disabled", _bouton(html, 'data-garage-demander="ouvrir"'))
         self.assertNotIn("disabled", _bouton(html, 'data-garage-demander="fermer"'))
 
@@ -199,7 +203,7 @@ class CommandesDuVoletTests(unittest.TestCase):
             self.assertIn("disabled", _bouton(html, repere))
 
     def test_fermer_demande_une_confirmation_avec_le_passage_degage(self) -> None:
-        html = self._commandes("open", confirmation="fermer", position=100)
+        html = self._commandes("open", confirmation="fermer", position=100, attributs=DOCKEE)
         self.assertIn("Fermer le volet ?", html)
         self.assertIn("sous le volet", html)
         self.assertIn("la tondeuse n&#39;est pas dehors", html)
@@ -213,16 +217,17 @@ class CommandesDuVoletTests(unittest.TestCase):
         self.assertIn('data-commande="garage-ouvrir"', html)
 
     def test_en_pilotage_actif_la_page_previent_que_le_pilote_peut_reprendre_la_main(self) -> None:
-        html = self._commandes("open", position=100, attributs={"mower_control_mode": "actif"})
+        html = self._commandes("open", position=100, attributs={**DOCKEE, "mower_control_mode": "actif"})
         self.assertIn("Pilotage actif", html)
-        html = self._commandes("open", position=100, attributs={"mower_control_mode": "observation"})
+        html = self._commandes("open", position=100, attributs={**DOCKEE, "mower_control_mode": "observation"})
         self.assertNotIn("Pilotage actif", html)
 
 
 @unittest.skipUnless(NODE, "Node n'est pas installé")
 class EnvoiDesCommandesTests(unittest.TestCase):
     def _envoyer(self, nom: str, volet: str = "open", **extra) -> dict:
-        (sortie,) = _rendre([{"type": "commande", "nom": nom, "volet": volet, "confirmation": "fermer", **extra}])
+        (sortie,) = _rendre([{"type": "commande", "nom": nom, "volet": volet, "confirmation": "fermer",
+                              "attributs": DOCKEE, **extra}])
         return sortie
 
     def test_la_confirmation_envoie_le_bon_service_au_bon_volet(self) -> None:
@@ -242,10 +247,6 @@ class EnvoiDesCommandesTests(unittest.TestCase):
         (sortie,) = _rendre([{"type": "clics", "volet": "open"}])
         self.assertEqual(sortie["trace"], ["fermer", "aucune", "ouvrir"])
         self.assertEqual(sortie["appels"], [], "demander ou annuler ne doit jamais envoyer de commande")
-
-
-DOCKEE = {"mower_is_docked": True, "mower_is_outside": False}
-DEHORS = {"mower_is_docked": False, "mower_is_outside": True}
 
 
 @unittest.skipUnless(NODE, "Node n'est pas installé")
@@ -281,10 +282,26 @@ class GardeDeLaFermetureTests(unittest.TestCase):
         html = self._commandes("open", DOCKEE, position=100)
         self.assertNotIn("disabled", _bouton(html, 'data-garage-demander="fermer"'))
 
-    def test_sans_information_sur_la_tondeuse_fermer_reste_possible(self) -> None:
-        """Aucune donnée de présence publiée (pas de tondeuse suivie) : on ne bloque pas à l'aveugle."""
-        html = self._commandes("open", {}, position=100)
-        self.assertNotIn("disabled", _bouton(html, 'data-garage-demander="fermer"'))
+    def test_sans_information_sur_la_tondeuse_fermer_est_refuse(self) -> None:
+        """STRICT (choix du propriétaire) : aucune position publiée — redémarrage de Home Assistant,
+        intégration muette — donc aucune preuve que la tondeuse est rentrée : pas de fermeture à
+        l'aveugle. Le volet reste commandable depuis son entité dans Home Assistant."""
+        for attributs in ({}, {"mower_is_outside": False}, {"mower_presence_state": "inconnue"}):
+            with self.subTest(attributs=attributs):
+                html = self._commandes("open", attributs, position=100)
+                self.assertIn("disabled", _bouton(html, 'data-garage-demander="fermer"'))
+                self.assertIn("n&#39;est pas confirmée à sa base", html)
+
+    def test_sans_information_sur_la_tondeuse_l_ordre_n_est_jamais_envoye(self) -> None:
+        for attributs in ({}, {"mower_is_outside": False}):
+            with self.subTest(attributs=attributs):
+                sortie = self._course(volet="open", position=100, attributs=attributs)
+                self.assertEqual(sortie["appels"], [])
+                self.assertIn("Commande annulée", sortie["toasts"][0][0])
+
+    def test_ouvrir_reste_possible_sans_information_sur_la_tondeuse(self) -> None:
+        html = self._commandes("closed", {})
+        self.assertNotIn("disabled", _bouton(html, 'data-garage-demander="ouvrir"'))
 
     def test_ouvrir_reste_possible_tondeuse_dehors(self) -> None:
         """Ouvrir ne piège personne : c'est même ce qu'il faut pour son retour."""
