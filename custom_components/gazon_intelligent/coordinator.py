@@ -2682,6 +2682,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             en_tonte = connectee and bool(mower_context.get("mower_is_mowing"))
             au_garage = connectee and bool(mower_context.get("mower_is_docked"))
             batterie = _to_float_or_none(mower_context.get("mower_battery"))
+            progression = _to_float_or_none(mower_context.get("mower_job_progress_pct"))
 
             # ── Mémoire collante : cette machine SAIT-ELLE annoncer sa station ? ─────────
             # Posée ici et jamais retirée. Sans elle, `_dock_signal_tondeuse_vu` renverrait
@@ -2703,6 +2704,16 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     en_cours[cle] = round(float(en_cours.get(cle) or 0.0) + ecoule, 2)
                 if en_erreur:
                     en_cours["a_ete_bloquee"] = True
+                # ⚠️ « TRAVAIL TERMINÉ » = une progression VUE sous 100 qui ATTEINT 100 dans cette
+                # passe. Pas un simple « 100 » : la progression reste à 100 entre deux travaux,
+                # donc une passe qui démarre sur un ancien 100 n'a rien terminé. Si un nouveau
+                # travail repart (retombée sous 100), le drapeau se relâche.
+                if progression is not None:
+                    if progression < 100.0:
+                        en_cours["progression_vue_inachevee"] = True
+                        en_cours["travail_termine_vu"] = False
+                    elif en_cours.get("progression_vue_inachevee"):
+                        en_cours["travail_termine_vu"] = True
                 if batterie is not None:
                     en_cours["batterie_fin"] = batterie
                 # Suivi de l'autorisation à CHAQUE échantillon : c'est sa valeur au dernier
@@ -2759,6 +2770,8 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "minutes_bloquees": 0.0,
                     "a_ete_bloquee": bool(en_erreur),
                     "tonte_autorisee_fin": self._tonte_autorisee_au_cycle_precedent(),
+                    "progression_vue_inachevee": progression is not None and progression < 100.0,
+                    "travail_termine_vu": False,
                     "derniere_vue": maintenant.isoformat(),
                     "dernier_genre": (
                         "bloquee" if en_erreur else ("tonte" if en_tonte else "transit")
@@ -2838,16 +2851,26 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         la coordination l'ait rappelée ou non — lui attribuer le rappel effacerait la cause
         réelle. À l'inverse, rentrer avec 58 % pendant que la tonte vient d'être interdite
         n'est pas une décision de la machine, et c'est ce cas-là qui manquait.
+
+        ⚠️ MAIS UN TRAVAIL TERMINÉ NE SE RAPPELLE PAS. Mesuré le 02/10/2026 : travail à 100 % à
+        19:55:27 (batterie 61 %), et dans le MÊME cycle la tonte devient interdite — l'espacement
+        d'au moins trois jours entre deux tontes s'enclenche PARCE QUE le travail vient de finir.
+        L'autorisation tombée n'est alors pas la cause du retour, c'en est la conséquence : la
+        machine rentre parce qu'elle a fini, aucune commande de rappel n'a été envoyée. Étiquetée
+        `rappelee`, cette passe sortait de `mower_autonomous_return_battery_median` — la mesure du
+        niveau auquel la machine décide d'elle-même que c'est fini.
         """
         batterie_fin = _to_float_or_none(passe.get("batterie_fin"))
         autorisee_fin = passe.get("tonte_autorisee_fin")
+        travail_termine = bool(passe.get("travail_termine_vu"))
         bloquee = bool(passe.get("a_ete_bloquee")) or float(passe.get("minutes_bloquees") or 0.0) > 0.0
         if bloquee:
             motif = "bloquee"
         elif batterie_fin is not None and batterie_fin <= _BATTERIE_RETOUR_VIDE_PCT:
             motif = "batterie_vide"
-        elif autorisee_fin is False and bool(passe.get("autorisee_vue_vraie")):
-            # Autorisée PUIS interdite : la coordination l'a bien rappelée.
+        elif autorisee_fin is False and bool(passe.get("autorisee_vue_vraie")) and not travail_termine:
+            # Autorisée PUIS interdite, sans que le travail soit fini : la coordination l'a
+            # bien rappelée.
             motif = "rappelee"
         elif batterie_fin is None:
             motif = "inconnue"
@@ -2868,6 +2891,8 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # Fait brut, pas une étiquette : la passe s'est déroulée sans qu'aucune
             # autorisation n'ait jamais été vraie (lancement manuel, hors fenêtre).
             "hors_coordination": autorisee_fin is False and not bool(passe.get("autorisee_vue_vraie")),
+            # Fait brut : la progression du travail a atteint 100 % pendant cette passe.
+            "travail_termine": travail_termine,
             "fin_motif": motif,
         }
 

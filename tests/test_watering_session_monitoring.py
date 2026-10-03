@@ -9324,6 +9324,172 @@ class PasseHorsCoordinationTests(unittest.TestCase):
         self.assertEqual(passe["fin_motif"], "batterie_vide")
 
 
+class PasseTravailTermineTests(unittest.TestCase):
+    """Un travail terminé ne se « rappelle » pas : la machine rentre parce qu'elle a fini.
+
+    ⚠️ LE CAS DU 02/10/2026. Travail à 100 % à 19:55:27, batterie 61 %. Dans le MÊME cycle la
+    tonte devient interdite (l'espacement de trois jours s'enclenche parce que le travail vient de
+    finir). Aucune commande de rappel n'a été envoyée, pourtant le carnet étiquetait la passe
+    `rappelee` — donc hors de `mower_autonomous_return_battery_median`, qui mesure justement le
+    niveau auquel la machine décide d'elle-même que c'est fini.
+    """
+
+    def _coord(self, instant):
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord._runtime_state = {}
+        coord._current_datetime = lambda: instant
+        coord._current_date = lambda: instant.date()
+        coord._parse_datetime_value = (
+            coordinator_mod.GazonIntelligentCoordinator._parse_datetime_value.__get__(coord)
+        )
+        coord._minutes_creditables = (
+            coordinator_mod.GazonIntelligentCoordinator._minutes_creditables.__get__(coord)
+        )
+        coord._autorisee = None
+        coord._tonte_autorisee_au_cycle_precedent = lambda: coord._autorisee
+        return coord
+
+    @staticmethod
+    def _ctx(*, garage=False, tonte=False, batterie=None, progression=None):
+        return {"tondeuse_connectee": True, "tondeuse_erreur": None,
+                "mower_is_mowing": tonte, "mower_is_docked": garage, "mower_battery": batterie,
+                "mower_job_progress_pct": progression}
+
+    def _tondre(self, de, a, *, batterie, progression, autorisee=True, pas=10):
+        """Un échantillon toutes les `pas` minutes (sous le plafond de crédit de 15 min), la
+        batterie et la progression variant linéairement de `de` à `a`."""
+        etapes = []
+        minute = de
+        while minute <= a:
+            f = 0.0 if a == de else (minute - de) / (a - de)
+            etapes.append((minute, autorisee, self._ctx(
+                tonte=True,
+                batterie=round(batterie[0] + (batterie[1] - batterie[0]) * f),
+                progression=round(progression[0] + (progression[1] - progression[0]) * f),
+            )))
+            minute += pas
+        return etapes
+
+    def _rejouer(self, etapes):
+        """`etapes` : (minutes, autorisation publiée au cycle précédent, contexte)."""
+        t0 = datetime(2026, 10, 2, 18, 40, tzinfo=timezone.utc)
+        coord = self._coord(t0)
+        for minutes, autorisee, ctx in etapes:
+            instant = t0 + timedelta(minutes=minutes)
+            coord._current_datetime = lambda t=instant: t
+            coord._current_date = lambda t=instant: t.date()
+            coord._autorisee = autorisee
+            coord._suivre_passes_tondeuse(dict(ctx))
+        return coord._runtime_state["mower_passes"]["journal"][-1]
+
+    def test_le_travail_qui_atteint_100_puis_l_autorisation_qui_tombe_n_est_pas_un_rappel(self) -> None:
+        passe = self._rejouer([
+            (0, True, self._ctx(garage=True, batterie=95, progression=43)),
+            *self._tondre(1, 71, batterie=(95, 62), progression=(43, 99)),
+            # 100 % ET autorisation retirée dans le même cycle (espacement), puis rentrée.
+            (73, False, self._ctx(tonte=False, batterie=61, progression=100)),
+            (75, False, self._ctx(garage=True, batterie=58, progression=100)),
+        ])
+        self.assertEqual(passe["fin_motif"], "retour_autonome")
+        self.assertIs(passe["travail_termine"], True)
+        self.assertIs(passe["hors_coordination"], False)
+        self.assertEqual(passe["batterie_fin"], 58)
+        self.assertGreater(passe["minutes_tondues"], 60)
+
+    def test_une_vraie_passe_rappelee_reste_rappelee(self) -> None:
+        """La progression reste sous 100 : le retour vient bien du retrait de l'autorisation."""
+        passe = self._rejouer([
+            (0, True, self._ctx(garage=True, batterie=100, progression=20)),
+            *self._tondre(1, 39, batterie=(100, 58), progression=(20, 60)),
+            (40, False, self._ctx(tonte=True, batterie=58, progression=60)),
+            (41, False, self._ctx(garage=True, batterie=58, progression=60)),
+        ])
+        self.assertEqual(passe["fin_motif"], "rappelee")
+        self.assertIs(passe["travail_termine"], False)
+
+    def test_un_ancien_100_au_depart_ne_vaut_pas_un_travail_termine(self) -> None:
+        """La progression reste à 100 entre deux travaux : la passe démarre dessus, puis le
+        nouveau travail la fait retomber. Le rappel qui suit en est bien un."""
+        passe = self._rejouer([
+            (0, True, self._ctx(garage=True, batterie=100, progression=100)),
+            (1, True, self._ctx(tonte=True, batterie=100, progression=100)),
+            *self._tondre(3, 30, batterie=(99, 70), progression=(2, 35)),
+            (31, False, self._ctx(tonte=True, batterie=70, progression=35)),
+            (32, False, self._ctx(garage=True, batterie=70, progression=35)),
+        ])
+        self.assertEqual(passe["fin_motif"], "rappelee")
+        self.assertIs(passe["travail_termine"], False)
+
+    def test_un_100_fige_pendant_toute_la_passe_n_est_pas_un_travail_termine(self) -> None:
+        """Départ à la main alors que la progression sommeille à 100 : elle n'est jamais vue sous
+        100 dans la passe, donc rien n'a été « terminé » — le rappel qui suit en est un."""
+        passe = self._rejouer([
+            (0, True, self._ctx(garage=True, batterie=100, progression=100)),
+            *self._tondre(1, 31, batterie=(100, 70), progression=(100, 100)),
+            (32, False, self._ctx(tonte=True, batterie=70, progression=100)),
+            (33, False, self._ctx(garage=True, batterie=70, progression=100)),
+        ])
+        self.assertEqual(passe["fin_motif"], "rappelee")
+        self.assertIs(passe["travail_termine"], False)
+
+    def test_un_nouveau_travail_dans_la_meme_passe_relache_le_drapeau(self) -> None:
+        """100 % atteint, puis un nouveau travail repart sans rentrer : le terminé d'avant ne
+        doit pas absoudre le rappel d'après."""
+        passe = self._rejouer([
+            (0, True, self._ctx(garage=True, batterie=90, progression=50)),
+            *self._tondre(1, 21, batterie=(90, 80), progression=(50, 100)),
+            *self._tondre(23, 43, batterie=(78, 60), progression=(5, 30)),
+            (44, False, self._ctx(tonte=True, batterie=60, progression=30)),
+            (45, False, self._ctx(garage=True, batterie=60, progression=30)),
+        ])
+        self.assertEqual(passe["fin_motif"], "rappelee")
+        self.assertIs(passe["travail_termine"], False)
+
+    def test_la_batterie_vide_prime_sur_le_travail_termine(self) -> None:
+        passe = self._rejouer([
+            (0, True, self._ctx(garage=True, batterie=100, progression=60)),
+            *self._tondre(1, 81, batterie=(100, 12), progression=(60, 99)),
+            (83, False, self._ctx(tonte=False, batterie=12, progression=100)),
+            (84, False, self._ctx(garage=True, batterie=12, progression=100)),
+        ])
+        self.assertEqual(passe["fin_motif"], "batterie_vide")
+
+    def test_sans_mesure_de_progression_rien_ne_change(self) -> None:
+        """Pas de capteur de progression : on ne conclut jamais « travail terminé »."""
+        passe = self._rejouer([
+            (0, True, self._ctx(garage=True, batterie=100)),
+            *[(m, True, self._ctx(tonte=True, batterie=100 - m)) for m in range(1, 40, 10)],
+            (40, False, self._ctx(tonte=True, batterie=58)),
+            (41, False, self._ctx(garage=True, batterie=58)),
+        ])
+        self.assertEqual(passe["fin_motif"], "rappelee")
+        self.assertIs(passe["travail_termine"], False)
+
+    def test_les_passes_terminees_nourrissent_la_mediane_des_retours_autonomes(self) -> None:
+        """Le but du correctif, de bout en bout : trois travaux terminés, chacun avec
+        l'autorisation retirée au même cycle (espacement) — la mesure du niveau auquel la machine
+        décide d'elle-même que c'est fini doit sortir, et valoir leur médiane."""
+        t0 = datetime(2026, 10, 2, 18, 40, tzinfo=timezone.utc)
+        coord = self._coord(t0)
+        sortie = {}
+        for jour, batterie_fin in enumerate((55, 58, 61)):
+            etapes = [
+                (0, True, self._ctx(garage=True, batterie=95, progression=40)),
+                *self._tondre(1, 71, batterie=(95, batterie_fin + 3), progression=(40, 99)),
+                (73, False, self._ctx(tonte=False, batterie=batterie_fin + 3, progression=100)),
+                (75, False, self._ctx(garage=True, batterie=batterie_fin, progression=100)),
+            ]
+            for minutes, autorisee, ctx in etapes:
+                instant = t0 + timedelta(days=jour, minutes=minutes)
+                coord._current_datetime = lambda t=instant: t
+                coord._current_date = lambda t=instant: t.date()
+                coord._autorisee = autorisee
+                sortie = coord._suivre_passes_tondeuse(dict(ctx))
+        journal = coord._runtime_state["mower_passes"]["journal"]
+        self.assertEqual([p["fin_motif"] for p in journal], ["retour_autonome"] * 3)
+        self.assertEqual(sortie["mower_last_pass_end_reason"], "retour_autonome")
+        self.assertEqual(sortie["mower_autonomous_return_battery_median"], 58.0)
+
 class ProgressionTonteTests(unittest.TestCase):
     """La progression du TRAVAIL, publiée sans qu'elle décide de rien.
 
