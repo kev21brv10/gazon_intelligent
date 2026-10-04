@@ -54,11 +54,21 @@
   3 minutes devant une tondeuse dehors lève une alerte critique, publiée comme les autres
   anomalies du volet (`mower_garage_alert`), affichée sur la page et envoyée aux téléphones. Elle
   n'actionne rien ; le volet injoignable et le volet bloqué gardent leur propre alerte et priment.
+- **Nouveau mode de pilotage « Volet seul »** : le volet suit l'état de la tondeuse — ouvert devant une
+  tondeuse qui sort, revient ou démarre, refermé après sa rentrée (délai, garde du travail inachevé
+  et alertes du volet inchangés) — sans que l'intégration commande la tondeuse : ni départ, ni
+  retour, ni reprise, ni ouverture « avant un départ » qu'elle n'enverrait pas. Elle reste gérée par
+  son appli et ses horaires. Jusqu'ici, le volet ne suivait la tondeuse qu'en mode actif, qui
+  commande aussi la machine. Le mode se choisit dans le réglage du pilotage (entre Observation et
+  Actif) ; un reste de cycle d'un ancien mode actif est ignoré et effacé, et un garde-fou refuse
+  tout ordre de tondeuse dans ce mode. Limite connue : la fermeture se base sur la décision de tonte
+  du gazon, pas sur l'horaire de la tondeuse ; un départ programmé alors que le gazon ne l'autorise
+  pas trouve le volet fermé, rouvert dès qu'elle est vue sortir.
 - **Publié** : `mower_manual_active`, `_command`, `_step`, `_reason`, `_until`, `_duration_min`,
   `_error`, `_ended_at`, `_suspension_active`, `_suspension_until` et `mower_edgecut_available`
   (capteur d'état de la tonte et diagnostics) ; l'état de la commande survit à un redémarrage.
-- **Vérifié** : suite complète avec 2 724 tests et 3 449 sous-tests, ruff et mypy (55 fichiers)
-  verts, le nouveau module pur `manual_command` y compris ; 134 variantes cassées volontairement
+- **Vérifié** : suite complète avec 2 752 tests et 3 451 sous-tests, ruff et mypy (55 fichiers)
+  verts, le nouveau module pur `manual_command` y compris ; 151 variantes cassées volontairement
   (gardes, séquence du volet, réouverture du volet, pause, bordure, fin de commande, suspension,
   effacement du pilote, persistance, page), toutes détectées.
 

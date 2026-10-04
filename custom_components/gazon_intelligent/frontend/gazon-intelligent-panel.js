@@ -6479,7 +6479,7 @@ class GazonIntelligentPanel extends HTMLElement {
     const erreur = a("mower_control_last_error");
     const cycle = a("mower_control_cycle_state");
     const motifReprise = a("mower_control_resume_reason");
-    const titres = { desactive: "Pilotage désactivé", observation: "Pilotage en observation", actif: "Pilotage actif" };
+    const titres = { desactive: "Pilotage désactivé", observation: "Pilotage en observation", volet_seul: "Pilotage du volet seul", actif: "Pilotage actif" };
     const actions = { start_mowing: "départ", dock: "retour à la base", open_cover: "ouverture du garage", close_cover: "fermeture du garage" };
     const cycles = {
       depart_envoye: "Départ envoyé, attente de sortie",
@@ -6494,9 +6494,9 @@ class GazonIntelligentPanel extends HTMLElement {
     const suiviCycle = mode === "actif" && cycles[cycle]
       ? `<p><b>${esc(cycles[cycle])}</b>${cycle === "reprise_attendue" && motifReprise ? ` · ${esc(motifReprise)}` : ""}</p>`
       : "";
-    return `<section class="section"><div class="section-tete"><h3>${esc(titres[mode] || "Pilotage de la tondeuse")}</h3><p>${mode === "observation" ? "Aucune commande n'est envoyée." : mode === "actif" ? "Gazon Intelligent commande la tondeuse selon ses sécurités." : "La tondeuse reste gérée par son système actuel."}</p></div>
+    return `<section class="section"><div class="section-tete"><h3>${esc(titres[mode] || "Pilotage de la tondeuse")}</h3><p>${mode === "observation" ? "Aucune commande n'est envoyée." : mode === "volet_seul" ? "Gazon Intelligent ouvre et ferme le volet selon l'état de la tondeuse ; elle reste gérée par son système." : mode === "actif" ? "Gazon Intelligent commande la tondeuse selon ses sécurités." : "La tondeuse reste gérée par son système actuel."}</p></div>
       <div class="lignes"><div class="ligne compacte">
-        <div class="ligne-tete"><span class="ligne-icone"><ha-icon icon="${mode === "actif" ? "mdi:robot-mower" : mode === "observation" ? "mdi:eye-outline" : "mdi:power-off"}"></ha-icon></span>
+        <div class="ligne-tete"><span class="ligne-icone"><ha-icon icon="${mode === "actif" ? "mdi:robot-mower" : mode === "volet_seul" ? "mdi:garage-variant" : mode === "observation" ? "mdi:eye-outline" : "mdi:power-off"}"></ha-icon></span>
           <div class="ligne-textes"><h4>${action ? `Décision : ${esc(actions[action] || action)}` : esc(etat || "En attente")}</h4><p>${esc(erreur || raison || "Le prochain cycle précisera la décision.")}</p></div>
         </div>
         ${suiviCycle}
@@ -7759,13 +7759,14 @@ class GazonIntelligentPanel extends HTMLElement {
     const arret = (fonctions & 8) !== 0
       ? `<button class="bouton-blanc" data-commande="garage-arreter" data-volet="${esc(entityId)}" ${admin && enMouvement && !occupe("garage-arreter") ? "" : "disabled"}><ha-icon icon="mdi:stop-circle-outline"></ha-icon>Arrêter</button>`
       : "";
-    const actif = this._a("tonte_etat", "mower_control_mode") === "actif";
+    const modePilote = this._a("tonte_etat", "mower_control_mode");
+    const actif = modePilote === "actif" || modePilote === "volet_seul";
     const note = indisponible
       ? `<p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>Le volet ne répond pas : les commandes sont désactivées.</span></p>`
       : /tondeuse/.test(refus.fermer)
         ? `<p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>${esc(refus.fermer)}</span></p>`
         : actif
-        ? `<p class="note"><ha-icon icon="mdi:information-outline"></ha-icon><span>Pilotage actif : le pilote peut reprendre la main, par exemple refermer le volet après une rentrée confirmée.</span></p>`
+        ? `<p class="note"><ha-icon icon="mdi:information-outline"></ha-icon><span>${modePilote === "volet_seul" ? "Pilotage du volet seul" : "Pilotage actif"} : le pilote peut reprendre la main, par exemple refermer le volet après une rentrée confirmée.</span></p>`
         : "";
     return `<div class="commandes-garage"><div class="rangee-boutons">${bouton("ouvrir")}${bouton("fermer")}${arret}</div>${note}</div>`;
   }

@@ -4278,10 +4278,15 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         decision["mower_control_last_action_at"] = runtime.get("last_action_at")
         decision["mower_control_last_error"] = runtime.get("last_error")
 
+        if mode == "volet_seul" and action and action not in garage_guard.COVER_ACTIONS:
+            # Garde-fou : le mode « volet seul » ne commande JAMAIS la tondeuse, même si une règle le demandait.
+            _LOGGER.error("Mode volet seul : l'ordre %s n'est pas un ordre de volet, ignoré", action)
+            decision["mower_control_pending_action"] = None
+            action = None
         if mode == "observation" and action:
             decision["mower_control_state"] = "observation"
             decision["mower_control_reason"] = f"Observation : {decision['mower_control_reason']}"
-        elif mode == "actif" and isinstance(action, str):
+        elif mode in {"actif", "volet_seul"} and isinstance(action, str):
             mower_entity = str(snapshot.get("tondeuse_source_entity") or "")
             domain, service, entity_id = {
                 "start_mowing": ("lawn_mower", "start_mowing", mower_entity),

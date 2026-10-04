@@ -664,11 +664,16 @@ CHOIX: tuple[Choix, ...] = (
     Choix(
         "pilotage_tondeuse", "installation",
         "Qui commande les départs et les retours de la tondeuse ?",
-        "Commencer par Observation. Actif envoie réellement les commandes à la tondeuse et au garage configuré.",
+        "Commencer par Observation. « Volet seul » ne commande que le volet ; Actif envoie aussi les commandes à la tondeuse.",
         "desactive",
         (
             Option("desactive", "Désactivé", "L'intégration observe la tondeuse mais ne décide ni départ ni retour."),
             Option("observation", "Observation", "Elle affiche ce qu'elle ferait, sans envoyer aucune commande."),
+            Option(
+                "volet_seul",
+                "Volet seul",
+                "Elle ouvre et ferme le volet selon l'état de la tondeuse, avec toutes les sécurités, sans jamais commander la tondeuse.",
+            ),
             Option(
                 "actif",
                 "Actif",

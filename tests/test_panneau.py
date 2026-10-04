@@ -1023,6 +1023,11 @@ class CeQueLaPageEcritTests(unittest.TestCase):
         refus = self._ecrire({}, {"pilotage_tondeuse": "magique"})
         self.assertIn("pilotage_tondeuse", refus["erreurs"])
 
+    def test_le_mode_volet_seul_est_un_choix_valide_du_pilotage(self) -> None:
+        reponse = self._ecrire({}, {"pilotage_tondeuse": "volet_seul"})
+        self.assertTrue(reponse["ok"], reponse)
+        self.assertEqual(self.entree.options["pilotage_tondeuse"], "volet_seul")
+
     def test_les_creneaux_de_depart_sont_un_choix_separe_du_mode_actif(self) -> None:
         reponse = self._ecrire({}, {"tondeuse_creneaux_depart": "ideal_acceptable"})
         self.assertTrue(reponse["ok"])
