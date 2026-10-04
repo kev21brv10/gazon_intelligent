@@ -125,6 +125,21 @@ class TravailInacheveGardeLeVoletOuvertTests(unittest.TestCase):
                 self.assertEqual(r["mower_control_state"], "travail_inacheve")
                 self.assertIsNone(r["mower_control_pending_action"])
 
+    def test_apres_un_retour_manuel_le_volet_est_referme_comme_avant(self) -> None:
+        """⚠️ Relevé à l'essai du 04/10/2026 : « Retour à la base » laisse le travail « en pause » ; sans cette
+        exception le volet serait resté ouvert jusqu'à 3 h alors que l'utilisateur a voulu la rentrée."""
+        for etat, extra in (("en_pause", {}), ("en_cours", {}), ("repos", {"mower_job_resume_possible": True})):
+            with self.subTest(etat=etat):
+                r = _decider(_recharge(mower_job_completion_state=etat, mower_manual_suspension_active=True, **extra))
+                self.assertEqual(r["mower_control_pending_action"], "close_cover")
+                self.assertEqual(r["mower_control_state"], "fermeture_garage")
+
+    def test_sans_retour_manuel_la_garde_reste_active(self) -> None:
+        for valeur in (False, None):
+            with self.subTest(suspension=valeur):
+                r = _decider(_recharge(mower_manual_suspension_active=valeur))
+                self.assertEqual(r["mower_control_state"], "travail_inacheve")
+
     def test_une_reprise_due_du_pilote_referme_comme_avant(self) -> None:
         """Si le pilote a lui-même interrompu le cycle (`resume_required`), il referme exprès."""
         r = _decider(_recharge(), runtime={"resume_required": True, "managed_cycle_active": False})
@@ -161,6 +176,25 @@ class TravailInacheveDansLeCoordinateurTests(unittest.TestCase):
         self.assertNotIn("close_cover", base._ordres(appel))
         instantane = base._cycle(coord, _recharge(mower_job_completion_state="termine"), apres=5.0)
         self.assertEqual(base._ordres(appel)[-1], "close_cover", f"fin du travail : fermeture ({instantane['mower_control_state']})")
+
+
+class RetourManuelDansLeCoordinateurTests(unittest.TestCase):
+    """Le scénario de l'essai, par le vrai cycle : retour manuel, rentrée, puis fermeture du volet."""
+
+    def test_apres_un_retour_manuel_le_pilote_actif_referme_le_volet(self) -> None:
+        from tests.test_manual_coordinateur import RetourPauseReprendreTests, _dehors, _quai
+        base = RetourPauseReprendreTests()
+        coord = base._coord("actif")
+        coord._latest_full_snapshot = _dehors()
+        self.assertTrue(base._demander(coord, "retour")["ok"])
+        base._cycle(coord, _dehors(), etat="open", position=100)
+        encours = dict(mower_job_completion_state="en_pause", mower_job_progress_pct=55)
+        instantane = base._cycle(coord, _quai(**encours), apres=2.0)
+        self.assertEqual(instantane["mower_manual_step"], "termine")
+        self.assertIs(instantane["mower_manual_suspension_active"], True)
+        for minutes in (1.0, 1.0, 2.0):
+            instantane = base._cycle(coord, _quai(**encours), apres=minutes)
+        self.assertEqual(base._ordres()[-1], "cover.close_cover", f"état : {instantane['mower_control_state']}")
 
 
 if __name__ == "__main__":

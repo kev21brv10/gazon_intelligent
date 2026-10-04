@@ -422,12 +422,16 @@ def evaluate_mower_control(
             # le pilote la tenait pour « rentrée » : volet refermé, puis tondeuse repartant vers une
             # porte close. Borné : un vieux travail abandonné ne bloque pas la fermeture pour toujours.
             # Hors reprise due : si le pilote a lui-même interrompu le cycle, il referme exprès.
+            # Hors retour manuel : l'utilisateur a VOLONTAIREMENT interrompu le travail (relevé à l'essai
+            # du 04/10/2026 : après « Retour à la base », le travail restait « en pause » et le volet
+            # aurait attendu 3 h) — la tondeuse ne repart pas, et la suspension des départs le dit.
             job_unfinished = completion_state in {"en_pause", "en_cours"} or (
                 completion_state == "repos" and snapshot.get("mower_job_resume_possible") is True
             )
             if (
                 job_unfinished
                 and not resume_required
+                and snapshot.get("mower_manual_suspension_active") is not True
                 and not _elapsed(now, docked_since, MOWER_JOB_HOLD_MAX_MINUTES)
             ):
                 return result(

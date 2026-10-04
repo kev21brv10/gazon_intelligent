@@ -45,7 +45,9 @@
   plus 3 heures après la rentrée : un vieux travail abandonné ne bloque pas la fermeture pour
   toujours. Contrepartie assumée : après une rentrée sur travail inachevé (pluie, par exemple), le
   volet peut rester ouvert jusqu'à 3 h au lieu de 1 à 2 minutes. Sans effet sur les cycles lancés
-  par le pilote (inchangés) ni sur une reprise due après une interruption du pilote lui-même.
+  par le pilote (inchangés), sur une reprise due après une interruption du pilote lui-même, ni
+  après un « Retour à la base » manuel : la rentrée est voulue (relevé à l'essai sur le matériel,
+  le travail restait « en pause »), le volet se referme comme d'habitude.
 - **Alerte « volet fermé, tondeuse dehors » dans tous les modes** : le pilote ne rouvre un volet
   refermé qu'en mode actif, la commande manuelle que pendant sa durée ; en observation ou
   désactivé, rien ne le disait. Le volet non ouvert (fermé, en fermeture, ouvert à moitié) plus de
@@ -55,8 +57,8 @@
 - **Publié** : `mower_manual_active`, `_command`, `_step`, `_reason`, `_until`, `_duration_min`,
   `_error`, `_ended_at`, `_suspension_active`, `_suspension_until` et `mower_edgecut_available`
   (capteur d'état de la tonte et diagnostics) ; l'état de la commande survit à un redémarrage.
-- **Vérifié** : suite complète avec 2 721 tests et 3 444 sous-tests, ruff et mypy (55 fichiers)
-  verts, le nouveau module pur `manual_command` y compris ; 132 variantes cassées volontairement
+- **Vérifié** : suite complète avec 2 724 tests et 3 449 sous-tests, ruff et mypy (55 fichiers)
+  verts, le nouveau module pur `manual_command` y compris ; 134 variantes cassées volontairement
   (gardes, séquence du volet, réouverture du volet, pause, bordure, fin de commande, suspension,
   effacement du pilote, persistance, page), toutes détectées.
 
