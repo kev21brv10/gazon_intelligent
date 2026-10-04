@@ -54,11 +54,20 @@
   3 minutes devant une tondeuse dehors lève une alerte critique, publiée comme les autres
   anomalies du volet (`mower_garage_alert`), affichée sur la page et envoyée aux téléphones. Elle
   n'actionne rien ; le volet injoignable et le volet bloqué gardent leur propre alerte et priment.
+- **Le départ suit l'ouverture du volet de quelques secondes, plus de plusieurs minutes** : le pilote
+  actif (et la séquence d'une commande manuelle) n'était rejugé qu'à l'intervalle normal (2 min) ou à
+  un événement d'une entité suivie ; la tondeuse partait donc bien après le délai de sécurité (36 s
+  mesurés à l'essai pour un délai réglé à 15 s, et jusqu'à 2 min en pilotage actif). Tant que le pilote
+  attend le volet — ouverture en cours, délai de sécurité, délai avant fermeture — il demande
+  maintenant un nouveau passage toutes les 5 secondes : la tondeuse part au plus 5 s après le délai
+  de sécurité réglé, et le volet se referme au plus 5 s après son délai. Mode actif seulement :
+  observation et désactivé n'attendent rien. Les réglages sont inchangés (ouverture avant le
+  départ, attente après l'ouverture, position minimale, fermeture après la rentrée).
 - **Publié** : `mower_manual_active`, `_command`, `_step`, `_reason`, `_until`, `_duration_min`,
   `_error`, `_ended_at`, `_suspension_active`, `_suspension_until` et `mower_edgecut_available`
   (capteur d'état de la tonte et diagnostics) ; l'état de la commande survit à un redémarrage.
-- **Vérifié** : suite complète avec 2 724 tests et 3 449 sous-tests, ruff et mypy (55 fichiers)
-  verts, le nouveau module pur `manual_command` y compris ; 134 variantes cassées volontairement
+- **Vérifié** : suite complète avec 2 731 tests et 3 454 sous-tests, ruff et mypy (55 fichiers)
+  verts, le nouveau module pur `manual_command` y compris ; 142 variantes cassées volontairement
   (gardes, séquence du volet, réouverture du volet, pause, bordure, fin de commande, suspension,
   effacement du pilote, persistance, page), toutes détectées.
 

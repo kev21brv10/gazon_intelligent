@@ -191,6 +191,10 @@ from .watering_policy import repartir_creneaux_semis, resolve_semis_stage_progra
 _LOGGER = logging.getLogger(__name__)
 
 _MOWER_JOB_DOCKED_GRACE_MINUTES = 60
+# États du pilote qui ATTENDENT le volet et se rejugent donc à quelques secondes d'intervalle.
+_PILOT_FAST_WAIT_STATES = frozenset(
+    {"ouverture_garage", "ouverture_garage_reprise", "attente_garage", "attente_fermeture_garage"}
+)
 
 # Un arrêt demandé pendant les toutes dernières écritures ne doit pas rester suspendu si le
 # stockage Home Assistant se bloque. La tâche continue sous shield : elle porte l'événement de fin,
@@ -473,7 +477,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._auto_irrigation_scheduler_task: asyncio.Task | None = None
         self._unsub_start_listener: CALLBACK_TYPE | None = None
         self._unsub_delayed_refresh: CALLBACK_TYPE | None = None
-        self._unsub_manual_refresh: CALLBACK_TYPE | None = None
+        self._unsub_quick_refresh: CALLBACK_TYPE | None = None
         self._unsub_auto_irrigation_monitor: CALLBACK_TYPE | None = None
         self._unsub_source_listeners: list[CALLBACK_TYPE] = []
         self._unsub_zone_listeners: list[CALLBACK_TYPE] = []
@@ -4064,7 +4068,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if suspension_minutes:
                 manual["suspension_jusqu_a"] = (now + timedelta(minutes=float(suspension_minutes))).isoformat()
             if manual_command.is_active(manual, now):
-                self._schedule_manual_refresh()
+                self._schedule_quick_refresh()
         return self._manual_attributes(manual, now, snapshot)
 
     async def _async_execute_manual_action(
@@ -4087,16 +4091,25 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return str(err) or err.__class__.__name__
         return None
 
-    def _schedule_manual_refresh(self, delay_seconds: float = 20.0) -> None:
-        """Rejuge la commande bientôt : l'intervalle normal (2 min) ferait traîner un départ."""
-        if getattr(self, "_unsub_manual_refresh", None) is not None:
+    def _schedule_quick_refresh(self, delay_seconds: float = 5.0) -> None:
+        """Rejuge bientôt une séquence qui attend (volet à ouvrir, délai de sécurité, délai de fermeture).
+
+        ⚠️ Sans cela, l'intervalle normal (2 min) fait traîner la séquence : la tondeuse ne partait que
+        bien après le délai de sécurité (relevé à l'essai : 36 s entre l'ouverture du volet et le
+        départ pour un délai réglé à 15 s). Un seul minuteur à la fois ; il passe par le chemin rapide
+        des actions de l'utilisateur, jamais par le chemin débouncé des capteurs (10 s d'attente).
+        """
+        if getattr(self, "_unsub_quick_refresh", None) is not None:
             return
 
         async def _refresh(_now: Any) -> None:
-            self._unsub_manual_refresh = None
-            await self.async_request_refresh()
+            self._unsub_quick_refresh = None
+            if self._dans_le_cycle:
+                # Un cycle tourne déjà : il rejugera lui-même, et redemandera un minuteur s'il faut attendre.
+                return
+            await self._rafraichir_apres_action_utilisateur()
 
-        self._unsub_manual_refresh = async_call_later(self.hass, delay_seconds, _refresh)
+        self._unsub_quick_refresh = async_call_later(self.hass, delay_seconds, _refresh)
 
     async def async_commande_tondeuse(self, commande: str, *, duree_min: Any = None) -> dict[str, Any]:
         """Prend une commande manuelle de la page (`demarrer`, `bordure`, `retour`, `pause`, `annuler`).
@@ -4365,6 +4378,10 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 decision["mower_control_last_action"] = action
                 decision["mower_control_last_action_at"] = instant
                 decision["mower_control_last_error"] = None
+        # Le pilote attend le volet (ouverture, délai de sécurité, délai de fermeture) : le rejuger vite,
+        # pour que le départ suive l'ouverture de quelques secondes seulement et non de plusieurs minutes.
+        if mode == "actif" and decision.get("mower_control_state") in _PILOT_FAST_WAIT_STATES:
+            self._schedule_quick_refresh()
         decision["mower_control_cycle_state"] = (
             "reprise_attendue"
             if runtime.get("resume_required") is True
@@ -8117,11 +8134,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._unsub_delayed_refresh()
             self._unsub_delayed_refresh = None
 
-    def _cancel_manual_refresh(self) -> None:
-        unsub = getattr(self, "_unsub_manual_refresh", None)
+    def _cancel_quick_refresh(self) -> None:
+        unsub = getattr(self, "_unsub_quick_refresh", None)
         if unsub:
             unsub()
-        self._unsub_manual_refresh = None
+        self._unsub_quick_refresh = None
 
     def _cancel_zone_monitoring(self) -> None:
         for unsub in self._unsub_zone_listeners:
@@ -8148,7 +8165,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_shutdown(self) -> None:
         """Nettoie les tâches en cours à la fermeture de l'intégration."""
         self._cancel_post_start_refresh()
-        self._cancel_manual_refresh()
+        self._cancel_quick_refresh()
         self._cancel_auto_irrigation_monitoring()
         self._cancel_source_monitoring()
         self._cancel_zone_monitoring()

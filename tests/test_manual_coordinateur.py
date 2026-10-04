@@ -88,7 +88,7 @@ class _Base(unittest.TestCase):
         self.plateforme = "landroid_cloud"
         coord._mower_platform = lambda entity_id: self.plateforme
         self.rafraichissements = []
-        coord._schedule_manual_refresh = lambda *a, **k: self.rafraichissements.append(1)
+        coord._schedule_quick_refresh = lambda *a, **k: self.rafraichissements.append(1)
         self.arrosage = False
         coord._latest_full_snapshot = _quai()
         return coord
@@ -686,27 +686,41 @@ class RejugementPlanifieTests(_Base):
         from unittest.mock import MagicMock, patch
         coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
         coord.hass = object()
-        coord.async_request_refresh = AsyncMock()
+        coord._rafraichir_apres_action_utilisateur = AsyncMock()
         desabonnement = MagicMock()
         with patch.object(coordinator_mod, "async_call_later", return_value=desabonnement) as planifier:
-            coord._schedule_manual_refresh()
-            coord._schedule_manual_refresh()
+            coord._schedule_quick_refresh()
+            coord._schedule_quick_refresh()
             self.assertEqual(planifier.call_count, 1, "un seul minuteur à la fois")
+            self.assertEqual(planifier.call_args.args[1], 5.0, "quelques secondes, pas l'intervalle normal de 2 min")
             rappel = planifier.call_args.args[2]
             asyncio.run(rappel(None))
-            coord.async_request_refresh.assert_awaited_once()
-            self.assertIsNone(coord._unsub_manual_refresh, "le minuteur échu est oublié")
-            coord._schedule_manual_refresh()
+            coord._rafraichir_apres_action_utilisateur.assert_awaited_once()
+            self.assertIsNone(coord._unsub_quick_refresh, "le minuteur échu est oublié")
+            coord._schedule_quick_refresh()
             self.assertEqual(planifier.call_count, 2, "un nouveau minuteur est possible après l'échéance")
-            coord._cancel_manual_refresh()
+            coord._cancel_quick_refresh()
             desabonnement.assert_called_once()
-            self.assertIsNone(coord._unsub_manual_refresh)
+            self.assertIsNone(coord._unsub_quick_refresh)
+
+    def test_le_minuteur_ne_lance_pas_un_second_cycle_pendant_un_cycle(self) -> None:
+        """Un cycle qui tourne rejuge lui-même et redemandera un minuteur s'il faut encore attendre."""
+        from unittest.mock import patch
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord.hass = object()
+        coord._rafraichir_apres_action_utilisateur = AsyncMock()
+        coord._dans_le_cycle = True
+        with patch.object(coordinator_mod, "async_call_later") as planifier:
+            coord._schedule_quick_refresh()
+            asyncio.run(planifier.call_args.args[2](None))
+        coord._rafraichir_apres_action_utilisateur.assert_not_awaited()
+        self.assertIsNone(coord._unsub_quick_refresh)
 
     def test_l_arret_de_l_integration_annule_le_minuteur(self) -> None:
         import pathlib
         source = (pathlib.Path(coordinator_mod.__file__).parent / "coordinator.py").read_text(encoding="utf-8")
         arret = source.split("async def async_shutdown(self)")[1].split("\n    def ")[0]
-        self.assertIn("self._cancel_manual_refresh()", arret)
+        self.assertIn("self._cancel_quick_refresh()", arret)
 
 
 class PublicationEtPersistanceTests(_Base):
