@@ -1,5 +1,40 @@
 # Changelog
 
+## 1.0.0-rc.24
+
+- **Commander la tondeuse depuis la page** : nouvelle carte « Commander la tondeuse » dans l'onglet
+  Tonte — Démarrer la tonte, Coupe de bordure (durée choisie au curseur, de 10 à 120 minutes, 30 par
+  défaut), Retour à la base, Pause (remplacée par Reprendre quand la tondeuse est en pause) et
+  Annuler. Les commandes marchent quel que soit le mode du pilote automatique (désactivé,
+  observation ou actif) : c'est une action explicite. Un départ demande une confirmation (passage
+  dégagé) ; pause, retour et reprise partent tout de suite. Réservé aux administrateurs.
+- **Le volet est géré par l'intégration** : un départ ou une coupe de bordure est une séquence jouée
+  côté serveur et rejugée à chaque cycle avec l'état réel — ouverture du volet, confirmation de sa
+  position, délai de sécurité (celui du réglage « Avance à l'ouverture »), puis départ. Aucun ordre
+  de départ ne part tant que le volet n'est pas confirmé ouvert. Un volet qui ne répond pas, ou qui
+  atteint le plafond de tentatives, abandonne la commande avec son motif ; un retour ouvre d'abord
+  le volet. Elle ne dépend pas de l'onglet : fermer la page n'interrompt rien.
+- **Mode manuel temporaire** : tant qu'une commande est en cours, le pilote s'efface — pas de
+  rappel, pas de fermeture du volet, pas de départ — sans que son réglage change. Une seule règle
+  reste prioritaire : une tondeuse dehors ne doit pas trouver son volet fermé. La commande prend
+  fin quand le travail est terminé et la tondeuse rentrée (jamais sur un simple « repos » : l'état
+  rebondit au démarrage, et une recharge au milieu du travail ne termine rien), à son échéance
+  (4 h ; durée de la bordure + 20 min ; 1 h pour une pause) ou par Annuler. Après un retour manuel,
+  les départs automatiques sont suspendus 4 heures — sinon le pilote renverrait aussitôt une
+  tondeuse à quai dans de bonnes conditions ; la fermeture du volet, elle, suit la rentrée comme
+  d'habitude.
+- **Gardes rejugées à chaque cycle** : tondeuse connectée, prête et à sa base, batterie d'au moins
+  20 %, pas d'arrosage en cours, service de bordure présent. Retour et pause passent devant une
+  sortie en cours (on peut toujours l'arrêter) ; un second départ est refusé. Un refus est rendu
+  en clair à la page, pas comme une erreur.
+- **Publié** : `mower_manual_active`, `_command`, `_step`, `_reason`, `_until`, `_duration_min`,
+  `_error`, `_ended_at`, `_suspension_active`, `_suspension_until` et `mower_edgecut_available`
+  (capteur d'état de la tonte et diagnostics) ; l'état de la commande survit à un redémarrage.
+- **Vérifié** : suite complète avec 2 637 tests et 3 391 sous-tests, ruff et mypy (55 fichiers)
+  verts, le nouveau module pur `manual_command` y compris ; 70 variantes cassées volontairement
+  (gardes, séquence du volet, fin de commande, suspension, effacement du pilote, persistance, page),
+  toutes détectées.
+
 ## 1.0.0-rc.23
 
 - **Un volet qui ne bouge pas n'est plus relancé sans fin ni sans alerte** : avant, un volet qui

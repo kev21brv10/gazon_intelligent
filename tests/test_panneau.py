@@ -1257,6 +1257,52 @@ class LesCommandesTests(unittest.TestCase):
         self.assertEqual(connexion.erreurs[-1][:2], (7, "not_found"))
 
 
+class LaCommandeDeTondeuseTests(unittest.TestCase):
+    """`gazon_intelligent/tondeuse/commande` : la page demande, le coordinateur juge."""
+
+    def _coordinateur(self, reponse=None):
+        coordinateur = _Coordinateur(_Entree("e1"))
+        coordinateur.async_commande_tondeuse = AsyncMock(return_value=reponse or {"ok": True, "message": "Prise en compte."})
+        return coordinateur
+
+    def test_la_demande_est_transmise_avec_sa_duree_et_la_reponse_rendue_telle_quelle(self) -> None:
+        coordinateur = self._coordinateur()
+        hass, _ = _hass(coordinateur)
+        connexion = _Connexion()
+        message = {"id": 8, "type": panneau.WS_COMMANDE_TONDEUSE, "entry_id": "e1", "commande": "bordure", "duree_min": 45}
+        asyncio.run(panneau._ws_commande_tondeuse(hass, connexion, message))
+        coordinateur.async_commande_tondeuse.assert_awaited_once_with("bordure", duree_min=45)
+        self.assertEqual(connexion.resultats, [(8, {"ok": True, "message": "Prise en compte."})])
+
+    def test_un_refus_n_est_pas_une_erreur_de_protocole(self) -> None:
+        refus = {"ok": False, "message": "La tondeuse doit être à sa base pour partir."}
+        coordinateur = self._coordinateur(refus)
+        hass, _ = _hass(coordinateur)
+        connexion = _Connexion()
+        asyncio.run(panneau._ws_commande_tondeuse(
+            hass, connexion, {"id": 9, "type": panneau.WS_COMMANDE_TONDEUSE, "entry_id": "e1", "commande": "demarrer"}))
+        self.assertEqual(connexion.erreurs, [])
+        self.assertEqual(connexion.resultats, [(9, refus)])
+        coordinateur.async_commande_tondeuse.assert_awaited_once_with("demarrer", duree_min=None)
+
+    def test_une_exception_du_coordinateur_est_rendue_en_clair(self) -> None:
+        coordinateur = self._coordinateur()
+        coordinateur.async_commande_tondeuse = AsyncMock(side_effect=RuntimeError("boum"))
+        hass, _ = _hass(coordinateur)
+        connexion = _Connexion()
+        asyncio.run(panneau._ws_commande_tondeuse(
+            hass, connexion, {"id": 10, "type": panneau.WS_COMMANDE_TONDEUSE, "entry_id": "e1", "commande": "retour"}))
+        self.assertEqual(connexion.erreurs, [(10, "unknown_error", "boum")])
+
+    def test_une_instance_inconnue_est_signalee(self) -> None:
+        hass, _ = _hass(self._coordinateur())
+        connexion = _Connexion()
+        asyncio.run(panneau._ws_commande_tondeuse(
+            hass, connexion, {"id": 11, "type": panneau.WS_COMMANDE_TONDEUSE, "entry_id": "inconnue", "commande": "pause"}))
+        self.assertEqual(connexion.erreurs[0][:2], (11, "not_found"))
+        self.assertEqual(connexion.resultats, [])
+
+
 def _faux_composants():
     """websocket_api, frontend, panel_custom, http et loader, qui notent ce qu'on leur demande."""
     journal: dict[str, list] = {"commandes": [], "panneaux": [], "retraits": [], "fichiers": []}
@@ -1339,10 +1385,17 @@ class LEnregistrementTests(unittest.TestCase):
         with faux:
             panneau.async_enregistrer_commandes(hass)
             panneau.async_enregistrer_commandes(hass)
-        self.assertEqual([c._ws_command for c in journal["commandes"]], [panneau.WS_LIRE, panneau.WS_ECRIRE])
-        lire, ecrire = journal["commandes"]
+        self.assertEqual(
+            [c._ws_command for c in journal["commandes"]],
+            [panneau.WS_LIRE, panneau.WS_ECRIRE, panneau.WS_COMMANDE_TONDEUSE],
+        )
+        lire, ecrire, commande_tondeuse = journal["commandes"]
         self.assertFalse(getattr(lire, "_admin", False))
         self.assertTrue(getattr(ecrire, "_admin", False))
+        # Une commande de tondeuse met une machine en mouvement : réservée aux administrateurs.
+        self.assertTrue(getattr(commande_tondeuse, "_admin", False))
+        noms_tondeuse = {(cle.args[0] if getattr(cle, "args", None) else cle) for cle in commande_tondeuse._ws_schema}
+        self.assertTrue({"entry_id", "commande", "duree_min"} <= noms_tondeuse)
         # Le schéma accepte les alertes (0.93.0) : sans cette clé, Home Assistant refuserait l'envoi.
         # Selon le stub de voluptuous chargé avant, une clé est une chaîne ou un marqueur qui la porte.
         noms = {(cle.args[0] if getattr(cle, "args", None) else cle) for cle in ecrire._ws_schema}

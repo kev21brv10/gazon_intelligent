@@ -22,6 +22,7 @@
 
 const WS_LIRE = "gazon_intelligent/reglages/get";
 const WS_ECRIRE = "gazon_intelligent/reglages/set";
+const WS_COMMANDE_TONDEUSE = "gazon_intelligent/tondeuse/commande";
 
 const MOIS_LONGS = [
   "janvier", "février", "mars", "avril", "mai", "juin",
@@ -2422,6 +2423,13 @@ dialog.dialogue > form { display: flex; flex-direction: column; min-height: 0; m
 .etat-garage .statut { flex: none; }
 .commandes-garage { padding: 0 20px 4px; }
 .commandes-garage .rangee-boutons { padding: 8px 0 4px; }
+.commandes-tondeuse { padding: 0 20px 6px; }
+.commandes-tondeuse .rangee-boutons { padding: 8px 0 4px; }
+.commandes-tondeuse .note { margin: 6px 0; }
+.bordure-duree { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 2px 12px; padding: 10px 0 2px; }
+.bordure-duree label { font-size: 13px; color: var(--gz-doux); }
+.bordure-duree output { font-variant-numeric: tabular-nums; font-weight: 600; }
+.bordure-duree .curseur-zone { grid-column: 1 / -1; }
 .pilote-garage { padding: 2px 20px 6px; font-size: 13px; color: var(--gz-doux); line-height: 1.45; }
 .pilote-garage p { margin: 2px 0; }
 .pilote-garage b { color: var(--gz-texte); }
@@ -6166,6 +6174,7 @@ class GazonIntelligentPanel extends HTMLElement {
     return this._mosaique([
       [carteMachine, "gauche", "large"],
       [this._coordinationHtml(), "gauche", "etroit"],
+      [this._commandesTondeuseHtml(), "gauche", "etroit"],
       [this._pilotageTondeuseEtatHtml(), "gauche", "etroit"],
       [this._travailHtml(), "milieu", "large"],
       [this._hauteursHtml(c), "milieu", "etroit"],
@@ -6307,6 +6316,147 @@ class GazonIntelligentPanel extends HTMLElement {
         <p>${allume ? "Allumé : les vannes restent fermées tant que la tondeuse travaille ou rentre." : "Éteint : l'arrosage ne regarde pas la tondeuse."}</p></div>
       <button class="bascule" role="switch" aria-checked="${allume}" data-dialogue="coordination" aria-label="Attendre la tondeuse avant d'arroser"></button>
     </div></section>`;
+  }
+
+  // ── Commandes manuelles : départ, coupe de bordure, retour, pause, reprise ──
+  // Le volet est géré PAR L'INTÉGRATION (ouverture, délai de sécurité, départ) : la page ne fait
+  // qu'envoyer la demande. Les refus ci-dessous ne sont qu'un miroir pratique des gardes du
+  // serveur, qui reste seul juge — rejugé ici au dernier moment, comme pour le volet.
+  _refusTondeuse(commande) {
+    const a = (cle) => this._a("tonte_etat", cle);
+    if (commande === "annuler") return a("mower_manual_active") === true ? "" : "Aucune commande manuelle en cours.";
+    const enCours = a("mower_manual_active") === true ? a("mower_manual_command") : null;
+    const prioritaire = commande === "retour" || commande === "pause" || commande === "reprendre";
+    if (enCours && (!prioritaire || enCours === commande)) {
+      return "Une commande manuelle est déjà en cours : attendre sa fin ou l'annuler.";
+    }
+    if (a("tondeuse_connectee") !== true) return "La tondeuse n'est pas connectée.";
+    const volet = this._donnees?.garage_tondeuse?.choisie;
+    const etatVolet = volet ? String(this._hass?.states?.[volet]?.state || "").toLowerCase() : "";
+    const voletMuet = Boolean(volet) && (etatVolet === "" || etatVolet === "unavailable" || etatVolet === "unknown");
+    const aQuai = a("mower_is_docked") === true;
+    const dehors = a("mower_is_outside") === true;
+    if (commande === "demarrer" || commande === "bordure") {
+      if (commande === "bordure" && a("mower_edgecut_available") === false) return "La coupe de bordure n'est pas disponible avec cette tondeuse.";
+      if (voletMuet) return "Le volet ne répond pas : la tondeuse ne peut pas sortir ni rentrer.";
+      if (a("tondeuse_prete") !== true) return "La tondeuse n'est pas prête.";
+      if (!aQuai) return "La tondeuse doit être à sa base pour partir.";
+      const batterie = nombreOuNul(a("tondeuse_batterie"));
+      if (batterie !== null && batterie < 20) return `La batterie est trop basse pour partir (${nombreFr(batterie, 0)} %, minimum 20 %).`;
+    } else if (commande === "retour") {
+      if (voletMuet) return "Le volet ne répond pas : la tondeuse ne peut pas sortir ni rentrer.";
+      if (aQuai && !dehors) return "La tondeuse est déjà à sa base.";
+    } else if (commande === "pause") {
+      if (!dehors) return "La tondeuse n'est pas dehors : rien à mettre en pause.";
+    } else if (commande === "reprendre") {
+      if (!dehors) return "La tondeuse n'est pas dehors : rien à reprendre.";
+      if (enCours !== "pause" && a("mower_job_completion_state") !== "en_pause") return "La tondeuse n'est pas en pause.";
+    }
+    return "";
+  }
+
+  _dureeBordureValide() {
+    const d = Number(this._dureeBordure);
+    return Number.isFinite(d) ? Math.min(120, Math.max(10, Math.round(d / 5) * 5)) : 30;
+  }
+
+  _commandesTondeuseHtml() {
+    const a = (cle) => this._a("tonte_etat", cle);
+    if (!a("tondeuse_source_entity")) return "";
+    const admin = this._estAdmin();
+    const occupe = (cle) => this._commandesEnCours.has(cle);
+    const fuseau = this._fuseau();
+    const volet = this._donnees?.garage_tondeuse?.choisie;
+    const libelles = { demarrer: "un départ", bordure: "une coupe de bordure", retour: "un retour à la base", pause: "une pause", reprendre: "une reprise" };
+    const active = a("mower_manual_active") === true;
+    const commandeActive = active ? a("mower_manual_command") : null;
+    const duree = this._dureeBordureValide();
+    const bordureDispo = a("mower_edgecut_available") !== false;
+
+    // Confirmation d'un départ : le volet s'ouvre tout seul, la tondeuse part sans personne.
+    const demande = this._tondeuseConfirmation;
+    if (admin && (demande === "demarrer" || demande === "bordure")) {
+      const refus = this._refusTondeuse(demande);
+      if (refus) {
+        return `<section class="section"><div class="section-tete"><h3>Commander la tondeuse</h3></div>
+          <div class="commandes-tondeuse"><p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>${esc(refus)} La demande est annulée.</span></p>
+          <div class="rangee-boutons"><button class="bouton-contour" data-tondeuse-annuler>Compris</button></div></div></section>`;
+      }
+      const quoi = demande === "bordure"
+        ? `La tondeuse va faire le tour du gazon pendant ${nombreFr(duree, 0)} min`
+        : "La tondeuse va partir tondre";
+      const volets = volet ? " Le volet va d'abord s'ouvrir, puis elle partira après le délai de sécurité." : "";
+      return `<section class="section"><div class="section-tete"><h3>Commander la tondeuse</h3></div>
+        <div class="commandes-tondeuse"><p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>${esc(quoi)}.${esc(volets)} Vérifier que le passage est dégagé et que personne n'est sur le gazon.</span></p>
+        <div class="rangee-boutons">
+          <button class="bouton-plein" data-commande="tondeuse-${demande}" ${occupe(`tondeuse-${demande}`) ? "disabled" : ""}><ha-icon icon="${demande === "bordure" ? "mdi:vector-polyline" : "mdi:play"}"></ha-icon>${demande === "bordure" ? "Lancer la bordure" : "Démarrer maintenant"}</button>
+          <button class="bouton-contour" data-tondeuse-annuler>Annuler</button>
+        </div></div></section>`;
+    }
+
+    const refus = {};
+    for (const c of ["demarrer", "bordure", "retour", "pause", "reprendre"]) refus[c] = this._refusTondeuse(c);
+    const inactif = (c) => !admin || Boolean(refus[c]) || occupe(`tondeuse-${c}`);
+    const bouton = (c, texte, icone, demander) => `<button class="${c === "demarrer" ? "bouton-plein" : "bouton-contour"}" ${demander ? `data-tondeuse-demander="${c}"` : `data-commande="tondeuse-${c}"`}
+      ${inactif(c) ? `disabled${refus[c] ? ` title="${esc(refus[c])}"` : ""}` : ""}><ha-icon icon="${icone}"></ha-icon>${esc(texte)}</button>`;
+    const reprise = commandeActive === "pause" || a("mower_job_completion_state") === "en_pause";
+    const boutons = [
+      bouton("demarrer", "Démarrer la tonte", "mdi:play", true),
+      bordureDispo ? bouton("bordure", "Coupe de bordure", "mdi:vector-polyline", true) : "",
+      bouton("retour", "Retour à la base", "mdi:home-import-outline", false),
+      reprise ? bouton("reprendre", "Reprendre", "mdi:play-pause", false) : bouton("pause", "Pause", "mdi:pause", false),
+    ].join("");
+
+    let bandeau = "";
+    if (active) {
+      const jusqua = instantFr(a("mower_manual_until"), fuseau);
+      const pilote = a("mower_control_mode") && a("mower_control_mode") !== "desactive" ? " Le pilote automatique attend la fin de cette commande." : "";
+      const motif = String(a("mower_manual_reason") || "").replace(/\.\s*$/, "");
+      bandeau = `<p class="note"><ha-icon icon="mdi:hand-back-right-outline"></ha-icon><span><b>Mode manuel : ${esc(libelles[commandeActive] || "commande")}</b>${motif ? ` — ${esc(motif)}` : ""}${jusqua ? ` (au plus tard ${esc(jusqua)})` : ""}.${esc(pilote)} Annuler rend la main au pilote sans arrêter la tondeuse.</span></p>
+        <div class="rangee-boutons"><button class="bouton-blanc" data-commande="tondeuse-annuler" ${admin && !occupe("tondeuse-annuler") ? "" : "disabled"}><ha-icon icon="mdi:close-circle-outline"></ha-icon>Annuler la commande</button></div>`;
+    } else if (a("mower_manual_step") === "erreur") {
+      const fini = a("mower_manual_ended_at") ? new Date(a("mower_manual_ended_at")).getTime() : 0;
+      if (fini && Date.now() - fini < 3600 * 1000) {
+        bandeau = `<p class="note alerte" role="alert"><ha-icon icon="mdi:alert-outline"></ha-icon><span><b>Commande abandonnée</b> : ${esc(a("mower_manual_reason") || "voir le journal de Home Assistant")}</span></p>`;
+      }
+    }
+    let suspension = "";
+    if (a("mower_manual_suspension_active") === true) {
+      const jusqua = instantFr(a("mower_manual_suspension_until"), fuseau);
+      suspension = `<p class="note"><ha-icon icon="mdi:timer-pause-outline"></ha-icon><span>Retour manuel : le pilote ne relance pas la tondeuse${jusqua ? ` avant ${esc(jusqua)}` : " pour l'instant"}.</span></p>`;
+    }
+    const reglette = admin && bordureDispo ? `<div class="bordure-duree">
+        <label for="duree-bordure">Durée de la coupe de bordure</label><output id="duree-bordure-valeur">${nombreFr(duree, 0)} min</output>
+        <div class="curseur-zone"><input id="duree-bordure" type="range" min="10" max="120" step="5" value="${duree}" data-bordure-duree
+          style="--rempli:${pourcent(duree, 10, 120)}%" aria-label="Durée de la coupe de bordure" aria-valuetext="${nombreFr(duree, 0)} minutes"></div>
+      </div>` : "";
+    const aide = volet
+      ? "Le volet s'ouvre tout seul avant un départ ou un retour, et le pilote le referme après la rentrée."
+      : "Départ, retour et pause envoyés directement à la tondeuse.";
+    const note = admin ? "" : `<p class="note"><ha-icon icon="mdi:lock-outline"></ha-icon><span>Seul un administrateur peut commander la tondeuse.</span></p>`;
+    return `<section class="section"><div class="section-tete"><h3>Commander la tondeuse</h3><p>${esc(aide)}</p></div>
+      <div class="commandes-tondeuse">${bandeau}${suspension}<div class="rangee-boutons">${boutons}</div>${reglette}${note}</div></section>`;
+  }
+
+  async _commandeTondeuse(commande) {
+    if (!this._estAdmin()) {
+      this._afficherToast("Seul un administrateur peut faire ça.", true);
+      return false;
+    }
+    const message = { type: WS_COMMANDE_TONDEUSE, entry_id: this._donnees.entry_id, commande };
+    if (commande === "bordure") message.duree_min = this._dureeBordureValide();
+    try {
+      const reponse = await this._hass.callWS(message);
+      if (reponse?.ok) {
+        this._afficherToast(reponse.message || "Commande envoyée.");
+        return true;
+      }
+      this._afficherToast(`Commande refusée : ${reponse?.message || "raison inconnue"}`, true);
+    } catch (e) {
+      console.error("Gazon Intelligent : commande de tondeuse", message, e);
+      await this._signalerEchec(e);
+    }
+    return false;
   }
 
   _pilotageTondeuseEtatHtml() {
@@ -7246,6 +7396,14 @@ class GazonIntelligentPanel extends HTMLElement {
           }[nom];
           await this._service("cover", service, { entity_id: volet }, message);
         }
+      } else if (nom.startsWith("tondeuse-")) {
+        const commande = nom.slice("tondeuse-".length);
+        this._tondeuseConfirmation = undefined;
+        // Rejugé ICI, avec l'état d'AUJOURD'HUI : la confirmation date d'un clic précédent et la
+        // tondeuse a pu bouger entre-temps (le serveur rejuge aussi, c'est lui qui décide).
+        const refus = this._refusTondeuse(commande);
+        if (refus) this._afficherToast(`Commande annulée : ${refus}`, true);
+        else await this._commandeTondeuse(commande);
       } else if (nom === "pompe-marche" || nom === "pompe-arret") {
         await this._service("switch", nom === "pompe-marche" ? "turn_on" : "turn_off", { entity_id: pompe }, nom === "pompe-marche" ? "Pompe en marche." : "Pompe arrêtée.");
       }
@@ -8240,6 +8398,17 @@ class GazonIntelligentPanel extends HTMLElement {
       if (liste) liste.innerHTML = this._rechercheResultatsHtml();
       return;
     }
+    if (cible.matches?.("[data-bordure-duree]")) {
+      // Le curseur de la bordure n'est pas un réglage : valeur locale, aucun brouillon, aucun rendu
+      // (un rendu lui ferait perdre le doigt en plein glissement).
+      this._dureeBordure = Number(cible.value);
+      const duree = this._dureeBordureValide();
+      const valeur = this.shadowRoot.querySelector("#duree-bordure-valeur");
+      if (valeur) valeur.textContent = `${nombreFr(duree, 0)} min`;
+      cible.style.setProperty("--rempli", `${pourcent(duree, 10, 120)}%`);
+      cible.setAttribute("aria-valuetext", `${nombreFr(duree, 0)} minutes`);
+      return;
+    }
     if (this._fenetre.contains(cible)) return;
     if (!cible.matches?.('input[type="range"]')) return;
     const ligne = cible.closest("[data-cle]");
@@ -8378,6 +8547,19 @@ class GazonIntelligentPanel extends HTMLElement {
     }
     if (cible.closest?.("[data-garage-annuler]")) {
       this._garageConfirmation = undefined;
+      this._rendre();
+      return true;
+    }
+    const departTondeuse = cible.closest?.("[data-tondeuse-demander]");
+    if (departTondeuse) {
+      if (!departTondeuse.disabled) {
+        this._tondeuseConfirmation = departTondeuse.dataset.tondeuseDemander;
+        this._rendre();
+      }
+      return true;
+    }
+    if (cible.closest?.("[data-tondeuse-annuler]")) {
+      this._tondeuseConfirmation = undefined;
       this._rendre();
       return true;
     }

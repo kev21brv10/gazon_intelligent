@@ -327,6 +327,20 @@ def evaluate_mower_control(
             return command("open_cover", "ouverture_garage", raison)
         return result("bloque_garage", "Le retour attend l'ouverture manuelle du garage.")
 
+    # MODE MANUEL (page Gazon) : une commande de départ, de bordure, de retour ou de pause vient
+    # d'être donnée par l'utilisateur. Le pilote s'efface le temps de cette sortie — ni rappel, ni
+    # fermeture du volet, ni départ — SANS que le réglage du pilotage change. Seule la règle
+    # ci-dessus (volet fermé devant une tondeuse dehors) a priorité : elle protège la machine.
+    if snapshot.get("mower_manual_active") is True:
+        # Une tondeuse partie ne doit pas laisser un vieux « rentrée depuis » autoriser une fermeture
+        # immédiate à son retour : le délai repart de sa vraie rentrée.
+        manual_updates = {"docked_since": None} if (not strong_dock and runtime.get("docked_since") is not None) else {}
+        return result(
+            "manuel",
+            "Commande manuelle en cours : le pilote automatique attend sa fin.",
+            updates=manual_updates,
+        )
+
     # On rappelle uniquement quand le GAZON retire son autorisation. Une donnée machine incertaine
     # ne suffit pas : elle pourrait produire des rappels inutiles à chaque indisponibilité réseau.
     if (outside or mowing) and mowing_forbidden and not returning:
@@ -426,6 +440,16 @@ def evaluate_mower_control(
     elif runtime.get("docked_since") is not None:
         # Le signal fort a disparu : l'ancien instant ne doit jamais autoriser une fermeture.
         runtime_clear = {"docked_since": None}
+
+    # Après un RETOUR manuel, pas de départ automatique pendant un moment : le pilote verrait une
+    # tondeuse à quai, des conditions favorables, et la renverrait aussitôt. Placé APRÈS la
+    # fermeture du volet (qui doit suivre le retour) et AVANT tout départ ou reprise.
+    if snapshot.get("mower_manual_suspension_active") is True:
+        return result(
+            "depart_suspendu",
+            "Retour manuel récent : les départs automatiques sont suspendus.",
+            updates=runtime_clear,
+        )
 
     if snapshot.get("action_possible") is not True:
         if resume_required:
