@@ -141,5 +141,76 @@ class AlerteDuVoletTests(unittest.TestCase):
         self.assertIn("commande impossible", annonce[0].titre)
 
 
+class AnomalieEtErreurSimultaneesTests(unittest.TestCase):
+    """Une anomalie du volet ne se perd jamais parce qu'une erreur de commande passait avant elle."""
+
+    BLOQUE = dict(alert="volet_bloque", alert_reason="Le volet n'a pas atteint sa position après 3 tentatives.")
+
+    def _suite(self, *etapes):
+        memoire = None
+        resultats = []
+        for garage in etapes:
+            alertes, memoire = _evaluer(memoire, progression=None, sujets_actifs=SUJETS, activite_garage=garage)
+            resultats.append(alertes)
+        return resultats
+
+    @staticmethod
+    def _titres(alertes):
+        return [("résolue" if a.resolue else a.titre) for a in alertes]
+
+    def test_erreur_et_anomalie_au_meme_controle_l_anomalie_part_apres_la_levee_de_l_erreur(self) -> None:
+        """⚠️ Reproduit en relecture : l'erreur gagnait la chaîne, la mémoire de l'anomalie avançait quand
+        même, et l'alerte persistante du volet ne partait jamais."""
+        normal = _garage()
+        les_deux = _garage(error="Service refusé", **self.BLOQUE)
+        anomalie = _garage(**self.BLOQUE)
+        c1, c2, c3, c4, c5 = self._suite(normal, les_deux, anomalie, anomalie, anomalie)
+        self.assertEqual(c1, [])
+        self.assertEqual(self._titres(c2), ["⚠️ Garage de la tondeuse : commande impossible"])
+        self.assertEqual(self._titres(c3), ["résolue"], "la levée de l'erreur passe d'abord")
+        self.assertEqual(self._titres(c4), ["⚠️ Garage de la tondeuse : volet bloqué"], "puis l'anomalie, enfin annoncée")
+        self.assertTrue(c4[0].persistante)
+        self.assertEqual(c5, [], "et une seule fois")
+
+    def test_erreur_levee_et_anomalie_nouvelle_au_meme_controle(self) -> None:
+        c1, c2, c3, c4 = self._suite(_garage(), _garage(error="Service refusé"), _garage(**self.BLOQUE), _garage(**self.BLOQUE))
+        self.assertEqual(self._titres(c2), ["⚠️ Garage de la tondeuse : commande impossible"])
+        self.assertEqual(self._titres(c3), ["résolue"])
+        self.assertEqual(self._titres(c4), ["⚠️ Garage de la tondeuse : volet bloqué"])
+
+    def test_une_anomalie_deja_annoncee_n_est_pas_reannoncee_par_une_erreur_survenue_apres(self) -> None:
+        bloque = _garage(**self.BLOQUE)
+        c1, c2, c3, c4 = self._suite(_garage(), bloque, _garage(error="Service refusé", **self.BLOQUE), bloque)
+        self.assertEqual(self._titres(c2), ["⚠️ Garage de la tondeuse : volet bloqué"])
+        self.assertEqual(self._titres(c3), ["⚠️ Garage de la tondeuse : commande impossible"])
+        self.assertEqual(self._titres(c4), ["résolue"], "l'erreur levée ; l'anomalie, déjà annoncée, ne repart pas")
+
+    def test_anomalie_levee_pendant_une_erreur_ne_retire_pas_la_trace_de_l_erreur(self) -> None:
+        """L'anomalie levée n'est pas différée : sa « résolution » retirerait, au contrôle suivant, la
+        notification de l'erreur qui l'a remplacée alors que l'erreur dure encore."""
+        erreur = _garage(error="Service refusé")
+        c1, c2, c3, c4 = self._suite(_garage(), _garage(**self.BLOQUE), erreur, erreur)
+        self.assertEqual(self._titres(c2), ["⚠️ Garage de la tondeuse : volet bloqué"])
+        self.assertEqual(self._titres(c3), ["⚠️ Garage de la tondeuse : commande impossible"])
+        self.assertEqual(c4, [], "aucune résolution tant que l'erreur est là")
+
+    def test_une_anomalie_disparue_avant_d_etre_annoncee_ne_part_jamais(self) -> None:
+        erreur = _garage(error="Service refusé")
+        c1, c2, c3, c4, c5 = self._suite(_garage(), _garage(error="Service refusé", **self.BLOQUE), erreur, erreur, _garage())
+        self.assertEqual(self._titres(c2), ["⚠️ Garage de la tondeuse : commande impossible"])
+        self.assertEqual(c3, [])
+        self.assertEqual(c4, [])
+        self.assertEqual(self._titres(c5), ["résolue"], "seule l'erreur est levée : aucune anomalie n'a jamais été annoncée")
+
+    def test_la_famille_garage_desactivee_n_accumule_aucune_anomalie_en_attente(self) -> None:
+        """Famille décochée : rien ne part, et la mémoire suit l'état courant (rien à rattraper à la réactivation)."""
+        memoire = None
+        for garage in (_garage(), _garage(error="Service refusé", **self.BLOQUE), _garage(**self.BLOQUE)):
+            alertes, memoire = _evaluer(memoire, progression=None, sujets_actifs=set(), activite_garage=garage)
+            self.assertEqual(alertes, [])
+        alertes, memoire = _evaluer(memoire, progression=None, sujets_actifs=SUJETS, activite_garage=_garage(**self.BLOQUE))
+        self.assertEqual(alertes, [], "réactivée sur une anomalie déjà ancienne : pas d'alerte fantôme")
+
+
 if __name__ == "__main__":
     unittest.main()

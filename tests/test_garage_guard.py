@@ -554,5 +554,46 @@ class VoletOuvertALaMainDansLePiloteTests(unittest.TestCase):
         self.assertEqual(decision["mower_control_pending_action"], "close_cover")
 
 
+class RegistreLieAUnVoletTests(unittest.TestCase):
+    """Changer de volet ne transmet pas au nouveau le blocage de l'ancien."""
+
+    BLOQUE = {
+        gg.KEY_COMMAND: "open_cover", gg.KEY_COMMAND_AT: _il_y_a(10), gg.KEY_SERIES_START: _il_y_a(15),
+        gg.KEY_ATTEMPTS: 3, gg.KEY_OPENED_BY_PILOT: True, gg.KEY_OPEN_SINCE: _il_y_a(30),
+        gg.KEY_UNAVAILABLE_SINCE: _il_y_a(5),
+    }
+
+    def test_sans_volet_configure_rien_n_est_lie(self) -> None:
+        self.assertEqual(gg.entity_updates({}, None), {})
+        self.assertEqual(gg.entity_updates(self.BLOQUE, ""), {})
+
+    def test_le_premier_volet_est_adopte_sans_rien_effacer(self) -> None:
+        self.assertEqual(gg.entity_updates({}, "cover.garage"), {gg.KEY_ENTITY: "cover.garage"})
+        # Un registre d'avant cette liaison (aucune entité mémorisée) est adopté tel quel.
+        self.assertEqual(gg.entity_updates(dict(self.BLOQUE), "cover.garage"), {gg.KEY_ENTITY: "cover.garage"})
+
+    def test_le_meme_volet_ne_change_rien(self) -> None:
+        self.assertEqual(gg.entity_updates({**self.BLOQUE, gg.KEY_ENTITY: "cover.garage"}, "cover.garage"), {})
+
+    def test_un_autre_volet_repart_d_un_registre_vierge(self) -> None:
+        runtime = {**self.BLOQUE, gg.KEY_ENTITY: "cover.ancien"}
+        maj = gg.entity_updates(runtime, "cover.nouveau")
+        self.assertEqual(maj[gg.KEY_ENTITY], "cover.nouveau")
+        for cle in (gg.KEY_COMMAND, gg.KEY_COMMAND_AT, gg.KEY_SERIES_START, gg.KEY_OPENED_BY_PILOT,
+                    gg.KEY_OPEN_SINCE, gg.KEY_UNAVAILABLE_SINCE):
+            self.assertIsNone(maj[cle], cle)
+        self.assertEqual(maj[gg.KEY_ATTEMPTS], 0)
+        # Appliqué : plus aucune série, le nouveau volet n'est pas tenu pour bloqué.
+        appliquee = {**runtime, **maj}
+        self.assertIsNone(gg.command_gate("open_cover", appliquee, {}, NOW))
+        self.assertFalse(gg.exhausted(appliquee))
+
+    def test_un_volet_retire_puis_un_autre_configure_est_aussi_reinitialise(self) -> None:
+        """Volet décoché (aucune entité) puis un AUTRE choisi : la mémoire de l'ancien ne survit pas."""
+        runtime = {**self.BLOQUE, gg.KEY_ENTITY: "cover.ancien"}
+        self.assertEqual(gg.entity_updates(runtime, None), {})
+        self.assertIn(gg.KEY_COMMAND, gg.entity_updates(runtime, "cover.nouveau"))
+
+
 if __name__ == "__main__":
     unittest.main()

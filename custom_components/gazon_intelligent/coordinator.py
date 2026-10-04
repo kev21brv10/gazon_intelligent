@@ -4164,6 +4164,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             lire_reglage(settings, "tondeuse_garage_ouverture_min", DEFAULT_MOWER_GARAGE_MIN_OPEN_POSITION)
         )
         if cover_entity:
+            # Le registre appartient à UN volet : un autre volet configuré repart d'un registre vierge
+            # (sinon le blocage de l'ancien, jusqu'à 24 h, serait appliqué au nouveau).
+            runtime.update(garage_guard.entity_updates(runtime, cover_entity))
             # Le registre des ordres de volet est remis à jour AVANT la décision, sur l'état réel :
             # cible atteinte → série fermée ; volet vu fermé → plus « ouvert par le pilote ».
             runtime.update(

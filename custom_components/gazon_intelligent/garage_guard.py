@@ -71,6 +71,13 @@ KEY_OPEN_SINCE = "garage_ouvert_depuis"
 # Depuis quand le volet est vu indisponible. Un volet « indisponible » juste après un redémarrage de
 # Home Assistant est normal pendant une ou deux minutes : on n'alerte qu'au-delà d'un délai de grâce.
 KEY_UNAVAILABLE_SINCE = "garage_indisponible_depuis"
+# Le volet auquel appartient ce registre. Changer de volet (remplacement, autre entité) ne doit pas
+# transmettre au nouveau les ordres, les tentatives et le blocage de l'ancien : un nouveau volet
+# fermé serait sinon tenu pour « bloqué » pendant 24 h.
+KEY_ENTITY = "garage_entite"
+_ENTITY_BOUND_KEYS = (
+    KEY_COMMAND, KEY_COMMAND_AT, KEY_SERIES_START, KEY_OPENED_BY_PILOT, KEY_OPEN_SINCE, KEY_UNAVAILABLE_SINCE,
+)
 
 ALERT_UNAVAILABLE = "volet_indisponible"
 ALERT_STUCK = "volet_bloque"
@@ -226,6 +233,24 @@ def after_command(
     }
     if action == "open_cover":
         updates[KEY_OPENED_BY_PILOT] = True
+    return updates
+
+
+def entity_updates(runtime: Mapping[str, Any], cover_entity: str | None) -> dict[str, Any]:
+    """Lie le registre au volet configuré ; un AUTRE volet repart d'un registre vierge.
+
+    Un registre d'avant cette liaison (aucune entité mémorisée) est adopté tel quel : on ne sait pas à
+    quel volet il appartenait, et l'effacer à l'aveugle changerait le comportement en silence.
+    """
+    if not cover_entity:
+        return {}
+    known = runtime.get(KEY_ENTITY)
+    if known == cover_entity:
+        return {}
+    updates: dict[str, Any] = {KEY_ENTITY: cover_entity}
+    if known:
+        updates.update({key: None for key in _ENTITY_BOUND_KEYS})
+        updates[KEY_ATTEMPTS] = 0
     return updates
 
 

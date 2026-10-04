@@ -493,7 +493,14 @@ def _evaluer_activites(
         precedente = suivi.get("garage_state")
         erreur_precedente = str(suivi.get("garage_error") or "")
         alerte_precedente = str(suivi.get("garage_alert") or "")
+        # ⚠️ Une anomalie NOUVELLE que l'erreur de commande (ou sa levée) a fait passer sous silence
+        # n'est PAS mémorisée : elle reste à annoncer au contrôle suivant. Avancer la mémoire ici la
+        # perdrait pour de bon (reproduit en relecture : erreur + anomalie au même contrôle, l'alerte
+        # persistante du volet ne partait jamais). Seule une anomalie qui APPARAÎT est retenue : une
+        # anomalie levée n'a rien à annoncer, sa résolution passe après l'erreur en cours.
+        anomalie_en_attente = False
         if SUJET_GARAGE_TONDEUSE in sujets_actifs and garage_error and garage_error != erreur_precedente:
+            anomalie_en_attente = bool(garage_alert) and garage_alert != alerte_precedente
             alertes.append(Alerte(
                 sujet=SUJET_GARAGE_TONDEUSE,
                 titre="⚠️ Garage de la tondeuse : commande impossible",
@@ -501,6 +508,7 @@ def _evaluer_activites(
                 niveau="action",
             ))
         elif SUJET_GARAGE_TONDEUSE in sujets_actifs and not garage_error and erreur_precedente:
+            anomalie_en_attente = bool(garage_alert) and garage_alert != alerte_precedente
             alertes.append(Alerte(
                 sujet=SUJET_GARAGE_TONDEUSE,
                 titre="",
@@ -539,7 +547,7 @@ def _evaluer_activites(
             ))
         suivi["garage_state"] = garage_state
         suivi["garage_error"] = garage_error or None
-        suivi["garage_alert"] = garage_alert or None
+        suivi["garage_alert"] = (alerte_precedente or None) if anomalie_en_attente else (garage_alert or None)
     return alertes
 
 
