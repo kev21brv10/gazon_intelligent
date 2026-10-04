@@ -621,6 +621,41 @@ REGLAGES: tuple[Reglage, ...] = (
         source="mower_control_constants.DEFAULT_MOWER_GARAGE_CLOSE_DELAY_MINUTES",
         avertissement="Réglage sensible : un délai trop court peut fermer le volet alors que la tondeuse termine sa manœuvre.",
     ),
+    Reglage(
+        "tondeuse_garage_delai_fermeture_manuel", "installation",
+        "Si le volet a été ouvert à la main, combien de temps attendre avant de le refermer ?",
+        "Tondeuse à quai, un volet ouvert sans ordre de l'intégration est refermé après ce délai, compté "
+        "depuis son ouverture. Il n'est jamais plus court que le délai après une rentrée.",
+        "duree", 30, 5, 240, 5,
+        source="garage_guard.DEFAULT_GARAGE_MANUAL_CLOSE_DELAY_MINUTES",
+    ),
+    Reglage(
+        "tondeuse_garage_delai_reprise", "installation",
+        "Si le volet ne bouge pas, combien de temps attendre avant de renvoyer l'ordre ?",
+        "Un ordre d'ouverture ou de fermeture n'est renvoyé qu'après ce délai. Il remplace, pour le volet, "
+        "le délai commun à toutes les commandes.",
+        "duree", 2, 1, 10, 0.5,
+        source="garage_guard.DEFAULT_GARAGE_RETRY_DELAY_MINUTES",
+        avertissement="Réglage sensible : un délai trop court peut envoyer plusieurs fois le même ordre au moteur du volet.",
+    ),
+    Reglage(
+        "tondeuse_garage_tentatives_max", "installation",
+        "Combien de tentatives automatiques avant de considérer le volet bloqué ?",
+        "Après ce nombre d'ordres sans effet, le pilote s'arrête et une alerte demande une intervention sur "
+        "place. Il reste arrêté tant que le volet n'a pas atteint sa position, 24 h au plus : passé ce délai, "
+        "une nouvelle série de tentatives est autorisée.",
+        "nombre", 3, 1, 10, 1, "fois",
+        source="garage_guard.DEFAULT_GARAGE_MAX_ATTEMPTS",
+        avertissement="Réglage sensible : une valeur élevée fait insister sur le moteur d'un volet coincé.",
+    ),
+    Reglage(
+        "tondeuse_garage_delai_max_mouvement", "installation",
+        "Au bout de combien de temps un volet qui n'a pas atteint sa position est-il bloqué ?",
+        "Compté depuis le premier ordre ; ensuite une alerte est envoyée. Une ouverture ou une fermeture "
+        "complète prend une dizaine de secondes.",
+        "duree", 3, 1, 15, 0.5,
+        source="garage_guard.DEFAULT_GARAGE_MAX_TRAVEL_MINUTES",
+    ),
 )
 
 # Les chiffres de chaque sol sont ceux du moteur (réserve de départ et stock maximal) :

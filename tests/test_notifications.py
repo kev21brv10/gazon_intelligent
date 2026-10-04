@@ -1048,6 +1048,10 @@ class CoordinateurAlertesTests(unittest.TestCase):
             "mower_garage_entity": "cover.garage",
             "mower_garage_state": "open",
             "mower_control_pending_action": "open_cover",
+            # Annoncé parce que le PILOTE vient d'ordonner cette ouverture (une manœuvre à la main
+            # ne notifie pas : voir tests/test_garage_notifications.py).
+            "mower_control_last_action": "open_cover",
+            "mower_control_last_action_at": (coord._current_datetime() - timedelta(minutes=1)).isoformat(),
             "mower_control_last_error": "Service refusé",
         })
         self.assertEqual(contexte["activite_arrosage"]["active_id"], "sess-active")

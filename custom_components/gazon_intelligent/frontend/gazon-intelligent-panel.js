@@ -6340,6 +6340,7 @@ class GazonIntelligentPanel extends HTMLElement {
         </div>
         ${suiviCycle}
         ${derniereCommande}
+        ${this._alerteVoletHtml()}
       </div></div>
     </section>`;
   }
@@ -7467,6 +7468,9 @@ class GazonIntelligentPanel extends HTMLElement {
     const avance = nombreFr(this._valeur("tondeuse_garage_avance_ouverture"), 3);
     const ouvertureMin = nombreFr(this._valeur("tondeuse_garage_ouverture_min"), 3);
     const fermeture = nombreFr(this._valeur("tondeuse_garage_delai_fermeture"), 3);
+    const fermetureManuelle = dureeFr(this._valeur("tondeuse_garage_delai_fermeture_manuel"));
+    const tentatives = nombreFr(this._valeur("tondeuse_garage_tentatives_max"), 0);
+    const delaiMax = dureeFr(this._valeur("tondeuse_garage_delai_max_mouvement"));
     const phrase = choisie
       ? `Le passage est protégé par ${volets.find((v) => v.entity_id === choisie)?.nom || choisie}. Chaque étape reste indépendante.`
       : "Aucun volet n'est branché.";
@@ -7484,10 +7488,16 @@ class GazonIntelligentPanel extends HTMLElement {
           "tondeuse_garage_ouverture_min",
           "tondeuse_garage_avance_ouverture",
         ])}
-        ${scenario("Au retour", "mdi:home-import-outline", `${retourAuto ? "Ouverture automatique" : "Ouverture manuelle"} · ${fermetureAuto ? `fermeture après ${fermeture} min` : "reste ouvert"}`, [
+        ${scenario("Au retour", "mdi:home-import-outline", `${retourAuto ? "Ouverture automatique" : "Ouverture manuelle"} · ${fermetureAuto ? `fermeture après ${fermeture} min (${fermetureManuelle} si ouvert à la main)` : "reste ouvert"}`, [
           "tondeuse_garage_ouvrir_pour_retour",
           "tondeuse_garage_fermer_apres_retour",
           "tondeuse_garage_delai_fermeture",
+          "tondeuse_garage_delai_fermeture_manuel",
+        ])}
+        ${scenario("Si le volet ne répond pas", "mdi:garage-alert-variant", `${tentatives} tentatives au plus · alerte après ${delaiMax}`, [
+          "tondeuse_garage_delai_max_mouvement",
+          "tondeuse_garage_tentatives_max",
+          "tondeuse_garage_delai_reprise",
         ])}
       </div>` : `<p class="note"><ha-icon icon="mdi:information-outline"></ha-icon><span>Sélectionner un volet dans Réglages → Entités pour afficher ses automatismes et ses délais.</span></p>`}`;
     return this._sectionReglageHtml({
@@ -7498,6 +7508,8 @@ class GazonIntelligentPanel extends HTMLElement {
       cles: choisie ? [
         "tondeuse_garage_ouvrir_avant_depart", "tondeuse_garage_ouverture_min", "tondeuse_garage_avance_ouverture",
         "tondeuse_garage_ouvrir_pour_retour", "tondeuse_garage_fermer_apres_retour", "tondeuse_garage_delai_fermeture",
+        "tondeuse_garage_delai_fermeture_manuel", "tondeuse_garage_delai_max_mouvement",
+        "tondeuse_garage_tentatives_max", "tondeuse_garage_delai_reprise",
       ] : [],
       attributs: 'data-garage-tondeuse="1"',
       ouverte: change,
@@ -7589,6 +7601,15 @@ class GazonIntelligentPanel extends HTMLElement {
     return `<div class="commandes-garage"><div class="rangee-boutons">${bouton("ouvrir")}${bouton("fermer")}${arret}</div>${note}</div>`;
   }
 
+  // Une anomalie du volet publiée par l'intégration (bloqué, injoignable tondeuse dehors).
+  _alerteVoletHtml() {
+    const code = this._a("tonte_etat", "mower_garage_alert");
+    if (!code) return "";
+    const motif = this._a("tonte_etat", "mower_garage_alert_reason");
+    const titre = code === "volet_indisponible" ? "Volet injoignable" : "Volet bloqué";
+    return `<p class="note alerte alerte-volet" role="alert"><ha-icon icon="mdi:garage-alert-variant"></ha-icon><span><b>${esc(titre)}</b>${motif ? ` : ${esc(motif)}` : ""}</span></p>`;
+  }
+
   // Ce que le pilote a fait en dernier et ce qu'il compte faire du volet, tels que l'intégration
   // les publie. En observation, la « prochaine action » n'est PAS envoyée : on le dit.
   _garagePiloteHtml() {
@@ -7603,7 +7624,9 @@ class GazonIntelligentPanel extends HTMLElement {
       const mode = a("mower_control_mode");
       lignes.push(`Prochaine action prévue : <b>${esc(actions[prevue])}</b>${mode === "observation" ? " (affichée seulement, pilotage en observation)" : ""}.`);
     }
-    return lignes.length ? `<div class="pilote-garage">${lignes.map((l) => `<p>${l}</p>`).join("")}</div>` : "";
+    const texte = lignes.length ? `<div class="pilote-garage">${lignes.map((l) => `<p>${l}</p>`).join("")}</div>` : "";
+    const alerte = this._alerteVoletHtml();
+    return alerte ? `<div class="commandes-garage">${alerte}</div>${texte}` : texte;
   }
 
   _etatGarageTondeuseHtml(entityId) {
@@ -7692,7 +7715,7 @@ class GazonIntelligentPanel extends HTMLElement {
       ["tondeuse", "mdi:robot-mower-outline", "Tondeuse en erreur", "Nouvelle erreur du robot, sans répétition tant qu'elle reste identique."],
       ["activite_arrosage", "mdi:water-check-outline", "Activité arrosage", "Début et fin d'un cycle, quantité et zones exécutées."],
       ["activite_tondeuse", "mdi:robot-mower", "Activité tondeuse", "Départ, retour vers la station et rentrée confirmée."],
-      ["garage_tondeuse", "mdi:garage-variant", "Garage tondeuse", "Ouverture, fermeture confirmée ou erreur de commande."],
+      ["garage_tondeuse", "mdi:garage-variant", "Garage tondeuse", "Ouverture ou fermeture ordonnée par le pilote, erreur de commande, volet bloqué ou injoignable."],
     ];
     const choixHtml = choixCategories.map(([cle, icone, titre, aide]) => `<div class="ligne compacte">
       <div class="ligne-tete">

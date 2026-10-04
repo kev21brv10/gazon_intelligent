@@ -84,6 +84,8 @@ _SNAPSHOT_KEYS: tuple[str, ...] = (
     "mower_control_resume_reason",
     "mower_garage_entity",
     "mower_garage_state",
+    "mower_garage_alert",
+    "mower_garage_alert_reason",
     "mowing_blocked_by_watering",
     "mowing_blocked",
     "mowing_block_reason_code",

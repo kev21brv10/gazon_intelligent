@@ -88,6 +88,7 @@ from .memory import compute_application_state
 from .decision_mowing import _NO_ERROR_CODES
 from .mower_adapter import build_mower_context, derive_related_entity_id
 from .mower_coordination import build_mower_coordination_context
+from . import garage_guard
 from .mower_control import evaluate_mower_control
 from .entity_ids import public_entity_id, resolve_entry_instance_slug
 from .shared_state import get_shared_state, resolve_effective_config
@@ -288,6 +289,8 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "mower_control_resume_reason",
     "mower_garage_entity",
     "mower_garage_state",
+    "mower_garage_alert",
+    "mower_garage_alert_reason",
     "mower_resolution_state",
     "mower_resolution_reason",
     "mower_resolution_candidate_count",
@@ -3944,11 +3947,40 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             runtime = {}
             self._runtime_state["mower_control"] = runtime
         settings = self._reglages_instance()
+        reglages_volet = {
+            "tondeuse_garage_delai_reprise": lire_reglage(
+                settings, "tondeuse_garage_delai_reprise", garage_guard.DEFAULT_GARAGE_RETRY_DELAY_MINUTES
+            ),
+            "tondeuse_garage_delai_max_mouvement": lire_reglage(
+                settings, "tondeuse_garage_delai_max_mouvement", garage_guard.DEFAULT_GARAGE_MAX_TRAVEL_MINUTES
+            ),
+            "tondeuse_garage_tentatives_max": lire_reglage(
+                settings, "tondeuse_garage_tentatives_max", garage_guard.DEFAULT_GARAGE_MAX_ATTEMPTS
+            ),
+            "tondeuse_garage_delai_fermeture_manuel": lire_reglage(
+                settings,
+                "tondeuse_garage_delai_fermeture_manuel",
+                garage_guard.DEFAULT_GARAGE_MANUAL_CLOSE_DELAY_MINUTES,
+            ),
+        }
+        ouverture_min = float(
+            lire_reglage(settings, "tondeuse_garage_ouverture_min", DEFAULT_MOWER_GARAGE_MIN_OPEN_POSITION)
+        )
+        if cover_entity:
+            # Le registre des ordres de volet est remis à jour AVANT la décision, sur l'état réel :
+            # cible atteinte → série fermée ; volet vu fermé → plus « ouvert par le pilote ».
+            runtime.update(
+                garage_guard.reset_updates(
+                    runtime, cover_state, cover_position, self._current_datetime(), ouverture_min,
+                    settings=reglages_volet,
+                )
+            )
         decision = evaluate_mower_control(
             snapshot,
             now=self._current_datetime(),
             mode=mode,
             settings={
+                **reglages_volet,
                 "tondeuse_creneaux_depart": self._get_conf(CONF_TONDEUSE_CRENEAUX_DEPART)
                 or DEFAULT_MOWER_START_WINDOW_POLICY,
                 "tondeuse_pilotage_batterie_min": lire_reglage(
@@ -4030,6 +4062,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             else:
                 instant = self._current_datetime().isoformat()
                 runtime.update({"last_action": action, "last_action_at": instant, "last_error": None})
+                runtime.update(
+                    garage_guard.after_command(
+                        runtime, action, instant, self._current_datetime(), settings=reglages_volet
+                    )
+                )
                 if action == "start_mowing":
                     # Un départ réussi n'est envoyé qu'une fois. Après une reprise due, la dette
                     # est acquittée immédiatement puis le constructeur reprend ses cycles de
@@ -4096,6 +4133,24 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         decision["mower_control_resume_required"] = runtime.get("resume_required") is True
         decision["mower_control_resume_reason"] = runtime.get("resume_reason")
+        # Une anomalie du volet, quel que soit le mode du pilote : un volet qui ne répond pas
+        # alors que la tondeuse est dehors est un fait, pas une décision.
+        anomalie = garage_guard.alert(
+            cover_entity=cover_entity,
+            cover_state=cover_state,
+            position=cover_position,
+            mower_away=bool(
+                snapshot.get("mower_is_outside")
+                or snapshot.get("mower_is_returning")
+                or snapshot.get("mower_is_mowing")
+            ),
+            runtime=runtime,
+            settings=reglages_volet,
+            now=self._current_datetime(),
+            min_open_position=ouverture_min,
+        )
+        decision["mower_garage_alert"] = anomalie["code"] if anomalie else None
+        decision["mower_garage_alert_reason"] = anomalie["motif"] if anomalie else None
         snapshot.update(decision)
 
     def _contexte_des_alertes(
@@ -4189,12 +4244,21 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             },
             "activite_garage": {
                 "configured": bool(snapshot.get("mower_garage_entity")),
-                "state": snapshot.get("mower_garage_state"),
+                # « Utile seulement » : une manœuvre n'est annoncée que si le pilote l'a ordonnée.
+                "state": garage_guard.notifiable_state(
+                    snapshot.get("mower_garage_state"),
+                    snapshot.get("mower_control_last_action"),
+                    snapshot.get("mower_control_last_action_at"),
+                    maintenant,
+                ),
                 "error": (
                     erreur_controleur
                     if action_tondeuse in {"open_cover", "close_cover"}
                     else None
                 ),
+                # Une anomalie (volet bloqué, volet injoignable tondeuse dehors) part toujours.
+                "alert": snapshot.get("mower_garage_alert"),
+                "alert_reason": snapshot.get("mower_garage_alert_reason"),
             },
             "sujets_actifs": notifications.sujets_voulus(self.entry),
         }

@@ -4145,6 +4145,8 @@ class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):
             "mower_control_resume_reason",
             "mower_garage_entity",
             "mower_garage_state",
+            "mower_garage_alert",
+            "mower_garage_alert_reason",
         )
         if controller_attrs:
             attrs.update(controller_attrs)

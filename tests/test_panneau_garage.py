@@ -48,6 +48,7 @@ _ensure_package("custom_components.gazon_intelligent", PACKAGE_DIR)
 _install_homeassistant_dt_stub()
 
 reglages = __import__("custom_components.gazon_intelligent.reglages", fromlist=["_"])
+reglages_module = reglages
 
 PANNEAU = PACKAGE_DIR / "frontend" / "gazon-intelligent-panel.js"
 NODE = shutil.which("node")
@@ -99,7 +100,7 @@ function fabriquer(c) {
 // La carte COMPLÈTE : registre réel, valeurs par défaut, volet enregistré (et brouillon éventuel).
 function carte(p, c) {
   p._donnees.registre = c.registre;
-  p._donnees.valeurs = c.valeurs;
+  p._donnees.valeurs = { ...c.valeurs, ...(c.reglages || {}) };
   p._donnees.garage_tondeuse = {
     choisie: c.enregistre === undefined ? "cover.garage" : c.enregistre,
     volets: [{ entity_id: "cover.garage", nom: "Garage - Tondeuse" }, { entity_id: "cover.autre", nom: "Autre volet" }],
@@ -173,10 +174,11 @@ def _rendre(cas: list[dict]) -> list[dict]:
     return json.loads(sortie.stdout)
 
 
-def _carte(volet: str = "open", attributs: dict | None = None, **extra) -> str:
+def _carte(volet: str = "open", attributs: dict | None = None, reglages: dict | None = None, **extra) -> str:
     (sortie,) = _rendre([{
         "type": "carte", "volet": volet, "position": 100, "attributs": attributs or {},
-        "registre": reglages.exporter(), "valeurs": reglages.valeurs_par_defaut(), **extra,
+        "registre": reglages_module.exporter(), "valeurs": reglages_module.valeurs_par_defaut(),
+        "reglages": reglages or {}, **extra,
     }])
     return sortie["html"]
 
@@ -629,6 +631,71 @@ class InstantEnFrancaisTests(unittest.TestCase):
     def test_un_instant_illisible_donne_une_chaine_vide(self) -> None:
         self.assertEqual(self._instant("pas une date", "2026-10-03T18:30:00Z"), "")
         self.assertEqual(self._instant("", "2026-10-03T18:30:00Z"), "")
+
+
+@unittest.skipUnless(NODE, "Node n'est pas installé")
+class ReglagesDeSecuriteDuVoletSurLaCarteTests(unittest.TestCase):
+    """Les réglages du volet sont tous sur la carte, rangés par situation."""
+
+    def test_les_quatre_nouveaux_reglages_sont_sur_la_carte(self) -> None:
+        html = _carte()
+        for cle in (
+            "tondeuse_garage_delai_fermeture_manuel", "tondeuse_garage_delai_max_mouvement",
+            "tondeuse_garage_tentatives_max", "tondeuse_garage_delai_reprise",
+        ):
+            with self.subTest(cle=cle):
+                self.assertIn(f'data-cle="{cle}"', html)
+
+    def test_le_groupe_si_le_volet_ne_repond_pas_porte_ses_trois_reglages(self) -> None:
+        html = _carte()
+        debut = html.index('data-garage-groupe="Si le volet ne répond pas"')
+        groupe = html[debut:html.index("</details>", debut)]
+        for cle in ("tondeuse_garage_delai_max_mouvement", "tondeuse_garage_tentatives_max", "tondeuse_garage_delai_reprise"):
+            self.assertIn(f'data-cle="{cle}"', groupe)
+        self.assertIn("3 tentatives au plus", groupe)
+        self.assertIn(f"alerte après 3{NBSP}min", groupe)
+
+    def test_le_delai_de_fermeture_a_la_main_est_dans_le_groupe_au_retour(self) -> None:
+        html = _carte()
+        debut = html.index('data-garage-groupe="Au retour"')
+        groupe = html[debut:html.index("</details>", debut)]
+        self.assertIn('data-cle="tondeuse_garage_delai_fermeture_manuel"', groupe)
+        self.assertIn(f"30{NBSP}min si ouvert à la main", groupe)
+
+    def test_le_resume_suit_les_valeurs_reglees(self) -> None:
+        html = _carte(reglages={
+            "tondeuse_garage_tentatives_max": 5, "tondeuse_garage_delai_max_mouvement": 6,
+            "tondeuse_garage_delai_fermeture_manuel": 90,
+        })
+        self.assertIn("5 tentatives au plus", html)
+        self.assertIn(f"alerte après 6{NBSP}min", html)
+        self.assertIn(f"1{NBSP}h{NBSP}30 si ouvert à la main", html)
+
+
+@unittest.skipUnless(NODE, "Node n'est pas installé")
+class AlerteDuVoletSurLaPageTests(unittest.TestCase):
+    ALERTE = {"mower_garage_alert": "volet_bloque", "mower_garage_alert_reason": "Le volet n'a pas atteint sa position."}
+
+    def test_une_anomalie_est_affichee_en_tete_de_la_carte(self) -> None:
+        html = _carte(attributs=self.ALERTE)
+        self.assertIn("alerte-volet", html)
+        self.assertIn("Volet bloqué", html)
+        self.assertIn("n&#39;a pas atteint sa position", html)
+        self.assertLess(html.index("alerte-volet"), html.index('data-garage-groupe="Avant le départ"'))
+
+    def test_un_volet_injoignable_a_son_propre_titre(self) -> None:
+        html = _carte(attributs={"mower_garage_alert": "volet_indisponible", "mower_garage_alert_reason": "Il ne répond pas."})
+        self.assertIn("Volet injoignable", html)
+
+    def test_sans_anomalie_aucune_note(self) -> None:
+        self.assertNotIn("alerte-volet", _carte(attributs={"mower_garage_alert": None}))
+        self.assertNotIn("alerte-volet", _carte())
+
+    def test_le_bloc_pilotage_de_l_onglet_tonte_porte_aussi_l_anomalie(self) -> None:
+        (sortie,) = _rendre([{"type": "bloc_pilote", "volet": "closed", "attributs": {"mower_control_mode": "actif", **self.ALERTE}}])
+        self.assertIn("alerte-volet", sortie["html"])
+        (sortie,) = _rendre([{"type": "bloc_pilote", "volet": "closed", "attributs": {"mower_control_mode": "actif"}}])
+        self.assertNotIn("alerte-volet", sortie["html"])
 
 
 class LibelleDuReglageDOuvertureTests(unittest.TestCase):
