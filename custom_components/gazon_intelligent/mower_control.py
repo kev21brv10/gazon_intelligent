@@ -98,6 +98,40 @@ def _result(
     }
 
 
+def _departure_held(snapshot: Mapping[str, Any], settings: Mapping[str, Any]) -> bool:
+    """Le pilote n'enverra AUCUN nouveau départ tant que ces conditions durent.
+
+    Même jugement que les gardes de départ plus bas (créneau, quota du jour, batterie) et que la
+    suspension après un retour manuel. Sert à fermer le volet quand la tondeuse est rentrée et que
+    le pilote n'a plus de départ à envoyer, même si le gazon autorise encore la tonte : le volet se
+    rouvre tout seul avant le prochain départ. Un test de cohérence rejoue les deux chemins.
+    """
+    if snapshot.get("mower_manual_suspension_active") is True:
+        return True
+    window_state = str(snapshot.get("mowing_window_state") or "").strip().lower()
+    window_policy = str(
+        settings.get("tondeuse_creneaux_depart") or DEFAULT_MOWER_START_WINDOW_POLICY
+    ).strip().lower()
+    if window_policy not in MOWER_START_WINDOW_POLICIES:
+        window_policy = DEFAULT_MOWER_START_WINDOW_POLICY
+    allowed_windows = {
+        "ideal_seulement": {"ideal"},
+        "ideal_acceptable": {"ideal", "acceptable"},
+        "tout_non_bloque": {"ideal", "acceptable", "discouraged"},
+    }[window_policy]
+    if window_state not in allowed_windows:
+        return True
+    count = _number(snapshot.get("mower_pass_count_today"))
+    limit = _number(snapshot.get("mowing_daily_session_limit"))
+    if count is None or limit is None or count >= limit:
+        return True
+    battery = _number(snapshot.get("mower_battery", snapshot.get("tondeuse_batterie")))
+    minimum = _number(settings.get("tondeuse_pilotage_batterie_min"))
+    if minimum is None:
+        minimum = DEFAULT_MOWER_CONTROL_MIN_BATTERY
+    return battery is None or battery < minimum
+
+
 def evaluate_mower_control(
     snapshot: Mapping[str, Any],
     *,
@@ -410,7 +444,12 @@ def evaluate_mower_control(
         runtime,
     )
     runtime_clear: dict[str, Any] = {}
-    if cover_entity and strong_dock and snapshot.get("action_possible") is not True:
+    # ⚠️ FERMER QUAND LE PILOTE N'A PLUS DE DÉPART À ENVOYER, pas seulement quand le gazon interdit la tonte :
+    # quota du jour atteint, créneau non autorisé, batterie à recharger, retour manuel récent. Sinon le
+    # volet restait ouvert jusqu'à la nuit alors que rien ne repartait. Il se rouvre avant le prochain
+    # départ (séquence d'ouverture). Pas pour une reprise due : le pilote la doit encore.
+    nothing_to_send = not resume_required and _departure_held(snapshot, settings)
+    if cover_entity and strong_dock and (snapshot.get("action_possible") is not True or nothing_to_send):
         docked_since = runtime.get("docked_since")
         updates = {} if docked_since else {"docked_since": now.isoformat()}
         if cover in _COVER_OPEN | _COVER_OPENING:

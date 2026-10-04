@@ -703,17 +703,28 @@ class RejugementPlanifieTests(_Base):
             desabonnement.assert_called_once()
             self.assertIsNone(coord._unsub_quick_refresh)
 
-    def test_le_minuteur_ne_lance_pas_un_second_cycle_pendant_un_cycle(self) -> None:
-        """Un cycle qui tourne rejuge lui-même et redemandera un minuteur s'il faut encore attendre."""
+    def test_un_minuteur_echu_pendant_un_cycle_est_rearme_au_lieu_d_etre_perdu(self) -> None:
+        """⚠️ Relevé en relecture : un cycle B demande son passage alors qu'un minuteur A existe encore (la demande
+        est ignorée), puis A échoit PENDANT B : sans réarmement, B finit sans minuteur et l'attente du volet retombe
+        à l'intervalle normal (2 min) au lieu de 5 s."""
         from unittest.mock import patch
         coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
         coord.hass = object()
         coord._rafraichir_apres_action_utilisateur = AsyncMock()
-        coord._dans_le_cycle = True
         with patch.object(coordinator_mod, "async_call_later") as planifier:
-            coord._schedule_quick_refresh()
-            asyncio.run(planifier.call_args.args[2](None))
-        coord._rafraichir_apres_action_utilisateur.assert_not_awaited()
+            coord._schedule_quick_refresh()                       # minuteur A
+            minuteur_a = planifier.call_args.args[2]
+            coord._dans_le_cycle = True                           # le cycle B démarre
+            coord._schedule_quick_refresh()                       # B demande son passage : ignoré, A existe
+            self.assertEqual(planifier.call_count, 1)
+            asyncio.run(minuteur_a(None))                         # A échoit PENDANT B
+            coord._rafraichir_apres_action_utilisateur.assert_not_awaited()
+            self.assertEqual(planifier.call_count, 2, "un nouveau minuteur est armé")
+            self.assertIsNotNone(coord._unsub_quick_refresh)
+            self.assertEqual(planifier.call_args.args[1], 5.0)
+            coord._dans_le_cycle = False                          # B se termine
+            asyncio.run(planifier.call_args.args[2](None))        # le minuteur réarmé échoit hors cycle
+        coord._rafraichir_apres_action_utilisateur.assert_awaited_once()
         self.assertIsNone(coord._unsub_quick_refresh)
 
     def test_l_arret_de_l_integration_annule_le_minuteur(self) -> None:

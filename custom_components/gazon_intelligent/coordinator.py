@@ -4105,7 +4105,10 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         async def _refresh(_now: Any) -> None:
             self._unsub_quick_refresh = None
             if self._dans_le_cycle:
-                # Un cycle tourne déjà : il rejugera lui-même, et redemandera un minuteur s'il faut attendre.
+                # Un cycle tourne déjà : il rejugera lui-même. ⚠️ MAIS il a peut-être déjà demandé son passage
+                # alors que CE minuteur existait encore (la demande est alors ignorée) : en sortant il ne
+                # re-demandera rien, et l'attente retomberait à l'intervalle normal. On ré-arme donc le minuteur.
+                self._schedule_quick_refresh(delay_seconds)
                 return
             await self._rafraichir_apres_action_utilisateur()
 

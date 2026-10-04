@@ -62,12 +62,23 @@
   maintenant un nouveau passage toutes les 5 secondes : la tondeuse part au plus 5 s après le délai
   de sécurité réglé, et le volet se referme au plus 5 s après son délai. Mode actif seulement :
   observation et désactivé n'attendent rien. Les réglages sont inchangés (ouverture avant le
-  départ, attente après l'ouverture, position minimale, fermeture après la rentrée).
+  départ, attente après l'ouverture, position minimale, fermeture après la rentrée). Un minuteur qui
+  échoit pendant qu'un cycle tourne est ré-armé au lieu d'être perdu (relevé en relecture : l'attente
+  retombait sinon à l'intervalle normal).
+- **Le volet se ferme quand le pilote n'a plus de départ à envoyer** : jusqu'ici, tondeuse rentrée et
+  travail terminé, il ne se fermait que si le gazon interdisait la tonte (nuit, pluie) ; il restait
+  donc ouvert quand le quota du jour était atteint, le créneau non autorisé ou la batterie à
+  recharger, alors que rien ne repartait. Il se ferme maintenant, après son délai, dans ces cas et
+  après un retour manuel récent, et se rouvre tout seul avant le prochain départ (ouverture, délai de
+  sécurité, départ). Inchangés : la garde du travail inachevé, la reprise due du pilote, l'arrosage
+  en cours et la tondeuse pas prête (qui ne ferment pas le volet), l'option « fermer après la
+  rentrée » et le délai de fermeture. Les conditions reprennent celles des gardes de départ ; un
+  test de cohérence rejoue les deux chemins sur 360 situations.
 - **Publié** : `mower_manual_active`, `_command`, `_step`, `_reason`, `_until`, `_duration_min`,
   `_error`, `_ended_at`, `_suspension_active`, `_suspension_until` et `mower_edgecut_available`
   (capteur d'état de la tonte et diagnostics) ; l'état de la commande survit à un redémarrage.
-- **Vérifié** : suite complète avec 2 731 tests et 3 454 sous-tests, ruff et mypy (55 fichiers)
-  verts, le nouveau module pur `manual_command` y compris ; 142 variantes cassées volontairement
+- **Vérifié** : suite complète avec 2 749 tests et 3 467 sous-tests, ruff et mypy (55 fichiers)
+  verts, le nouveau module pur `manual_command` y compris ; 154 variantes cassées volontairement
   (gardes, séquence du volet, réouverture du volet, pause, bordure, fin de commande, suspension,
   effacement du pilote, persistance, page), toutes détectées.
 

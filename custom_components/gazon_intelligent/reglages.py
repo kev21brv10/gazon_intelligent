@@ -592,7 +592,8 @@ REGLAGES: tuple[Reglage, ...] = (
     Reglage(
         "tondeuse_garage_fermer_apres_retour", "installation",
         "Fermer automatiquement le garage après la rentrée ?",
-        "Sinon, le volet reste ouvert jusqu'à sa fermeture manuelle.",
+        "Il se ferme après la rentrée quand la tondeuse n'a plus de départ prévu (quota du jour atteint, créneau non "
+        "autorisé, batterie à recharger) et se rouvre avant le prochain. Sinon, il reste ouvert jusqu'à sa fermeture manuelle.",
         "interrupteur", True, 0, 1, 1,
         source="mower_control_constants.DEFAULT_MOWER_GARAGE_CLOSE_AFTER_DOCK",
         avertissement="Réglage sensible : la fermeture automatique exige toujours une rentrée fortement confirmée.",
