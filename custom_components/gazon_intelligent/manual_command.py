@@ -173,7 +173,7 @@ def validate_request(
         return "La tondeuse n'est pas connectée."
     if commande == "bordure" and not edgecut_available:
         return "La coupe de bordure n'est pas disponible avec cette tondeuse."
-    if commande in DEPARTS | {"retour"} and not cover_known:
+    if commande in DEPARTS | {"retour", "reprendre"} and not cover_known:
         return "Le volet ne répond pas : la tondeuse ne peut pas sortir ni rentrer."
     if commande in DEPARTS:
         if snapshot.get("tondeuse_prete") is not True:
@@ -322,13 +322,46 @@ def evaluate(
             )
         return waiting("pause_envoyee", "Tondeuse en pause : le pilote ne la rappelle pas.")
 
-    # ── Reprise après une pause : la tondeuse est dehors, donc le volet est déjà ouvert pour elle ──
+    # Volet à OUVRIR ET CONFIRMÉ avant l'ordre (retour, reprise). None = confirmé, ou aucun volet.
+    def cover_first(*, mute: str, late: str, opening: str, open_it: str) -> dict[str, Any] | None:
+        if not cover_entity:
+            return None
+        if not cover_known:
+            return _result(state, "erreur", mute, finished=True, updates={"erreur": "volet_indisponible"})
+        if confirmed:
+            return None
+        blocage = None if cover == "opening" else garage_guard.command_gate(
+            "open_cover", garage_runtime, settings, now
+        )
+        if blocage is not None and blocage["state"] == "volet_bloque":
+            return _result(state, "erreur", blocage["reason"], finished=True, updates={"erreur": "volet_bloque"})
+        waited_total = _minutes_since(now, state.get("demande_a"))
+        if waited_total is not None and waited_total >= MANUAL_GARAGE_WAIT_MAX_MINUTES:
+            return _result(state, "erreur", late, finished=True, updates={"erreur": "volet_non_ouvert"})
+        if cover == "opening":
+            return _result(state, "attente_garage", opening)
+        if blocage is not None:
+            return _result(state, "attente_garage", blocage["reason"])
+        return _result(state, "ouverture_garage", open_it, action={"service": "cover.open_cover", "data": {}})
+
+    # ── Reprise après une pause : la tondeuse est dehors ──
+    # ⚠️ Même ordre que le retour : volet ouvert ET confirmé AVANT l'ordre. Elle est dehors, mais rien
+    # ne garantit que le volet est encore ouvert (refermé à la main, par une automatisation) ; la
+    # reprise ne doit jamais la laisser repartir vers un volet qu'on ne sait pas ouvert.
     # Une fois l'ordre parti, la commande est « dehors » : elle suit le chemin d'un départ (le mode
     # manuel tient jusqu'à la fin du travail ou l'échéance).
     if commande == "reprendre" and not state.get("envoye_a"):
         if not _outside(snapshot):
             return _result(state, "erreur", "La tondeuse n'est plus dehors : reprise abandonnée.", finished=True,
                            updates={"erreur": "pas_dehors"})
+        attente = cover_first(
+            mute="Le volet ne répond pas : la reprise n'est pas lancée.",
+            late="Le volet n'est pas ouvert après plusieurs minutes : reprise non lancée.",
+            opening="Ouverture du volet en cours avant la reprise.",
+            open_it="Ouverture du volet avant la reprise.",
+        )
+        if attente is not None:
+            return attente
         return _result(
             state, "dehors", "Reprise demandée à la tondeuse.",
             action={"service": "lawn_mower.start_mowing", "data": {}},
@@ -344,26 +377,14 @@ def evaluate(
                     suspension_minutes=MANUAL_HOLD_AFTER_RETURN_MINUTES,
                 )
             return waiting("retour_envoye", "Retour demandé : la tondeuse rentre.")
-        if cover_entity:
-            if not cover_known:
-                return _result(state, "erreur", "Le volet ne répond pas : le retour n'est pas lancé.", finished=True,
-                               updates={"erreur": "volet_indisponible"})
-            if not confirmed:
-                blocage = None if cover == "opening" else garage_guard.command_gate(
-                    "open_cover", garage_runtime, settings, now
-                )
-                if blocage is not None and blocage["state"] == "volet_bloque":
-                    return _result(state, "erreur", blocage["reason"], finished=True, updates={"erreur": "volet_bloque"})
-                waited_total = _minutes_since(now, state.get("demande_a"))
-                if waited_total is not None and waited_total >= MANUAL_GARAGE_WAIT_MAX_MINUTES:
-                    return _result(state, "erreur", "Le volet n'est pas ouvert après plusieurs minutes : retour non lancé.",
-                                   finished=True, updates={"erreur": "volet_non_ouvert"})
-                if cover == "opening":
-                    return _result(state, "attente_garage", "Ouverture du volet en cours avant le retour.")
-                if blocage is not None:
-                    return _result(state, "attente_garage", blocage["reason"])
-                return _result(state, "ouverture_garage", "Ouverture du volet avant le retour.",
-                               action={"service": "cover.open_cover", "data": {}})
+        attente = cover_first(
+            mute="Le volet ne répond pas : le retour n'est pas lancé.",
+            late="Le volet n'est pas ouvert après plusieurs minutes : retour non lancé.",
+            opening="Ouverture du volet en cours avant le retour.",
+            open_it="Ouverture du volet avant le retour.",
+        )
+        if attente is not None:
+            return attente
         return _result(
             state, "retour_envoye", "Retour demandé à la tondeuse.",
             action={"service": "lawn_mower.dock", "data": {}},

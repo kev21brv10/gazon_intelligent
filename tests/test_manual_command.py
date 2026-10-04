@@ -528,18 +528,82 @@ class PauseTests(unittest.TestCase):
 
 
 class ReprisePourSortieTests(unittest.TestCase):
-    def test_la_reprise_envoie_un_seul_depart_sans_toucher_au_volet(self) -> None:
-        r = _suite(_etat("reprendre"), _dehors(mower_job_completion_state="en_pause"), volet="closed", position=0)
+    """⚠️ Comme le retour : le volet est ouvert ET confirmé AVANT l'ordre de reprise. Elle est dehors, mais
+    rien ne garantit que le volet est encore ouvert pour son retour."""
+
+    EN_PAUSE = dict(mower_job_completion_state="en_cours", mower_operation_state="paused")
+
+    def test_volet_ferme_on_l_ouvre_d_abord_et_rien_ne_repart(self) -> None:
+        r = _suite(_etat("reprendre"), _dehors(**self.EN_PAUSE), volet="closed", position=0)
+        self.assertEqual(r["action"], {"service": "cover.open_cover", "data": {}})
+        self.assertEqual(r["etape"], "ouverture_garage")
+        self.assertNotIn("envoye_a", r["updates"])
+
+    def test_la_reprise_n_est_jamais_envoyee_volet_non_confirme(self) -> None:
+        """L'invariant, en boucle : aucun `start_mowing` tant que le volet n'est pas confirmé ouvert."""
+        for volet, position in (("closed", 0), ("closing", 20), ("opening", 50), ("open", 60), ("unavailable", None)):
+            with self.subTest(volet=volet):
+                r = _suite(_etat("reprendre"), _dehors(**self.EN_PAUSE), volet=volet, position=position)
+                self.assertNotEqual((r["action"] or {}).get("service"), "lawn_mower.start_mowing")
+
+    def test_volet_ouvert_la_reprise_part_une_seule_fois(self) -> None:
+        r = _suite(_etat("reprendre"), _dehors(**self.EN_PAUSE), volet="open", position=100)
         self.assertEqual(r["action"], {"service": "lawn_mower.start_mowing", "data": {}})
         self.assertEqual(r["etape"], "dehors")
         self.assertIs(r["updates"]["vu_dehors"], True)
         envoyee = _etat("reprendre", etape="dehors", envoye_a=_il_y_a(1), vu_dehors=True)
         self.assertIsNone(_suite(envoyee, _dehors(), volet="open", position=100)["action"])
 
+    def test_pas_de_delai_de_securite_apres_l_ouverture(self) -> None:
+        """Le délai de sécurité protège une tondeuse qui SORT du garage ; celle-ci est déjà dehors."""
+        etat = _etat("reprendre", etape="attente_garage")
+        r = _suite(etat, _dehors(**self.EN_PAUSE), volet="open", position=100)
+        self.assertEqual((r["action"] or {}).get("service"), "lawn_mower.start_mowing")
+
+    def test_ouverture_en_cours_on_attend(self) -> None:
+        r = _suite(_etat("reprendre"), _dehors(**self.EN_PAUSE), volet="opening", position=40)
+        self.assertIsNone(r["action"])
+        self.assertEqual(r["etape"], "attente_garage")
+
+    def test_sans_volet_configure_la_reprise_part_directement(self) -> None:
+        r = _sans_volet(_etat("reprendre"), _dehors(**self.EN_PAUSE))
+        self.assertEqual(r["action"], {"service": "lawn_mower.start_mowing", "data": {}})
+
+    def test_volet_muet_la_reprise_n_est_pas_lancee(self) -> None:
+        r = _suite(_etat("reprendre"), _dehors(**self.EN_PAUSE), volet="unavailable")
+        self.assertIsNone(r["action"])
+        self.assertEqual(r["etape"], "erreur")
+        self.assertEqual(r["updates"]["erreur"], "volet_indisponible")
+        self.assertTrue(r["finished"])
+
+    def test_ordre_de_volet_retenu_ne_fait_pas_echouer_la_reprise(self) -> None:
+        garage = {gg.KEY_COMMAND: "open_cover", gg.KEY_COMMAND_AT: _il_y_a(0.5), gg.KEY_ATTEMPTS: 1,
+                  gg.KEY_SERIES_START: _il_y_a(0.5)}
+        r = _suite(_etat("reprendre"), _dehors(**self.EN_PAUSE), volet="closed", position=0, garage=garage)
+        self.assertIsNone(r["action"])
+        self.assertEqual(r["etape"], "attente_garage")
+        self.assertFalse(r["finished"])
+
+    def test_volet_bloque_ou_trop_long_la_reprise_est_abandonnee(self) -> None:
+        bloque = {gg.KEY_COMMAND: "open_cover", gg.KEY_COMMAND_AT: _il_y_a(4), gg.KEY_ATTEMPTS: 3,
+                  gg.KEY_SERIES_START: _il_y_a(10)}
+        r = _suite(_etat("reprendre"), _dehors(**self.EN_PAUSE), volet="closed", garage=bloque)
+        self.assertEqual((r["etape"], r["updates"]["erreur"]), ("erreur", "volet_bloque"))
+        vieux = mc.new_state("reprendre", NOW - timedelta(minutes=9))
+        garage = {gg.KEY_COMMAND: "open_cover", gg.KEY_COMMAND_AT: _il_y_a(1), gg.KEY_ATTEMPTS: 1,
+                  gg.KEY_SERIES_START: _il_y_a(1)}
+        r = _suite(vieux, _dehors(**self.EN_PAUSE), volet="closed", garage=garage)
+        self.assertEqual((r["etape"], r["updates"]["erreur"]), ("erreur", "volet_non_ouvert"))
+
     def test_une_tondeuse_rentree_entre_temps_abandonne_la_reprise(self) -> None:
         r = _suite(_etat("reprendre"), _quai(), volet="open", position=100)
         self.assertIsNone(r["action"])
         self.assertEqual(r["etape"], "erreur")
+
+    def test_la_demande_est_refusee_si_le_volet_ne_repond_pas(self) -> None:
+        refus = mc.validate_request("reprendre", _dehors(**self.EN_PAUSE), state=None, now=NOW,
+                                    irrigation_active=False, edgecut_available=True, cover_known=False)
+        self.assertIn("volet ne répond pas", refus)
 
     def test_apres_la_reprise_le_travail_termine_finit_la_commande(self) -> None:
         envoyee = _etat("reprendre", etape="dehors", envoye_a=_il_y_a(5), vu_dehors=True)

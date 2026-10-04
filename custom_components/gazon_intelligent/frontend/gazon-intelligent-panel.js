@@ -6349,6 +6349,7 @@ class GazonIntelligentPanel extends HTMLElement {
     } else if (commande === "pause") {
       if (!dehors) return "La tondeuse n'est pas dehors : rien à mettre en pause.";
     } else if (commande === "reprendre") {
+      if (voletMuet) return "Le volet ne répond pas : la tondeuse ne peut pas sortir ni rentrer.";
       if (!dehors) return "La tondeuse n'est pas dehors : rien à reprendre.";
       if (enCours !== "pause" && !this._tondeuseEnPause()) return "La tondeuse n'est pas en pause.";
     }

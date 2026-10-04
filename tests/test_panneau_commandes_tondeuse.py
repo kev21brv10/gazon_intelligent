@@ -447,6 +447,9 @@ class RefusTests(unittest.TestCase):
         self.assertIn("volet ne répond pas", _refus("demarrer", A_QUAI, volet=None))
         self.assertIn("volet ne répond pas", _refus("retour", DEHORS, volet=None))
         self.assertEqual(_refus("pause", DEHORS, volet=None), "", "la pause ne touche pas au volet")
+        en_pause = {**DEHORS, "mower_operation_state": "paused"}
+        self.assertIn("volet ne répond pas", _refus("reprendre", en_pause, volet=None), "la reprise attend le volet")
+        self.assertEqual(_refus("reprendre", en_pause), "", "volet fermé mais joignable : la reprise l'ouvrira")
 
     def test_sans_volet_enregistre_son_etat_ne_compte_pas(self) -> None:
         self.assertEqual(_refus("demarrer", A_QUAI, volet=None, sans_volet=True), "")

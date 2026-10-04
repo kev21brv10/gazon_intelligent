@@ -4121,7 +4121,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         cover_raw = self._get_conf(CONF_ENTITE_VOLET_GARAGE_TONDEUSE)
         cover_entity = str(cover_raw) if cover_raw else None
         cover_known = True
-        if cover_entity and commande in {*manual_command.DEPARTS, "retour"}:
+        if cover_entity and commande in {*manual_command.DEPARTS, "retour", "reprendre"}:
             cover = self.hass.states.get(cover_entity)
             cover_known = str(getattr(cover, "state", "") or "").lower() not in {"", "unavailable", "unknown"}
         refus = manual_command.validate_request(

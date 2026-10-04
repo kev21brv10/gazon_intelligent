@@ -32,14 +32,16 @@
   l'intégration Landroid Cloud et que son service existe (une autre marque installée à côté d'une
   Landroid n'a pas le bouton). Reprendre est proposé pour une tondeuse en pause, quelle que soit
   l'origine de la pause (cette page, l'appli du constructeur, à la main) : dehors, l'état de
-  travail reste « en cours » même en pause, seul l'état de la machine le dit. Retour et pause passent devant une
+  travail reste « en cours » même en pause, seul l'état de la machine le dit. Comme le retour, la
+  reprise ouvre d'abord le volet et attend sa confirmation avant d'envoyer l'ordre (elle est
+  refusée si le volet ne répond pas) : rien ne garantit qu'un volet resté seul est encore ouvert. Retour et pause passent devant une
   sortie en cours (on peut toujours l'arrêter) ; un second départ est refusé. Un refus est rendu
   en clair à la page, pas comme une erreur.
 - **Publié** : `mower_manual_active`, `_command`, `_step`, `_reason`, `_until`, `_duration_min`,
   `_error`, `_ended_at`, `_suspension_active`, `_suspension_until` et `mower_edgecut_available`
   (capteur d'état de la tonte et diagnostics) ; l'état de la commande survit à un redémarrage.
-- **Vérifié** : suite complète avec 2 677 tests et 3 414 sous-tests, ruff et mypy (55 fichiers)
-  verts, le nouveau module pur `manual_command` y compris ; 95 variantes cassées volontairement
+- **Vérifié** : suite complète avec 2 688 tests et 3 422 sous-tests, ruff et mypy (55 fichiers)
+  verts, le nouveau module pur `manual_command` y compris ; 105 variantes cassées volontairement
   (gardes, séquence du volet, réouverture du volet, pause, bordure, fin de commande, suspension,
   effacement du pilote, persistance, page), toutes détectées.
 

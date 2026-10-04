@@ -596,7 +596,29 @@ class RetourPauseReprendreTests(_Base):
         instantane = self._cycle(coord, _dehors(gazon_permet_tonte=False), apres=2.0)
         self.assertEqual(instantane["mower_control_state"], "manuel", "le pilote ne défait pas la pause")
 
-    def test_reprendre_apres_une_pause_envoie_le_depart_sans_toucher_au_volet(self) -> None:
+    def test_reprendre_volet_ferme_ouvre_d_abord_puis_repart_dans_chaque_mode(self) -> None:
+        """⚠️ La reprise n'est pas envoyée tant que le volet n'est pas confirmé ouvert (comme le retour)."""
+        for mode in ("desactive", "observation", "actif"):
+            with self.subTest(mode=mode):
+                coord = self._coord(mode)
+                coord._latest_full_snapshot = _dehors(mower_operation_state="paused")
+                self.assertTrue(self._demander(coord, "reprendre")["ok"])
+                self._cycle(coord, _dehors(mower_operation_state="paused"))
+                self.assertEqual(self._ordres(), ["cover.open_cover"], f"{mode} : le volet d'abord, rien d'autre")
+                self._cycle(coord, _dehors(mower_operation_state="paused"), apres=0.3, etat="opening", position=40)
+                self.assertEqual(self._ordres(), ["cover.open_cover"])
+                self._cycle(coord, _dehors(mower_operation_state="paused"), apres=0.3, etat="open", position=100)
+                self.assertEqual(self._ordres(), ["cover.open_cover", "lawn_mower.start_mowing"])
+
+    def test_reprendre_volet_muet_est_refuse_des_la_demande(self) -> None:
+        coord = self._coord("actif")
+        coord._latest_full_snapshot = _dehors(mower_operation_state="paused")
+        self.volet = types.SimpleNamespace(state="unavailable", attributes={})
+        reponse = self._demander(coord, "reprendre")
+        self.assertFalse(reponse["ok"])
+        self.assertIn("volet ne répond pas", reponse["message"])
+
+    def test_reprendre_apres_une_pause_volet_deja_ouvert_envoie_le_depart(self) -> None:
         coord = self._coord("actif")
         coord._latest_full_snapshot = _dehors()
         self._demander(coord, "pause")
