@@ -7638,6 +7638,8 @@ class GazonIntelligentPanel extends HTMLElement {
     const ouvertureMin = nombreFr(this._valeur("tondeuse_garage_ouverture_min"), 3);
     const fermeture = nombreFr(this._valeur("tondeuse_garage_delai_fermeture"), 3);
     const fermetureManuelle = dureeFr(this._valeur("tondeuse_garage_delai_fermeture_manuel"));
+    const fermePendantTonte = this._valeur("tondeuse_garage_ferme_pendant_tonte") === true;
+    const delaiTonte = dureeFr(this._valeur("tondeuse_garage_delai_fermeture_tonte"));
     const tentatives = nombreFr(this._valeur("tondeuse_garage_tentatives_max"), 0);
     const delaiMax = dureeFr(this._valeur("tondeuse_garage_delai_max_mouvement"));
     const phrase = choisie
@@ -7663,6 +7665,10 @@ class GazonIntelligentPanel extends HTMLElement {
           "tondeuse_garage_delai_fermeture",
           "tondeuse_garage_delai_fermeture_manuel",
         ])}
+        ${scenario("Pendant la tonte", "mdi:cat", fermePendantTonte ? `Volet fermé dès qu'elle tond (après ${delaiTonte}) · ouvert seulement pour la laisser passer` : "Volet laissé ouvert tant que la tondeuse est dehors", [
+          "tondeuse_garage_ferme_pendant_tonte",
+          "tondeuse_garage_delai_fermeture_tonte",
+        ])}
         ${scenario("Si le volet ne répond pas", "mdi:garage-alert-variant", `${tentatives} tentatives au plus · alerte après ${delaiMax}`, [
           "tondeuse_garage_delai_max_mouvement",
           "tondeuse_garage_tentatives_max",
@@ -7679,6 +7685,7 @@ class GazonIntelligentPanel extends HTMLElement {
         "tondeuse_garage_ouvrir_pour_retour", "tondeuse_garage_fermer_apres_retour", "tondeuse_garage_delai_fermeture",
         "tondeuse_garage_delai_fermeture_manuel", "tondeuse_garage_delai_max_mouvement",
         "tondeuse_garage_tentatives_max", "tondeuse_garage_delai_reprise",
+        "tondeuse_garage_ferme_pendant_tonte", "tondeuse_garage_delai_fermeture_tonte",
       ] : [],
       attributs: 'data-garage-tondeuse="1"',
       ouverte: change,

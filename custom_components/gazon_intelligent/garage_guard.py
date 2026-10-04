@@ -400,10 +400,13 @@ def alert(
     settings: Mapping[str, Any] | None,
     now: datetime,
     min_open_position: float = _DEFAULT_MIN_OPEN_POSITION,
+    door_needed: bool | None = None,
 ) -> dict[str, str] | None:
     """Une anomalie du volet à signaler ? {code, motif}, ou None.
 
     `mower_away` : la tondeuse est dehors, en retour ou en train de tondre.
+    `door_needed` : elle a besoin du volet OUVERT (par défaut : dehors). Avec le volet « porte », il reste
+    fermé pendant la tonte : seuls le démarrage et le retour comptent pour « volet fermé devant la tondeuse ».
     ⚠️ À évaluer APRÈS `reset_updates` : un volet qui a atteint sa cible entre deux cycles n'est pas
     bloqué, même si le temps écoulé dépasse la marge.
     """
@@ -427,7 +430,8 @@ def alert(
     # ⚠️ Le plus grave et le moins visible : une tondeuse dehors devant un volet fermé. Le pilote ne le
     # rouvre qu'en mode actif, la commande manuelle que pendant sa durée ; en observation ou désactivé,
     # rien d'autre ne le dit. Signalé dans TOUS les modes, sans rien actionner.
-    if mower_away and cover not in _UNKNOWN_COVER_STATES and not _open_confirmed(cover, position, min_open_position):
+    needs_door = mower_away if door_needed is None else door_needed
+    if needs_door and cover not in _UNKNOWN_COVER_STATES and not _open_confirmed(cover, position, min_open_position):
         since = _minutes_since(now, runtime.get(KEY_CLOSED_OUTSIDE_SINCE))
         if since is not None and since >= GARAGE_CLOSED_OUTSIDE_GRACE_MINUTES:
             return {

@@ -74,13 +74,26 @@
   en cours et la tondeuse pas prête (qui ne ferment pas le volet), l'option « fermer après la
   rentrée » et le délai de fermeture. Les conditions reprennent celles des gardes de départ ; un
   test de cohérence rejoue les deux chemins sur 360 situations.
+- **Volet « porte » (réglage facultatif, éteint par défaut)** : pour que les chats ne restent pas
+  enfermés dans le cabanon, le volet ne reste plus ouvert pendant la tonte. Réglage « Garder le volet
+  fermé pendant la tonte ? » : il s'ouvre pour laisser SORTIR la tondeuse, se referme dès qu'elle
+  tond (après 15 s, réglable de 0 à 5 min : elle a passé la porte), se rouvre quand elle REVIENT et
+  se referme derrière elle une fois à quai — y compris pour une recharge à mi-travail, où la garde
+  du travail inachevé est alors levée. Il s'applique au pilote actif et à la sortie d'une commande
+  manuelle (qui ne rouvre plus un volet fermé exprès en tonte ; une reprise après une pause ne
+  l'ouvre pas non plus). Pendant la tonte, un volet fermé n'est plus une anomalie : l'alerte « volet
+  fermé » ne vaut que pour le démarrage et le retour. Groupe « Pendant la tonte » dans la carte du
+  garage. Contreparties : au retour, le volet met une dizaine de secondes à s'ouvrir une fois la
+  tondeuse vue en retour, et elle peut l'atteindre avant ; un départ lancé hors du pilote (appli,
+  Node-RED) trouve le volet fermé jusqu'à ce qu'elle soit vue en démarrage. Éteint, rien ne change.
 - **Publié** : `mower_manual_active`, `_command`, `_step`, `_reason`, `_until`, `_duration_min`,
   `_error`, `_ended_at`, `_suspension_active`, `_suspension_until` et `mower_edgecut_available`
   (capteur d'état de la tonte et diagnostics) ; l'état de la commande survit à un redémarrage.
-- **Vérifié** : suite complète avec 2 749 tests et 3 467 sous-tests, ruff et mypy (55 fichiers)
-  verts, le nouveau module pur `manual_command` y compris ; 154 variantes cassées volontairement
+- **Vérifié** : suite complète avec 2 790 tests et 3 487 sous-tests, ruff et mypy (55 fichiers)
+  verts, le nouveau module pur `manual_command` y compris ; 181 variantes cassées volontairement
   (gardes, séquence du volet, réouverture du volet, pause, bordure, fin de commande, suspension,
-  effacement du pilote, persistance, page), toutes détectées.
+  effacement du pilote, persistance, volet porte, page), toutes détectées sauf une équivalente (la même
+  information passe par deux chemins).
 
 ## 1.0.0-rc.23
 

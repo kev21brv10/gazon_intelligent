@@ -590,6 +590,25 @@ REGLAGES: tuple[Reglage, ...] = (
         avertissement="Réglage sensible : désactivé, le volet doit être ouvert avant qu'une autre automatisation rappelle la tondeuse.",
     ),
     Reglage(
+        "tondeuse_garage_ferme_pendant_tonte", "installation",
+        "Garder le volet fermé pendant la tonte ?",
+        "Le volet ne s'ouvre que pour laisser sortir la tondeuse, se referme dès qu'elle tond, se rouvre quand elle "
+        "rentre et se referme derrière elle une fois à quai : un chat ne peut pas entrer pendant la tonte. "
+        "Éteint, le volet reste ouvert tant que la tondeuse est dehors.",
+        "interrupteur", False, 0, 1, 1,
+        source="mower_control_constants.DEFAULT_MOWER_GARAGE_CLOSE_WHILE_MOWING",
+        avertissement="Réglage sensible : le volet est fermé quand la tondeuse rentre ; il s'ouvre dès qu'elle est vue en retour, "
+        "mais elle peut l'atteindre avant. Un volet qui ne s'ouvre pas déclenche l'alerte « volet fermé ».",
+    ),
+    Reglage(
+        "tondeuse_garage_delai_fermeture_tonte", "installation",
+        "Une fois la tondeuse en tonte, combien de temps attendre avant de fermer le volet ?",
+        "Une petite marge pour que la tondeuse ait passé la porte. Sans effet si le volet n'est pas gardé fermé pendant la tonte.",
+        "duree", 0.25, 0, 5, 0.25,
+        source="mower_control_constants.DEFAULT_MOWER_GARAGE_CLOSE_WHILE_MOWING_DELAY_MINUTES",
+        avertissement="Réglage sensible : à zéro, le volet peut se fermer sur la tondeuse encore dans l'embrasure.",
+    ),
+    Reglage(
         "tondeuse_garage_fermer_apres_retour", "installation",
         "Fermer automatiquement le garage après la rentrée ?",
         "Il se ferme après la rentrée quand la tondeuse n'a plus de départ prévu (quota du jour atteint, créneau non "

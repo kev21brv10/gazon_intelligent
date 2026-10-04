@@ -32,6 +32,8 @@ from .const import (
     DEFAULT_MOWER_GARAGE_CLOSE_AFTER_DOCK,
     DEFAULT_MOWER_GARAGE_OPEN_LEAD_MINUTES,
     DEFAULT_MOWER_GARAGE_CLOSE_DELAY_MINUTES,
+    DEFAULT_MOWER_GARAGE_CLOSE_WHILE_MOWING,
+    DEFAULT_MOWER_GARAGE_CLOSE_WHILE_MOWING_DELAY_MINUTES,
     DEFAULT_MOWER_GARAGE_OPEN_BEFORE_START,
     DEFAULT_MOWER_GARAGE_OPEN_FOR_RETURN,
     DEFAULT_MOWER_GARAGE_MIN_OPEN_POSITION,
@@ -4011,6 +4013,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         settings: Mapping[str, Any],
         reglages_volet: Mapping[str, Any],
         ouverture_min: float,
+        gate_mode: bool = False,
     ) -> dict[str, Any]:
         """Fait avancer d'UNE étape la commande manuelle en cours, puis publie son état.
 
@@ -4034,6 +4037,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         settings, "tondeuse_garage_avance_ouverture", DEFAULT_MOWER_GARAGE_OPEN_LEAD_MINUTES
                     ),
                     "tondeuse_garage_ouverture_min": ouverture_min,
+                    "tondeuse_garage_ferme_pendant_tonte": gate_mode,
                 },
                 garage_runtime=runtime,
                 irrigation_active=self.arrosage_en_cours(),
@@ -4187,6 +4191,19 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             or snapshot.get("mower_is_mowing")
         )
         settings = self._reglages_instance()
+        # Volet « porte » (réglage facultatif) : la tondeuse n'a besoin du volet ouvert que pour SORTIR
+        # (démarrage) ou RENTRER (retour) ; pendant la tonte il reste fermé. Sinon, dès qu'elle est dehors.
+        gate_mode = bool(
+            lire_reglage(settings, "tondeuse_garage_ferme_pendant_tonte", DEFAULT_MOWER_GARAGE_CLOSE_WHILE_MOWING)
+        )
+        door_needed = (
+            bool(
+                snapshot.get("mower_is_returning")
+                or str(snapshot.get("mower_operation_state") or "").lower() == "starting"
+            )
+            if gate_mode
+            else mower_away
+        )
         reglages_volet = {
             "tondeuse_garage_delai_reprise": lire_reglage(
                 settings, "tondeuse_garage_delai_reprise", garage_guard.DEFAULT_GARAGE_RETRY_DELAY_MINUTES
@@ -4216,7 +4233,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 garage_guard.reset_updates(
                     runtime, cover_state, cover_position, self._current_datetime(), ouverture_min,
                     settings=reglages_volet,
-                    mower_away=mower_away,
+                    mower_away=door_needed,
                 )
             )
         # Commande manuelle (page Gazon) : jugée AVANT le pilote, qui s'efface tant qu'elle dure.
@@ -4232,6 +4249,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 settings=settings,
                 reglages_volet=reglages_volet,
                 ouverture_min=ouverture_min,
+                gate_mode=gate_mode,
             )
         )
         decision = evaluate_mower_control(
@@ -4255,6 +4273,12 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 ),
                 "tondeuse_garage_ouvrir_pour_retour": lire_reglage(
                     settings, "tondeuse_garage_ouvrir_pour_retour", DEFAULT_MOWER_GARAGE_OPEN_FOR_RETURN
+                ),
+                "tondeuse_garage_ferme_pendant_tonte": gate_mode,
+                "tondeuse_garage_delai_fermeture_tonte": lire_reglage(
+                    settings,
+                    "tondeuse_garage_delai_fermeture_tonte",
+                    DEFAULT_MOWER_GARAGE_CLOSE_WHILE_MOWING_DELAY_MINUTES,
                 ),
                 "tondeuse_garage_fermer_apres_retour": lire_reglage(
                     settings, "tondeuse_garage_fermer_apres_retour", DEFAULT_MOWER_GARAGE_CLOSE_AFTER_DOCK
@@ -4403,6 +4427,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             cover_state=cover_state,
             position=cover_position,
             mower_away=mower_away,
+            door_needed=door_needed,
             runtime=runtime,
             settings=reglages_volet,
             now=self._current_datetime(),

@@ -127,6 +127,8 @@ function html(choisie) {
     tondeuse_garage_ouvrir_pour_retour: true,
     tondeuse_garage_fermer_apres_retour: true,
     tondeuse_garage_delai_fermeture: 2,
+    tondeuse_garage_ferme_pendant_tonte: false,
+    tondeuse_garage_delai_fermeture_tonte: 0.25,
   })[cle];
   return panel._garageTondeuseHtml();
 }

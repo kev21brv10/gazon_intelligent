@@ -19,6 +19,8 @@ from .mower_control_constants import (
     DEFAULT_MOWER_START_WINDOW_POLICY,
     DEFAULT_MOWER_GARAGE_CLOSE_AFTER_DOCK,
     DEFAULT_MOWER_GARAGE_CLOSE_DELAY_MINUTES,
+    DEFAULT_MOWER_GARAGE_CLOSE_WHILE_MOWING,
+    DEFAULT_MOWER_GARAGE_CLOSE_WHILE_MOWING_DELAY_MINUTES,
     DEFAULT_MOWER_GARAGE_OPEN_BEFORE_START,
     DEFAULT_MOWER_GARAGE_OPEN_FOR_RETURN,
     DEFAULT_MOWER_GARAGE_OPEN_LEAD_MINUTES,
@@ -168,6 +170,15 @@ def evaluate_mower_control(
     returning = snapshot.get("mower_is_returning") is True or operation in _RETURNING_OPERATIONS
     mowing = snapshot.get("mower_is_mowing") is True or operation in _OUTSIDE_OPERATIONS
     strong_dock = snapshot.get("mower_dock_signal_fort") is True or operation in {"docked", "charging"}
+    # VOLET « PORTE » (réglage facultatif) : il ne s'ouvre que pour laisser SORTIR (démarrage) ou RENTRER
+    # (retour) la tondeuse, se referme dès qu'elle tond et derrière elle à quai. `working` : elle tond
+    # vraiment — ni en démarrage (elle franchit encore la porte), ni en retour.
+    gate_mode = _enabled(
+        settings.get("tondeuse_garage_ferme_pendant_tonte"), DEFAULT_MOWER_GARAGE_CLOSE_WHILE_MOWING
+    )
+    starting = operation == "starting"
+    working = mowing and not starting and not returning
+    door_needed = (returning or starting) if gate_mode else (outside or returning)
     completion_state = str(snapshot.get("mower_job_completion_state") or "").lower()
     progress = _number(snapshot.get("mower_job_progress_pct"))
     mowing_forbidden = snapshot.get("gazon_permet_tonte") is False
@@ -293,6 +304,13 @@ def evaluate_mower_control(
             }
         )
 
+    # Depuis quand la tondeuse tond (le volet se referme après le délai) ; effacé dès qu'elle ne tond plus.
+    if gate_mode and working:
+        if not runtime.get("mowing_since"):
+            runtime_updates["mowing_since"] = now.isoformat()
+    elif runtime.get("mowing_since"):
+        runtime_updates["mowing_since"] = None
+
     effective_runtime = dict(runtime)
     effective_runtime.update(runtime_updates)
 
@@ -352,7 +370,8 @@ def evaluate_mower_control(
         return result(state, reason, action=action)
 
     # Une tondeuse dehors ne doit jamais trouver son volet fermé, même avant un ordre de retour.
-    if cover_entity and (outside or returning) and ouverture_a_completer:
+    # (Volet « porte » : seulement quand elle démarre ou rentre ; pendant la tonte il reste fermé.)
+    if cover_entity and door_needed and ouverture_a_completer:
         if open_for_return:
             raison = (
                 f"Ouverture du garage à compléter avant le retour ({position:g} %, minimum {minimum_position:g} %)."
@@ -361,6 +380,19 @@ def evaluate_mower_control(
             )
             return command("open_cover", "ouverture_garage", raison)
         return result("bloque_garage", "Le retour attend l'ouverture manuelle du garage.")
+
+    # VOLET « PORTE » : la tondeuse tond, elle a passé la porte → le volet se referme derrière elle après
+    # une courte attente (elle peut encore être dans l'embrasure juste après son démarrage).
+    if gate_mode and cover_entity and working and cover in _COVER_OPEN | _COVER_OPENING:
+        wait = _number(settings.get("tondeuse_garage_delai_fermeture_tonte"))
+        if wait is None:
+            wait = DEFAULT_MOWER_GARAGE_CLOSE_WHILE_MOWING_DELAY_MINUTES
+        if not _elapsed(now, effective_runtime.get("mowing_since"), wait):
+            return result(
+                "attente_fermeture_tonte",
+                f"Tondeuse en tonte : le volet se ferme après {max(0.0, wait) * 60:g} s.",
+            )
+        return command("close_cover", "fermeture_pendant_tonte", "Tondeuse en tonte : le volet se ferme derrière elle.")
 
     # MODE MANUEL (page Gazon) : une commande de départ, de bordure, de retour ou de pause vient
     # d'être donnée par l'utilisateur. Le pilote s'efface le temps de cette sortie — ni rappel, ni
@@ -423,7 +455,10 @@ def evaluate_mower_control(
             "depart_envoye",
             "Départ envoyé ; attente de la sortie effective de la tondeuse.",
         )
-    if cycle_active and not resume_required:
+    # Volet « porte » : une tondeuse en cycle autonome qui rentre se recharger voit le volet se refermer
+    # derrière elle (le départ qui suit rouvre le volet) ; on laisse donc passer l'évaluation de fermeture.
+    cycle_gate = gate_mode and cycle_active and not resume_required and strong_dock and bool(cover_entity)
+    if cycle_active and not resume_required and not cycle_gate:
         return result(
             "cycle_autonome",
             (
@@ -449,7 +484,7 @@ def evaluate_mower_control(
     # volet restait ouvert jusqu'à la nuit alors que rien ne repartait. Il se rouvre avant le prochain
     # départ (séquence d'ouverture). Pas pour une reprise due : le pilote la doit encore.
     nothing_to_send = not resume_required and _departure_held(snapshot, settings)
-    if cover_entity and strong_dock and (snapshot.get("action_possible") is not True or nothing_to_send):
+    if cover_entity and strong_dock and (snapshot.get("action_possible") is not True or nothing_to_send or cycle_gate):
         docked_since = runtime.get("docked_since")
         updates = {} if docked_since else {"docked_since": now.isoformat()}
         if cover in _COVER_OPEN | _COVER_OPENING:
@@ -469,6 +504,7 @@ def evaluate_mower_control(
             )
             if (
                 job_unfinished
+                and not gate_mode
                 and not resume_required
                 and snapshot.get("mower_manual_suspension_active") is not True
                 and not _elapsed(now, docked_since, MOWER_JOB_HOLD_MAX_MINUTES)
@@ -503,6 +539,13 @@ def evaluate_mower_control(
     elif runtime.get("docked_since") is not None:
         # Le signal fort a disparu : l'ancien instant ne doit jamais autoriser une fermeture.
         runtime_clear = {"docked_since": None}
+
+    if cycle_gate:
+        return result(
+            "cycle_autonome",
+            "Cycle autonome en cours : la tondeuse gère seule ses recharges et ses redéparts.",
+            updates=runtime_clear,
+        )
 
     # Après un RETOUR manuel, pas de départ automatique pendant un moment : le pilote verrait une
     # tondeuse à quai, des conditions favorables, et la renverrait aussitôt. Placé APRÈS la

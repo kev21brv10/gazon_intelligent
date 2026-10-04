@@ -146,6 +146,19 @@ def _paused(snapshot: Mapping[str, Any]) -> bool:
     return operation in {"paused", "pause"} or status == "pause" or job == "en_pause"
 
 
+def _gate_mode(settings: Mapping[str, Any] | None) -> bool:
+    """Volet « porte » : fermé pendant la tonte, ouvert seulement pour laisser sortir ou rentrer la tondeuse."""
+    return (settings or {}).get("tondeuse_garage_ferme_pendant_tonte") is True
+
+
+def _needs_door(snapshot: Mapping[str, Any], settings: Mapping[str, Any] | None) -> bool:
+    """La tondeuse a-t-elle besoin du volet ouvert ? Dehors ; avec le volet « porte » : au démarrage ou au retour."""
+    if not _gate_mode(settings):
+        return _outside(snapshot)
+    operation = str(snapshot.get("mower_operation_state") or "").lower()
+    return snapshot.get("mower_is_returning") is True or operation in {"starting", "transit", "returning"}
+
+
 def _battery(snapshot: Mapping[str, Any]) -> float | None:
     return _number(snapshot.get("mower_battery", snapshot.get("tondeuse_batterie")))
 
@@ -299,7 +312,7 @@ def evaluate(
     # observation : il ne fait qu'afficher). Or une commande manuelle marche dans les trois modes :
     # tant qu'elle dure, c'est elle qui rouvre un volet refermé en route (à la main, par une
     # automatisation…). Même registre d'ordres que le pilote : pas de doublon.
-    needs_open = bool(cover_entity) and cover_known and _outside(snapshot) and not confirmed and cover != "opening"
+    needs_open = bool(cover_entity) and cover_known and _needs_door(snapshot, settings) and not confirmed and cover != "opening"
 
     def waiting(step: str, reason: str, *, updates: Mapping[str, Any] | None = None) -> dict[str, Any]:
         if needs_open:
@@ -354,7 +367,9 @@ def evaluate(
         if not _outside(snapshot):
             return _result(state, "erreur", "La tondeuse n'est plus dehors : reprise abandonnée.", finished=True,
                            updates={"erreur": "pas_dehors"})
-        attente = cover_first(
+        # Volet « porte » : fermé pendant la tonte exprès, la reprise (tondeuse déjà dehors) ne l'ouvre pas ;
+        # il s'ouvrira quand elle rentrera.
+        attente = None if _gate_mode(settings) else cover_first(
             mute="Le volet ne répond pas : la reprise n'est pas lancée.",
             late="Le volet n'est pas ouvert après plusieurs minutes : reprise non lancée.",
             opening="Ouverture du volet en cours avant la reprise.",

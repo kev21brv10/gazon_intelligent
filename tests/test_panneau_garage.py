@@ -692,6 +692,19 @@ class AlerteDuVoletSurLaPageTests(unittest.TestCase):
         self.assertIn("Volet fermé, tondeuse dehors", html)
         self.assertNotIn("Volet bloqué", html)
 
+    def test_la_carte_propose_le_groupe_pendant_la_tonte_avec_ses_deux_reglages(self) -> None:
+        html = _carte(attributs={})
+        self.assertIn('data-garage-groupe="Pendant la tonte"', html)
+        groupe = html.split('data-garage-groupe="Pendant la tonte"')[1].split("</details>")[0]
+        self.assertIn("tondeuse_garage_ferme_pendant_tonte", groupe)
+        self.assertIn("tondeuse_garage_delai_fermeture_tonte", groupe)
+        self.assertIn("Volet laissé ouvert tant que la tondeuse est dehors", groupe, "résumé du réglage éteint (défaut)")
+
+    def test_le_resume_du_groupe_dit_le_volet_porte_quand_le_reglage_est_allume(self) -> None:
+        html = _carte(attributs={}, reglages={"tondeuse_garage_ferme_pendant_tonte": True})
+        groupe = html.split('data-garage-groupe="Pendant la tonte"')[1].split("</details>")[0]
+        self.assertIn("Volet fermé dès qu'elle tond", groupe.replace("&#39;", "'"))
+
     def test_sans_anomalie_aucune_note(self) -> None:
         self.assertNotIn("alerte-volet", _carte(attributs={"mower_garage_alert": None}))
         self.assertNotIn("alerte-volet", _carte())

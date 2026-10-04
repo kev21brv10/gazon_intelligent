@@ -178,6 +178,8 @@ class LeRegistreEstCoherentTests(unittest.TestCase):
                 "tondeuse_garage_delai_fermeture",
                 "tondeuse_garage_delai_reprise",
                 "tondeuse_garage_tentatives_max",
+                "tondeuse_garage_ferme_pendant_tonte",
+                "tondeuse_garage_delai_fermeture_tonte",
             },
         )
 
@@ -363,6 +365,8 @@ class LesValeursParDefautSontCellesDuMoteurTests(unittest.TestCase):
             "tondeuse_garage_ouvrir_avant_depart": mc.DEFAULT_MOWER_GARAGE_OPEN_BEFORE_START,
             "tondeuse_garage_ouvrir_pour_retour": mc.DEFAULT_MOWER_GARAGE_OPEN_FOR_RETURN,
             "tondeuse_garage_fermer_apres_retour": mc.DEFAULT_MOWER_GARAGE_CLOSE_AFTER_DOCK,
+            "tondeuse_garage_ferme_pendant_tonte": mc.DEFAULT_MOWER_GARAGE_CLOSE_WHILE_MOWING,
+            "tondeuse_garage_delai_fermeture_tonte": mc.DEFAULT_MOWER_GARAGE_CLOSE_WHILE_MOWING_DELAY_MINUTES,
             "tondeuse_garage_delai_fermeture_manuel": gg.DEFAULT_GARAGE_MANUAL_CLOSE_DELAY_MINUTES,
             "tondeuse_garage_delai_reprise": gg.DEFAULT_GARAGE_RETRY_DELAY_MINUTES,
             "tondeuse_garage_tentatives_max": gg.DEFAULT_GARAGE_MAX_ATTEMPTS,
