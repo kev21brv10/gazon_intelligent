@@ -176,6 +176,8 @@ class LeRegistreEstCoherentTests(unittest.TestCase):
                 "tondeuse_garage_avance_ouverture",
                 "tondeuse_garage_ouverture_min",
                 "tondeuse_garage_delai_fermeture",
+                "tondeuse_garage_delai_reprise",
+                "tondeuse_garage_tentatives_max",
             },
         )
 
@@ -351,6 +353,7 @@ class LesValeursParDefautSontCellesDuMoteurTests(unittest.TestCase):
 
     def test_pilotage_tondeuse(self) -> None:
         mc = _module("mower_control_constants")
+        gg = _module("garage_guard")
         attendu = {
             "tondeuse_pilotage_batterie_min": mc.DEFAULT_MOWER_CONTROL_MIN_BATTERY,
             "tondeuse_pilotage_delai_commandes": mc.DEFAULT_MOWER_CONTROL_COMMAND_COOLDOWN_MINUTES,
@@ -360,6 +363,10 @@ class LesValeursParDefautSontCellesDuMoteurTests(unittest.TestCase):
             "tondeuse_garage_ouvrir_avant_depart": mc.DEFAULT_MOWER_GARAGE_OPEN_BEFORE_START,
             "tondeuse_garage_ouvrir_pour_retour": mc.DEFAULT_MOWER_GARAGE_OPEN_FOR_RETURN,
             "tondeuse_garage_fermer_apres_retour": mc.DEFAULT_MOWER_GARAGE_CLOSE_AFTER_DOCK,
+            "tondeuse_garage_delai_fermeture_manuel": gg.DEFAULT_GARAGE_MANUAL_CLOSE_DELAY_MINUTES,
+            "tondeuse_garage_delai_reprise": gg.DEFAULT_GARAGE_RETRY_DELAY_MINUTES,
+            "tondeuse_garage_tentatives_max": gg.DEFAULT_GARAGE_MAX_ATTEMPTS,
+            "tondeuse_garage_delai_max_mouvement": gg.DEFAULT_GARAGE_MAX_TRAVEL_MINUTES,
         }
         for cle, valeur in attendu.items():
             with self.subTest(cle=cle):

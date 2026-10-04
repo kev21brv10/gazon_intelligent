@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from datetime import datetime, timedelta
 from typing import Any
 
+from . import garage_guard
 from .mower_control_constants import (
     DEFAULT_MOWER_CONTROL_COMMAND_COOLDOWN_MINUTES,
     DEFAULT_MOWER_CONTROL_MIN_BATTERY,
@@ -301,6 +302,13 @@ def evaluate_mower_control(
         cooldown = DEFAULT_MOWER_CONTROL_COMMAND_COOLDOWN_MINUTES
 
     def command(action: str, state: str, reason: str) -> dict[str, Any]:
+        if action in garage_guard.COVER_ACTIONS:
+            # Un ordre de volet suit SA propre porte : série, plafond de tentatives et délai de
+            # reprise du volet (2 min), pas le délai commun à toutes les commandes (10 min).
+            retenu = garage_guard.command_gate(action, effective_runtime, settings, now)
+            if retenu is not None:
+                return result(retenu["state"], retenu["reason"])
+            return result(state, reason, action=action)
         last_action = effective_runtime.get("last_action")
         if last_action == action and _within_cooldown(
             now, effective_runtime.get("last_action_at"), cooldown
@@ -376,9 +384,16 @@ def evaluate_mower_control(
             ),
         )
 
-    close_delay = _number(settings.get("tondeuse_garage_delai_fermeture"))
-    if close_delay is None:
-        close_delay = DEFAULT_MOWER_GARAGE_CLOSE_DELAY_MINUTES
+    close_delay_normal = _number(settings.get("tondeuse_garage_delai_fermeture"))
+    close_delay, opened_by_hand = garage_guard.close_delay(
+        {
+            **settings,
+            "tondeuse_garage_delai_fermeture": (
+                DEFAULT_MOWER_GARAGE_CLOSE_DELAY_MINUTES if close_delay_normal is None else close_delay_normal
+            ),
+        },
+        runtime,
+    )
     runtime_clear: dict[str, Any] = {}
     if cover_entity and strong_dock and snapshot.get("action_possible") is not True:
         docked_since = runtime.get("docked_since")
@@ -386,13 +401,26 @@ def evaluate_mower_control(
         if cover in _COVER_OPEN | _COVER_OPENING:
             if not close_after_dock:
                 return result("rangee", "Tondeuse rentrée ; fermeture automatique désactivée.", updates=updates)
-            if not docked_since or not _elapsed(now, docked_since, close_delay):
+            close_since = garage_guard.close_reference(runtime, docked_since, opened_by_hand)
+            if not docked_since or not _elapsed(now, close_since, close_delay):
                 return result(
                     "attente_fermeture_garage",
-                    "Rentrée confirmée ; délai de sécurité avant fermeture.",
+                    (
+                        f"Garage ouvert à la main, tondeuse à quai : fermeture après {close_delay:g} min."
+                        if opened_by_hand
+                        else "Rentrée confirmée ; délai de sécurité avant fermeture."
+                    ),
                     updates=updates,
                 )
-            return command("close_cover", "fermeture_garage", "Rentrée confirmée ; fermeture du garage.")
+            return command(
+                "close_cover",
+                "fermeture_garage",
+                (
+                    "Garage ouvert à la main et tondeuse à quai : fermeture du garage."
+                    if opened_by_hand
+                    else "Rentrée confirmée ; fermeture du garage."
+                ),
+            )
         if updates:
             return result("rangee", "Tondeuse rentrée au garage.", updates=updates)
     elif runtime.get("docked_since") is not None:

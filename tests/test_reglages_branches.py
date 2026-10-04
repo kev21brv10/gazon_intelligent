@@ -712,6 +712,11 @@ class ChaqueReglageEstBrancheTests(unittest.TestCase):
         "tondeuse_garage_avance_ouverture": "test_mower_control.py",
         "tondeuse_garage_ouverture_min": "test_mower_control.py",
         "tondeuse_garage_delai_fermeture": "test_mower_control.py",
+        # Le volet : porte des ordres, alerte et délai d'un volet ouvert à la main.
+        "tondeuse_garage_delai_fermeture_manuel": "test_garage_guard.py",
+        "tondeuse_garage_delai_reprise": "test_garage_guard.py",
+        "tondeuse_garage_tentatives_max": "test_garage_guard.py",
+        "tondeuse_garage_delai_max_mouvement": "test_garage_guard.py",
     }
 
     def test_chaque_reglage_a_son_scenario(self) -> None:

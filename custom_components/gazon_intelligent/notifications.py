@@ -479,16 +479,28 @@ def _evaluer_activites(
     garage_state = str(garage_data.get("state") or "").lower() if garage_configure else None
     garage_state = garage_state if garage_state in {"open", "closed"} else None
     garage_error = str(garage_data.get("error") or "").strip() if garage_configure else ""
+    garage_alert = str(garage_data.get("alert") or "").strip() if garage_configure else ""
     if not suivi.get("garage_initialise"):
+        # ⚠️ L'anomalie n'est PAS mémorisée à l'initialisation : une anomalie déjà là au premier
+        # contrôle doit partir au suivant, pas être avalée comme un état de départ.
         suivi.update({
             "garage_initialise": True,
             "garage_state": garage_state,
             "garage_error": garage_error or None,
+            "garage_alert": None,
         })
     else:
         precedente = suivi.get("garage_state")
         erreur_precedente = str(suivi.get("garage_error") or "")
+        alerte_precedente = str(suivi.get("garage_alert") or "")
+        # ⚠️ Une anomalie NOUVELLE que l'erreur de commande (ou sa levée) a fait passer sous silence
+        # n'est PAS mémorisée : elle reste à annoncer au contrôle suivant. Avancer la mémoire ici la
+        # perdrait pour de bon (reproduit en relecture : erreur + anomalie au même contrôle, l'alerte
+        # persistante du volet ne partait jamais). Seule une anomalie qui APPARAÎT est retenue : une
+        # anomalie levée n'a rien à annoncer, sa résolution passe après l'erreur en cours.
+        anomalie_en_attente = False
         if SUJET_GARAGE_TONDEUSE in sujets_actifs and garage_error and garage_error != erreur_precedente:
+            anomalie_en_attente = bool(garage_alert) and garage_alert != alerte_precedente
             alertes.append(Alerte(
                 sujet=SUJET_GARAGE_TONDEUSE,
                 titre="⚠️ Garage de la tondeuse : commande impossible",
@@ -496,6 +508,28 @@ def _evaluer_activites(
                 niveau="action",
             ))
         elif SUJET_GARAGE_TONDEUSE in sujets_actifs and not garage_error and erreur_precedente:
+            anomalie_en_attente = bool(garage_alert) and garage_alert != alerte_precedente
+            alertes.append(Alerte(
+                sujet=SUJET_GARAGE_TONDEUSE,
+                titre="",
+                message="",
+                resolue=True,
+            ))
+        elif SUJET_GARAGE_TONDEUSE in sujets_actifs and garage_alert and garage_alert != alerte_precedente:
+            # Une anomalie du volet (bloqué, injoignable tondeuse dehors) : toujours une alerte
+            # persistante. « Injoignable tondeuse dehors » est critique — elle peut ne plus pouvoir rentrer.
+            titre_anomalie = {
+                "volet_indisponible": "🚨 Garage de la tondeuse : volet injoignable",
+                "volet_bloque": "⚠️ Garage de la tondeuse : volet bloqué",
+            }.get(garage_alert, "⚠️ Garage de la tondeuse : anomalie")
+            alertes.append(Alerte(
+                sujet=SUJET_GARAGE_TONDEUSE,
+                titre=titre_anomalie,
+                message=str(garage_data.get("alert_reason") or "").strip()
+                or "Le volet du garage de la tondeuse signale une anomalie.",
+                niveau="critique" if garage_alert == "volet_indisponible" else "action",
+            ))
+        elif SUJET_GARAGE_TONDEUSE in sujets_actifs and not garage_alert and alerte_precedente:
             alertes.append(Alerte(
                 sujet=SUJET_GARAGE_TONDEUSE,
                 titre="",
@@ -513,6 +547,7 @@ def _evaluer_activites(
             ))
         suivi["garage_state"] = garage_state
         suivi["garage_error"] = garage_error or None
+        suivi["garage_alert"] = (alerte_precedente or None) if anomalie_en_attente else (garage_alert or None)
     return alertes
 
 

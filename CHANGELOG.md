@@ -1,5 +1,46 @@
 # Changelog
 
+## 1.0.0-rc.23
+
+- **Un volet qui ne bouge pas n'est plus relancé sans fin ni sans alerte** : avant, un volet qui
+  acceptait un ordre sans bouger (message radio perdu, moteur coincé) était relancé toutes les
+  dix minutes — le délai commun à toutes les commandes — sans plafond ni alerte ; seule une erreur
+  du service était signalée. Désormais les ordres d'ouverture et de fermeture forment une série :
+  nouvelle tentative après un délai PROPRE au volet (2 min par défaut), au plus 3 tentatives,
+  puis le pilote s'arrête (`volet_bloque`) et une alerte persistante demande une intervention sur
+  place. Le volet bloqué RESTE bloqué, et l'alerte reste affichée, jusqu'à réparation : tant que
+  le volet n'a pas atteint sa position le pilote n'envoie plus rien (au plus 24 h), et dès qu'il
+  l'atteint — même manœuvré à la main — il repart normalement. Passé 24 h sans réparation, une
+  nouvelle série de tentatives est autorisée (limite dite dans l'aide du réglage). Une série qui n'a pas épuisé ses
+  tentatives est oubliée au bout d'une heure sans ordre (une autre panne). Réglages (carte
+  « Garage », groupe « Si le volet ne répond pas ») : délai de reprise, tentatives maximales,
+  délai avant de le dire bloqué.
+- **Volet injoignable alors que la tondeuse est dehors** : alerte critique (elle peut ne plus
+  pouvoir rentrer), quel que soit le mode du pilote, après un délai de grâce de 5 minutes — un
+  volet est « indisponible » une à deux minutes après chaque redémarrage de Home Assistant, ce
+  n'est pas une anomalie. Publiée en attributs (`mower_garage_alert`, `mower_garage_alert_reason`)
+  et affichée sur la page.
+- **Un volet ouvert à la main n'est plus refermé d'emblée** : tondeuse à quai, un volet ouvert sans
+  ordre de l'intégration était refermé après le délai d'une rentrée (1 à 2 minutes), avec le motif
+  « Rentrée confirmée » alors qu'aucune rentrée n'avait eu lieu. Il attend maintenant 30 minutes
+  (réglable, jamais moins que le délai normal), comptées depuis son ouverture — pas depuis une
+  rentrée qui peut dater de plusieurs heures — et le motif dit « Garage ouvert à la main ». Seul
+  un volet vu fermé puis ouvert sans ordre du pilote est « à la main » : sans trace, le
+  comportement d'avant est conservé.
+- **Notifications utiles seulement** : une ouverture ou une fermeture n'est annoncée au téléphone
+  que si le pilote l'a ordonnée (il y a moins de 15 minutes) ; un volet manœuvré à la main ne
+  notifie plus. Une anomalie du volet part toujours, et une anomalie déjà présente au premier
+  contrôle (redémarrage en pleine panne) n'est pas avalée. Une anomalie qui apparaît au même
+  contrôle qu'une erreur de commande (ou que sa levée) n'est pas perdue : l'erreur passe d'abord,
+  l'anomalie est annoncée au contrôle suivant, une seule fois.
+- **Un volet remplacé repart d'un registre vierge** : les ordres, les tentatives et le blocage sont
+  liés au volet configuré. Si l'entité du volet change, le nouveau n'hérite plus du blocage de
+  l'ancien (jusqu'à 24 h) ; un registre d'avant cette liaison est adopté tel quel.
+- **Vérifié** : suite complète avec 2 475 tests et 3 316 sous-tests, ruff et mypy (54 fichiers)
+  verts, le nouveau module pur `garage_guard` y compris ; 50 variantes cassées volontairement
+  (plafond, délais, série, alerte, délai manuel, notifications, liaison au volet, page), toutes
+  détectées.
+
 ## 1.0.0-rc.22
 
 - **Ouvrir, fermer, arrêter le volet depuis la page** : la carte « Garage de la tondeuse »
