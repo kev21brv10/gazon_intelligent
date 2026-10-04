@@ -30,9 +30,11 @@
 - **Notifications utiles seulement** : une ouverture ou une fermeture n'est annoncée au téléphone
   que si le pilote l'a ordonnée (il y a moins de 15 minutes) ; un volet manœuvré à la main ne
   notifie plus. Une anomalie du volet part toujours, et une anomalie déjà présente au premier
-  contrôle (redémarrage en pleine panne) n'est pas avalée.
-- **Vérifié** : suite complète avec 2 462 tests et 3 316 sous-tests, ruff et mypy (54 fichiers)
-  verts, le nouveau module pur `garage_guard` y compris ; 40 variantes cassées volontairement
+  contrôle (redémarrage en pleine panne) n'est pas avalée. Une anomalie qui apparaît au même
+  contrôle qu'une erreur de commande (ou que sa levée) n'est pas perdue : l'erreur passe d'abord,
+  l'anomalie est annoncée au contrôle suivant, une seule fois.
+- **Vérifié** : suite complète avec 2 468 tests et 3 316 sous-tests, ruff et mypy (54 fichiers)
+  verts, le nouveau module pur `garage_guard` y compris ; 44 variantes cassées volontairement
   (plafond, délais, série, alerte, délai manuel, notifications, page), toutes détectées.
 
 ## 1.0.0-rc.22
