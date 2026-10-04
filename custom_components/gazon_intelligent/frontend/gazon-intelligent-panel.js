@@ -6350,9 +6350,19 @@ class GazonIntelligentPanel extends HTMLElement {
       if (!dehors) return "La tondeuse n'est pas dehors : rien à mettre en pause.";
     } else if (commande === "reprendre") {
       if (!dehors) return "La tondeuse n'est pas dehors : rien à reprendre.";
-      if (enCours !== "pause" && a("mower_job_completion_state") !== "en_pause") return "La tondeuse n'est pas en pause.";
+      if (enCours !== "pause" && !this._tondeuseEnPause()) return "La tondeuse n'est pas en pause.";
     }
     return "";
+  }
+
+  // En pause — depuis cette page, l'appli du constructeur ou à la main. ⚠️ L'état de travail ne suffit
+  // pas : `en_pause` n'existe que tondeuse À QUAI ; dehors il vaut `en_cours`. Même règle que le serveur.
+  _tondeuseEnPause() {
+    const a = (cle) => this._a("tonte_etat", cle);
+    const machine = String(a("mower_operation_state") || "").toLowerCase();
+    return machine === "paused" || machine === "pause"
+      || String(a("tondeuse_statut") || "").toLowerCase() === "pause"
+      || a("mower_job_completion_state") === "en_pause";
   }
 
   _dureeBordureValide() {
@@ -6399,7 +6409,7 @@ class GazonIntelligentPanel extends HTMLElement {
     const inactif = (c) => !admin || Boolean(refus[c]) || occupe(`tondeuse-${c}`);
     const bouton = (c, texte, icone, demander) => `<button class="${c === "demarrer" ? "bouton-plein" : "bouton-contour"}" ${demander ? `data-tondeuse-demander="${c}"` : `data-commande="tondeuse-${c}"`}
       ${inactif(c) ? `disabled${refus[c] ? ` title="${esc(refus[c])}"` : ""}` : ""}><ha-icon icon="${icone}"></ha-icon>${esc(texte)}</button>`;
-    const reprise = commandeActive === "pause" || a("mower_job_completion_state") === "en_pause";
+    const reprise = commandeActive === "pause" || this._tondeuseEnPause();
     const boutons = [
       bouton("demarrer", "Démarrer la tonte", "mdi:play", true),
       bordureDispo ? bouton("bordure", "Coupe de bordure", "mdi:vector-polyline", true) : "",

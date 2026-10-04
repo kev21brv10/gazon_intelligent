@@ -16,7 +16,11 @@
   le volet. Elle ne dépend pas de l'onglet : fermer la page n'interrompt rien.
 - **Mode manuel temporaire** : tant qu'une commande est en cours, le pilote s'efface — pas de
   rappel, pas de fermeture du volet, pas de départ — sans que son réglage change. Une seule règle
-  reste prioritaire : une tondeuse dehors ne doit pas trouver son volet fermé. La commande prend
+  reste prioritaire : une tondeuse dehors ne doit pas trouver son volet fermé. Le pilote ne la
+  tient qu'en mode actif, alors que la commande marche dans les trois modes : c'est donc la
+  commande elle-même qui rouvre un volet refermé en route (à la main, par une automatisation),
+  avec la même porte d'ordres que le pilote — pas de doublon, au plus trois tentatives, alerte si
+  le volet ne répond pas. La commande prend
   fin quand le travail est terminé et la tondeuse rentrée (jamais sur un simple « repos » : l'état
   rebondit au démarrage, et une recharge au milieu du travail ne termine rien), à son échéance
   (4 h ; durée de la bordure + 20 min ; 1 h pour une pause) ou par Annuler. Après un retour manuel,
@@ -24,16 +28,20 @@
   tondeuse à quai dans de bonnes conditions ; la fermeture du volet, elle, suit la rentrée comme
   d'habitude.
 - **Gardes rejugées à chaque cycle** : tondeuse connectée, prête et à sa base, batterie d'au moins
-  20 %, pas d'arrosage en cours, service de bordure présent. Retour et pause passent devant une
+  20 %, pas d'arrosage en cours, coupe de bordure seulement si la tondeuse CHOISIE est portée par
+  l'intégration Landroid Cloud et que son service existe (une autre marque installée à côté d'une
+  Landroid n'a pas le bouton). Reprendre est proposé pour une tondeuse en pause, quelle que soit
+  l'origine de la pause (cette page, l'appli du constructeur, à la main) : dehors, l'état de
+  travail reste « en cours » même en pause, seul l'état de la machine le dit. Retour et pause passent devant une
   sortie en cours (on peut toujours l'arrêter) ; un second départ est refusé. Un refus est rendu
   en clair à la page, pas comme une erreur.
 - **Publié** : `mower_manual_active`, `_command`, `_step`, `_reason`, `_until`, `_duration_min`,
   `_error`, `_ended_at`, `_suspension_active`, `_suspension_until` et `mower_edgecut_available`
   (capteur d'état de la tonte et diagnostics) ; l'état de la commande survit à un redémarrage.
-- **Vérifié** : suite complète avec 2 637 tests et 3 391 sous-tests, ruff et mypy (55 fichiers)
-  verts, le nouveau module pur `manual_command` y compris ; 70 variantes cassées volontairement
-  (gardes, séquence du volet, fin de commande, suspension, effacement du pilote, persistance, page),
-  toutes détectées.
+- **Vérifié** : suite complète avec 2 677 tests et 3 414 sous-tests, ruff et mypy (55 fichiers)
+  verts, le nouveau module pur `manual_command` y compris ; 95 variantes cassées volontairement
+  (gardes, séquence du volet, réouverture du volet, pause, bordure, fin de commande, suspension,
+  effacement du pilote, persistance, page), toutes détectées.
 
 ## 1.0.0-rc.23
 

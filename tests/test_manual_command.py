@@ -58,8 +58,10 @@ def _quai(**maj):
 
 
 def _dehors(**maj):
-    return _quai(mower_is_docked=False, mower_is_outside=True, mower_is_mowing=True,
-                 mower_operation_state="tonte", mower_dock_signal_fort=False, **maj)
+    base = dict(mower_is_docked=False, mower_is_outside=True, mower_is_mowing=True,
+                mower_operation_state="tonte", mower_dock_signal_fort=False)
+    base.update(maj)
+    return _quai(**base)
 
 
 def _valider(commande, snapshot=None, **kw):
@@ -556,6 +558,97 @@ class SortieSupplanteeTests(unittest.TestCase):
 
     def test_un_nouvel_etat_remet_a_zero_la_date_de_fin(self) -> None:
         self.assertIsNone(mc.new_state("demarrer", NOW)["fini_a"])
+
+
+class VoletRouvertDevantUneTondeuseDehorsTests(unittest.TestCase):
+    """⚠️ Une tondeuse dehors ne trouve jamais son volet fermé : tant qu'une commande manuelle dure,
+    c'est elle qui le rouvre — le pilote ne le fait qu'en mode actif, et la commande marche dans les trois."""
+
+    ETATS = {
+        "pause": lambda: _etat("pause", etape="pause_envoyee", envoye_a=_il_y_a(1)),
+        "retour": lambda: _etat("retour", etape="retour_envoye", envoye_a=_il_y_a(1)),
+        "sortie": lambda: _etat("demarrer", etape="dehors", envoye_a=_il_y_a(5), vu_dehors=True),
+        "départ_envoyé": lambda: _etat("demarrer", etape="depart_envoye", envoye_a=_il_y_a(1)),
+        "reprise": lambda: _etat("reprendre", etape="dehors", envoye_a=_il_y_a(1), vu_dehors=True),
+    }
+
+    def test_volet_ferme_devant_une_tondeuse_dehors_il_est_rouvert_dans_chaque_etat(self) -> None:
+        for nom, fabrique in self.ETATS.items():
+            with self.subTest(etat=nom):
+                etat = fabrique()
+                r = _suite(etat, _dehors(), volet="closed", position=0)
+                self.assertEqual(r["action"], {"service": "cover.open_cover", "data": {}})
+                self.assertEqual(r["etape"], etat["etape"] if nom != "départ_envoyé" else "dehors",
+                                 "la commande continue, son étape ne change pas")
+                self.assertFalse(r["finished"])
+
+    def test_volet_qui_se_ferme_en_route_est_aussi_rouvert(self) -> None:
+        for volet, position in (("closing", 40), ("closed", 0)):
+            with self.subTest(volet=volet):
+                r = _suite(self.ETATS["sortie"](), _dehors(), volet=volet, position=position)
+                self.assertEqual((r["action"] or {}).get("service"), "cover.open_cover")
+
+    def test_ouverture_incomplete_est_completee(self) -> None:
+        r = _suite(self.ETATS["sortie"](), _dehors(), volet="open", position=60)
+        self.assertEqual((r["action"] or {}).get("service"), "cover.open_cover")
+
+    def test_volet_ouvert_ou_en_ouverture_aucun_ordre(self) -> None:
+        for volet, position in (("open", 100), ("opening", 30)):
+            with self.subTest(volet=volet):
+                for nom, fabrique in self.ETATS.items():
+                    self.assertIsNone(_suite(fabrique(), _dehors(), volet=volet, position=position)["action"], nom)
+
+    def test_volet_muet_aucun_ordre_l_alerte_s_en_charge(self) -> None:
+        for volet in ("unavailable", "unknown", None):
+            with self.subTest(volet=volet):
+                r = _suite(self.ETATS["sortie"](), _dehors(), volet=volet)
+                self.assertIsNone(r["action"])
+                self.assertFalse(r["finished"], "la commande n'est pas abandonnée : la tondeuse est dehors")
+
+    def test_sans_volet_configure_aucun_ordre(self) -> None:
+        self.assertIsNone(_sans_volet(self.ETATS["sortie"](), _dehors())["action"])
+
+    def test_tondeuse_rentree_aucun_ordre_de_volet(self) -> None:
+        """À quai, volet fermé : rien à rouvrir (ni pour une sortie finie, ni pour un retour terminé)."""
+        r = _suite(self.ETATS["sortie"](), _quai(mower_job_completion_state="en_cours"), volet="closed", position=0)
+        self.assertIsNone(r["action"])
+
+    def test_ordre_deja_envoye_retenu_aucun_doublon(self) -> None:
+        garage = {gg.KEY_COMMAND: "open_cover", gg.KEY_COMMAND_AT: _il_y_a(0.5), gg.KEY_ATTEMPTS: 1,
+                  gg.KEY_SERIES_START: _il_y_a(0.5)}
+        r = _suite(self.ETATS["sortie"](), _dehors(), volet="closed", position=0, garage=garage)
+        self.assertIsNone(r["action"])
+        self.assertEqual(r["etape"], "dehors")
+        self.assertIn("nouvelle tentative", r["reason"])
+
+    def test_volet_bloque_la_commande_continue_sans_ordre(self) -> None:
+        garage = {gg.KEY_COMMAND: "open_cover", gg.KEY_COMMAND_AT: _il_y_a(4), gg.KEY_ATTEMPTS: 3,
+                  gg.KEY_SERIES_START: _il_y_a(10)}
+        r = _suite(self.ETATS["sortie"](), _dehors(), volet="closed", position=0, garage=garage)
+        self.assertIsNone(r["action"])
+        self.assertFalse(r["finished"])
+        self.assertEqual(r["etape"], "dehors")
+
+
+class PauseFaiteAilleursTests(unittest.TestCase):
+    """⚠️ Dehors, l'état de travail est `en_cours` même en pause : seul l'état de la machine dit « pause »."""
+
+    def test_pause_depuis_l_appli_du_constructeur_la_reprise_est_possible(self) -> None:
+        for nom, maj in (
+            ("état machine", {"mower_operation_state": "paused"}),
+            ("statut normalisé", {"tondeuse_statut": "pause"}),
+            ("travail en pause à quai", {"mower_job_completion_state": "en_pause"}),
+        ):
+            with self.subTest(source=nom):
+                self.assertIsNone(_valider("reprendre", _dehors(**{"mower_job_completion_state": "en_cours", **maj})))
+
+    def test_une_tondeuse_qui_tond_n_est_pas_en_pause(self) -> None:
+        self.assertIn("pas en pause", _valider("reprendre", _dehors(mower_job_completion_state="en_cours")))
+        self.assertIn("pas en pause", _valider("reprendre", _dehors(mower_job_completion_state="sans_mesure")))
+
+    def test_la_pause_manuelle_expiree_n_empeche_pas_de_reprendre_une_machine_restee_en_pause(self) -> None:
+        expiree = _etat("pause", etape="pause_envoyee", envoye_a=_il_y_a(70), jusqu_a=_il_y_a(10))
+        self.assertIsNone(_valider("reprendre", _dehors(mower_operation_state="paused"), state=expiree))
 
 
 class AnnulationTests(unittest.TestCase):

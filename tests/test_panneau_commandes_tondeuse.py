@@ -192,6 +192,25 @@ class AffichageTests(unittest.TestCase):
         self.assertTrue(_actif(html, 'data-commande="tondeuse-reprendre"'))
         self.assertNotIn('tondeuse-reprendre"', _carte(DEHORS))
 
+    def test_une_tondeuse_mise_en_pause_ailleurs_propose_de_reprendre(self) -> None:
+        """⚠️ Dehors, l'état de travail reste `en_cours` même en pause : seul l'état de la machine le dit."""
+        for nom, maj in (
+            ("état machine", {"mower_operation_state": "paused"}),
+            ("état machine (variante)", {"mower_operation_state": "pause"}),
+            ("statut normalisé", {"tondeuse_statut": "pause"}),
+        ):
+            with self.subTest(source=nom):
+                html = _carte({**DEHORS, "mower_job_completion_state": "en_cours", **maj})
+                self.assertIn('data-commande="tondeuse-reprendre"', html)
+                self.assertNotIn('data-commande="tondeuse-pause"', html)
+                self.assertTrue(_actif(html, 'data-commande="tondeuse-reprendre"'))
+                self.assertEqual(_refus("reprendre", {**DEHORS, "mower_job_completion_state": "en_cours", **maj}), "")
+
+    def test_une_tondeuse_qui_tond_ne_propose_pas_de_reprendre(self) -> None:
+        html = _carte({**DEHORS, "mower_operation_state": "tonte", "tondeuse_statut": "tonte_en_cours"})
+        self.assertNotIn('tondeuse-reprendre"', html)
+        self.assertIn("pas en pause", _refus("reprendre", {**DEHORS, "mower_operation_state": "tonte"}))
+
     def test_pas_de_bouton_bordure_sans_le_service_de_la_tondeuse(self) -> None:
         html = _carte({**A_QUAI, "mower_edgecut_available": False})
         self.assertNotIn('data-tondeuse-demander="bordure"', html)

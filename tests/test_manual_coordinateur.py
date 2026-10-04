@@ -85,6 +85,8 @@ class _Base(unittest.TestCase):
         coord.arrosage_en_cours = lambda: self.arrosage
         coord._current_datetime = lambda: self.horloge.maintenant
         coord._rafraichir_apres_action_utilisateur = AsyncMock()
+        self.plateforme = "landroid_cloud"
+        coord._mower_platform = lambda entity_id: self.plateforme
         self.rafraichissements = []
         coord._schedule_manual_refresh = lambda *a, **k: self.rafraichissements.append(1)
         self.arrosage = False
@@ -289,6 +291,146 @@ class DepartAvecVoletTests(_Base):
         self._demander(coord, "demarrer")
         instantane = self._cycle(coord, _quai())
         self.assertIsNone(instantane["mower_control_last_action"])
+
+
+class BordureLieeALaTondeuseChoisieTests(_Base):
+    """Le service `landroid_cloud.ots` ne vaut que pour une tondeuse portée par cette intégration."""
+
+    avec_volet = False
+
+    def test_une_tondeuse_d_une_autre_marque_n_a_pas_de_bordure_meme_avec_une_landroid_installee(self) -> None:
+        coord = self._coord()
+        self.plateforme = "husqvarna_automower"   # le service existe (une Landroid est installée à côté)
+        reponse = self._demander(coord, "bordure")
+        self.assertFalse(reponse["ok"])
+        self.assertIn("bordure", reponse["message"])
+        self.assertIs(self._cycle(coord, _quai())["mower_edgecut_available"], False)
+        self.assertTrue(self._demander(coord, "demarrer")["ok"], "le départ normal n'est pas touché")
+
+    def test_une_plateforme_inconnue_vaut_indisponible(self) -> None:
+        coord = self._coord()
+        self.plateforme = None
+        self.assertFalse(self._demander(coord, "bordure")["ok"])
+        self.assertIs(self._cycle(coord, _quai())["mower_edgecut_available"], False)
+
+    def test_sans_tondeuse_choisie_pas_de_bordure(self) -> None:
+        coord = self._coord()
+        self.assertIs(self._cycle(coord, _quai(tondeuse_source_entity=""))["mower_edgecut_available"], False)
+
+    def test_la_landroid_choisie_avec_son_service_a_la_bordure(self) -> None:
+        coord = self._coord()
+        self.assertIs(self._cycle(coord, _quai())["mower_edgecut_available"], True)
+
+    def test_la_plateforme_est_lue_pour_l_entite_choisie(self) -> None:
+        coord = self._coord()
+        vues = []
+        coord._mower_platform = lambda entity_id: vues.append(entity_id) or "landroid_cloud"
+        self._cycle(coord, _quai())
+        self.assertIn(TONDEUSE, vues)
+
+    def test_la_demande_juge_la_tondeuse_choisie_et_pas_une_autre(self) -> None:
+        coord = self._coord()
+        coord._mower_platform = lambda entity_id: "landroid_cloud" if entity_id == TONDEUSE else "autre_marque"
+        self.assertTrue(self._demander(coord, "bordure")["ok"], "la tondeuse choisie est une Landroid")
+        coord = self._coord()
+        coord._mower_platform = lambda entity_id: "autre_marque" if entity_id == TONDEUSE else "landroid_cloud"
+        reponse = self._demander(coord, "bordure")
+        self.assertFalse(reponse["ok"], "la tondeuse choisie n'est PAS une Landroid, même si une autre l'est")
+        self.assertIn("bordure", reponse["message"])
+
+    def test_la_sequence_rejuge_la_tondeuse_choisie(self) -> None:
+        """Acceptée, puis la plateforme n'est plus la bonne au cycle suivant : la bordure est abandonnée."""
+        coord = self._coord()
+        self.assertTrue(self._demander(coord, "bordure")["ok"])
+        coord._mower_platform = lambda entity_id: "autre_marque" if entity_id == TONDEUSE else "landroid_cloud"
+        instantane = self._cycle(coord, _quai())
+        self.assertEqual(self._ordres(), [])
+        self.assertEqual(instantane["mower_manual_step"], "erreur")
+
+    def test_la_lecture_du_registre_est_protegee(self) -> None:
+        """Vrai `_mower_platform` : le registre d'entités de Home Assistant, simulé ici."""
+        import sys
+        import types as _types
+        from unittest.mock import patch
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord.hass = object()
+        er = _types.ModuleType("homeassistant.helpers.entity_registry")
+        er.async_get = lambda hass: _types.SimpleNamespace(
+            async_get=lambda eid: _types.SimpleNamespace(platform="landroid_cloud") if eid == TONDEUSE else None
+        )
+        helpers = _types.ModuleType("homeassistant.helpers")
+        helpers.__path__ = []  # type: ignore[attr-defined]
+        helpers.entity_registry = er  # type: ignore[attr-defined]
+        with patch.dict(sys.modules, {"homeassistant.helpers": helpers, "homeassistant.helpers.entity_registry": er}):
+            self.assertEqual(coord._mower_platform(TONDEUSE), "landroid_cloud")
+            self.assertIsNone(coord._mower_platform("lawn_mower.inconnue"))
+        er.async_get = lambda hass: (_ for _ in ()).throw(RuntimeError("registre indisponible"))
+        with patch.dict(sys.modules, {"homeassistant.helpers": helpers, "homeassistant.helpers.entity_registry": er}):
+            self.assertIsNone(coord._mower_platform(TONDEUSE))
+
+
+class VoletRouvertPendantUneSortieManuelleTests(_Base):
+    """⚠️ La règle « pas de volet fermé devant une tondeuse dehors » tient dans les TROIS modes du pilote."""
+
+    def _sortie_en_cours(self, mode):
+        coord = self._coord(mode)
+        self.volet = types.SimpleNamespace(state="open", attributes={"current_position": 100})
+        self.assertTrue(self._demander(coord, "demarrer")["ok"])
+        self._cycle(coord, _quai(), apres=0.5)          # volet ouvert : délai de sécurité
+        self._cycle(coord, _quai(), apres=2.5)          # départ envoyé
+        self._cycle(coord, _dehors(), apres=1.0)        # elle sort
+        self.assertEqual(self._ordres(), ["lawn_mower.start_mowing"])
+        return coord
+
+    def test_le_volet_refermé_en_route_est_rouvert_dans_chaque_mode(self) -> None:
+        for mode in ("desactive", "observation", "actif"):
+            with self.subTest(mode=mode):
+                coord = self._sortie_en_cours(mode)
+                instantane = self._cycle(coord, _dehors(), apres=2.0, etat="closed", position=0)
+                self.assertEqual(self._ordres().count("cover.open_cover"), 1, f"{mode} : un seul ordre")
+                self.assertEqual(self._ordres()[-1], "cover.open_cover")
+                self.assertEqual(self._donnees_de_l_appel(), {"entity_id": "cover.garage"})
+                self.assertIs(instantane["mower_manual_active"], True, "la commande continue")
+                # Cycle suivant, volet pas encore bougé : l'ordre n'est pas doublé (registre partagé avec le pilote).
+                self._cycle(coord, _dehors(), apres=0.5)
+                self.assertEqual(self._ordres().count("cover.open_cover"), 1, f"{mode} : pas de doublon")
+
+    def test_le_volet_rouvert_la_serie_se_ferme(self) -> None:
+        coord = self._sortie_en_cours("observation")
+        self._cycle(coord, _dehors(), apres=2.0, etat="closed", position=0)
+        self._cycle(coord, _dehors(), apres=0.3, etat="open", position=100)
+        self.assertIsNone(coord._runtime_state["mower_control"].get(gg.KEY_COMMAND))
+        self._cycle(coord, _dehors(), apres=3.0)
+        self.assertEqual(self._ordres().count("cover.open_cover"), 1)
+
+    def test_un_volet_qui_refuse_de_s_ouvrir_declenche_l_alerte_quel_que_soit_le_mode(self) -> None:
+        for mode in ("desactive", "observation"):
+            with self.subTest(mode=mode):
+                coord = self._sortie_en_cours(mode)
+                self._cycle(coord, _dehors(), apres=2.0, etat="closed", position=0)
+                self._cycle(coord, _dehors(), apres=2.5)
+                self._cycle(coord, _dehors(), apres=2.5)
+                instantane = self._cycle(coord, _dehors(), apres=3.5)
+                self.assertEqual(self._ordres().count("cover.open_cover"), 3, "au plus trois tentatives")
+                self.assertEqual(instantane["mower_garage_alert"], gg.ALERT_STUCK)
+                self.assertIs(instantane["mower_manual_active"], True, "la tondeuse est dehors : on ne l'abandonne pas")
+
+
+class PauseFaiteAilleursCoordinateurTests(_Base):
+    avec_volet = False
+
+    def test_la_reprise_est_acceptee_pour_une_machine_mise_en_pause_depuis_l_appli_du_constructeur(self) -> None:
+        coord = self._coord()
+        coord._latest_full_snapshot = _dehors(mower_operation_state="paused", mower_job_completion_state="en_cours")
+        reponse = self._demander(coord, "reprendre")
+        self.assertTrue(reponse["ok"], reponse)
+        self._cycle(coord, coord._latest_full_snapshot)
+        self.assertEqual(self._ordres(), ["lawn_mower.start_mowing"])
+
+    def test_une_tondeuse_qui_tond_n_a_rien_a_reprendre(self) -> None:
+        coord = self._coord()
+        coord._latest_full_snapshot = _dehors()
+        self.assertFalse(self._demander(coord, "reprendre")["ok"])
 
 
 class PiloteEffaceTests(_Base):

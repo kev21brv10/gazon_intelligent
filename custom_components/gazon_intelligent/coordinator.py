@@ -3941,12 +3941,32 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             or (scheduler is not None and not scheduler.done())
         )
 
-    def _edgecut_available(self) -> bool:
-        """Le service de coupe de bordure de la tondeuse existe-t-il dans Home Assistant ?"""
+    def _mower_platform(self, entity_id: str) -> str | None:
+        """L'intégration (plateforme) qui porte cette entité, d'après le registre ; None si inconnue."""
         try:
-            return bool(self.hass.services.has_service("landroid_cloud", "ots"))
+            from homeassistant.helpers import entity_registry as er
+
+            entree = er.async_get(self.hass).async_get(entity_id)
+            platform = getattr(entree, "platform", None)
+            return str(platform) if platform else None
+        except Exception:  # noqa: BLE001 - sans registre, une plateforme inconnue vaut « non prise en charge »
+            return None
+
+    def _edgecut_available(self, mower_entity: str | None) -> bool:
+        """La coupe de bordure est-elle possible avec LA tondeuse choisie ?
+
+        Le service `landroid_cloud.ots` doit exister ET la tondeuse sélectionnée doit être portée par
+        cette intégration : sans quoi une tondeuse d'une autre marque, installée à côté d'une
+        Landroid, afficherait un bouton qui n'échoue qu'après l'appel.
+        """
+        if not mower_entity:
+            return False
+        try:
+            if not self.hass.services.has_service("landroid_cloud", "ots"):
+                return False
         except Exception:  # noqa: BLE001 - une capacité inconnue vaut « indisponible »
             return False
+        return self._mower_platform(mower_entity) == "landroid_cloud"
 
     def _manual_state(self) -> dict[str, Any]:
         manual = self._runtime_state.get("mower_manual")
@@ -3955,7 +3975,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._runtime_state["mower_manual"] = manual
         return manual
 
-    def _manual_attributes(self, manual: Mapping[str, Any], now: datetime) -> dict[str, Any]:
+    def _manual_attributes(
+        self, manual: Mapping[str, Any], now: datetime, snapshot: Mapping[str, Any]
+    ) -> dict[str, Any]:
         """Ce que la page et le pilote lisent de la commande manuelle."""
         active = manual_command.is_active(manual, now)
         suspended = manual_command.suspension_active(manual, now)
@@ -3971,7 +3993,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "mower_manual_ended_at": manual.get("fini_a") if has_state else None,
             "mower_manual_suspension_active": suspended,
             "mower_manual_suspension_until": manual.get("suspension_jusqu_a") if suspended else None,
-            "mower_edgecut_available": self._edgecut_available(),
+            "mower_edgecut_available": self._edgecut_available(str(snapshot.get("tondeuse_source_entity") or "")),
         }
 
     async def _async_run_manual_command(
@@ -4011,7 +4033,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 },
                 garage_runtime=runtime,
                 irrigation_active=self.arrosage_en_cours(),
-                edgecut_available=self._edgecut_available(),
+                edgecut_available=self._edgecut_available(str(snapshot.get("tondeuse_source_entity") or "")),
             )
             updates = dict(result["updates"])
             reason = str(result["reason"])
@@ -4043,7 +4065,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 manual["suspension_jusqu_a"] = (now + timedelta(minutes=float(suspension_minutes))).isoformat()
             if manual_command.is_active(manual, now):
                 self._schedule_manual_refresh()
-        return self._manual_attributes(manual, now)
+        return self._manual_attributes(manual, now, snapshot)
 
     async def _async_execute_manual_action(
         self,
@@ -4108,7 +4130,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             state=manual,
             now=now,
             irrigation_active=self.arrosage_en_cours(),
-            edgecut_available=self._edgecut_available(),
+            edgecut_available=self._edgecut_available(str(snapshot.get("tondeuse_source_entity") or "")),
             cover_known=cover_known,
         )
         if refus is not None:

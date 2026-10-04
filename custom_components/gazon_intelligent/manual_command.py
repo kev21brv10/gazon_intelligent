@@ -134,6 +134,18 @@ def _outside(snapshot: Mapping[str, Any]) -> bool:
     )
 
 
+def _paused(snapshot: Mapping[str, Any]) -> bool:
+    """La tondeuse est en pause — que ce soit depuis cette page, depuis l'appli du constructeur ou à la main.
+
+    ⚠️ L'état de travail ne suffit pas : `en_pause` n'existe que tondeuse À QUAI ; dehors, le suivi du
+    travail rend `en_cours` (ou `sans_mesure`). Seul l'état de la machine dit qu'elle est en pause.
+    """
+    operation = str(snapshot.get("mower_operation_state") or "").lower()
+    status = str(snapshot.get("tondeuse_statut") or "").lower()
+    job = str(snapshot.get("mower_job_completion_state") or "").lower()
+    return operation in {"paused", "pause"} or status == "pause" or job == "en_pause"
+
+
 def _battery(snapshot: Mapping[str, Any]) -> float | None:
     return _number(snapshot.get("mower_battery", snapshot.get("tondeuse_batterie")))
 
@@ -180,8 +192,7 @@ def validate_request(
     if commande == "reprendre":
         if not _outside(snapshot):
             return "La tondeuse n'est pas dehors : rien à reprendre."
-        paused = en_cours == "pause" or str(snapshot.get("mower_job_completion_state") or "").lower() == "en_pause"
-        if not paused:
+        if en_cours != "pause" and not _paused(snapshot):
             return "La tondeuse n'est pas en pause."
     return None
 
@@ -283,6 +294,23 @@ def evaluate(
         and (_number(cover_position) is None or float(_number(cover_position) or 0.0) >= min_open)
     )
     cover_known = cover not in {"", "none", "unavailable", "unknown"}
+    # ⚠️ UNE TONDEUSE DEHORS NE DOIT JAMAIS TROUVER SON VOLET FERMÉ, quel que soit le mode du pilote.
+    # Le pilote tient cette règle, mais seulement en mode actif (désactivé : il s'arrête avant ;
+    # observation : il ne fait qu'afficher). Or une commande manuelle marche dans les trois modes :
+    # tant qu'elle dure, c'est elle qui rouvre un volet refermé en route (à la main, par une
+    # automatisation…). Même registre d'ordres que le pilote : pas de doublon.
+    needs_open = bool(cover_entity) and cover_known and _outside(snapshot) and not confirmed and cover != "opening"
+
+    def waiting(step: str, reason: str, *, updates: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        if needs_open:
+            blocage = garage_guard.command_gate("open_cover", garage_runtime, settings, now)
+            if blocage is not None:
+                return _result(state, step, blocage["reason"], updates=updates)
+            return _result(
+                state, step, "Volet fermé devant une tondeuse dehors : ouverture du volet.",
+                action={"service": "cover.open_cover", "data": {}}, updates=updates,
+            )
+        return _result(state, step, reason, updates=updates)
 
     # ── Pause : un seul ordre, puis le mode manuel tient le temps d'une pause ──
     if commande == "pause":
@@ -292,7 +320,7 @@ def evaluate(
                 action={"service": "lawn_mower.pause", "data": {}},
                 updates={"envoye_a": now.isoformat()},
             )
-        return _result(state, "pause_envoyee", "Tondeuse en pause : le pilote ne la rappelle pas.")
+        return waiting("pause_envoyee", "Tondeuse en pause : le pilote ne la rappelle pas.")
 
     # ── Reprise après une pause : la tondeuse est dehors, donc le volet est déjà ouvert pour elle ──
     # Une fois l'ordre parti, la commande est « dehors » : elle suit le chemin d'un départ (le mode
@@ -315,7 +343,7 @@ def evaluate(
                     state, "termine", "La tondeuse est rentrée.", finished=True,
                     suspension_minutes=MANUAL_HOLD_AFTER_RETURN_MINUTES,
                 )
-            return _result(state, "retour_envoye", "Retour demandé : la tondeuse rentre.")
+            return waiting("retour_envoye", "Retour demandé : la tondeuse rentre.")
         if cover_entity:
             if not cover_known:
                 return _result(state, "erreur", "Le volet ne répond pas : le retour n'est pas lancé.", finished=True,
@@ -346,7 +374,7 @@ def evaluate(
     # ── Départ (normal ou coupe de bordure) ──
     if etape == "depart_envoye":
         if _outside(snapshot):
-            return _result(state, "dehors", "La tondeuse est dehors : le pilote ne la rappelle pas.",
+            return waiting("dehors", "La tondeuse est dehors : le pilote ne la rappelle pas.",
                            updates={"vu_dehors": True})
         waited = _minutes_since(now, state.get("envoye_a"))
         if waited is not None and waited >= MANUAL_START_CONFIRM_MAX_MINUTES:
@@ -363,7 +391,7 @@ def evaluate(
         )
         if done:
             return _result(state, "termine", "Travail terminé : la tondeuse est rentrée.", finished=True)
-        return _result(state, "dehors", "La tondeuse travaille : le pilote ne la rappelle pas.")
+        return waiting("dehors", "La tondeuse travaille : le pilote ne la rappelle pas.")
 
     # Étapes d'ouverture du volet puis départ.
     waited_total = _minutes_since(now, state.get("demande_a"))
