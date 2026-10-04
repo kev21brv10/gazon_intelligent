@@ -23,7 +23,6 @@ from .mower_control_constants import (
     DEFAULT_MOWER_GARAGE_OPEN_FOR_RETURN,
     DEFAULT_MOWER_GARAGE_OPEN_LEAD_MINUTES,
     DEFAULT_MOWER_GARAGE_MIN_OPEN_POSITION,
-    MOWER_CONTROL_COVER_ONLY,
     MOWER_CONTROL_MODES,
     MOWER_JOB_HOLD_MAX_MINUTES,
     MOWER_MANAGED_START_TIMEOUT_MINUTES,
@@ -144,18 +143,9 @@ def evaluate_mower_control(
     # renvoyons jamais `start_mowing` à chaque recharge. Seul un `dock` demandé par CE pilote
     # crée une dette de reprise, acquittée par une unique commande quand les gardes reviennent.
     runtime_updates: dict[str, Any] = {}
-    # ⚠️ MODE « VOLET SEUL » : aucun cycle n'est géré ni repris — l'intégration ne commande pas la
-    # tondeuse. Un reste de cycle d'un ancien mode actif (drapeaux persistés) est ignoré ET effacé :
-    # sinon `cycle_autonome` (plus bas) empêcherait pour toujours la fermeture du volet.
-    cover_only = mode == MOWER_CONTROL_COVER_ONLY
-    stale_cycle = cover_only and (
-        runtime.get("managed_start_pending") is True
-        or runtime.get("managed_cycle_active") is True
-        or runtime.get("resume_required") is True
-    )
-    start_pending = runtime.get("managed_start_pending") is True and not cover_only
-    cycle_active = runtime.get("managed_cycle_active") is True and not cover_only
-    resume_required = runtime.get("resume_required") is True and not cover_only
+    start_pending = runtime.get("managed_start_pending") is True
+    cycle_active = runtime.get("managed_cycle_active") is True
+    resume_required = runtime.get("resume_required") is True
     managed_job_seen_incomplete = runtime.get("managed_job_seen_incomplete") is True
     managed_job_id = runtime.get("managed_job_id")
     observed_job_id = snapshot.get("mower_job_followed_id") or snapshot.get("mower_job_id")
@@ -269,24 +259,6 @@ def evaluate_mower_control(
             }
         )
 
-    if stale_cycle:
-        runtime_updates.update(
-            {
-                "managed_start_pending": False,
-                "managed_cycle_active": False,
-                "resume_required": False,
-                "resume_reason": None,
-                "resume_requested_at": None,
-                "managed_job_seen_incomplete": False,
-                "managed_job_id": None,
-                "managed_start_baseline_captured": False,
-                "managed_start_baseline_job_id": None,
-                "managed_start_baseline_progress": None,
-                "managed_start_baseline_completion_state": None,
-                "managed_start_requested_at": None,
-            }
-        )
-
     effective_runtime = dict(runtime)
     effective_runtime.update(runtime_updates)
 
@@ -372,7 +344,7 @@ def evaluate_mower_control(
 
     # On rappelle uniquement quand le GAZON retire son autorisation. Une donnée machine incertaine
     # ne suffit pas : elle pourrait produire des rappels inutiles à chaque indisponibilité réseau.
-    if (outside or mowing) and mowing_forbidden and not returning and not cover_only:
+    if (outside or mowing) and mowing_forbidden and not returning:
         return command("dock", "retour_demande", "Les conditions du gazon ne permettent plus la tonte.")
 
     # Une interdiction forte peut apparaître pendant une recharge intermédiaire. Même déjà à la
@@ -492,20 +464,6 @@ def evaluate_mower_control(
     elif runtime.get("docked_since") is not None:
         # Le signal fort a disparu : l'ancien instant ne doit jamais autoriser une fermeture.
         runtime_clear = {"docked_since": None}
-
-    # VOLET SEUL : tout ce qui suit est la gestion de la TONDEUSE (suspension des départs, créneaux,
-    # quota, batterie, ouverture « avant le départ », `start_mowing`) — jamais appliquée ici. Le volet
-    # a déjà été géré plus haut : ouvert devant une tondeuse dehors, refermé après sa rentrée.
-    if cover_only:
-        return result(
-            "volet_seul",
-            (
-                "Volet suivi selon l'état de la tondeuse ; la tondeuse reste gérée par son système."
-                if cover_entity
-                else "Aucun volet configuré : rien à gérer."
-            ),
-            updates=runtime_clear,
-        )
 
     # Après un RETOUR manuel, pas de départ automatique pendant un moment : le pilote verrait une
     # tondeuse à quai, des conditions favorables, et la renverrait aussitôt. Placé APRÈS la

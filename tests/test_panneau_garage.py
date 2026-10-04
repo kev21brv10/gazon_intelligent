@@ -252,21 +252,6 @@ class CommandesDuVoletTests(unittest.TestCase):
         html = self._commandes("open", position=100, attributs={**DOCKEE, "mower_control_mode": "observation"})
         self.assertNotIn("Pilotage actif", html)
 
-    def test_en_volet_seul_la_page_previent_aussi_que_le_pilote_peut_reprendre_la_main(self) -> None:
-        html = self._commandes("open", position=100, attributs={**DOCKEE, "mower_control_mode": "volet_seul"})
-        self.assertIn("Pilotage du volet seul", html)
-        self.assertNotIn("Pilotage actif", html)
-        self.assertIn("peut reprendre la main", html)
-
-    def test_le_bloc_pilotage_nomme_le_volet_seul_et_dit_que_la_tondeuse_n_est_pas_commandee(self) -> None:
-        (sortie,) = _rendre([{"type": "bloc_pilote", "volet": "open",
-                              "attributs": {"mower_control_mode": "volet_seul", "mower_control_state": "volet_seul"}}])
-        html = sortie["html"]
-        self.assertIn("Pilotage du volet seul", html)
-        self.assertIn("elle reste gérée par son système", html)
-        self.assertIn("mdi:garage-variant", html)
-        self.assertNotIn("commande la tondeuse selon ses sécurités", html)
-
 
 @unittest.skipUnless(NODE, "Node n'est pas installé")
 class EnvoiDesCommandesTests(unittest.TestCase):

@@ -1,9 +1,6 @@
 """Constantes du pilote de tondeuse, sans dépendance Home Assistant."""
 
-MOWER_CONTROL_MODES = ("desactive", "observation", "volet_seul", "actif")
-# Mode « volet seul » : le volet suit l'état de la tondeuse, mais l'intégration ne la commande JAMAIS
-# (ni départ, ni retour, ni reprise) : elle reste gérée par son appli et ses horaires.
-MOWER_CONTROL_COVER_ONLY = "volet_seul"
+MOWER_CONTROL_MODES = ("desactive", "observation", "actif")
 DEFAULT_MOWER_CONTROL_MODE = "desactive"
 MOWER_START_WINDOW_POLICIES = ("ideal_seulement", "ideal_acceptable", "tout_non_bloque")
 DEFAULT_MOWER_START_WINDOW_POLICY = "ideal_seulement"
