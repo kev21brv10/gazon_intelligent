@@ -227,6 +227,156 @@ class VoletDansLeCoordinateurTests(unittest.TestCase):
         self.assertEqual(self._ordres(appel), ["open_cover", "close_cover"])
 
 
+class VoletFermeDevantUneTondeuseDehorsCoordinateurTests(unittest.TestCase):
+    """L'alerte part dans les TROIS modes du pilote, par le vrai cycle, jusqu'à l'instantané publié."""
+
+    DEHORS = dict(mower_is_docked=False, mower_is_outside=True, mower_is_mowing=True, mower_operation_state="tonte",
+                  mower_dock_signal_fort=False, action_possible=False)
+
+    def _coord(self, mode):
+        base = VoletDansLeCoordinateurTests()
+        coord, appel = base._coord(mode)
+        self.base = base
+        return coord, appel
+
+    def test_dans_chaque_mode_l_alerte_part_apres_la_marge(self) -> None:
+        for mode in ("desactive", "observation", "actif"):
+            with self.subTest(mode=mode):
+                coord, appel = self._coord(mode)
+                instantane = self.base._cycle(coord, _pret(**self.DEHORS), etat="closed", position=0)
+                self.assertIsNone(instantane["mower_garage_alert"], "pas d'alerte au premier constat")
+                instantane = self.base._cycle(coord, _pret(**self.DEHORS), apres=2.0)
+                if mode != "actif":
+                    self.assertIsNone(instantane["mower_garage_alert"], "dans la marge")
+                instantane = self.base._cycle(coord, _pret(**self.DEHORS), apres=1.5)
+                self.assertIn(
+                    instantane["mower_garage_alert"], (gg.ALERT_CLOSED_OUTSIDE, gg.ALERT_STUCK),
+                    f"{mode} : une alerte doit être publiée",
+                )
+                if mode != "actif":
+                    self.assertEqual(instantane["mower_garage_alert"], gg.ALERT_CLOSED_OUTSIDE)
+                    self.assertIn("la tondeuse est dehors", instantane["mower_garage_alert_reason"])
+                    self.assertEqual(self.base._ordres(appel), [], "observation / désactivé : rien n'est commandé")
+
+    def test_le_volet_rouvert_dans_la_marge_aucune_alerte_et_la_trace_est_effacee(self) -> None:
+        coord, _ = self._coord("observation")
+        self.base._cycle(coord, _pret(**self.DEHORS), etat="closed", position=0)
+        self.base._cycle(coord, _pret(**self.DEHORS), apres=2.0, etat="open", position=100)
+        instantane = self.base._cycle(coord, _pret(**self.DEHORS), apres=3.0)
+        self.assertIsNone(instantane["mower_garage_alert"])
+        self.assertIsNone(coord._runtime_state["mower_control"].get(gg.KEY_CLOSED_OUTSIDE_SINCE))
+
+    def test_le_volet_rouvert_apres_l_alerte_elle_s_efface(self) -> None:
+        coord, _ = self._coord("desactive")
+        self.base._cycle(coord, _pret(**self.DEHORS), etat="closed", position=0)
+        instantane = self.base._cycle(coord, _pret(**self.DEHORS), apres=4.0)
+        self.assertEqual(instantane["mower_garage_alert"], gg.ALERT_CLOSED_OUTSIDE)
+        instantane = self.base._cycle(coord, _pret(**self.DEHORS), apres=1.0, etat="open", position=100)
+        self.assertIsNone(instantane["mower_garage_alert"])
+
+    def test_tondeuse_rentree_volet_ferme_aucune_alerte_dans_aucun_mode(self) -> None:
+        for mode in ("desactive", "observation", "actif"):
+            with self.subTest(mode=mode):
+                coord, _ = self._coord(mode)
+                self.base._cycle(coord, _pret(action_possible=False), etat="closed", position=0)
+                instantane = self.base._cycle(coord, _pret(action_possible=False), apres=10.0)
+                self.assertIsNone(instantane["mower_garage_alert"])
+
+    def test_la_cle_de_depuis_quand_est_persistee_avec_le_registre(self) -> None:
+        coord, _ = self._coord("observation")
+        self.base._cycle(coord, _pret(**self.DEHORS), etat="closed", position=0)
+        self.assertTrue(coord._runtime_state["mower_control"].get(gg.KEY_CLOSED_OUTSIDE_SINCE))
+
+
+class PiloteRejugeVitePendantLesAttentesDuVoletTests(unittest.TestCase):
+    """⚠️ Le départ doit suivre l'ouverture du volet de quelques secondes, pas de plusieurs minutes.
+
+    Sans minuteur court, le pilote ne se rejugeait qu'à l'intervalle normal (2 min) ou à un événement
+    d'une entité suivie : la tondeuse partait bien après le délai de sécurité (36 s mesurés pour un délai
+    de 15 s). Ici le vrai cycle demande lui-même un nouveau passage tant qu'il attend le volet.
+    """
+
+    def _coord(self, mode="actif", reglages=None):
+        base = VoletDansLeCoordinateurTests()
+        coord, appel = base._coord(mode)
+        coord._reglages_instance = lambda: dict(reglages or {})
+        self.demandes = []
+        coord._schedule_quick_refresh = lambda *a, **k: self.demandes.append(base.horloge.maintenant)
+        self.base = base
+        return coord, appel
+
+    def _cycle(self, coord, snapshot, apres=0.0, **kw):
+        return self.base._cycle(coord, snapshot, apres=apres, **kw)
+
+    def test_le_depart_suit_l_ouverture_du_volet_de_quelques_secondes(self) -> None:
+        coord, appel = self._coord(reglages={"tondeuse_garage_avance_ouverture": 0.25})   # 15 s
+        secondes = 0
+        # t = 0 : l'ordre d'ouverture part.
+        self._cycle(coord, _pret(), etat="closed", position=0)
+        self.assertEqual(self.base._ordres(appel), ["open_cover"])
+        # Le volet s'ouvre : 6 s plus tard il est confirmé ouvert.
+        self._cycle(coord, _pret(), apres=6 / 60, etat="open", position=100)
+        secondes = 6
+        depart_a = None
+        while secondes < 120 and depart_a is None:
+            # Un nouveau passage est demandé À CHAQUE ATTENTE : le minuteur réel (5 s) tourne.
+            self.assertTrue(self.demandes, "aucun passage rapide demandé pendant l'attente du volet")
+            self.demandes.clear()
+            self._cycle(coord, _pret(), apres=5 / 60)
+            secondes += 5
+            if "start_mowing" in self.base._ordres(appel):
+                depart_a = secondes
+        self.assertIsNotNone(depart_a, "la tondeuse n'est jamais partie")
+        self.assertLessEqual(depart_a - 6, 15 + 5, "départ au plus tard un pas de minuteur après le délai de sécurité")
+        self.assertGreaterEqual(depart_a - 6, 15, "jamais avant le délai de sécurité")
+        self.assertEqual(self.base._ordres(appel), ["open_cover", "start_mowing"])
+
+    def test_l_ouverture_en_cours_et_le_delai_demandent_un_passage_rapide(self) -> None:
+        for etat, position, attendu in (("closed", 0, "ouverture_garage"), ("opening", 40, "attente_garage"), ("open", 100, "attente_garage")):
+            with self.subTest(etat=etat):
+                coord, _ = self._coord(reglages={"tondeuse_garage_avance_ouverture": 2.0})
+                instantane = self._cycle(coord, _pret(), etat=etat, position=position)
+                self.assertEqual(instantane["mower_control_state"], attendu)
+                self.assertTrue(self.demandes)
+
+    def test_le_delai_avant_fermeture_demande_aussi_un_passage_rapide_et_la_fermeture_suit_le_delai(self) -> None:
+        coord, appel = self._coord(reglages={"tondeuse_garage_delai_fermeture": 1.0})
+        quai = dict(action_possible=False)
+        self._cycle(coord, _pret(**quai), etat="open", position=100)            # rentrée vue (t = 0)
+        ferme_a = None
+        for pas in range(1, 30):
+            self.demandes.clear()
+            instantane = self._cycle(coord, _pret(**quai), apres=5 / 60)
+            if "close_cover" in self.base._ordres(appel):
+                ferme_a = pas * 5
+                break
+            self.assertEqual(instantane["mower_control_state"], "attente_fermeture_garage")
+            self.assertTrue(self.demandes, "pas de passage rapide pendant le délai de fermeture")
+        self.assertIsNotNone(ferme_a)
+        self.assertGreaterEqual(ferme_a, 60)
+        self.assertLessEqual(ferme_a, 65, "fermeture au plus un pas de minuteur après le délai")
+
+    def test_pas_de_passage_rapide_en_observation_ni_desactive(self) -> None:
+        for mode in ("observation", "desactive"):
+            with self.subTest(mode=mode):
+                coord, _ = self._coord(mode, reglages={"tondeuse_garage_avance_ouverture": 2.0})
+                self._cycle(coord, _pret(), etat="open", position=100)
+                self._cycle(coord, _pret(), apres=0.1)
+                self.assertEqual(self.demandes, [])
+
+    def test_pas_de_passage_rapide_quand_rien_n_attend_le_volet(self) -> None:
+        coord, _ = self._coord()
+        instantane = self._cycle(coord, _pret(action_possible=False, mower_pass_count_today=2), etat="closed", position=0)
+        self.assertNotIn(instantane["mower_control_state"], coordinator_mod._PILOT_FAST_WAIT_STATES)
+        self.assertEqual(self.demandes, [])
+
+    def test_les_etats_d_attente_sont_ceux_du_pilote(self) -> None:
+        self.assertEqual(
+            coordinator_mod._PILOT_FAST_WAIT_STATES,
+            frozenset({"ouverture_garage", "ouverture_garage_reprise", "attente_garage", "attente_fermeture_garage"}),
+        )
+
+
 class ChangementDeVoletTests(unittest.TestCase):
     """Un volet remplacé repart d'un registre vierge : il n'hérite pas du blocage de l'ancien."""
 

@@ -48,6 +48,9 @@ GARAGE_SERIES_WINDOW_MINUTES = 60.0
 GARAGE_BLOCK_WINDOW_MINUTES = 24 * 60.0
 # Un volet indisponible n'est signalé (tondeuse dehors) qu'après ce délai de grâce.
 GARAGE_UNAVAILABLE_GRACE_MINUTES = 5.0
+# Marge avant d'alerter d'un volet fermé devant une tondeuse dehors : en mode actif le pilote (ou la commande
+# manuelle) le rouvre au cycle suivant, et un volet met une dizaine de secondes à s'ouvrir.
+GARAGE_CLOSED_OUTSIDE_GRACE_MINUTES = 3.0
 # Une ouverture ou fermeture confirmée n'est notifiée que si c'est le pilote qui l'a ordonnée, il y a
 # moins de ce délai : un volet manœuvré à la main ne dérange personne.
 GARAGE_NOTIFY_WINDOW_MINUTES = 15.0
@@ -71,16 +74,20 @@ KEY_OPEN_SINCE = "garage_ouvert_depuis"
 # Depuis quand le volet est vu indisponible. Un volet « indisponible » juste après un redémarrage de
 # Home Assistant est normal pendant une ou deux minutes : on n'alerte qu'au-delà d'un délai de grâce.
 KEY_UNAVAILABLE_SINCE = "garage_indisponible_depuis"
+# Depuis quand le volet est vu non ouvert alors que la tondeuse est dehors.
+KEY_CLOSED_OUTSIDE_SINCE = "garage_ferme_dehors_depuis"
 # Le volet auquel appartient ce registre. Changer de volet (remplacement, autre entité) ne doit pas
 # transmettre au nouveau les ordres, les tentatives et le blocage de l'ancien : un nouveau volet
 # fermé serait sinon tenu pour « bloqué » pendant 24 h.
 KEY_ENTITY = "garage_entite"
 _ENTITY_BOUND_KEYS = (
     KEY_COMMAND, KEY_COMMAND_AT, KEY_SERIES_START, KEY_OPENED_BY_PILOT, KEY_OPEN_SINCE, KEY_UNAVAILABLE_SINCE,
+    KEY_CLOSED_OUTSIDE_SINCE,
 )
 
 ALERT_UNAVAILABLE = "volet_indisponible"
 ALERT_STUCK = "volet_bloque"
+ALERT_CLOSED_OUTSIDE = "volet_ferme_dehors"
 
 _UNKNOWN_COVER_STATES = frozenset({"", "none", "unavailable", "unknown"})
 
@@ -254,6 +261,14 @@ def entity_updates(runtime: Mapping[str, Any], cover_entity: str | None) -> dict
     return updates
 
 
+def _open_confirmed(cover: str, position: Any, min_open_position: float) -> bool:
+    """Le volet est ouvert ET assez grand pour laisser passer la tondeuse (position inconnue : ouvert)."""
+    if cover != "open":
+        return False
+    number = _number(position, -1.0)
+    return number < 0.0 or number >= min_open_position
+
+
 def reset_updates(
     runtime: Mapping[str, Any],
     cover_state: Any,
@@ -262,6 +277,7 @@ def reset_updates(
     min_open_position: float = _DEFAULT_MIN_OPEN_POSITION,
     *,
     settings: Mapping[str, Any] | None = None,
+    mower_away: bool = False,
 ) -> dict[str, Any]:
     """Ce qu'il faut effacer du registre au vu de l'état ACTUEL du volet.
 
@@ -293,6 +309,15 @@ def reset_updates(
             updates[KEY_UNAVAILABLE_SINCE] = now.isoformat()
     elif runtime.get(KEY_UNAVAILABLE_SINCE):
         updates[KEY_UNAVAILABLE_SINCE] = None
+    # Volet non ouvert devant une tondeuse dehors : depuis quand (l'alerte attend une marge).
+    not_open_outside = mower_away and cover not in _UNKNOWN_COVER_STATES and not _open_confirmed(
+        cover, position, min_open_position
+    )
+    if not_open_outside:
+        if not runtime.get(KEY_CLOSED_OUTSIDE_SINCE):
+            updates[KEY_CLOSED_OUTSIDE_SINCE] = now.isoformat()
+    elif runtime.get(KEY_CLOSED_OUTSIDE_SINCE):
+        updates[KEY_CLOSED_OUTSIDE_SINCE] = None
     return updates
 
 
@@ -375,10 +400,13 @@ def alert(
     settings: Mapping[str, Any] | None,
     now: datetime,
     min_open_position: float = _DEFAULT_MIN_OPEN_POSITION,
+    door_needed: bool | None = None,
 ) -> dict[str, str] | None:
     """Une anomalie du volet à signaler ? {code, motif}, ou None.
 
     `mower_away` : la tondeuse est dehors, en retour ou en train de tondre.
+    `door_needed` : elle a besoin du volet OUVERT (par défaut : dehors). Avec le volet « porte », il reste
+    fermé pendant la tonte : seuls le démarrage et le retour comptent pour « volet fermé devant la tondeuse ».
     ⚠️ À évaluer APRÈS `reset_updates` : un volet qui a atteint sa cible entre deux cycles n'est pas
     bloqué, même si le temps écoulé dépasse la marge.
     """
@@ -396,6 +424,34 @@ def alert(
                 "elle risque de ne pas pouvoir rentrer."
             ),
         }
+    stuck = _stuck_alert(cover_state, position, runtime, settings, now, min_open_position)
+    if stuck is not None:
+        return stuck
+    # ⚠️ Le plus grave et le moins visible : une tondeuse dehors devant un volet fermé. Le pilote ne le
+    # rouvre qu'en mode actif, la commande manuelle que pendant sa durée ; en observation ou désactivé,
+    # rien d'autre ne le dit. Signalé dans TOUS les modes, sans rien actionner.
+    needs_door = mower_away if door_needed is None else door_needed
+    if needs_door and cover not in _UNKNOWN_COVER_STATES and not _open_confirmed(cover, position, min_open_position):
+        since = _minutes_since(now, runtime.get(KEY_CLOSED_OUTSIDE_SINCE))
+        if since is not None and since >= GARAGE_CLOSED_OUTSIDE_GRACE_MINUTES:
+            return {
+                "code": ALERT_CLOSED_OUTSIDE,
+                "motif": (
+                    "Le volet n'est pas ouvert alors que la tondeuse est dehors : "
+                    "elle risque de ne pas pouvoir rentrer."
+                ),
+            }
+    return None
+
+
+def _stuck_alert(
+    cover_state: Any,
+    position: Any,
+    runtime: Mapping[str, Any],
+    settings: Mapping[str, Any] | None,
+    now: datetime,
+    min_open_position: float,
+) -> dict[str, str] | None:
     command = runtime.get(KEY_COMMAND)
     if not command or not series_alive(runtime, now, settings):
         return None

@@ -712,6 +712,9 @@ class ChaqueReglageEstBrancheTests(unittest.TestCase):
         "tondeuse_garage_avance_ouverture": "test_mower_control.py",
         "tondeuse_garage_ouverture_min": "test_mower_control.py",
         "tondeuse_garage_delai_fermeture": "test_mower_control.py",
+        # Le volet « porte » : fermé pendant la tonte, ouvert pour laisser passer la tondeuse.
+        "tondeuse_garage_ferme_pendant_tonte": "test_mower_control_volet_porte.py",
+        "tondeuse_garage_delai_fermeture_tonte": "test_mower_control_volet_porte.py",
         # Le volet : porte des ordres, alerte et délai d'un volet ouvert à la main.
         "tondeuse_garage_delai_fermeture_manuel": "test_garage_guard.py",
         "tondeuse_garage_delai_reprise": "test_garage_guard.py",

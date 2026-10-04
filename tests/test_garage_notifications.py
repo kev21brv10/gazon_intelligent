@@ -116,6 +116,14 @@ class AlerteDuVoletTests(unittest.TestCase):
         self.assertEqual([a.sujet for a in second], ["garage_tondeuse"])
         self.assertEqual(troisieme, [])
 
+    def test_un_volet_ferme_devant_une_tondeuse_dehors_est_critique(self) -> None:
+        ferme = _garage(alert="volet_ferme_dehors", alert_reason="Le volet n'est pas ouvert alors que la tondeuse est dehors.")
+        _, annonce = self._suite(_garage(), ferme)
+        self.assertEqual(annonce[0].niveau, "critique")
+        self.assertIn("volet fermé", annonce[0].titre)
+        self.assertIn("tondeuse dehors", annonce[0].titre)
+        self.assertTrue(annonce[0].persistante)
+
     def test_une_anomalie_sans_motif_a_un_message_par_defaut(self) -> None:
         _, annonce = self._suite(_garage(), _garage(alert="volet_bloque"))
         self.assertIn("anomalie", annonce[0].message.lower())

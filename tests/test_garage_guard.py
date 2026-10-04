@@ -595,5 +595,71 @@ class RegistreLieAUnVoletTests(unittest.TestCase):
         self.assertIn(gg.KEY_COMMAND, gg.entity_updates(runtime, "cover.nouveau"))
 
 
+class VoletFermeDevantUneTondeuseDehorsTests(unittest.TestCase):
+    """⚠️ Une tondeuse dehors devant un volet fermé : le plus grave, et le moins visible hors mode actif."""
+
+    def _alerte(self, *, etat="closed", position=0, dehors=True, depuis=10.0, runtime=None, entite="cover.garage"):
+        rt = {gg.KEY_CLOSED_OUTSIDE_SINCE: _il_y_a(depuis) if depuis is not None else None, **(runtime or {})}
+        return gg.alert(cover_entity=entite, cover_state=etat, position=position, mower_away=dehors,
+                        runtime=rt, settings=None, now=NOW)
+
+    def test_volet_ferme_devant_une_tondeuse_dehors_l_alerte_part_apres_la_marge(self) -> None:
+        self.assertIsNone(self._alerte(depuis=2.9))
+        alerte = self._alerte(depuis=3.0)
+        self.assertEqual(alerte["code"], gg.ALERT_CLOSED_OUTSIDE)
+        self.assertIn("la tondeuse est dehors", alerte["motif"])
+
+    def test_la_marge_est_celle_du_module(self) -> None:
+        self.assertEqual(gg.GARAGE_CLOSED_OUTSIDE_GRACE_MINUTES, 3.0)
+
+    def test_volet_en_fermeture_ou_ouverture_incomplete_compte_comme_non_ouvert(self) -> None:
+        for etat, position in (("closing", 40), ("opening", 30), ("open", 60), ("closed", None)):
+            with self.subTest(etat=etat):
+                self.assertEqual(self._alerte(etat=etat, position=position)["code"], gg.ALERT_CLOSED_OUTSIDE)
+
+    def test_volet_ouvert_assez_aucune_alerte(self) -> None:
+        for etat, position in (("open", 100), ("open", 95), ("open", None)):
+            with self.subTest(position=position):
+                self.assertIsNone(self._alerte(etat=etat, position=position))
+
+    def test_tondeuse_rentree_ou_sans_volet_configure_aucune_alerte(self) -> None:
+        self.assertIsNone(self._alerte(dehors=False))
+        self.assertIsNone(self._alerte(entite=None))
+        self.assertIsNone(self._alerte(entite=""))
+
+    def test_sans_trace_de_depuis_quand_pas_d_alerte(self) -> None:
+        self.assertIsNone(self._alerte(depuis=None))
+
+    def test_volet_injoignable_reste_l_alerte_injoignable_pas_celle_ci(self) -> None:
+        for etat in ("unavailable", "unknown"):
+            alerte = self._alerte(etat=etat, position=None, runtime={gg.KEY_UNAVAILABLE_SINCE: _il_y_a(10)})
+            self.assertEqual(alerte["code"], gg.ALERT_UNAVAILABLE)
+
+    def test_un_volet_bloque_prime_sur_le_volet_ferme(self) -> None:
+        bloque = {gg.KEY_COMMAND: "open_cover", gg.KEY_COMMAND_AT: _il_y_a(4), gg.KEY_ATTEMPTS: 3,
+                  gg.KEY_SERIES_START: _il_y_a(10)}
+        self.assertEqual(self._alerte(runtime=bloque)["code"], gg.ALERT_STUCK)
+
+    def test_depuis_quand_est_note_puis_efface_par_le_registre(self) -> None:
+        maj = gg.reset_updates({}, "closed", 0, NOW, mower_away=True)
+        self.assertEqual(maj[gg.KEY_CLOSED_OUTSIDE_SINCE], NOW.isoformat())
+        # Déjà noté : l'instant d'origine n'est pas réécrit.
+        self.assertNotIn(gg.KEY_CLOSED_OUTSIDE_SINCE, gg.reset_updates({gg.KEY_CLOSED_OUTSIDE_SINCE: _il_y_a(5)}, "closed", 0, NOW, mower_away=True))
+        for etat, position in (("open", 100), ("open", None)):
+            maj = gg.reset_updates({gg.KEY_CLOSED_OUTSIDE_SINCE: _il_y_a(5)}, etat, position, NOW, mower_away=True)
+            self.assertIsNone(maj[gg.KEY_CLOSED_OUTSIDE_SINCE], "volet rouvert : on efface")
+        maj = gg.reset_updates({gg.KEY_CLOSED_OUTSIDE_SINCE: _il_y_a(5)}, "closed", 0, NOW, mower_away=False)
+        self.assertIsNone(maj[gg.KEY_CLOSED_OUTSIDE_SINCE], "tondeuse rentrée : on efface")
+
+    def test_pas_de_depuis_quand_pour_un_volet_muet_ou_sans_tondeuse_dehors(self) -> None:
+        self.assertNotIn(gg.KEY_CLOSED_OUTSIDE_SINCE, gg.reset_updates({}, "unavailable", None, NOW, mower_away=True))
+        self.assertNotIn(gg.KEY_CLOSED_OUTSIDE_SINCE, gg.reset_updates({}, "closed", 0, NOW, mower_away=False))
+        self.assertNotIn(gg.KEY_CLOSED_OUTSIDE_SINCE, gg.reset_updates({}, "closed", 0, NOW), "défaut : tondeuse non dehors")
+
+    def test_un_autre_volet_efface_aussi_le_depuis_quand(self) -> None:
+        runtime = {gg.KEY_ENTITY: "cover.ancien", gg.KEY_CLOSED_OUTSIDE_SINCE: _il_y_a(30)}
+        self.assertIsNone(gg.entity_updates(runtime, "cover.nouveau")[gg.KEY_CLOSED_OUTSIDE_SINCE])
+
+
 if __name__ == "__main__":
     unittest.main()

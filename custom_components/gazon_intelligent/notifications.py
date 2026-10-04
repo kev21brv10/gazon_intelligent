@@ -521,13 +521,14 @@ def _evaluer_activites(
             titre_anomalie = {
                 "volet_indisponible": "🚨 Garage de la tondeuse : volet injoignable",
                 "volet_bloque": "⚠️ Garage de la tondeuse : volet bloqué",
+                "volet_ferme_dehors": "🚨 Garage de la tondeuse : volet fermé, tondeuse dehors",
             }.get(garage_alert, "⚠️ Garage de la tondeuse : anomalie")
             alertes.append(Alerte(
                 sujet=SUJET_GARAGE_TONDEUSE,
                 titre=titre_anomalie,
                 message=str(garage_data.get("alert_reason") or "").strip()
                 or "Le volet du garage de la tondeuse signale une anomalie.",
-                niveau="critique" if garage_alert == "volet_indisponible" else "action",
+                niveau="critique" if garage_alert in {"volet_indisponible", "volet_ferme_dehors"} else "action",
             ))
         elif SUJET_GARAGE_TONDEUSE in sujets_actifs and not garage_alert and alerte_precedente:
             alertes.append(Alerte(

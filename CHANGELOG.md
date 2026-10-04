@@ -1,5 +1,100 @@
 # Changelog
 
+## 1.0.0-rc.24
+
+- **Commander la tondeuse depuis la page** : nouvelle carte « Commander la tondeuse » dans l'onglet
+  Tonte — Démarrer la tonte, Coupe de bordure (durée choisie au curseur, de 10 à 120 minutes, 30 par
+  défaut), Retour à la base, Pause (remplacée par Reprendre quand la tondeuse est en pause) et
+  Annuler. Les commandes marchent quel que soit le mode du pilote automatique (désactivé,
+  observation ou actif) : c'est une action explicite. Un départ demande une confirmation (passage
+  dégagé) ; pause, retour et reprise partent tout de suite. Réservé aux administrateurs.
+- **Le volet est géré par l'intégration** : un départ ou une coupe de bordure est une séquence jouée
+  côté serveur et rejugée à chaque cycle avec l'état réel — ouverture du volet, confirmation de sa
+  position, délai de sécurité (celui du réglage « Avance à l'ouverture »), puis départ. Aucun ordre
+  de départ ne part tant que le volet n'est pas confirmé ouvert. Un volet qui ne répond pas, ou qui
+  atteint le plafond de tentatives, abandonne la commande avec son motif ; un retour ouvre d'abord
+  le volet. Elle ne dépend pas de l'onglet : fermer la page n'interrompt rien.
+- **Mode manuel temporaire** : tant qu'une commande est en cours, le pilote s'efface — pas de
+  rappel, pas de fermeture du volet, pas de départ — sans que son réglage change. Une seule règle
+  reste prioritaire : une tondeuse dehors ne doit pas trouver son volet fermé. Le pilote ne la
+  tient qu'en mode actif, alors que la commande marche dans les trois modes : c'est donc la
+  commande elle-même qui rouvre un volet refermé en route (à la main, par une automatisation),
+  avec la même porte d'ordres que le pilote — pas de doublon, au plus trois tentatives, alerte si
+  le volet ne répond pas. La commande prend
+  fin quand le travail est terminé et la tondeuse rentrée (jamais sur un simple « repos » : l'état
+  rebondit au démarrage, et une recharge au milieu du travail ne termine rien), à son échéance
+  (4 h ; durée de la bordure + 20 min ; 1 h pour une pause) ou par Annuler. Après un retour manuel,
+  les départs automatiques sont suspendus 4 heures — sinon le pilote renverrait aussitôt une
+  tondeuse à quai dans de bonnes conditions ; la fermeture du volet, elle, suit la rentrée comme
+  d'habitude.
+- **Gardes rejugées à chaque cycle** : tondeuse connectée, prête et à sa base, batterie d'au moins
+  20 %, pas d'arrosage en cours, coupe de bordure seulement si la tondeuse CHOISIE est portée par
+  l'intégration Landroid Cloud et que son service existe (une autre marque installée à côté d'une
+  Landroid n'a pas le bouton). Reprendre est proposé pour une tondeuse en pause, quelle que soit
+  l'origine de la pause (cette page, l'appli du constructeur, à la main) : dehors, l'état de
+  travail reste « en cours » même en pause, seul l'état de la machine le dit. Comme le retour, la
+  reprise ouvre d'abord le volet et attend sa confirmation avant d'envoyer l'ordre (elle est
+  refusée si le volet ne répond pas) : rien ne garantit qu'un volet resté seul est encore ouvert. Retour et pause passent devant une
+  sortie en cours (on peut toujours l'arrêter) ; un second départ est refusé. Un refus est rendu
+  en clair à la page, pas comme une erreur.
+- **Le volet reste ouvert pendant un travail inachevé** : une tondeuse rentrée se recharger au milieu
+  d'un travail repart seule à la fin de la charge. Quand ce travail n'a pas été lancé par le pilote
+  (appli du constructeur, programme horaire), le pilote la tenait pour « rentrée » et refermait le
+  volet après son délai, la tondeuse repartant ensuite vers une porte close. Un travail en pause, en
+  cours, ou ancien mais reprenable garde maintenant le volet ouvert (état `travail_inacheve`), au
+  plus 3 heures après la rentrée : un vieux travail abandonné ne bloque pas la fermeture pour
+  toujours. Contrepartie assumée : après une rentrée sur travail inachevé (pluie, par exemple), le
+  volet peut rester ouvert jusqu'à 3 h au lieu de 1 à 2 minutes. Sans effet sur les cycles lancés
+  par le pilote (inchangés), sur une reprise due après une interruption du pilote lui-même, ni
+  après un « Retour à la base » manuel : la rentrée est voulue (relevé à l'essai sur le matériel,
+  le travail restait « en pause »), le volet se referme comme d'habitude.
+- **Alerte « volet fermé, tondeuse dehors » dans tous les modes** : le pilote ne rouvre un volet
+  refermé qu'en mode actif, la commande manuelle que pendant sa durée ; en observation ou
+  désactivé, rien ne le disait. Le volet non ouvert (fermé, en fermeture, ouvert à moitié) plus de
+  3 minutes devant une tondeuse dehors lève une alerte critique, publiée comme les autres
+  anomalies du volet (`mower_garage_alert`), affichée sur la page et envoyée aux téléphones. Elle
+  n'actionne rien ; le volet injoignable et le volet bloqué gardent leur propre alerte et priment.
+- **Le départ suit l'ouverture du volet de quelques secondes, plus de plusieurs minutes** : le pilote
+  actif (et la séquence d'une commande manuelle) n'était rejugé qu'à l'intervalle normal (2 min) ou à
+  un événement d'une entité suivie ; la tondeuse partait donc bien après le délai de sécurité (36 s
+  mesurés à l'essai pour un délai réglé à 15 s, et jusqu'à 2 min en pilotage actif). Tant que le pilote
+  attend le volet — ouverture en cours, délai de sécurité, délai avant fermeture — il demande
+  maintenant un nouveau passage toutes les 5 secondes : la tondeuse part au plus 5 s après le délai
+  de sécurité réglé, et le volet se referme au plus 5 s après son délai. Mode actif seulement :
+  observation et désactivé n'attendent rien. Les réglages sont inchangés (ouverture avant le
+  départ, attente après l'ouverture, position minimale, fermeture après la rentrée). Un minuteur qui
+  échoit pendant qu'un cycle tourne est ré-armé au lieu d'être perdu (relevé en relecture : l'attente
+  retombait sinon à l'intervalle normal).
+- **Le volet se ferme quand le pilote n'a plus de départ à envoyer** : jusqu'ici, tondeuse rentrée et
+  travail terminé, il ne se fermait que si le gazon interdisait la tonte (nuit, pluie) ; il restait
+  donc ouvert quand le quota du jour était atteint, le créneau non autorisé ou la batterie à
+  recharger, alors que rien ne repartait. Il se ferme maintenant, après son délai, dans ces cas et
+  après un retour manuel récent, et se rouvre tout seul avant le prochain départ (ouverture, délai de
+  sécurité, départ). Inchangés : la garde du travail inachevé, la reprise due du pilote, l'arrosage
+  en cours et la tondeuse pas prête (qui ne ferment pas le volet), l'option « fermer après la
+  rentrée » et le délai de fermeture. Les conditions reprennent celles des gardes de départ ; un
+  test de cohérence rejoue les deux chemins sur 360 situations.
+- **Volet « porte » (réglage facultatif, éteint par défaut)** : pour que les chats ne restent pas
+  enfermés dans le cabanon, le volet ne reste plus ouvert pendant la tonte. Réglage « Garder le volet
+  fermé pendant la tonte ? » : il s'ouvre pour laisser SORTIR la tondeuse, se referme dès qu'elle
+  tond (après 15 s, réglable de 0 à 5 min : elle a passé la porte), se rouvre quand elle REVIENT et
+  se referme derrière elle une fois à quai — y compris pour une recharge à mi-travail, où la garde
+  du travail inachevé est alors levée. Il s'applique au pilote actif et à la sortie d'une commande
+  manuelle (qui ne rouvre plus un volet fermé exprès en tonte ; une reprise après une pause ne
+  l'ouvre pas non plus). Pendant la tonte, un volet fermé n'est plus une anomalie : l'alerte « volet
+  fermé » ne vaut que pour le démarrage et le retour. Groupe « Pendant la tonte » dans la carte du
+  garage. Contreparties : au retour, le volet met une dizaine de secondes à s'ouvrir une fois la
+  tondeuse vue en retour, et elle peut l'atteindre avant ; un départ lancé hors du pilote (appli,
+  Node-RED) trouve le volet fermé jusqu'à ce qu'elle soit vue en démarrage. Éteint, rien ne change.
+- **Publié** : `mower_manual_active`, `_command`, `_step`, `_reason`, `_until`, `_duration_min`,
+  `_error`, `_ended_at`, `_suspension_active`, `_suspension_until` et `mower_edgecut_available`
+  (capteur d'état de la tonte et diagnostics) ; l'état de la commande survit à un redémarrage.
+- **Vérifié** : suite complète avec 2 790 tests et 3 487 sous-tests, ruff et mypy (55 fichiers)
+  verts, le nouveau module pur `manual_command` y compris ; 181 variantes cassées volontairement
+  (gardes, séquence du volet, réouverture du volet, pause, bordure, fin de commande, suspension,
+  effacement du pilote, persistance, volet porte, page), toutes détectées sauf une équivalente (la même
+  information passe par deux chemins).
+
 ## 1.0.0-rc.23
 
 - **Un volet qui ne bouge pas n'est plus relancé sans fin ni sans alerte** : avant, un volet qui

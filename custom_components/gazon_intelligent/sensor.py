@@ -4147,6 +4147,17 @@ class GazonTonteEtatSensor(GazonEntityBase, SensorEntity):
             "mower_garage_state",
             "mower_garage_alert",
             "mower_garage_alert_reason",
+            "mower_manual_active",
+            "mower_manual_command",
+            "mower_manual_step",
+            "mower_manual_reason",
+            "mower_manual_until",
+            "mower_manual_duration_min",
+            "mower_manual_error",
+            "mower_manual_ended_at",
+            "mower_manual_suspension_active",
+            "mower_manual_suspension_until",
+            "mower_edgecut_available",
         )
         if controller_attrs:
             attrs.update(controller_attrs)

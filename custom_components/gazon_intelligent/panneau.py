@@ -85,6 +85,7 @@ DOSSIER_FRONTEND = Path(__file__).parent / "frontend"
 FICHIER_PANNEAU = "gazon-intelligent-panel.js"
 WS_LIRE = f"{DOMAIN}/reglages/get"
 WS_ECRIRE = f"{DOMAIN}/reglages/set"
+WS_COMMANDE_TONDEUSE = f"{DOMAIN}/tondeuse/commande"
 _CLE_ETAT = f"{DOMAIN}_panneau"
 
 LIAISONS_MATERIEL: tuple[dict[str, Any], ...] = (
@@ -965,6 +966,25 @@ async def _ws_ecrire(hass: Any, connection: Any, msg: dict[str, Any]) -> None:
     connection.send_result(msg["id"], resultat)
 
 
+async def _ws_commande_tondeuse(hass: Any, connection: Any, msg: dict[str, Any]) -> None:
+    """Départ, coupe de bordure, retour, pause ou annulation demandés depuis la page.
+
+    Le refus d'une commande (tondeuse pas à sa base, batterie basse, volet muet…) n'est PAS une
+    erreur de protocole : la page reçoit `{"ok": false, "message": …}` et l'affiche en clair.
+    """
+    coordinateur = coordinateur_demande(hass, msg.get("entry_id"))
+    if coordinateur is None:
+        connection.send_error(msg["id"], "not_found", "Cette instance de Gazon Intelligent est introuvable.")
+        return
+    try:
+        resultat = await coordinateur.async_commande_tondeuse(msg["commande"], duree_min=msg.get("duree_min"))
+    except Exception as err:  # noqa: BLE001 - l'erreur est rendue à la page, en clair
+        _LOGGER.exception("Commande de tondeuse de la page Gazon non exécutée")
+        connection.send_error(msg["id"], "unknown_error", str(err) or "La commande n'a pas pu être exécutée.")
+        return
+    connection.send_result(msg["id"], resultat)
+
+
 # ── Enregistrement dans Home Assistant ─────────────────────────────────────────────────────
 
 
@@ -999,8 +1019,22 @@ def async_enregistrer_commandes(hass: Any) -> None:
             }
         )(websocket_api.async_response(_ws_ecrire))
     )
+    # Une commande de tondeuse met une machine en mouvement : réservée aux administrateurs.
+    commande_tondeuse = websocket_api.require_admin(
+        websocket_api.websocket_command(
+            {
+                vol.Required("type"): WS_COMMANDE_TONDEUSE,
+                vol.Required("entry_id"): str,
+                # Une commande inconnue est refusée en clair par `manual_command.validate_request`,
+                # et une durée illisible ramenée par `manual_command.edge_duration` : rien à filtrer ici.
+                vol.Required("commande"): str,
+                vol.Optional("duree_min"): object,
+            }
+        )(websocket_api.async_response(_ws_commande_tondeuse))
+    )
     websocket_api.async_register_command(hass, lire)
     websocket_api.async_register_command(hass, ecrire)
+    websocket_api.async_register_command(hass, commande_tondeuse)
     etat["commandes"] = True
 
 

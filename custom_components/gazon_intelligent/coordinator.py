@@ -32,6 +32,8 @@ from .const import (
     DEFAULT_MOWER_GARAGE_CLOSE_AFTER_DOCK,
     DEFAULT_MOWER_GARAGE_OPEN_LEAD_MINUTES,
     DEFAULT_MOWER_GARAGE_CLOSE_DELAY_MINUTES,
+    DEFAULT_MOWER_GARAGE_CLOSE_WHILE_MOWING,
+    DEFAULT_MOWER_GARAGE_CLOSE_WHILE_MOWING_DELAY_MINUTES,
     DEFAULT_MOWER_GARAGE_OPEN_BEFORE_START,
     DEFAULT_MOWER_GARAGE_OPEN_FOR_RETURN,
     DEFAULT_MOWER_GARAGE_MIN_OPEN_POSITION,
@@ -89,6 +91,7 @@ from .decision_mowing import _NO_ERROR_CODES
 from .mower_adapter import build_mower_context, derive_related_entity_id
 from .mower_coordination import build_mower_coordination_context
 from . import garage_guard
+from . import manual_command
 from .mower_control import evaluate_mower_control
 from .entity_ids import public_entity_id, resolve_entry_instance_slug
 from .shared_state import get_shared_state, resolve_effective_config
@@ -190,6 +193,10 @@ from .watering_policy import repartir_creneaux_semis, resolve_semis_stage_progra
 _LOGGER = logging.getLogger(__name__)
 
 _MOWER_JOB_DOCKED_GRACE_MINUTES = 60
+# États du pilote qui ATTENDENT le volet et se rejugent donc à quelques secondes d'intervalle.
+_PILOT_FAST_WAIT_STATES = frozenset(
+    {"ouverture_garage", "ouverture_garage_reprise", "attente_garage", "attente_fermeture_garage"}
+)
 
 # Un arrêt demandé pendant les toutes dernières écritures ne doit pas rester suspendu si le
 # stockage Home Assistant se bloque. La tâche continue sous shield : elle porte l'événement de fin,
@@ -291,6 +298,17 @@ _COORDINATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "mower_garage_state",
     "mower_garage_alert",
     "mower_garage_alert_reason",
+    "mower_manual_active",
+    "mower_manual_command",
+    "mower_manual_step",
+    "mower_manual_reason",
+    "mower_manual_until",
+    "mower_manual_duration_min",
+    "mower_manual_error",
+    "mower_manual_ended_at",
+    "mower_manual_suspension_active",
+    "mower_manual_suspension_until",
+    "mower_edgecut_available",
     "mower_resolution_state",
     "mower_resolution_reason",
     "mower_resolution_candidate_count",
@@ -461,6 +479,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._auto_irrigation_scheduler_task: asyncio.Task | None = None
         self._unsub_start_listener: CALLBACK_TYPE | None = None
         self._unsub_delayed_refresh: CALLBACK_TYPE | None = None
+        self._unsub_quick_refresh: CALLBACK_TYPE | None = None
         self._unsub_auto_irrigation_monitor: CALLBACK_TYPE | None = None
         self._unsub_source_listeners: list[CALLBACK_TYPE] = []
         self._unsub_zone_listeners: list[CALLBACK_TYPE] = []
@@ -3800,6 +3819,9 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             CONF_CAPTEUR_TONDEUSE_EN_CHARGE,
             CONF_CAPTEUR_TONDEUSE_PROCHAIN_DEPART,
             CONF_CAPTEUR_TONDEUSE_HAUTEUR_COUPE,
+            # Le volet : une commande manuelle attend sa confirmation d'ouverture, il faut donc
+            # réagir à SON changement d'état et non au cycle suivant (2 min plus tard).
+            CONF_ENTITE_VOLET_GARAGE_TONDEUSE,
         ):
             entity_id = self._get_conf(key)
             if isinstance(entity_id, str) and entity_id:
@@ -3925,6 +3947,223 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             or (scheduler is not None and not scheduler.done())
         )
 
+    def _mower_platform(self, entity_id: str) -> str | None:
+        """L'intégration (plateforme) qui porte cette entité, d'après le registre ; None si inconnue."""
+        try:
+            from homeassistant.helpers import entity_registry as er
+
+            entree = er.async_get(self.hass).async_get(entity_id)
+            platform = getattr(entree, "platform", None)
+            return str(platform) if platform else None
+        except Exception:  # noqa: BLE001 - sans registre, une plateforme inconnue vaut « non prise en charge »
+            return None
+
+    def _edgecut_available(self, mower_entity: str | None) -> bool:
+        """La coupe de bordure est-elle possible avec LA tondeuse choisie ?
+
+        Le service `landroid_cloud.ots` doit exister ET la tondeuse sélectionnée doit être portée par
+        cette intégration : sans quoi une tondeuse d'une autre marque, installée à côté d'une
+        Landroid, afficherait un bouton qui n'échoue qu'après l'appel.
+        """
+        if not mower_entity:
+            return False
+        try:
+            if not self.hass.services.has_service("landroid_cloud", "ots"):
+                return False
+        except Exception:  # noqa: BLE001 - une capacité inconnue vaut « indisponible »
+            return False
+        return self._mower_platform(mower_entity) == "landroid_cloud"
+
+    def _manual_state(self) -> dict[str, Any]:
+        manual = self._runtime_state.get("mower_manual")
+        if not isinstance(manual, dict):
+            manual = {}
+            self._runtime_state["mower_manual"] = manual
+        return manual
+
+    def _manual_attributes(
+        self, manual: Mapping[str, Any], now: datetime, snapshot: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Ce que la page et le pilote lisent de la commande manuelle."""
+        active = manual_command.is_active(manual, now)
+        suspended = manual_command.suspension_active(manual, now)
+        has_state = bool(manual.get("commande"))
+        return {
+            "mower_manual_active": active,
+            "mower_manual_command": manual.get("commande") if has_state else None,
+            "mower_manual_step": manual.get("etape") if has_state else None,
+            "mower_manual_reason": manual.get("raison") if has_state else None,
+            "mower_manual_until": manual.get("jusqu_a") if active else None,
+            "mower_manual_duration_min": manual.get("duree_min") if has_state else None,
+            "mower_manual_error": manual.get("erreur") if has_state else None,
+            "mower_manual_ended_at": manual.get("fini_a") if has_state else None,
+            "mower_manual_suspension_active": suspended,
+            "mower_manual_suspension_until": manual.get("suspension_jusqu_a") if suspended else None,
+            "mower_edgecut_available": self._edgecut_available(str(snapshot.get("tondeuse_source_entity") or "")),
+        }
+
+    async def _async_run_manual_command(
+        self,
+        snapshot: Mapping[str, Any],
+        *,
+        runtime: dict[str, Any],
+        cover_entity: str | None,
+        cover_state: Any,
+        cover_position: Any,
+        settings: Mapping[str, Any],
+        reglages_volet: Mapping[str, Any],
+        ouverture_min: float,
+        gate_mode: bool = False,
+    ) -> dict[str, Any]:
+        """Fait avancer d'UNE étape la commande manuelle en cours, puis publie son état.
+
+        Même règle que le pilote : jamais d'exception vers le cycle principal, et jamais d'ordre
+        au premier cycle après un redémarrage (les entités peuvent encore être `unavailable`).
+        """
+        now = self._current_datetime()
+        manual = self._manual_state()
+        bootstrap_complete = getattr(self, "_mower_control_bootstrap_complete", False)
+        if bootstrap_complete and manual.get("etape") in manual_command.ACTIVE_STEPS:
+            result = manual_command.evaluate(
+                snapshot,
+                now=now,
+                state=manual,
+                cover_entity=cover_entity,
+                cover_state=cover_state,
+                cover_position=cover_position,
+                settings={
+                    **dict(reglages_volet),
+                    "tondeuse_garage_avance_ouverture": lire_reglage(
+                        settings, "tondeuse_garage_avance_ouverture", DEFAULT_MOWER_GARAGE_OPEN_LEAD_MINUTES
+                    ),
+                    "tondeuse_garage_ouverture_min": ouverture_min,
+                    "tondeuse_garage_ferme_pendant_tonte": gate_mode,
+                },
+                garage_runtime=runtime,
+                irrigation_active=self.arrosage_en_cours(),
+                edgecut_available=self._edgecut_available(str(snapshot.get("tondeuse_source_entity") or "")),
+            )
+            updates = dict(result["updates"])
+            reason = str(result["reason"])
+            action = result["action"]
+            suspension_minutes = result["suspension_minutes"]
+            if action:
+                erreur = await self._async_execute_manual_action(
+                    action, snapshot, cover_entity=cover_entity
+                )
+                if erreur is None:
+                    if action["service"] == "cover.open_cover":
+                        instant = now.isoformat()
+                        runtime.update(
+                            garage_guard.after_command(
+                                runtime, "open_cover", instant, now, settings=reglages_volet
+                            )
+                        )
+                        runtime["garage_opened_at"] = None
+                else:
+                    # Ordre refusé : rien n'est parti, donc ni « envoyé », ni suspension des départs.
+                    updates = {"etape": "erreur", "erreur": "commande_refusee"}
+                    reason = f"Commande refusée par Home Assistant : {erreur}"
+                    suspension_minutes = None
+            manual.update(updates)
+            manual["raison"] = reason
+            if manual.get("etape") in manual_command.TERMINAL_STEPS and not manual.get("fini_a"):
+                manual["fini_a"] = now.isoformat()
+            if suspension_minutes:
+                manual["suspension_jusqu_a"] = (now + timedelta(minutes=float(suspension_minutes))).isoformat()
+            if manual_command.is_active(manual, now):
+                self._schedule_quick_refresh()
+        return self._manual_attributes(manual, now, snapshot)
+
+    async def _async_execute_manual_action(
+        self,
+        action: Mapping[str, Any],
+        snapshot: Mapping[str, Any],
+        *,
+        cover_entity: str | None,
+    ) -> str | None:
+        """Envoie l'ordre à Home Assistant ; None si réussi, sinon le motif d'échec."""
+        domain, _, service = str(action["service"]).partition(".")
+        target = cover_entity if domain == "cover" else str(snapshot.get("tondeuse_source_entity") or "")
+        if not target:
+            return "aucune entité cible"
+        data = {**dict(action.get("data") or {}), "entity_id": target}
+        try:
+            await self.hass.services.async_call(domain, service, data, blocking=True)
+        except Exception as err:  # noqa: BLE001 - le calcul gazon doit continuer
+            _LOGGER.exception("Commande manuelle tondeuse impossible : %s", action["service"])
+            return str(err) or err.__class__.__name__
+        return None
+
+    def _schedule_quick_refresh(self, delay_seconds: float = 5.0) -> None:
+        """Rejuge bientôt une séquence qui attend (volet à ouvrir, délai de sécurité, délai de fermeture).
+
+        ⚠️ Sans cela, l'intervalle normal (2 min) fait traîner la séquence : la tondeuse ne partait que
+        bien après le délai de sécurité (relevé à l'essai : 36 s entre l'ouverture du volet et le
+        départ pour un délai réglé à 15 s). Un seul minuteur à la fois ; il passe par le chemin rapide
+        des actions de l'utilisateur, jamais par le chemin débouncé des capteurs (10 s d'attente).
+        """
+        if getattr(self, "_unsub_quick_refresh", None) is not None:
+            return
+
+        async def _refresh(_now: Any) -> None:
+            self._unsub_quick_refresh = None
+            if self._dans_le_cycle:
+                # Un cycle tourne déjà : il rejugera lui-même. ⚠️ MAIS il a peut-être déjà demandé son passage
+                # alors que CE minuteur existait encore (la demande est alors ignorée) : en sortant il ne
+                # re-demandera rien, et l'attente retomberait à l'intervalle normal. On ré-arme donc le minuteur.
+                self._schedule_quick_refresh(delay_seconds)
+                return
+            await self._rafraichir_apres_action_utilisateur()
+
+        self._unsub_quick_refresh = async_call_later(self.hass, delay_seconds, _refresh)
+
+    async def async_commande_tondeuse(self, commande: str, *, duree_min: Any = None) -> dict[str, Any]:
+        """Prend une commande manuelle de la page (`demarrer`, `bordure`, `retour`, `pause`, `annuler`).
+
+        Retourne {"ok": bool, "message": str}. L'acceptation ne PRÉJUGE de rien : la séquence
+        (volet, délai de sécurité, départ) est jouée cycle après cycle par
+        `_async_run_manual_command`, qui rejuge chaque garde avec l'état réel.
+        """
+        now = self._current_datetime()
+        manual = self._manual_state()
+        if commande == "annuler":
+            if not manual_command.is_active(manual, now):
+                return {"ok": False, "message": "Aucune commande manuelle en cours."}
+            manual.update(manual_command.cancel(manual, now))
+            manual["raison"] = "Commande manuelle annulée : le pilote automatique reprend la main."
+            manual["suspension_jusqu_a"] = None
+            await self._rafraichir_apres_action_utilisateur()
+            return {"ok": True, "message": manual["raison"]}
+        snapshot = self._latest_full_snapshot or {}
+        if not snapshot:
+            return {"ok": False, "message": "Les données ne sont pas encore prêtes : réessayer dans un instant."}
+        cover_raw = self._get_conf(CONF_ENTITE_VOLET_GARAGE_TONDEUSE)
+        cover_entity = str(cover_raw) if cover_raw else None
+        cover_known = True
+        if cover_entity and commande in {*manual_command.DEPARTS, "retour", "reprendre"}:
+            cover = self.hass.states.get(cover_entity)
+            cover_known = str(getattr(cover, "state", "") or "").lower() not in {"", "unavailable", "unknown"}
+        refus = manual_command.validate_request(
+            commande,
+            snapshot,
+            state=manual,
+            now=now,
+            irrigation_active=self.arrosage_en_cours(),
+            edgecut_available=self._edgecut_available(str(snapshot.get("tondeuse_source_entity") or "")),
+            cover_known=cover_known,
+        )
+        if refus is not None:
+            return {"ok": False, "message": refus}
+        previous_suspension = manual.get("suspension_jusqu_a")
+        state = manual_command.new_state(commande, now, duree_min=duree_min)
+        # Un départ voulu par l'utilisateur lève la suspension laissée par un retour manuel.
+        state["suspension_jusqu_a"] = None if commande in manual_command.DEPARTS else previous_suspension
+        state["raison"] = "Commande manuelle prise en compte."
+        self._runtime_state["mower_manual"] = state
+        await self._rafraichir_apres_action_utilisateur()
+        return {"ok": True, "message": str(state.get("raison") or "")}
+
     async def _async_apply_mower_control(self, snapshot: dict[str, Any]) -> None:
         """Évalue puis, uniquement en mode actif, exécute une commande de tondeuse.
 
@@ -3946,7 +4185,25 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not isinstance(runtime, dict):
             runtime = {}
             self._runtime_state["mower_control"] = runtime
+        mower_away = bool(
+            snapshot.get("mower_is_outside")
+            or snapshot.get("mower_is_returning")
+            or snapshot.get("mower_is_mowing")
+        )
         settings = self._reglages_instance()
+        # Volet « porte » (réglage facultatif) : la tondeuse n'a besoin du volet ouvert que pour SORTIR
+        # (démarrage) ou RENTRER (retour) ; pendant la tonte il reste fermé. Sinon, dès qu'elle est dehors.
+        gate_mode = bool(
+            lire_reglage(settings, "tondeuse_garage_ferme_pendant_tonte", DEFAULT_MOWER_GARAGE_CLOSE_WHILE_MOWING)
+        )
+        door_needed = (
+            bool(
+                snapshot.get("mower_is_returning")
+                or str(snapshot.get("mower_operation_state") or "").lower() == "starting"
+            )
+            if gate_mode
+            else mower_away
+        )
         reglages_volet = {
             "tondeuse_garage_delai_reprise": lire_reglage(
                 settings, "tondeuse_garage_delai_reprise", garage_guard.DEFAULT_GARAGE_RETRY_DELAY_MINUTES
@@ -3976,8 +4233,25 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 garage_guard.reset_updates(
                     runtime, cover_state, cover_position, self._current_datetime(), ouverture_min,
                     settings=reglages_volet,
+                    mower_away=door_needed,
                 )
             )
+        # Commande manuelle (page Gazon) : jugée AVANT le pilote, qui s'efface tant qu'elle dure.
+        # Ses ordres de volet passent par le même registre (`runtime`) : le pilote voit l'ordre
+        # qui vient de partir et ne le double pas.
+        snapshot.update(
+            await self._async_run_manual_command(
+                snapshot,
+                runtime=runtime,
+                cover_entity=cover_entity,
+                cover_state=cover_state,
+                cover_position=cover_position,
+                settings=settings,
+                reglages_volet=reglages_volet,
+                ouverture_min=ouverture_min,
+                gate_mode=gate_mode,
+            )
+        )
         decision = evaluate_mower_control(
             snapshot,
             now=self._current_datetime(),
@@ -3999,6 +4273,12 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 ),
                 "tondeuse_garage_ouvrir_pour_retour": lire_reglage(
                     settings, "tondeuse_garage_ouvrir_pour_retour", DEFAULT_MOWER_GARAGE_OPEN_FOR_RETURN
+                ),
+                "tondeuse_garage_ferme_pendant_tonte": gate_mode,
+                "tondeuse_garage_delai_fermeture_tonte": lire_reglage(
+                    settings,
+                    "tondeuse_garage_delai_fermeture_tonte",
+                    DEFAULT_MOWER_GARAGE_CLOSE_WHILE_MOWING_DELAY_MINUTES,
                 ),
                 "tondeuse_garage_fermer_apres_retour": lire_reglage(
                     settings, "tondeuse_garage_fermer_apres_retour", DEFAULT_MOWER_GARAGE_CLOSE_AFTER_DOCK
@@ -4125,6 +4405,10 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 decision["mower_control_last_action"] = action
                 decision["mower_control_last_action_at"] = instant
                 decision["mower_control_last_error"] = None
+        # Le pilote attend le volet (ouverture, délai de sécurité, délai de fermeture) : le rejuger vite,
+        # pour que le départ suive l'ouverture de quelques secondes seulement et non de plusieurs minutes.
+        if mode == "actif" and decision.get("mower_control_state") in _PILOT_FAST_WAIT_STATES:
+            self._schedule_quick_refresh()
         decision["mower_control_cycle_state"] = (
             "reprise_attendue"
             if runtime.get("resume_required") is True
@@ -4142,11 +4426,8 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             cover_entity=cover_entity,
             cover_state=cover_state,
             position=cover_position,
-            mower_away=bool(
-                snapshot.get("mower_is_outside")
-                or snapshot.get("mower_is_returning")
-                or snapshot.get("mower_is_mowing")
-            ),
+            mower_away=mower_away,
+            door_needed=door_needed,
             runtime=runtime,
             settings=reglages_volet,
             now=self._current_datetime(),
@@ -4844,6 +5125,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "mower_control": self._serialize_runtime_value(
                 self._runtime_state.get("mower_control")
             ),
+            # Commande manuelle en cours (page Gazon) : sans persistance, un redémarrage au milieu
+            # d'une sortie rendrait la tondeuse au pilote, qui la rappellerait ou fermerait le volet.
+            "mower_manual": self._serialize_runtime_value(
+                self._runtime_state.get("mower_manual")
+            ),
             # Même piège encore : sans persistance, un redémarrage efface la référence ET
             # l'horodatage de la dernière hausse. La garde « il pleut » repartirait alors
             # aveugle en pleine averse — précisément ce qu'elle vient de corriger.
@@ -4941,6 +5227,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "mowing_block_tally": runtime.get("mowing_block_tally"),
             "mower_passes": runtime.get("mower_passes"),
             "mower_control": runtime.get("mower_control"),
+            "mower_manual": runtime.get("mower_manual"),
             "pluie_mesuree": runtime.get("pluie_mesuree"),
             "pluie_cumul": runtime.get("pluie_cumul"),
             "mower_recommendation_ignored_since": runtime.get("mower_recommendation_ignored_since"),
@@ -7875,6 +8162,12 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._unsub_delayed_refresh()
             self._unsub_delayed_refresh = None
 
+    def _cancel_quick_refresh(self) -> None:
+        unsub = getattr(self, "_unsub_quick_refresh", None)
+        if unsub:
+            unsub()
+        self._unsub_quick_refresh = None
+
     def _cancel_zone_monitoring(self) -> None:
         for unsub in self._unsub_zone_listeners:
             unsub()
@@ -7900,6 +8193,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_shutdown(self) -> None:
         """Nettoie les tâches en cours à la fermeture de l'intégration."""
         self._cancel_post_start_refresh()
+        self._cancel_quick_refresh()
         self._cancel_auto_irrigation_monitoring()
         self._cancel_source_monitoring()
         self._cancel_zone_monitoring()
