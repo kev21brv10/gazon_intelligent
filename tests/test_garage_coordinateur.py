@@ -227,6 +227,49 @@ class VoletDansLeCoordinateurTests(unittest.TestCase):
         self.assertEqual(self._ordres(appel), ["open_cover", "close_cover"])
 
 
+class ChangementDeVoletTests(unittest.TestCase):
+    """Un volet remplacé repart d'un registre vierge : il n'hérite pas du blocage de l'ancien."""
+
+    def _coord(self):
+        base = VoletDansLeCoordinateurTests()
+        coord, appel = base._coord()
+        self.base = base
+        self.cover_conf = {"valeur": "cover.garage"}
+        coord._get_conf = lambda cle: (
+            "actif" if cle == "pilotage_tondeuse"
+            else self.cover_conf["valeur"] if cle == "entite_volet_garage_tondeuse" else None
+        )
+        self.nouveau = types.SimpleNamespace(state="closed", attributes={"current_position": 0})
+        coord.hass.states.get = lambda entity_id: (
+            self.base.volet if entity_id == "cover.garage" else self.nouveau if entity_id == "cover.neuf" else None
+        )
+        return coord, appel
+
+    def test_le_blocage_de_l_ancien_volet_ne_s_applique_pas_au_nouveau(self) -> None:
+        coord, appel = self._coord()
+        for minutes in (0.0, 2.5, 2.5):
+            self.base._cycle(coord, _pret(), apres=minutes)
+        self.assertEqual(self.base._ordres(appel), ["open_cover"] * 3)
+        instantane = self.base._cycle(coord, _pret(), apres=2.5)
+        self.assertEqual(instantane["mower_garage_alert"], gg.ALERT_STUCK, "l'ancien volet est bien bloqué")
+        # Le volet est remplacé par un autre, fermé : le pilote doit pouvoir l'ouvrir.
+        self.cover_conf["valeur"] = "cover.neuf"
+        instantane = self.base._cycle(coord, _pret(), apres=1.0)
+        self.assertEqual(self.base._ordres(appel)[-1], "open_cover")
+        self.assertEqual(len(self.base._ordres(appel)), 4, "un ordre de plus, pour le NOUVEAU volet")
+        self.assertEqual(appel.await_args_list[-1].args[2], {"entity_id": "cover.neuf"})
+        self.assertIsNone(instantane["mower_garage_alert"])
+        self.assertEqual(coord._runtime_state["mower_control"][gg.KEY_ENTITY], "cover.neuf")
+
+    def test_le_meme_volet_reste_bloque(self) -> None:
+        coord, appel = self._coord()
+        for minutes in (0.0, 2.5, 2.5, 2.5):
+            self.base._cycle(coord, _pret(), apres=minutes)
+        self.base._cycle(coord, _pret(), apres=10.0)
+        self.assertEqual(self.base._ordres(appel), ["open_cover"] * 3, "aucun ordre de plus pour le même volet")
+        self.assertEqual(coord._runtime_state["mower_control"][gg.KEY_ENTITY], "cover.garage")
+
+
 class AnomalieDuVoletArriveJusqu_AuCapteurTests(unittest.TestCase):
     """⚠️ Déclarer n'est pas câbler : l'alerte doit suivre sa VALEUR jusqu'à l'entité publiée.
 
