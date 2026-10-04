@@ -227,6 +227,67 @@ class VoletDansLeCoordinateurTests(unittest.TestCase):
         self.assertEqual(self._ordres(appel), ["open_cover", "close_cover"])
 
 
+class VoletFermeDevantUneTondeuseDehorsCoordinateurTests(unittest.TestCase):
+    """L'alerte part dans les TROIS modes du pilote, par le vrai cycle, jusqu'à l'instantané publié."""
+
+    DEHORS = dict(mower_is_docked=False, mower_is_outside=True, mower_is_mowing=True, mower_operation_state="tonte",
+                  mower_dock_signal_fort=False, action_possible=False)
+
+    def _coord(self, mode):
+        base = VoletDansLeCoordinateurTests()
+        coord, appel = base._coord(mode)
+        self.base = base
+        return coord, appel
+
+    def test_dans_chaque_mode_l_alerte_part_apres_la_marge(self) -> None:
+        for mode in ("desactive", "observation", "actif"):
+            with self.subTest(mode=mode):
+                coord, appel = self._coord(mode)
+                instantane = self.base._cycle(coord, _pret(**self.DEHORS), etat="closed", position=0)
+                self.assertIsNone(instantane["mower_garage_alert"], "pas d'alerte au premier constat")
+                instantane = self.base._cycle(coord, _pret(**self.DEHORS), apres=2.0)
+                if mode != "actif":
+                    self.assertIsNone(instantane["mower_garage_alert"], "dans la marge")
+                instantane = self.base._cycle(coord, _pret(**self.DEHORS), apres=1.5)
+                self.assertIn(
+                    instantane["mower_garage_alert"], (gg.ALERT_CLOSED_OUTSIDE, gg.ALERT_STUCK),
+                    f"{mode} : une alerte doit être publiée",
+                )
+                if mode != "actif":
+                    self.assertEqual(instantane["mower_garage_alert"], gg.ALERT_CLOSED_OUTSIDE)
+                    self.assertIn("la tondeuse est dehors", instantane["mower_garage_alert_reason"])
+                    self.assertEqual(self.base._ordres(appel), [], "observation / désactivé : rien n'est commandé")
+
+    def test_le_volet_rouvert_dans_la_marge_aucune_alerte_et_la_trace_est_effacee(self) -> None:
+        coord, _ = self._coord("observation")
+        self.base._cycle(coord, _pret(**self.DEHORS), etat="closed", position=0)
+        self.base._cycle(coord, _pret(**self.DEHORS), apres=2.0, etat="open", position=100)
+        instantane = self.base._cycle(coord, _pret(**self.DEHORS), apres=3.0)
+        self.assertIsNone(instantane["mower_garage_alert"])
+        self.assertIsNone(coord._runtime_state["mower_control"].get(gg.KEY_CLOSED_OUTSIDE_SINCE))
+
+    def test_le_volet_rouvert_apres_l_alerte_elle_s_efface(self) -> None:
+        coord, _ = self._coord("desactive")
+        self.base._cycle(coord, _pret(**self.DEHORS), etat="closed", position=0)
+        instantane = self.base._cycle(coord, _pret(**self.DEHORS), apres=4.0)
+        self.assertEqual(instantane["mower_garage_alert"], gg.ALERT_CLOSED_OUTSIDE)
+        instantane = self.base._cycle(coord, _pret(**self.DEHORS), apres=1.0, etat="open", position=100)
+        self.assertIsNone(instantane["mower_garage_alert"])
+
+    def test_tondeuse_rentree_volet_ferme_aucune_alerte_dans_aucun_mode(self) -> None:
+        for mode in ("desactive", "observation", "actif"):
+            with self.subTest(mode=mode):
+                coord, _ = self._coord(mode)
+                self.base._cycle(coord, _pret(action_possible=False), etat="closed", position=0)
+                instantane = self.base._cycle(coord, _pret(action_possible=False), apres=10.0)
+                self.assertIsNone(instantane["mower_garage_alert"])
+
+    def test_la_cle_de_depuis_quand_est_persistee_avec_le_registre(self) -> None:
+        coord, _ = self._coord("observation")
+        self.base._cycle(coord, _pret(**self.DEHORS), etat="closed", position=0)
+        self.assertTrue(coord._runtime_state["mower_control"].get(gg.KEY_CLOSED_OUTSIDE_SINCE))
+
+
 class ChangementDeVoletTests(unittest.TestCase):
     """Un volet remplacé repart d'un registre vierge : il n'hérite pas du blocage de l'ancien."""
 

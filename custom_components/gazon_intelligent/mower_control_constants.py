@@ -10,6 +10,10 @@ DEFAULT_MOWER_CONTROL_COMMAND_COOLDOWN_MINUTES = 10
 # affiché change), ne relance rien et n'annule rien — la commande reste due tant qu'aucun
 # signal frais ne l'a confirmée.
 MOWER_MANAGED_START_TIMEOUT_MINUTES = 15
+# Un travail inachevé (recharge à mi-travail) garde le volet ouvert au plus ce temps après la rentrée :
+# la recharge dure environ 70 min ; passé ce délai, un vieux travail abandonné ne doit pas bloquer
+# la fermeture pour toujours.
+MOWER_JOB_HOLD_MAX_MINUTES = 180
 DEFAULT_MOWER_GARAGE_OPEN_BEFORE_START = True
 DEFAULT_MOWER_GARAGE_OPEN_FOR_RETURN = True
 DEFAULT_MOWER_GARAGE_CLOSE_AFTER_DOCK = True

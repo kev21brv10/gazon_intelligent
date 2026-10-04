@@ -24,6 +24,7 @@ from .mower_control_constants import (
     DEFAULT_MOWER_GARAGE_OPEN_LEAD_MINUTES,
     DEFAULT_MOWER_GARAGE_MIN_OPEN_POSITION,
     MOWER_CONTROL_MODES,
+    MOWER_JOB_HOLD_MAX_MINUTES,
     MOWER_MANAGED_START_TIMEOUT_MINUTES,
     MOWER_START_WINDOW_POLICIES,
 )
@@ -415,6 +416,25 @@ def evaluate_mower_control(
         if cover in _COVER_OPEN | _COVER_OPENING:
             if not close_after_dock:
                 return result("rangee", "Tondeuse rentrée ; fermeture automatique désactivée.", updates=updates)
+            # ⚠️ UN TRAVAIL INACHEVÉ GARDE LE VOLET OUVERT. Une tondeuse rentrée se recharger au milieu
+            # d'un travail repart seule à la fin de la charge — quand ce travail n'a pas été lancé par
+            # ce pilote (appli du constructeur, programme horaire), `cycle_active` ne le couvre pas, et
+            # le pilote la tenait pour « rentrée » : volet refermé, puis tondeuse repartant vers une
+            # porte close. Borné : un vieux travail abandonné ne bloque pas la fermeture pour toujours.
+            # Hors reprise due : si le pilote a lui-même interrompu le cycle, il referme exprès.
+            job_unfinished = completion_state in {"en_pause", "en_cours"} or (
+                completion_state == "repos" and snapshot.get("mower_job_resume_possible") is True
+            )
+            if (
+                job_unfinished
+                and not resume_required
+                and not _elapsed(now, docked_since, MOWER_JOB_HOLD_MAX_MINUTES)
+            ):
+                return result(
+                    "travail_inacheve",
+                    "Travail en cours (recharge) : le volet reste ouvert pour le redémarrage de la tondeuse.",
+                    updates=updates,
+                )
             close_since = garage_guard.close_reference(runtime, docked_since, opened_by_hand)
             if not docked_since or not _elapsed(now, close_since, close_delay):
                 return result(

@@ -687,6 +687,11 @@ class AlerteDuVoletSurLaPageTests(unittest.TestCase):
         html = _carte(attributs={"mower_garage_alert": "volet_indisponible", "mower_garage_alert_reason": "Il ne répond pas."})
         self.assertIn("Volet injoignable", html)
 
+    def test_volet_ferme_devant_une_tondeuse_dehors_a_son_propre_titre(self) -> None:
+        html = _carte(attributs={"mower_garage_alert": "volet_ferme_dehors", "mower_garage_alert_reason": "Le volet n'est pas ouvert."})
+        self.assertIn("Volet fermé, tondeuse dehors", html)
+        self.assertNotIn("Volet bloqué", html)
+
     def test_sans_anomalie_aucune_note(self) -> None:
         self.assertNotIn("alerte-volet", _carte(attributs={"mower_garage_alert": None}))
         self.assertNotIn("alerte-volet", _carte())

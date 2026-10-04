@@ -4165,6 +4165,11 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not isinstance(runtime, dict):
             runtime = {}
             self._runtime_state["mower_control"] = runtime
+        mower_away = bool(
+            snapshot.get("mower_is_outside")
+            or snapshot.get("mower_is_returning")
+            or snapshot.get("mower_is_mowing")
+        )
         settings = self._reglages_instance()
         reglages_volet = {
             "tondeuse_garage_delai_reprise": lire_reglage(
@@ -4195,6 +4200,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 garage_guard.reset_updates(
                     runtime, cover_state, cover_position, self._current_datetime(), ouverture_min,
                     settings=reglages_volet,
+                    mower_away=mower_away,
                 )
             )
         # Commande manuelle (page Gazon) : jugée AVANT le pilote, qui s'efface tant qu'elle dure.
@@ -4376,11 +4382,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             cover_entity=cover_entity,
             cover_state=cover_state,
             position=cover_position,
-            mower_away=bool(
-                snapshot.get("mower_is_outside")
-                or snapshot.get("mower_is_returning")
-                or snapshot.get("mower_is_mowing")
-            ),
+            mower_away=mower_away,
             runtime=runtime,
             settings=reglages_volet,
             now=self._current_datetime(),

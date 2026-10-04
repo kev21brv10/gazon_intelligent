@@ -37,11 +37,26 @@
   refusée si le volet ne répond pas) : rien ne garantit qu'un volet resté seul est encore ouvert. Retour et pause passent devant une
   sortie en cours (on peut toujours l'arrêter) ; un second départ est refusé. Un refus est rendu
   en clair à la page, pas comme une erreur.
+- **Le volet reste ouvert pendant un travail inachevé** : une tondeuse rentrée se recharger au milieu
+  d'un travail repart seule à la fin de la charge. Quand ce travail n'a pas été lancé par le pilote
+  (appli du constructeur, programme horaire), le pilote la tenait pour « rentrée » et refermait le
+  volet après son délai, la tondeuse repartant ensuite vers une porte close. Un travail en pause, en
+  cours, ou ancien mais reprenable garde maintenant le volet ouvert (état `travail_inacheve`), au
+  plus 3 heures après la rentrée : un vieux travail abandonné ne bloque pas la fermeture pour
+  toujours. Contrepartie assumée : après une rentrée sur travail inachevé (pluie, par exemple), le
+  volet peut rester ouvert jusqu'à 3 h au lieu de 1 à 2 minutes. Sans effet sur les cycles lancés
+  par le pilote (inchangés) ni sur une reprise due après une interruption du pilote lui-même.
+- **Alerte « volet fermé, tondeuse dehors » dans tous les modes** : le pilote ne rouvre un volet
+  refermé qu'en mode actif, la commande manuelle que pendant sa durée ; en observation ou
+  désactivé, rien ne le disait. Le volet non ouvert (fermé, en fermeture, ouvert à moitié) plus de
+  3 minutes devant une tondeuse dehors lève une alerte critique, publiée comme les autres
+  anomalies du volet (`mower_garage_alert`), affichée sur la page et envoyée aux téléphones. Elle
+  n'actionne rien ; le volet injoignable et le volet bloqué gardent leur propre alerte et priment.
 - **Publié** : `mower_manual_active`, `_command`, `_step`, `_reason`, `_until`, `_duration_min`,
   `_error`, `_ended_at`, `_suspension_active`, `_suspension_until` et `mower_edgecut_available`
   (capteur d'état de la tonte et diagnostics) ; l'état de la commande survit à un redémarrage.
-- **Vérifié** : suite complète avec 2 688 tests et 3 422 sous-tests, ruff et mypy (55 fichiers)
-  verts, le nouveau module pur `manual_command` y compris ; 105 variantes cassées volontairement
+- **Vérifié** : suite complète avec 2 721 tests et 3 444 sous-tests, ruff et mypy (55 fichiers)
+  verts, le nouveau module pur `manual_command` y compris ; 132 variantes cassées volontairement
   (gardes, séquence du volet, réouverture du volet, pause, bordure, fin de commande, suspension,
   effacement du pilote, persistance, page), toutes détectées.
 

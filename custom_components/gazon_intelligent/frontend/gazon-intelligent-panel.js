@@ -7775,7 +7775,8 @@ class GazonIntelligentPanel extends HTMLElement {
     const code = this._a("tonte_etat", "mower_garage_alert");
     if (!code) return "";
     const motif = this._a("tonte_etat", "mower_garage_alert_reason");
-    const titre = code === "volet_indisponible" ? "Volet injoignable" : "Volet bloqué";
+    const titre = code === "volet_indisponible" ? "Volet injoignable"
+      : code === "volet_ferme_dehors" ? "Volet fermé, tondeuse dehors" : "Volet bloqué";
     return `<p class="note alerte alerte-volet" role="alert"><ha-icon icon="mdi:garage-alert-variant"></ha-icon><span><b>${esc(titre)}</b>${motif ? ` : ${esc(motif)}` : ""}</span></p>`;
   }
 
