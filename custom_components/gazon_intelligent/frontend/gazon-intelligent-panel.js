@@ -22,6 +22,7 @@
 
 const WS_LIRE = "gazon_intelligent/reglages/get";
 const WS_ECRIRE = "gazon_intelligent/reglages/set";
+const WS_COMMANDE_TONDEUSE = "gazon_intelligent/tondeuse/commande";
 
 const MOIS_LONGS = [
   "janvier", "février", "mars", "avril", "mai", "juin",
@@ -75,7 +76,7 @@ const DISPOSITION = {
       titre: "Quand la tondeuse peut-elle travailler ?",
       phrase: "Le dessin montre la journée en cours, avec le lever et le coucher du soleil réels.",
       dessin: "journee_tonte",
-      cles: ["tonte_fenetre_ideale_debut", "tonte_fenetre_ideale_fin"],
+      cles: ["tonte_fenetre_ideale_debut", "tonte_fenetre_ideale_fin", "tonte_soir_ideal_debut_avant_coucher", "tonte_soir_ideal_fin_avant_coucher"],
       place: ["gauche", "large"],
     },
     {
@@ -221,6 +222,12 @@ const DISPOSITION = {
       dessin: "feux_graines",
       cles: ["graines_vent_max", "graines_temperature_min"],
       place: ["droite", "etroit"],
+    },
+    {
+      titre: "Le sol déjà plein",
+      phrase: "Après la germination, on n'arrose pas un sol déjà plein : l'eau ne ferait que le noyer.",
+      cles: ["graines_sol_sature"],
+      place: ["milieu", "etroit"],
     },
     {
       titre: "L'alerte",
@@ -591,6 +598,7 @@ const ONGLET_ENTITES = {
 const PROFIL_GAZON_COMMUN = {
   tonte_fenetre_ideale_debut: 600, tonte_fenetre_ideale_fin: 840,
   tonte_soir_avant_coucher: 300, tonte_soir_apres_coucher: 30,
+  tonte_soir_ideal_debut_avant_coucher: 120, tonte_soir_ideal_fin_avant_coucher: 30,
   tonte_vent_a_eviter: 20, tonte_vent_bloque: 40,
   tonte_temperature_a_eviter: 25, tonte_temperature_bloquee: 30,
   tonte_humidite_bloquee: 90, tonte_max_par_jour: 2,
@@ -948,17 +956,41 @@ function dureeFr(minutes) {
   return reste ? `${h}\u00a0h\u00a0${deuxChiffres(reste)}` : `${h}\u00a0h`;
 }
 
+// Une durée réglée en SECONDES : « 0 s », « 45 s », puis « 1 min », « 2 min », « 1 min 30 s ».
+function secondesFr(secondes) {
+  if (secondes === undefined || secondes === null || Number.isNaN(secondes)) return "—";
+  return secondes < 60 ? `${Math.round(secondes)}\u00a0s` : dureeFr(secondes / 60);
+}
+
 const UNITES_AU_PLURIEL = new Set(["jours", "tontes", "coupes"]);
 
 function uniteAccordee(unite, valeur) {
   return UNITES_AU_PLURIEL.has(unite) && Math.abs(valeur) < 2 ? unite.slice(0, -1) : unite;
 }
 
+// Une durée comptée à partir du coucher du soleil : positive = avant, négative = après.
+const REGLAGES_RELATIFS_AU_COUCHER = new Set(["tonte_soir_ideal_fin_avant_coucher"]);
+
+function relatifAuCoucherFr(v) {
+  if (v > 0) return `${dureeFr(v)} avant le coucher`;
+  if (v < 0) return `${dureeFr(-v)} après le coucher`;
+  return "au coucher";
+}
+
+// Minutes après le coucher où finit le soir (et où commence la nuit) : MÊME règle que le moteur
+// (`decision_mowing._fin_du_soir_apres_coucher`) — le réglage « après le coucher », sauf si la
+// fin de l'idéal du soir tombe plus tard.
+function finDuSoirApresCoucher(v) {
+  return Math.max(v.tonte_soir_apres_coucher, -v.tonte_soir_ideal_fin_avant_coucher);
+}
+
 function valeurFr(r, v) {
   if (v === undefined || v === null || Number.isNaN(v)) return "—";
   if (r.genre === "heure") return heureFr(v);
+  if (r.genre === "duree" && REGLAGES_RELATIFS_AU_COUCHER.has(r.cle)) return relatifAuCoucherFr(v);
   if (r.genre === "duree") return dureeFr(v);
   if (r.genre === "jour") return `jour ${Math.round(v)}`;
+  if (r.unite === "s") return secondesFr(v);
   const n = nombreFr(v, Math.max(decimalesDe(r.pas), 0));
   if (r.unite === "×") return `${n}\u00a0×`;
   return r.unite ? `${n}\u00a0${uniteAccordee(r.unite, v)}` : n;
@@ -970,11 +1002,51 @@ const mmFr = (x) => `${nombreFr(x, 1)}\u00a0mm`;
 const ordinal = (n) => (n === 1 ? "1ʳᵉ" : `${n}ᵉ`);
 const ordinalM = (n) => (n === 1 ? "1ᵉʳ" : `${n}ᵉ`);
 
+// Échelle à DEUX pas (délais du volet : 1, 2, 3… secondes, puis 1 min, 2 min…) : de `minimum` à `seuil` la valeur
+// avance de `pas`, au-delà de `pas_haut`. Le curseur travaille alors en POSITIONS (0 … total), pas en valeurs.
+function echelleDe(r) {
+  if (!r || !(r.pas_haut > 0)) return null;
+  const bas = Math.round((r.seuil - r.minimum) / r.pas);
+  return { bas, total: bas + Math.round((r.maximum - r.seuil) / r.pas_haut) };
+}
+
+function valeurDePosition(r, p) {
+  const e = echelleDe(r);
+  const q = Math.min(e.total, Math.max(0, Math.round(p)));
+  return q <= e.bas ? r.minimum + q * r.pas : r.seuil + (q - e.bas) * r.pas_haut;
+}
+
+function positionDeValeur(r, v) {
+  const e = echelleDe(r);
+  const p = v <= r.seuil ? Math.floor((v - r.minimum) / r.pas + 0.5) : e.bas + Math.floor((v - r.seuil) / r.pas_haut + 0.5);
+  return Math.min(e.total, Math.max(0, p));
+}
+
 function caler(r, v) {
+  if (echelleDe(r)) return valeurDePosition(r, positionDeValeur(r, Math.min(r.maximum, Math.max(r.minimum, v))));
   const d = Math.max(decimalesDe(r.pas), decimalesDe(r.minimum));
   const crans = Math.round((v - r.minimum) / r.pas);
   const x = Number((r.minimum + crans * r.pas).toFixed(d));
   return Math.min(r.maximum, Math.max(r.minimum, x));
+}
+
+// Le cran voisin (+1 / −1) : un seul pas du curseur, quelle que soit l'échelle.
+function voisine(r, v, sens) {
+  if (echelleDe(r)) return valeurDePosition(r, positionDeValeur(r, v) + sens);
+  return caler(r, v + sens * r.pas);
+}
+
+// Les attributs d'un curseur : en positions pour une échelle à deux pas, en valeurs sinon.
+function attributsCurseur(r, v) {
+  const e = echelleDe(r);
+  if (!e) return { min: r.minimum, max: r.maximum, step: r.pas, valeur: v, rempli: pourcent(v, r.minimum, r.maximum) };
+  const p = positionDeValeur(r, v);
+  return { min: 0, max: e.total, step: 1, valeur: p, rempli: pourcent(p, 0, e.total) };
+}
+
+function positionConseil(r, d) {
+  const e = echelleDe(r);
+  return e ? pourcent(positionDeValeur(r, d), 0, e.total) : pourcent(d, r.minimum, r.maximum);
 }
 
 function egal(a, b) {
@@ -999,6 +1071,18 @@ function partiesLocales(date, fuseau) {
     annee: Number(p.year), mois: Number(p.month), jour: Number(p.day),
     minute: (Number(p.hour) % 24) * 60 + Number(p.minute),
   };
+}
+
+// Un instant ISO publié par l'intégration, en français et dans le fuseau de Home Assistant :
+// « aujourd'hui à 20 h 02 » ou « le 02/10 à 16 h 08 ». Chaîne vide si l'instant est illisible.
+function instantFr(iso, fuseau, maintenant = new Date()) {
+  const d = new Date(iso);
+  if (!iso || Number.isNaN(d.getTime())) return "";
+  const p = partiesLocales(d, fuseau);
+  const n = partiesLocales(maintenant, fuseau);
+  const memeJour = p.annee === n.annee && p.mois === n.mois && p.jour === n.jour;
+  const jour = memeJour ? "aujourd'hui" : `le ${String(p.jour).padStart(2, "0")}/${String(p.mois).padStart(2, "0")}`;
+  return `${jour} à ${heureFr(p.minute)}`;
 }
 
 function jourPlus(base, jours, options = { weekday: "short", day: "numeric", month: "short" }) {
@@ -1136,14 +1220,20 @@ function planDepuisZones(zones, passages, pauseS) {
 
 function classeTonte(min, v, soleil) {
   const nuit = soleil
-    ? min < soleil.lever || min >= soleil.coucher + v.tonte_soir_apres_coucher
+    ? min < soleil.lever || min >= soleil.coucher + finDuSoirApresCoucher(v)
     : min < 7 * 60 || min >= 22 * 60;
   if (nuit) return "nuit";
   if (min < v.tonte_fenetre_ideale_debut) return "tot";
   if (min < v.tonte_fenetre_ideale_fin) return "ideal";
   const soirDebut = soleil ? soleil.coucher - v.tonte_soir_avant_coucher : 17 * 60;
-  const soirFin = soleil ? soleil.coucher + v.tonte_soir_apres_coucher : 19 * 60;
-  if (min >= soirDebut && min < soirFin) return "possible";
+  const soirFin = soleil ? soleil.coucher + finDuSoirApresCoucher(v) : 19 * 60;
+  if (min >= soirDebut && min < soirFin) {
+    // Comme le moteur : le créneau idéal du soir vit DANS la fenêtre acceptable, jamais au-delà.
+    if (soleil
+      && min >= soleil.coucher - v.tonte_soir_ideal_debut_avant_coucher
+      && min < soleil.coucher - v.tonte_soir_ideal_fin_avant_coucher) return "ideal";
+    return "possible";
+  }
   if (min < 22 * 60) return "eviter";
   return "nuit";
 }
@@ -1298,6 +1388,7 @@ const CANDIDATS_MONTRES = 60;
 // ─── Validation (même règles que `reglages.valider`, le serveur revérifie) ─────────────
 
 function surLePas(r, x) {
+  if (echelleDe(r)) return Math.abs(valeurDePosition(r, positionDeValeur(r, x)) - x) < 1e-6;
   const crans = (x - r.minimum) / r.pas;
   return Math.abs(crans - Math.round(crans)) < 1e-6;
 }
@@ -1317,7 +1408,9 @@ function valider(registre, valeurs) {
     } else if (!nombres.every((x) => x >= r.minimum && x <= r.maximum)) {
       erreurs[r.cle] = `Sélectionner une valeur entre ${fr(r.minimum)} et ${fr(r.maximum)}.`;
     } else if (!nombres.every((x) => surLePas(r, x))) {
-      erreurs[r.cle] = `La valeur avance de ${fr(r.pas)} en ${fr(r.pas)}.`;
+      erreurs[r.cle] = echelleDe(r)
+        ? `Jusqu'à ${fr(r.seuil)}, la valeur avance de ${fr(r.pas)} en ${fr(r.pas)} ; au-delà, de ${fr(r.pas_haut)} en ${fr(r.pas_haut)}.`
+        : `La valeur avance de ${fr(r.pas)} en ${fr(r.pas)}.`;
     }
   }
   const affichees = { ...erreurs };
@@ -2408,6 +2501,17 @@ dialog.dialogue > form { display: flex; flex-direction: column; min-height: 0; m
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
 }
 .etat-garage .statut { flex: none; }
+.commandes-garage { padding: 0 20px 4px; }
+.commandes-garage .rangee-boutons { padding: 8px 0 4px; }
+.commandes-tondeuse { padding: 0 20px 6px; }
+.commandes-tondeuse .rangee-boutons { padding: 8px 0 4px; }
+.commandes-tondeuse .note { margin: 6px 0; }
+.volet-tonte { margin-top: 10px; }
+.volet-tonte .etat-garage { margin: 0; }
+.volet-tonte .commandes-garage { padding: 0; }
+.pilote-garage { padding: 2px 20px 6px; font-size: 13px; color: var(--gz-doux); line-height: 1.45; }
+.pilote-garage p { margin: 2px 0; }
+.pilote-garage b { color: var(--gz-texte); }
 .garage-reglages {
   margin: 10px 20px 18px; border: 1px solid var(--gz-trait); border-radius: 12px; overflow: hidden;
 }
@@ -3110,13 +3214,22 @@ class GazonIntelligentPanel extends HTMLElement {
     const vue = String(route?.path || "").startsWith("/reglages") ? "reglages" : "accueil";
     if (vue !== this._vue) {
       this._vue = vue;
+      this._oublierLesConfirmations();
       if (this._hass && this._etat === "pret") this._rendre();
     }
+  }
+
+  // Une confirmation d'ordre PHYSIQUE (volet, départ de la tondeuse) ne survit pas à un changement d'onglet ni de
+  // vue : sans cela elle réapparaîtrait plus tard, ailleurs, sans nouveau premier clic (relecture croisée A-017).
+  _oublierLesConfirmations() {
+    this._garageConfirmation = undefined;
+    this._tondeuseConfirmation = undefined;
   }
 
   _choisirVue(vue) {
     if (vue === this._vue) return;
     this._vue = vue;
+    this._oublierLesConfirmations();
     const prefixe = this._route?.prefix;
     if (prefixe) {
       const cible = vue === "reglages" ? `${prefixe}/reglages` : prefixe;
@@ -3907,6 +4020,7 @@ class GazonIntelligentPanel extends HTMLElement {
     const erreur = affichees[r.cle];
     const enAttente = r.cle in this._brouillon;
     const lecture = !this._estAdmin();
+    const c = attributsCurseur(r, v);
     return `<div class="ligne ${enAttente ? "change" : ""} ${erreur ? "en-erreur" : ""}" data-cle="${esc(r.cle)}">
       ${enAttente ? `<span class="a-enregistrer">à enregistrer</span>` : ""}
       <div class="ligne-tete">
@@ -3917,9 +4031,9 @@ class GazonIntelligentPanel extends HTMLElement {
       <div class="reglette">
         <button class="pas-btn" data-action="moins" aria-label="Moins" ${lecture || v <= r.minimum ? "disabled" : ""}><ha-icon icon="mdi:minus"></ha-icon></button>
         <div class="curseur-zone">
-          <span class="marque-conseil" style="--pos:${pourcent(d, r.minimum, r.maximum)}" title="Valeur conseillée : ${esc(valeurFr(r, d))}"></span>
-          <input type="range" min="${r.minimum}" max="${r.maximum}" step="${r.pas}" value="${v}"
-            style="--rempli:${pourcent(v, r.minimum, r.maximum)}%"
+          <span class="marque-conseil" style="--pos:${positionConseil(r, d)}" title="Valeur conseillée : ${esc(valeurFr(r, d))}"></span>
+          <input type="range" min="${c.min}" max="${c.max}" step="${c.step}" value="${c.valeur}"
+            style="--rempli:${c.rempli}%"
             aria-label="${esc(r.titre)}" aria-valuetext="${esc(valeurFr(r, v))}" ${lecture ? "disabled" : ""}>
         </div>
         <button class="pas-btn" data-action="plus" aria-label="Plus" ${lecture || v >= r.maximum ? "disabled" : ""}><ha-icon icon="mdi:plus"></ha-icon></button>
@@ -4369,12 +4483,20 @@ class GazonIntelligentPanel extends HTMLElement {
       return `<p class="note alerte"><ha-icon icon="mdi:weather-sunny-off"></ha-icon><span>Le soleil est inconnu : le soir se replie sur 17 h → 19 h.</span></p>`;
     }
     const debut = c.soleil.coucher - v.tonte_soir_avant_coucher;
-    const fin = c.soleil.coucher + v.tonte_soir_apres_coucher;
+    const fin = c.soleil.coucher + finDuSoirApresCoucher(v);
     // Quand l'ouverture tombe avant la fin du meilleur moment, c'est lui qui passe le relais.
     const relais = debut <= v.tonte_fenetre_ideale_fin;
+    const ouverture = relais ? v.tonte_fenetre_ideale_fin : debut;
+    // Le créneau idéal ne dépasse jamais la fenêtre du soir (même intersection que le moteur) ;
+    // si les réglages le font tomber hors de cette fenêtre, il n'existe pas : on ne l'annonce pas.
+    const idealDebut = Math.max(c.soleil.coucher - v.tonte_soir_ideal_debut_avant_coucher, ouverture);
+    const idealFin = Math.min(c.soleil.coucher - v.tonte_soir_ideal_fin_avant_coucher, fin);
+    const ideal = idealDebut < idealFin
+      ? `, dont de <b>${heureFr(idealDebut)}</b> à <b>${heureFr(idealFin)}</b> en créneau idéal`
+      : "";
     return `<div class="goutte-carte soir">
         <ha-icon icon="mdi:weather-sunset-down"></ha-icon>
-        <p>Aujourd'hui, le soleil se couche à <b>${heureFr(c.soleil.coucher)}</b> : la tondeuse peut tondre de <b>${heureFr(relais ? v.tonte_fenetre_ideale_fin : debut)}</b> à <b>${heureFr(fin)}</b>.${relais ? " (Le soir commence dès la fin du meilleur moment.)" : ""}</p>
+        <p>Aujourd'hui, le soleil se couche à <b>${heureFr(c.soleil.coucher)}</b> : la tondeuse peut tondre de <b>${heureFr(ouverture)}</b> à <b>${heureFr(fin)}</b>${ideal}.${relais ? " (Le soir commence dès la fin du meilleur moment.)" : ""}</p>
       </div>`;
   }
 
@@ -5647,6 +5769,10 @@ class GazonIntelligentPanel extends HTMLElement {
   // L'herbe mouillée, jugée comme le moteur (0.94.1) : le capteur « Rosée sur l'herbe » s'il
   // répond (au-dessus de 0 : mouillée), sinon `estimate_rosee` — l'air à 2 °C ou moins du point
   // de rosée de l'entité météo, une humidité d'au moins 88 %, du brouillard ou de la pluie.
+  // ⚠️ Une fois présente, le moteur MAINTIENT la rosée estimée (hystérésis : jusqu'à 2,5 °C d'écart
+  // et 86 % d'humidité) et le publie dans `sensor_health.rosee_maintenue`. La page lit ce verdict au
+  // lieu de refaire le calcul de l'instant : sans cela elle affichait « Herbe sèche » pendant que la
+  // tonte attendait encore (écart de 2,2 °C, humidité de 87 %).
   _herbeMouillee() {
     const ligne = this._sourceMeteo("capteur_rosee");
     const lecture = this._lectureSource(ligne);
@@ -5659,6 +5785,9 @@ class GazonIntelligentPanel extends HTMLElement {
     const pointDeRosee = nombreOuNul(meteo?.attributes?.dew_point ?? meteo?.attributes?.native_dew_point);
     const ecart = temp && pointDeRosee !== null ? temp.valeur - pointDeRosee : null;
     const air = ecart !== null ? `air à ${nombreFr(ecart, 1)} °C de son point de rosée` : "";
+    if (this._sante().rosee_maintenue === true) {
+      return { mouillee: true, raison: `rosée maintenue jusqu'à 2,5 °C d'écart et 86 % d'humidité${air ? ` — ${air}` : ""}` };
+    }
     if (ecart !== null && ecart <= 2) return { mouillee: true, raison: air };
     const humidite = this._mesureMeteo("capteur_humidite", "humidity");
     if (humidite && humidite.valeur >= 88) return { mouillee: true, raison: `humidité de l'air ${nombreFr(humidite.valeur, 0)} %` };
@@ -6149,6 +6278,7 @@ class GazonIntelligentPanel extends HTMLElement {
     return this._mosaique([
       [carteMachine, "gauche", "large"],
       [this._coordinationHtml(), "gauche", "etroit"],
+      [this._commandesTondeuseHtml(), "gauche", "etroit"],
       [this._pilotageTondeuseEtatHtml(), "gauche", "etroit"],
       [this._travailHtml(), "milieu", "large"],
       [this._hauteursHtml(c), "milieu", "etroit"],
@@ -6292,6 +6422,150 @@ class GazonIntelligentPanel extends HTMLElement {
     </div></section>`;
   }
 
+  // ── Commandes manuelles : départ, coupe de bordure, retour, pause, reprise ──
+  // Le volet est géré PAR L'INTÉGRATION (ouverture, délai de sécurité, départ) : la page ne fait
+  // qu'envoyer la demande. Les refus ci-dessous ne sont qu'un miroir pratique des gardes du
+  // serveur, qui reste seul juge — rejugé ici au dernier moment, comme pour le volet.
+  _refusTondeuse(commande) {
+    const a = (cle) => this._a("tonte_etat", cle);
+    if (commande === "annuler") return a("mower_manual_active") === true ? "" : "Aucune commande manuelle en cours.";
+    const enCours = a("mower_manual_active") === true ? a("mower_manual_command") : null;
+    const prioritaire = commande === "retour" || commande === "pause" || commande === "reprendre";
+    if (enCours && (!prioritaire || enCours === commande)) {
+      return "Une commande manuelle est déjà en cours : attendre sa fin ou l'annuler.";
+    }
+    if (a("tondeuse_connectee") !== true) return "La tondeuse n'est pas connectée.";
+    const volet = this._donnees?.garage_tondeuse?.choisie;
+    const etatVolet = volet ? String(this._hass?.states?.[volet]?.state || "").toLowerCase() : "";
+    const voletMuet = Boolean(volet) && (etatVolet === "" || etatVolet === "unavailable" || etatVolet === "unknown");
+    const aQuai = a("mower_is_docked") === true;
+    const dehors = a("mower_is_outside") === true;
+    if (commande === "demarrer" || commande === "bordure") {
+      if (commande === "bordure" && a("mower_edgecut_available") === false) return "La coupe de bordure n'est pas disponible avec cette tondeuse.";
+      if (voletMuet) return "Le volet ne répond pas : la tondeuse ne peut pas sortir ni rentrer.";
+      if (a("tondeuse_prete") !== true) return "La tondeuse n'est pas prête.";
+      if (!aQuai) return "La tondeuse doit être à sa base pour partir.";
+      const batterie = nombreOuNul(a("tondeuse_batterie"));
+      if (batterie !== null && batterie < 20) return `La batterie est trop basse pour partir (${nombreFr(batterie, 0)} %, minimum 20 %).`;
+    } else if (commande === "retour") {
+      if (voletMuet) return "Le volet ne répond pas : la tondeuse ne peut pas sortir ni rentrer.";
+      if (aQuai && !dehors) return "La tondeuse est déjà à sa base.";
+    } else if (commande === "pause") {
+      if (!dehors) return "La tondeuse n'est pas dehors : rien à mettre en pause.";
+    } else if (commande === "reprendre") {
+      if (voletMuet) return "Le volet ne répond pas : la tondeuse ne peut pas sortir ni rentrer.";
+      if (!dehors) return "La tondeuse n'est pas dehors : rien à reprendre.";
+      if (enCours !== "pause" && !this._tondeuseEnPause()) return "La tondeuse n'est pas en pause.";
+    }
+    return "";
+  }
+
+  // En pause — depuis cette page, l'appli du constructeur ou à la main. ⚠️ L'état de travail ne suffit
+  // pas : `en_pause` n'existe que tondeuse À QUAI ; dehors il vaut `en_cours`. Même règle que le serveur.
+  _tondeuseEnPause() {
+    const a = (cle) => this._a("tonte_etat", cle);
+    const machine = String(a("mower_operation_state") || "").toLowerCase();
+    return machine === "paused" || machine === "pause"
+      || String(a("tondeuse_statut") || "").toLowerCase() === "pause"
+      || a("mower_job_completion_state") === "en_pause";
+  }
+
+  _commandesTondeuseHtml() {
+    const a = (cle) => this._a("tonte_etat", cle);
+    if (!a("tondeuse_source_entity")) return "";
+    const admin = this._estAdmin();
+    const occupe = (cle) => this._commandesEnCours.has(cle);
+    const fuseau = this._fuseau();
+    const volet = this._donnees?.garage_tondeuse?.choisie;
+    const libelles = { demarrer: "un départ", bordure: "une coupe de bordure", retour: "un retour à la base", pause: "une pause", reprendre: "une reprise" };
+    const active = a("mower_manual_active") === true;
+    const commandeActive = active ? a("mower_manual_command") : null;
+    const bordureDispo = a("mower_edgecut_available") !== false;
+
+    // Confirmation d'un départ : le volet s'ouvre tout seul, la tondeuse part sans personne.
+    const demande = this._tondeuseConfirmation;
+    if (admin && (demande === "demarrer" || demande === "bordure")) {
+      const refus = this._refusTondeuse(demande);
+      if (refus) {
+        return `<section class="section"><div class="section-tete"><h3>Commander la tondeuse</h3></div>
+          <div class="commandes-tondeuse"><p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>${esc(refus)} La demande est annulée.</span></p>
+          <div class="rangee-boutons"><button class="bouton-contour" data-tondeuse-annuler>Compris</button></div></div></section>`;
+      }
+      const quoi = demande === "bordure"
+        ? "La tondeuse va faire le tour du gazon (coupe de bordure automatique, sans durée à régler : elle rentre seule à la fin)"
+        : "La tondeuse va partir tondre";
+      const volets = volet ? " Le volet va d'abord s'ouvrir, puis elle partira après le délai de sécurité." : "";
+      return `<section class="section"><div class="section-tete"><h3>Commander la tondeuse</h3></div>
+        <div class="commandes-tondeuse"><p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>${esc(quoi)}.${esc(volets)} Vérifier que le passage est dégagé et que personne n'est sur le gazon.</span></p>
+        <div class="rangee-boutons">
+          <button class="bouton-plein" data-commande="tondeuse-${demande}" ${occupe(`tondeuse-${demande}`) ? "disabled" : ""}><ha-icon icon="${demande === "bordure" ? "mdi:vector-polyline" : "mdi:play"}"></ha-icon>${demande === "bordure" ? "Lancer la bordure" : "Démarrer maintenant"}</button>
+          <button class="bouton-contour" data-tondeuse-annuler>Annuler</button>
+        </div></div></section>`;
+    }
+
+    const refus = {};
+    for (const c of ["demarrer", "bordure", "retour", "pause", "reprendre"]) refus[c] = this._refusTondeuse(c);
+    const inactif = (c) => !admin || Boolean(refus[c]) || occupe(`tondeuse-${c}`);
+    const bouton = (c, texte, icone, demander) => `<button class="${c === "demarrer" ? "bouton-plein" : "bouton-contour"}" ${demander ? `data-tondeuse-demander="${c}"` : `data-commande="tondeuse-${c}"`}
+      ${inactif(c) ? `disabled${refus[c] ? ` title="${esc(refus[c])}"` : ""}` : ""}><ha-icon icon="${icone}"></ha-icon>${esc(texte)}</button>`;
+    const reprise = commandeActive === "pause" || this._tondeuseEnPause();
+    const boutons = [
+      bouton("demarrer", "Démarrer la tonte", "mdi:play", true),
+      bordureDispo ? bouton("bordure", "Coupe de bordure", "mdi:vector-polyline", true) : "",
+      bouton("retour", "Retour à la base", "mdi:home-import-outline", false),
+      reprise ? bouton("reprendre", "Reprendre", "mdi:play-pause", false) : bouton("pause", "Pause", "mdi:pause", false),
+    ].join("");
+
+    let bandeau = "";
+    if (active) {
+      const jusqua = instantFr(a("mower_manual_until"), fuseau);
+      const pilote = a("mower_control_mode") && a("mower_control_mode") !== "desactive" ? " Le pilote automatique attend la fin de cette commande." : "";
+      const motif = String(a("mower_manual_reason") || "").replace(/\.\s*$/, "");
+      bandeau = `<p class="note"><ha-icon icon="mdi:hand-back-right-outline"></ha-icon><span><b>Mode manuel : ${esc(libelles[commandeActive] || "commande")}</b>${motif ? ` — ${esc(motif)}` : ""}${jusqua ? ` (au plus tard ${esc(jusqua)})` : ""}.${esc(pilote)} Annuler rend la main au pilote sans arrêter la tondeuse.</span></p>
+        <div class="rangee-boutons"><button class="bouton-blanc" data-commande="tondeuse-annuler" ${admin && !occupe("tondeuse-annuler") ? "" : "disabled"}><ha-icon icon="mdi:close-circle-outline"></ha-icon>Annuler la commande</button></div>`;
+    } else if (a("mower_manual_step") === "erreur") {
+      const fini = a("mower_manual_ended_at") ? new Date(a("mower_manual_ended_at")).getTime() : 0;
+      if (fini && Date.now() - fini < 3600 * 1000) {
+        bandeau = `<p class="note alerte" role="alert"><ha-icon icon="mdi:alert-outline"></ha-icon><span><b>Commande abandonnée</b> : ${esc(a("mower_manual_reason") || "voir le journal de Home Assistant")}</span></p>`;
+      }
+    }
+    let suspension = "";
+    if (a("mower_manual_suspension_active") === true) {
+      const jusqua = instantFr(a("mower_manual_suspension_until"), fuseau);
+      suspension = `<p class="note"><ha-icon icon="mdi:timer-pause-outline"></ha-icon><span>Retour manuel : le pilote ne relance pas la tondeuse${jusqua ? ` avant ${esc(jusqua)}` : " pour l'instant"}.</span></p>`;
+    }
+    const aide = volet
+      ? "Le volet s'ouvre tout seul avant un départ ou un retour, et le pilote le referme après la rentrée."
+      : "Départ, retour et pause envoyés directement à la tondeuse.";
+    const note = admin ? "" : `<p class="note"><ha-icon icon="mdi:lock-outline"></ha-icon><span>Seul un administrateur peut commander la tondeuse.</span></p>`;
+    // Le volet du garage, commandable d'ici aussi (mêmes boutons, mêmes confirmations et mêmes refus que dans
+    // Installation → Tondeuse → Garage) : on le manœuvre depuis l'onglet où l'on commande la tondeuse.
+    const voletHtml = volet && this._hass.states[volet]
+      ? `<div class="volet-tonte">${this._etatGarageTondeuseHtml(volet)}${this._commandesGarageHtml(volet)}</div>` : "";
+    return `<section class="section"><div class="section-tete"><h3>Commander la tondeuse</h3><p>${esc(aide)}</p></div>
+      <div class="commandes-tondeuse">${bandeau}${suspension}<div class="rangee-boutons">${boutons}</div>${voletHtml}${note}</div></section>`;
+  }
+
+  async _commandeTondeuse(commande) {
+    if (!this._estAdmin()) {
+      this._afficherToast("Seul un administrateur peut faire ça.", true);
+      return false;
+    }
+    const message = { type: WS_COMMANDE_TONDEUSE, entry_id: this._donnees.entry_id, commande };
+    try {
+      const reponse = await this._hass.callWS(message);
+      if (reponse?.ok) {
+        this._afficherToast(reponse.message || "Commande envoyée.");
+        return true;
+      }
+      this._afficherToast(`Commande refusée : ${reponse?.message || "raison inconnue"}`, true);
+    } catch (e) {
+      console.error("Gazon Intelligent : commande de tondeuse", message, e);
+      await this._signalerEchec(e);
+    }
+    return false;
+  }
+
   _pilotageTondeuseEtatHtml() {
     const a = (cle) => this._a("tonte_etat", cle);
     const mode = a("mower_control_mode") || this._donnees?.choix?.pilotage_tondeuse || "desactive";
@@ -6308,6 +6582,11 @@ class GazonIntelligentPanel extends HTMLElement {
       cycle_autonome: "Cycle autonome : recharges gérées par la tondeuse",
       reprise_attendue: "Reprise attendue après un rappel de l'intégration",
     };
+    const derniere = a("mower_control_last_action");
+    const quand = instantFr(a("mower_control_last_action_at"), this._fuseau());
+    const derniereCommande = derniere && quand
+      ? `<p>Dernière commande envoyée : <b>${esc(actions[derniere] || derniere)}</b>, ${esc(quand)}.</p>`
+      : "";
     const suiviCycle = mode === "actif" && cycles[cycle]
       ? `<p><b>${esc(cycles[cycle])}</b>${cycle === "reprise_attendue" && motifReprise ? ` · ${esc(motifReprise)}` : ""}</p>`
       : "";
@@ -6317,6 +6596,8 @@ class GazonIntelligentPanel extends HTMLElement {
           <div class="ligne-textes"><h4>${action ? `Décision : ${esc(actions[action] || action)}` : esc(etat || "En attente")}</h4><p>${esc(erreur || raison || "Le prochain cycle précisera la décision.")}</p></div>
         </div>
         ${suiviCycle}
+        ${derniereCommande}
+        ${this._alerteVoletHtml()}
       </div></div>
     </section>`;
   }
@@ -7204,6 +7485,32 @@ class GazonIntelligentPanel extends HTMLElement {
         await this._service("switch", "turn_off", { entity_id: id }, "Vanne fermée.");
       } else if (nom === "envoyer_etat") {
         await this._service("gazon_intelligent", "send_notification", { entity_id: entites.assistant }, "État du gazon envoyé aux appareils configurés.");
+      } else if (nom === "garage-ouvrir" || nom === "garage-fermer" || nom === "garage-arreter") {
+        const volet = this._donnees?.garage_tondeuse?.choisie;
+        this._garageConfirmation = undefined;
+        // Rejugé ICI, avec l'état d'AUJOURD'HUI : la confirmation date d'un clic précédent. Et le volet
+        // que le bouton MONTRAIT doit être celui qu'on commande : sinon on n'envoie rien.
+        const refus = bouton?.dataset?.volet !== volet
+          ? "Le volet affiché n'est plus celui qui est enregistré."
+          : nom === "garage-arreter" ? "" : this._refusVolet(nom);
+        if (refus) {
+          this._afficherToast(`Commande annulée : ${refus}`, true);
+        } else if (volet) {
+          const [service, message] = {
+            "garage-ouvrir": ["open_cover", "Ouverture du volet demandée."],
+            "garage-fermer": ["close_cover", "Fermeture du volet demandée."],
+            "garage-arreter": ["stop_cover", "Volet arrêté."],
+          }[nom];
+          await this._service("cover", service, { entity_id: volet }, message);
+        }
+      } else if (nom.startsWith("tondeuse-")) {
+        const commande = nom.slice("tondeuse-".length);
+        this._tondeuseConfirmation = undefined;
+        // Rejugé ICI, avec l'état d'AUJOURD'HUI : la confirmation date d'un clic précédent et la
+        // tondeuse a pu bouger entre-temps (le serveur rejuge aussi, c'est lui qui décide).
+        const refus = this._refusTondeuse(commande);
+        if (refus) this._afficherToast(`Commande annulée : ${refus}`, true);
+        else await this._commandeTondeuse(commande);
       } else if (nom === "pompe-marche" || nom === "pompe-arret") {
         await this._service("switch", nom === "pompe-marche" ? "turn_on" : "turn_off", { entity_id: pompe }, nom === "pompe-marche" ? "Pompe en marche." : "Pompe arrêtée.");
       }
@@ -7423,23 +7730,46 @@ class GazonIntelligentPanel extends HTMLElement {
     const ouvertureAuto = this._valeur("tondeuse_garage_ouvrir_avant_depart") === true;
     const retourAuto = this._valeur("tondeuse_garage_ouvrir_pour_retour") === true;
     const fermetureAuto = this._valeur("tondeuse_garage_fermer_apres_retour") === true;
-    const avance = nombreFr(this._valeur("tondeuse_garage_avance_ouverture"), 3);
+    const avance = secondesFr(Number(this._valeur("tondeuse_garage_avance_ouverture_secondes")));
     const ouvertureMin = nombreFr(this._valeur("tondeuse_garage_ouverture_min"), 3);
-    const fermeture = nombreFr(this._valeur("tondeuse_garage_delai_fermeture"), 3);
+    const fermeture = secondesFr(Number(this._valeur("tondeuse_garage_delai_fermeture_secondes")));
+    const fermetureManuelle = secondesFr(this._valeur("tondeuse_garage_delai_fermeture_manuel_secondes"));
+    const fermePendantTonte = this._valeur("tondeuse_garage_ferme_pendant_tonte") === true;
+    const secondesTonte = Number(this._valeur("tondeuse_garage_delai_fermeture_tonte_secondes"));
+    const delaiTonte = secondesTonte > 0 ? `après ${secondesFr(secondesTonte)}` : "sans attente";
+    const tentatives = nombreFr(this._valeur("tondeuse_garage_tentatives_max"), 0);
+    const delaiMax = secondesFr(this._valeur("tondeuse_garage_delai_max_mouvement_secondes"));
     const phrase = choisie
       ? `Le passage est protégé par ${volets.find((v) => v.entity_id === choisie)?.nom || choisie}. Chaque étape reste indépendante.`
       : "Aucun volet n'est branché.";
-    const corps = `${choisie ? this._etatGarageTondeuseHtml(choisie) : ""}
+    // ⚠️ Les commandes visent le volet ENREGISTRÉ, jamais celui d'un choix pas encore enregistré :
+    // sinon le bouton montrerait un volet et ordonnerait l'autre (ou rien, au premier branchement).
+    const enregistre = c.choisie || "";
+    const commandes = !choisie ? ""
+      : choisie !== enregistre
+        ? `<div class="commandes-garage"><p class="note"><ha-icon icon="mdi:information-outline"></ha-icon><span>Le choix du volet n'est pas enregistré : l'enregistrer avant de le commander.</span></p></div>`
+        : this._commandesGarageHtml(enregistre);
+    const corps = `${choisie ? this._etatGarageTondeuseHtml(choisie) + commandes + this._garagePiloteHtml() : ""}
       ${choisie ? `<div class="garage-reglages">
-        ${scenario("Avant le départ", "mdi:garage-open-variant", `${ouvertureAuto ? "Ouverture automatique" : "Ouverture manuelle"} · passage à ${ouvertureMin} % · attente ${avance} min`, [
+        ${scenario("Avant le départ", "mdi:garage-open-variant", `${ouvertureAuto ? "Ouverture automatique" : "Ouverture manuelle"} · passage à ${ouvertureMin} % · attente ${avance}`, [
           "tondeuse_garage_ouvrir_avant_depart",
           "tondeuse_garage_ouverture_min",
-          "tondeuse_garage_avance_ouverture",
+          "tondeuse_garage_avance_ouverture_secondes",
         ])}
-        ${scenario("Au retour", "mdi:home-import-outline", `${retourAuto ? "Ouverture automatique" : "Ouverture manuelle"} · ${fermetureAuto ? `fermeture après ${fermeture} min` : "reste ouvert"}`, [
+        ${scenario("Au retour", "mdi:home-import-outline", `${retourAuto ? "Ouverture automatique" : "Ouverture manuelle"} · ${fermetureAuto ? `fermeture après ${fermeture} (${fermetureManuelle} si ouvert à la main)` : "reste ouvert"}`, [
           "tondeuse_garage_ouvrir_pour_retour",
           "tondeuse_garage_fermer_apres_retour",
-          "tondeuse_garage_delai_fermeture",
+          "tondeuse_garage_delai_fermeture_secondes",
+          "tondeuse_garage_delai_fermeture_manuel_secondes",
+        ])}
+        ${scenario("Pendant la tonte", "mdi:cat", fermePendantTonte ? `Volet fermé dès qu'elle tond (${delaiTonte}) · ouvert seulement pour la laisser passer` : "Volet laissé ouvert tant que la tondeuse est dehors", [
+          "tondeuse_garage_ferme_pendant_tonte",
+          "tondeuse_garage_delai_fermeture_tonte_secondes",
+        ])}
+        ${scenario("Si le volet ne répond pas", "mdi:garage-alert-variant", `${tentatives} tentatives au plus · alerte après ${delaiMax}`, [
+          "tondeuse_garage_delai_max_mouvement_secondes",
+          "tondeuse_garage_tentatives_max",
+          "tondeuse_garage_delai_reprise_secondes",
         ])}
       </div>` : `<p class="note"><ha-icon icon="mdi:information-outline"></ha-icon><span>Sélectionner un volet dans Réglages → Entités pour afficher ses automatismes et ses délais.</span></p>`}`;
     return this._sectionReglageHtml({
@@ -7448,12 +7778,129 @@ class GazonIntelligentPanel extends HTMLElement {
       icone: "mdi:garage-variant",
       corps,
       cles: choisie ? [
-        "tondeuse_garage_ouvrir_avant_depart", "tondeuse_garage_ouverture_min", "tondeuse_garage_avance_ouverture",
-        "tondeuse_garage_ouvrir_pour_retour", "tondeuse_garage_fermer_apres_retour", "tondeuse_garage_delai_fermeture",
+        "tondeuse_garage_ouvrir_avant_depart", "tondeuse_garage_ouverture_min", "tondeuse_garage_avance_ouverture_secondes",
+        "tondeuse_garage_ouvrir_pour_retour", "tondeuse_garage_fermer_apres_retour", "tondeuse_garage_delai_fermeture_secondes",
+        "tondeuse_garage_delai_fermeture_manuel_secondes", "tondeuse_garage_delai_max_mouvement_secondes",
+        "tondeuse_garage_tentatives_max", "tondeuse_garage_delai_reprise_secondes",
+        "tondeuse_garage_ferme_pendant_tonte", "tondeuse_garage_delai_fermeture_tonte_secondes",
       ] : [],
       attributs: 'data-garage-tondeuse="1"',
       ouverte: change,
     });
+  }
+
+  // Pourquoi un ordre de volet est REFUSÉ maintenant, ou une chaîne vide s'il peut partir.
+  // ⚠️ JUGÉ À CHAQUE FOIS, jamais mémorisé : la confirmation demandée par un premier clic survit aux
+  // mises à jour de Home Assistant, et la tondeuse peut sortir entre les deux clics. Une fermeture
+  // sur une tondeuse dehors — ou dont la position n'est pas confirmée — l'enfermerait dehors ; le
+  // texte « vérifier que la tondeuse n'est pas dehors » n'est pas une garde. Appelée à l'affichage
+  // du bouton ET juste avant l'envoi (`_commande`). L'arrêt n'est jamais refusé : il est sans risque.
+  _refusVolet(commande) {
+    const volet = this._donnees?.garage_tondeuse?.choisie;
+    const etat = volet ? this._hass?.states?.[volet] : null;
+    if (!etat) return "Le volet n'est pas disponible.";
+    const brut = String(etat.state || "").toLowerCase();
+    if (brut === "unavailable" || brut === "unknown") return "Le volet ne répond pas.";
+    // Capacités publiées par le volet (OPEN = 1, CLOSE = 2) : un volet qui ne sait pas faire l'ordre
+    // ne le reçoit pas — comme l'arrêt, qui teste son bit (STOP = 8). Un attribut ABSENT ne dit rien :
+    // on ne bloque pas sur ce qu'on ne sait pas.
+    const fonctions = Number(etat.attributes?.supported_features);
+    if (commande === "garage-ouvrir" && Number.isFinite(fonctions) && !(fonctions & 1)) return "Ce volet ne sait pas s'ouvrir.";
+    if (commande === "garage-fermer" && Number.isFinite(fonctions) && !(fonctions & 2)) return "Ce volet ne sait pas se fermer.";
+    // ⚠️ Une confirmation ouverte AVANT un mouvement survit à ce mouvement : l'ordre inverse enverrait
+    // le volet repartir dans l'autre sens. Seul l'arrêt (jamais jugé ici) passe pendant un mouvement.
+    if (brut === "opening" || brut === "closing") return "Le volet est en mouvement : attendre la fin ou l'arrêter.";
+    if (commande === "garage-ouvrir" && brut === "open") return "Le volet est déjà ouvert.";
+    if (commande === "garage-fermer") {
+      if (brut === "closed") return "Le volet est déjà fermé.";
+      if (this._a("tonte_etat", "mower_is_outside") === true) {
+        return "La tondeuse est dehors : le volet reste ouvert pour son retour.";
+      }
+      // STRICT : sans confirmation que la tondeuse est rentrée (position inconnue, intégration qui
+      // ne publie rien, redémarrage de Home Assistant en cours), on ne ferme pas à l'aveugle. Le
+      // volet reste commandable depuis son entité dans Home Assistant.
+      if (this._a("tonte_etat", "mower_is_docked") !== true) {
+        return "La position de la tondeuse n'est pas confirmée à sa base : le volet reste ouvert.";
+      }
+    }
+    return "";
+  }
+
+  // Ouvrir, fermer, arrêter le volet à la main (test, dépannage). L'ordre d'ouverture ou de
+  // fermeture demande une confirmation ; l'arrêt, lui, agit tout de suite.
+  _commandesGarageHtml(entityId) {
+    const etat = this._hass.states[entityId];
+    if (!etat) return "";
+    const brut = String(etat.state || "").toLowerCase();
+    const fonctions = Number(etat.attributes?.supported_features) || 0;
+    const indisponible = brut === "unavailable" || brut === "unknown";
+    const enMouvement = brut === "opening" || brut === "closing";
+    const admin = this._estAdmin();
+    const occupe = (cle) => this._commandesEnCours.has(cle);
+    const demandes = {
+      ouvrir: { commande: "garage-ouvrir", texte: "Ouvrir", icone: "mdi:garage-open-variant", question: "Ouvrir le volet ? Vérifier que rien ne gêne le passage." },
+      fermer: { commande: "garage-fermer", texte: "Fermer", icone: "mdi:garage-variant", question: "Fermer le volet ? Vérifier que personne et rien n'est sous le volet, et que la tondeuse n'est pas dehors." },
+    };
+    const confirmation = this._garageConfirmation;
+    if (admin && demandes[confirmation]) {
+      const d = demandes[confirmation];
+      const refus = this._refusVolet(d.commande);
+      if (refus) {
+        return `<div class="commandes-garage">
+        <p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>${esc(refus)} La confirmation est annulée.</span></p>
+        <div class="rangee-boutons"><button class="bouton-contour" data-garage-annuler>Compris</button></div></div>`;
+      }
+      return `<div class="commandes-garage">
+        <p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>${esc(d.question)}</span></p>
+        <div class="rangee-boutons">
+          <button class="bouton-plein" data-commande="${d.commande}" data-volet="${esc(entityId)}" ${occupe(d.commande) ? "disabled" : ""}><ha-icon icon="${d.icone}"></ha-icon>${esc(d.texte)} maintenant</button>
+          <button class="bouton-contour" data-garage-annuler>Annuler</button>
+        </div></div>`;
+    }
+    const refus = { ouvrir: this._refusVolet("garage-ouvrir"), fermer: this._refusVolet("garage-fermer") };
+    const inactif = (verbe) => !admin || indisponible || enMouvement || Boolean(refus[verbe]);
+    const bouton = (verbe) => `<button class="bouton-contour" data-garage-demander="${verbe}" ${inactif(verbe) ? `disabled${refus[verbe] ? ` title="${esc(refus[verbe])}"` : ""}` : ""}><ha-icon icon="${demandes[verbe].icone}"></ha-icon>${esc(demandes[verbe].texte)}</button>`;
+    const arret = (fonctions & 8) !== 0
+      ? `<button class="bouton-blanc" data-commande="garage-arreter" data-volet="${esc(entityId)}" ${admin && enMouvement && !occupe("garage-arreter") ? "" : "disabled"}><ha-icon icon="mdi:stop-circle-outline"></ha-icon>Arrêter</button>`
+      : "";
+    const actif = this._a("tonte_etat", "mower_control_mode") === "actif";
+    const note = indisponible
+      ? `<p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>Le volet ne répond pas : les commandes sont désactivées.</span></p>`
+      : /tondeuse/.test(refus.fermer)
+        ? `<p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>${esc(refus.fermer)}</span></p>`
+        : actif
+        ? `<p class="note"><ha-icon icon="mdi:information-outline"></ha-icon><span>Pilotage actif : le pilote peut reprendre la main, par exemple refermer le volet après une rentrée confirmée.</span></p>`
+        : "";
+    return `<div class="commandes-garage"><div class="rangee-boutons">${bouton("ouvrir")}${bouton("fermer")}${arret}</div>${note}</div>`;
+  }
+
+  // Une anomalie du volet publiée par l'intégration (bloqué, injoignable tondeuse dehors).
+  _alerteVoletHtml() {
+    const code = this._a("tonte_etat", "mower_garage_alert");
+    if (!code) return "";
+    const motif = this._a("tonte_etat", "mower_garage_alert_reason");
+    const titre = code === "volet_indisponible" ? "Volet injoignable"
+      : code === "volet_ferme_dehors" ? "Volet fermé, tondeuse dehors" : "Volet bloqué";
+    return `<p class="note alerte alerte-volet" role="alert"><ha-icon icon="mdi:garage-alert-variant"></ha-icon><span><b>${esc(titre)}</b>${motif ? ` : ${esc(motif)}` : ""}</span></p>`;
+  }
+
+  // Ce que le pilote a fait en dernier et ce qu'il compte faire du volet, tels que l'intégration
+  // les publie. En observation, la « prochaine action » n'est PAS envoyée : on le dit.
+  _garagePiloteHtml() {
+    const a = (cle) => this._a("tonte_etat", cle);
+    const actions = { start_mowing: "départ", dock: "retour à la base", open_cover: "ouverture du garage", close_cover: "fermeture du garage" };
+    const lignes = [];
+    const derniere = a("mower_control_last_action");
+    const quand = instantFr(a("mower_control_last_action_at"), this._fuseau());
+    if (derniere && quand) lignes.push(`Dernière commande du pilote : <b>${esc(actions[derniere] || derniere)}</b>, ${esc(quand)}.`);
+    const prevue = a("mower_control_pending_action");
+    if (prevue === "open_cover" || prevue === "close_cover") {
+      const mode = a("mower_control_mode");
+      lignes.push(`Prochaine action prévue : <b>${esc(actions[prevue])}</b>${mode === "observation" ? " (affichée seulement, pilotage en observation)" : ""}.`);
+    }
+    const texte = lignes.length ? `<div class="pilote-garage">${lignes.map((l) => `<p>${l}</p>`).join("")}</div>` : "";
+    const alerte = this._alerteVoletHtml();
+    return alerte ? `<div class="commandes-garage">${alerte}</div>${texte}` : texte;
   }
 
   _etatGarageTondeuseHtml(entityId) {
@@ -7465,12 +7912,16 @@ class GazonIntelligentPanel extends HTMLElement {
     const etats = {
       open: ["ok", "mdi:garage-open-variant", "ouvert"],
       opening: ["retient", "mdi:garage-alert-variant", "ouverture en cours"],
-      closed: ["retient", "mdi:garage-variant", "fermé"],
+      closed: ["neutre", "mdi:garage-variant", "fermé"],
       closing: ["retient", "mdi:garage-alert-variant", "fermeture en cours"],
       unavailable: ["retient", "mdi:alert-outline", "indisponible"],
       unknown: ["retient", "mdi:alert-outline", "état inconnu"],
     };
-    const [ton, icone, libelle] = etats[brut] || ["retient", "mdi:garage-alert-variant", valeurEtat(etat)];
+    let [ton, icone, libelle] = etats[brut] || ["retient", "mdi:garage-alert-variant", valeurEtat(etat)];
+    // Fermé est l'état NORMAL au repos ; il n'inquiète que si la tondeuse est dehors.
+    if (brut === "closed" && this._a("tonte_etat", "mower_is_outside") === true) {
+      [ton, icone, libelle] = ["retient", "mdi:garage-alert-variant", "fermé alors que la tondeuse est dehors"];
+    }
     const nom = etat.attributes?.friendly_name || entityId;
     const position = Number(etat.attributes?.current_position);
     const libelleComplet = Number.isFinite(position) && ["open", "opening", "closing"].includes(brut)
@@ -7538,7 +7989,7 @@ class GazonIntelligentPanel extends HTMLElement {
       ["tondeuse", "mdi:robot-mower-outline", "Tondeuse en erreur", "Nouvelle erreur du robot, sans répétition tant qu'elle reste identique."],
       ["activite_arrosage", "mdi:water-check-outline", "Activité arrosage", "Début et fin d'un cycle, quantité et zones exécutées."],
       ["activite_tondeuse", "mdi:robot-mower", "Activité tondeuse", "Départ, retour vers la station et rentrée confirmée."],
-      ["garage_tondeuse", "mdi:garage-variant", "Garage tondeuse", "Ouverture, fermeture confirmée ou erreur de commande."],
+      ["garage_tondeuse", "mdi:garage-variant", "Garage tondeuse", "Ouverture ou fermeture ordonnée par le pilote, erreur de commande, volet bloqué ou injoignable."],
     ];
     const choixHtml = choixCategories.map(([cle, icone, titre, aide]) => `<div class="ligne compacte">
       <div class="ligne-tete">
@@ -8074,7 +8525,8 @@ class GazonIntelligentPanel extends HTMLElement {
       this._changerEntite(cle, caler(r, brute));
     } else {
       const r = this._reglage(cle);
-      this._changer(cle, caler(r, brute));
+      // Une échelle à deux pas : le curseur donne une POSITION, pas une valeur.
+      this._changer(cle, echelleDe(r) ? valeurDePosition(r, brute) : caler(r, brute));
     }
     this._rafraichirApresChangement(cle, { depuisCurseur: true });
   }
@@ -8170,6 +8622,7 @@ class GazonIntelligentPanel extends HTMLElement {
     const onglet = cible.closest?.("[data-onglet-accueil]");
     if (onglet) {
       this._ongletAccueil = onglet.dataset.ongletAccueil;
+      this._oublierLesConfirmations();
       this._rendre();
       this._page.scrollTo({ top: 0 });
       if (this._ongletAccueil === "arrosage") this._chargerHistorique();
@@ -8189,6 +8642,32 @@ class GazonIntelligentPanel extends HTMLElement {
     const commande = cible.closest?.("[data-commande]");
     if (commande) {
       if (!commande.disabled) this._commande(commande.dataset.commande, commande);
+      return true;
+    }
+    const demande = cible.closest?.("[data-garage-demander]");
+    if (demande) {
+      if (!demande.disabled) {
+        this._garageConfirmation = demande.dataset.garageDemander;
+        this._rendre();
+      }
+      return true;
+    }
+    if (cible.closest?.("[data-garage-annuler]")) {
+      this._garageConfirmation = undefined;
+      this._rendre();
+      return true;
+    }
+    const departTondeuse = cible.closest?.("[data-tondeuse-demander]");
+    if (departTondeuse) {
+      if (!departTondeuse.disabled) {
+        this._tondeuseConfirmation = departTondeuse.dataset.tondeuseDemander;
+        this._rendre();
+      }
+      return true;
+    }
+    if (cible.closest?.("[data-tondeuse-annuler]")) {
+      this._tondeuseConfirmation = undefined;
+      this._rendre();
       return true;
     }
     const note = cible.closest?.("[data-bascule-note]");
@@ -8401,7 +8880,7 @@ class GazonIntelligentPanel extends HTMLElement {
       this._changerEntite(cle, caler(r, v + sens * r.pas));
     } else {
       const r = this._reglage(cle);
-      this._changer(cle, caler(r, this._valeur(cle) + sens * r.pas));
+      this._changer(cle, voisine(r, this._valeur(cle), sens));
     }
     this._rendre();
   }

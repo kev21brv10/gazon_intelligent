@@ -1,5 +1,321 @@
 # Changelog
 
+## 1.0.0-rc.24
+
+- **Commander la tondeuse depuis la page** : nouvelle carte « Commander la tondeuse » dans l'onglet
+  Tonte — Démarrer la tonte, Coupe de bordure (automatique : un appui sur le bouton « Coupe de la
+  bordure » de la tondeuse, sans durée à régler), Retour à la base, Pause (remplacée par Reprendre quand la tondeuse est en pause) et
+  Annuler. Les commandes marchent quel que soit le mode du pilote automatique (désactivé,
+  observation ou actif) : c'est une action explicite. Un départ demande une confirmation (passage
+  dégagé) ; pause, retour et reprise partent tout de suite. Réservé aux administrateurs.
+- **Une sortie manuelle se termine à la rentrée du travail fini** : l'état « terminé » du travail ne dure que
+  quelques secondes (la tâche change d'identifiant à 100 %) alors que la tondeuse met encore plusieurs minutes
+  à rentrer ; la commande restait active 4 heures — relevé réel du 04/10/2026. La sortie retient maintenant
+  qu'elle a vu le travail inachevé (progression < 100 %) : rentrée à 100 %, elle est terminée. Une recharge à
+  mi-travail et le rebond de démarrage (100 % de l'ancien travail) ne terminent toujours rien.
+- **Motifs de blocage de la tonte en français** : la carte « Motifs de blocage » affichait les codes
+  bruts pour treize motifs (« mowing night », « phase sursemis », « vent fort »…). Ils ont maintenant un
+  libellé français, dans une table à part de celle du capteur « prochain blocage » (traduit en cinq
+  langues). Un test relit tous les codes de `decision_mowing.py` et refuse un motif sans libellé ou
+  présent dans les deux tables.
+- **Le programme des graines n'arrose plus un sol plein** : en sursemis, le cycle de surface quotidien ne lisait ni
+  le stock du registre du sol ni de capteur d'humidité du sol — du 28/09 au 08/10/2026, 47,5 mm reçus (pluie + arrosage)
+  pour 22,4 mm d'évaporation, stock plein 10 jours sur 11, et pourtant 2,2 mm arrosés chaque jour. Après la germination
+  (qui exige une surface toujours humide, et reste inchangée), le cycle est reporté (« sol déjà humide : sol saturé ») dès
+  que le stock atteint 90 % de sa capacité, quand le registre est fiable. Le seuil se règle dans Réglages → Graines (« Le
+  sol déjà plein », 70 à 100 %, 100 % désactive la protection). Une autre cause de report (pluie, froid) garde son motif.
+- **Un saut de compteur n'est plus une averse** : le 05/10/2026, des secousses sur la station ont fait chuter son
+  compteur de pluie à 0 pendant 8 secondes avant qu'il revienne à 29,8 mm ; le compteur « pluie du jour » a pris la
+  remontée pour 29,8 mm de pluie, et le suivi de la pluie mesurée — qui n'avait aucun plafond de plausibilité — a armé
+  90 minutes de ressuyage (« Herbe mouillée : ressuyage après 29,8 mm de pluie ») par ciel dégagé. Un gain de pluie ne
+  peut plus dépasser ce qu'une averse extrême verse dans le temps écoulé depuis la dernière lecture valide (3 mm/min,
+  jamais plus de 30 mm) : au-delà, il n'est ni de la pluie, ni une lame, ni une « hausse », il est tracé
+  (`pluie_mesuree_gain_rejete_mm` dans la santé des capteurs) et le capteur repart de sa nouvelle lecture. La station
+  elle-même garde son plafond fixe de 30 mm (son maximum mémorisé la protégeait déjà) : un vrai coup d'eau y est
+  toujours compté. Une coupure du capteur compte dans le temps écoulé : une vraie averse tombée pendant la panne n'est
+  pas rejetée au retour.
+- **Tondre avant l'orage** : une pluie annoncée ne bloque plus la tonte. Le score de tonte ne compte plus que la pluie
+  TOMBÉE : un orage de 17 mm prévu après-demain faisait passer le score de 49 à 67 (seuil 65) et la tonte d'un lundi sec
+  et ensoleillé était refusée (« Conditions défavorables ») — relevé le 05/10/2026 ; tondre avant la pluie est le bon
+  moment. La pluie en cours reste bloquée par sa propre règle, l'herbe mouillée par le ressuyage, et l'arrosage garde sa
+  sensibilité à la pluie annoncée.
+- **« Prochaine tonte » stable face à la prévision** : la date ajoutait de 1 à 3 jours dès qu'une pluie était annoncée
+  (le capteur disait « attendre ~1 h » et « prochaine tonte jeudi »), et elle sautait selon le motif du moment — les motifs
+  « nuit » et « espacement » ignoraient la prévision, les autres l'appliquaient (73 changements en deux jours). Seule la
+  journée de pluie elle-même (2 mm annoncés à J+1 ou J+2) est maintenant écartée, avec la même règle pour tous les motifs.
+  Un test rejoue le cas du 05/10, étalonné sur les valeurs réelles du capteur (« ~2 h » à 12 h 40, « ~1 h » à 13 h 40).
+- **« Robot indisponible » cumulé par cause** : le motif réunissait douze situations très différentes — pause pluie,
+  charge, tonte en cours, retour, démarrage, hors ligne, erreur… — sous un titre qui évoque une panne ; sur la carte « Motifs
+  de blocage », l'essentiel était en réalité la pause pluie à quai. Le cumul suit maintenant le détail déjà publié
+  (« Pause pluie du robot », « Robot en charge », « Robot hors ligne »…). Le code public `machine_unavailable` ne change pas
+  (automatisations, traductions) ; les journées déjà archivées gardent « Robot indisponible » jusqu'à sortir des 7 jours.
+  Un test relit les détails renvoyés par le moteur et refuse un détail sans libellé.
+- **Le volet du garage aussi dans l'onglet Tonte** : la carte « Commander la tondeuse » affiche l'état du
+  volet enregistré et ses boutons Ouvrir / Fermer (et Arrêter si le volet sait s'arrêter), avec les mêmes
+  confirmations et les mêmes refus que dans Installation → Tondeuse → Garage : volet en mouvement ou déjà
+  dans la position, tondeuse dehors ou non confirmée à sa base pour fermer, volet qui ne répond pas ou qui
+  ne sait pas faire l'ordre, lecteur non administrateur. L'état est rejugé au second clic. Une confirmation
+  d'ordre physique (volet, départ de la tondeuse) est oubliée dès qu'on change d'onglet ou de vue.
+- **Le volet est géré par l'intégration** : un départ ou une coupe de bordure est une séquence jouée
+  côté serveur et rejugée à chaque cycle avec l'état réel — ouverture du volet, confirmation de sa
+  position, délai de sécurité (celui du réglage « Avance à l'ouverture »), puis départ. Aucun ordre
+  de départ ne part tant que le volet n'est pas confirmé ouvert. Un volet qui ne répond pas, ou qui
+  atteint le plafond de tentatives, abandonne la commande avec son motif ; un retour ouvre d'abord
+  le volet. Elle ne dépend pas de l'onglet : fermer la page n'interrompt rien.
+- **Mode manuel temporaire** : tant qu'une commande est en cours, le pilote s'efface — pas de
+  rappel, pas de fermeture du volet, pas de départ — sans que son réglage change. Une seule règle
+  reste prioritaire : une tondeuse dehors ne doit pas trouver son volet fermé. Le pilote ne la
+  tient qu'en mode actif, alors que la commande marche dans les trois modes : c'est donc la
+  commande elle-même qui rouvre un volet refermé en route (à la main, par une automatisation),
+  avec la même porte d'ordres que le pilote — pas de doublon, au plus trois tentatives, alerte si
+  le volet ne répond pas. La commande prend
+  fin quand le travail est terminé et la tondeuse rentrée (jamais sur un simple « repos » : l'état
+  rebondit au démarrage, et une recharge au milieu du travail ne termine rien), à son échéance
+  (4 h, bordure comprise ; 1 h pour une pause) ou par Annuler. Après un retour manuel,
+  les départs automatiques sont suspendus 4 heures — sinon le pilote renverrait aussitôt une
+  tondeuse à quai dans de bonnes conditions ; la fermeture du volet, elle, suit la rentrée comme
+  d'habitude.
+- **Gardes rejugées à chaque cycle** : tondeuse connectée, prête et à sa base, batterie d'au moins
+  20 %, pas d'arrosage en cours, coupe de bordure seulement si la tondeuse CHOISIE a son bouton « Coupe de la
+  bordure » (même appareil, intégration Landroid Cloud, entité activée et disponible : une autre
+  marque, ou une autre tondeuse, installée à côté n'a pas le bouton). Reprendre est proposé pour une tondeuse en pause, quelle que soit
+  l'origine de la pause (cette page, l'appli du constructeur, à la main) : dehors, l'état de
+  travail reste « en cours » même en pause, seul l'état de la machine le dit. Comme le retour, la
+  reprise ouvre d'abord le volet et attend sa confirmation avant d'envoyer l'ordre (elle est
+  refusée si le volet ne répond pas) : rien ne garantit qu'un volet resté seul est encore ouvert. Retour et pause passent devant une
+  sortie en cours (on peut toujours l'arrêter) ; un second départ est refusé. Un refus est rendu
+  en clair à la page, pas comme une erreur.
+- **Le volet reste ouvert pendant un travail inachevé** : une tondeuse rentrée se recharger au milieu
+  d'un travail repart seule à la fin de la charge. Quand ce travail n'a pas été lancé par le pilote
+  (appli du constructeur, programme horaire), le pilote la tenait pour « rentrée » et refermait le
+  volet après son délai, la tondeuse repartant ensuite vers une porte close. Un travail en pause, en
+  cours, ou ancien mais reprenable garde maintenant le volet ouvert (état `travail_inacheve`), au
+  plus 3 heures après la rentrée : un vieux travail abandonné ne bloque pas la fermeture pour
+  toujours. Contrepartie assumée : après une rentrée sur travail inachevé (pluie, par exemple), le
+  volet peut rester ouvert jusqu'à 3 h au lieu de 1 à 2 minutes. Sans effet sur les cycles lancés
+  par le pilote (inchangés), sur une reprise due après une interruption du pilote lui-même, ni
+  après un « Retour à la base » manuel : la rentrée est voulue (relevé à l'essai sur le matériel,
+  le travail restait « en pause »), le volet se referme comme d'habitude.
+- **Alerte « volet fermé, tondeuse dehors » dans tous les modes** : le pilote ne rouvre un volet
+  refermé qu'en mode actif, la commande manuelle que pendant sa durée ; en observation ou
+  désactivé, rien ne le disait. Le volet non ouvert (fermé, en fermeture, ouvert à moitié) plus de
+  3 minutes devant une tondeuse dehors lève une alerte critique, publiée comme les autres
+  anomalies du volet (`mower_garage_alert`), affichée sur la page et envoyée aux téléphones. Elle
+  n'actionne rien ; le volet injoignable et le volet bloqué gardent leur propre alerte et priment.
+- **Le départ suit l'ouverture du volet de quelques secondes, plus de plusieurs minutes** : le pilote
+  actif (et la séquence d'une commande manuelle) n'était rejugé qu'à l'intervalle normal (2 min) ou à
+  un événement d'une entité suivie ; la tondeuse partait donc bien après le délai de sécurité (36 s
+  mesurés à l'essai pour un délai réglé à 15 s, et jusqu'à 2 min en pilotage actif). Tant que le pilote
+  attend le volet — ouverture en cours, délai de sécurité, délai avant fermeture — il demande
+  maintenant un nouveau passage toutes les 5 secondes : la tondeuse part au plus 5 s après le délai
+  de sécurité réglé, et le volet se referme au plus 5 s après son délai. Mode actif seulement :
+  observation et désactivé n'attendent rien. Les réglages sont inchangés (ouverture avant le
+  départ, attente après l'ouverture, position minimale, fermeture après la rentrée). Un minuteur qui
+  échoit pendant qu'un cycle tourne est ré-armé au lieu d'être perdu (relevé en relecture : l'attente
+  retombait sinon à l'intervalle normal).
+- **Le volet se ferme quand le pilote n'a plus de départ à envoyer** : jusqu'ici, tondeuse rentrée et
+  travail terminé, il ne se fermait que si le gazon interdisait la tonte (nuit, pluie) ; il restait
+  donc ouvert quand le quota du jour était atteint, le créneau non autorisé ou la batterie à
+  recharger, alors que rien ne repartait. Il se ferme maintenant, après son délai, dans ces cas et
+  après un retour manuel récent, et se rouvre tout seul avant le prochain départ (ouverture, délai de
+  sécurité, départ). Inchangés : la garde du travail inachevé, la reprise due du pilote, l'arrosage
+  en cours et la tondeuse pas prête (qui ne ferment pas le volet), l'option « fermer après la
+  rentrée » et le délai de fermeture. Les conditions reprennent celles des gardes de départ ; un
+  test de cohérence rejoue les deux chemins sur 360 situations.
+- **Redémarrage autonome après une recharge** : quand la tondeuse repart seule, son état brut passe à
+  « démarrage » alors que le capteur « en charge » reste vrai quelque temps ; elle était alors classée
+  « en charge », donc rangée (et « sûre pour l'arrosage »), et le volet ne s'ouvrait qu'au passage suivant
+  du coordinateur — relevé réel du 04/10/2026 : 56 s, pour un démarrage qui dure 45 à 70 s. Le démarrage brut
+  prime maintenant sur le capteur de charge, comme la tonte : la tondeuse est dehors dès qu'elle démarre. Même
+  règle pour un retour brut (`returning`, `going_home`, `homing`) : une tondeuse qui fait demi-tour juste après
+  sa sortie, capteur de charge encore vrai, n'est plus tenue pour rangée ni pour « sûre pour l'arrosage », et le
+  volet s'ouvre pour elle.
+- **Les six délais du volet se règlent en secondes, puis en minutes** : 1, 2, 3, 4… secondes, puis 1 min,
+  2 min, etc. Même échelle pour tous : « Après l'ouverture du garage, … avant le départ ? » (0 à 10 min,
+  2 min par défaut), « Après la rentrée confirmée, … avant de fermer ? » (0 à 15 min, 2 min), « Une fois
+  la tondeuse en tonte, … avant de fermer le volet ? » (0 à 5 min, 15 s), « Si le volet a été ouvert à la
+  main, … avant de le refermer ? » (0 à 4 h, 30 min), « Si le volet ne bouge pas, … avant de renvoyer
+  l'ordre ? » (5 s à 10 min, 2 min) et « Au bout de combien de temps un volet qui n'a pas atteint sa
+  position est-il bloqué ? » (5 s à 15 min, 3 min). Jusqu'à 1 min le curseur avance d'une seconde, au-delà
+  d'une minute, et la page écrit « 45 s », « 1 min », « 2 min »… (clés `…_secondes`). Les valeurs déjà
+  enregistrées en minutes sont reprises en secondes à la lecture (jamais perdues ; une valeur qui tombe
+  entre deux crans, comme 90 s, est ramenée au plus proche) ; une valeur déjà réglée en secondes l'emporte.
+  Le moteur du pilote continue de compter en minutes : la conversion se fait à un seul endroit du
+  coordinateur. Après la rentrée, le pilote se rejuge à l'échéance exacte (au plus 5 s, au moins 1 s) : un
+  délai de 1, 2, 3… secondes n'est pas arrondi au pas du minuteur. Les deux plus courts (renvoi, blocage)
+  ne descendent pas sous 5 s : une ouverture complète prend une dizaine de secondes.
+- **Volet « porte » (réglage facultatif, éteint par défaut)** : pour que les chats ne restent pas
+  enfermés dans le cabanon, le volet ne reste plus ouvert pendant la tonte. Réglage « Garder le volet
+  fermé pendant la tonte ? » : il s'ouvre pour laisser SORTIR la tondeuse, se referme dès qu'elle
+  tond (après 15 s, réglable à la seconde de 0 à 300 s : elle a passé la porte ; le pilote se rejuge à
+  l'échéance, par pas de 5 s au plus, la fermeture ne traîne pas jusqu'au cycle de 2 min), se rouvre quand elle REVIENT et
+  se referme derrière elle une fois à quai — y compris pour une recharge à mi-travail, où la garde
+  du travail inachevé est alors levée. Il s'applique au pilote actif et à la sortie d'une commande
+  manuelle (qui ne rouvre plus un volet fermé exprès en tonte ; une reprise après une pause ne
+  l'ouvre pas non plus ; une recharge à mi-travail PENDANT une sortie manuelle referme aussi le volet
+  derrière la tondeuse, qui le rouvre en repartant — relevé réel du 04/10/2026 : il restait ouvert pendant
+  toute la recharge). Pendant la tonte, un volet fermé n'est plus une anomalie : l'alerte « volet
+  fermé » ne vaut que pour le démarrage et le retour. Groupe « Pendant la tonte » dans la carte du
+  garage. Contreparties : au retour, le volet met une dizaine de secondes à s'ouvrir une fois la
+  tondeuse vue en retour, et elle peut l'atteindre avant ; un départ lancé hors du pilote (appli,
+  Node-RED) trouve le volet fermé jusqu'à ce qu'elle soit vue en démarrage. Éteint, rien ne change.
+- **Publié** : `mower_manual_active`, `_command`, `_step`, `_reason`, `_until`, `_duration_min`,
+  `_error`, `_ended_at`, `_suspension_active`, `_suspension_until` et `mower_edgecut_available`
+  (capteur d'état de la tonte et diagnostics) ; l'état de la commande survit à un redémarrage.
+- **Vérifié** : suite complète avec 2 790 tests et 3 487 sous-tests, ruff et mypy (55 fichiers)
+  verts, le nouveau module pur `manual_command` y compris ; 181 variantes cassées volontairement
+  (gardes, séquence du volet, réouverture du volet, pause, bordure, fin de commande, suspension,
+  effacement du pilote, persistance, volet porte, page), toutes détectées sauf une équivalente (la même
+  information passe par deux chemins).
+- **La hauteur estimée des plantules tient compte des tontes** : elle était calculée comme le
+  nombre de jours depuis la levée multiplié par la pousse quotidienne, sans jamais retrancher une
+  coupe. Le sursemis du 16/09/2026 annonçait 9,6 cm le 17/10 puis 14,0 cm le 28/10, alors que le
+  nombre de coupes des plantules comptait bien les tontes du 15/10 (lame à 5,0 cm), du 21/10 et du
+  27/10 (4,5 cm). Une tonte déclarée depuis la levée ramène désormais les plantules à la hauteur
+  de coupe (au plus : une lame plus haute que les plantules ne les touche pas), puis elles
+  repoussent à partir de là — 5,8 cm le 17/10 et 4,9 cm le 28/10 sur l'historique réel. La hauteur
+  de coupe est celle enregistrée avec la tonte ; à défaut le réglage actuel de la tondeuse ; à
+  défaut la lame du sursemis. La date de première coupe, le nombre de coupes et toutes les décisions
+  de tonte sont inchangés : seule l'estimation affichée change.
+- **La rosée estimée ne bascule plus à chaque tic de capteur** : l'estimation (air à 2,0 °C ou moins
+  du point de rosée, ou humidité d'au moins 88 %) était une photographie de l'instant. La station
+  mesure au dixième de degré et au pour cent : quand l'écart restait autour de 2,0 °C, l'autorisation
+  de tondre basculait à chaque tic — le 27/10/2026, 5 fois en 1 h 25 (écart 2,0 ↔ 2,2 °C, humidité
+  87 ↔ 88 %) — et le pilote automatique rappelait puis relançait la tondeuse, volet compris, à chaque
+  bascule. Une fois présente, la rosée reste désormais jusqu'à ce que l'écart dépasse 2,5 °C ET que
+  l'humidité repasse sous 86 % ; l'entrée est inchangée. Les marges viennent de 11 jours de mesures
+  de la station, rejoués : une sortie à 3,0 °C / 85 % supprimait aussi l'oscillation mais gardait le
+  gazon « mouillé » toute la journée du 27/10 (35 minutes sèches contre 335 avant) ; 2,5 °C / 86 %
+  remplace les 5 bascules de la matinée par une seule sortie, à 13:00, et retire 8 % des minutes
+  sèches de jour sur la période. Une lecture absente ne maintient rien, la mémoire est périmée au
+  bout de 30 minutes, elle survit aux redémarrages, et `rosee_maintenue` est publié dans la santé des
+  capteurs. Aucun effet quand un capteur « Rosée sur l'herbe » est branché : sa mesure se lit telle
+  quelle. La page affiche ce même verdict : elle recalculait seulement l'instant et annonçait
+  « Herbe sèche » (écart de 2,2 °C, humidité de 87 %) pendant que la tonte attendait encore.
+- **Vérifié** : suite complète avec 3 043 tests, ruff et mypy (55 fichiers) verts. Hauteur des
+  plantules : seize variantes cassées volontairement (coupe non retranchée, bornes de dates,
+  conversion mm → cm, ordre de repli de la hauteur de coupe, ancien calcul rétabli) toutes
+  détectées. Rosée : quarante variantes (seuils d'entrée et de sortie, bornes, lectures absentes,
+  mémoire périmée, illisible ou datée du futur, arrondi flottant, persistance, publication,
+  affichage de la page) toutes détectées, et la série réelle du 27/10 rejouée dans un test.
+
+## 1.0.0-rc.23
+
+- **Un volet qui ne bouge pas n'est plus relancé sans fin ni sans alerte** : avant, un volet qui
+  acceptait un ordre sans bouger (message radio perdu, moteur coincé) était relancé toutes les
+  dix minutes — le délai commun à toutes les commandes — sans plafond ni alerte ; seule une erreur
+  du service était signalée. Désormais les ordres d'ouverture et de fermeture forment une série :
+  nouvelle tentative après un délai PROPRE au volet (2 min par défaut), au plus 3 tentatives,
+  puis le pilote s'arrête (`volet_bloque`) et une alerte persistante demande une intervention sur
+  place. Le volet bloqué RESTE bloqué, et l'alerte reste affichée, jusqu'à réparation : tant que
+  le volet n'a pas atteint sa position le pilote n'envoie plus rien (au plus 24 h), et dès qu'il
+  l'atteint — même manœuvré à la main — il repart normalement. Passé 24 h sans réparation, une
+  nouvelle série de tentatives est autorisée (limite dite dans l'aide du réglage). Une série qui n'a pas épuisé ses
+  tentatives est oubliée au bout d'une heure sans ordre (une autre panne). Réglages (carte
+  « Garage », groupe « Si le volet ne répond pas ») : délai de reprise, tentatives maximales,
+  délai avant de le dire bloqué.
+- **Volet injoignable alors que la tondeuse est dehors** : alerte critique (elle peut ne plus
+  pouvoir rentrer), quel que soit le mode du pilote, après un délai de grâce de 5 minutes — un
+  volet est « indisponible » une à deux minutes après chaque redémarrage de Home Assistant, ce
+  n'est pas une anomalie. Publiée en attributs (`mower_garage_alert`, `mower_garage_alert_reason`)
+  et affichée sur la page.
+- **Un volet ouvert à la main n'est plus refermé d'emblée** : tondeuse à quai, un volet ouvert sans
+  ordre de l'intégration était refermé après le délai d'une rentrée (1 à 2 minutes), avec le motif
+  « Rentrée confirmée » alors qu'aucune rentrée n'avait eu lieu. Il attend maintenant 30 minutes
+  (réglable, jamais moins que le délai normal), comptées depuis son ouverture — pas depuis une
+  rentrée qui peut dater de plusieurs heures — et le motif dit « Garage ouvert à la main ». Seul
+  un volet vu fermé puis ouvert sans ordre du pilote est « à la main » : sans trace, le
+  comportement d'avant est conservé.
+- **Notifications utiles seulement** : une ouverture ou une fermeture n'est annoncée au téléphone
+  que si le pilote l'a ordonnée (il y a moins de 15 minutes) ; un volet manœuvré à la main ne
+  notifie plus. Une anomalie du volet part toujours, et une anomalie déjà présente au premier
+  contrôle (redémarrage en pleine panne) n'est pas avalée. Une anomalie qui apparaît au même
+  contrôle qu'une erreur de commande (ou que sa levée) n'est pas perdue : l'erreur passe d'abord,
+  l'anomalie est annoncée au contrôle suivant, une seule fois.
+- **Un volet remplacé repart d'un registre vierge** : les ordres, les tentatives et le blocage sont
+  liés au volet configuré. Si l'entité du volet change, le nouveau n'hérite plus du blocage de
+  l'ancien (jusqu'à 24 h) ; un registre d'avant cette liaison est adopté tel quel.
+- **Vérifié** : suite complète avec 2 475 tests et 3 316 sous-tests, ruff et mypy (54 fichiers)
+  verts, le nouveau module pur `garage_guard` y compris ; 50 variantes cassées volontairement
+  (plafond, délais, série, alerte, délai manuel, notifications, liaison au volet, page), toutes
+  détectées.
+
+## 1.0.0-rc.22
+
+- **Ouvrir, fermer, arrêter le volet depuis la page** : la carte « Garage de la tondeuse »
+  gagne trois boutons, pour tester ou dépanner. Ouvrir et fermer demandent une confirmation
+  (« vérifier que personne et rien n'est sous le volet ») ; l'arrêt agit tout de suite. Les boutons
+  sont grisés selon l'état du volet (pas d'ouverture d'un volet ouvert, rien pendant un
+  mouvement sauf l'arrêt, rien s'il est indisponible) et réservés aux administrateurs. En
+  pilotage actif, la page prévient que le pilote peut reprendre la main.
+- **La fermeture à la main ne peut pas enfermer la tondeuse dehors** : « Fermer » est grisé tant
+  que la tondeuse n'est pas CONFIRMÉE rentrée à sa base (dehors, position inconnue, intégration
+  muette après un redémarrage : même refus, le volet reste commandable depuis son entité dans
+  Home Assistant), et l'ordre est REJUGÉ juste avant d'être envoyé. La confirmation demandée par un premier clic survit en
+  effet aux mises à jour de Home Assistant : si la tondeuse sort entre les deux clics, le bouton
+  final disparaît et aucun ordre ne part (idem pour un volet devenu fermé, ouvert ou
+  indisponible entre-temps). L'arrêt n'est jamais refusé ; ouvrir reste possible tondeuse
+  dehors, c'est ce qu'il faut pour son retour.
+- **Les commandes visent le volet ENREGISTRÉ, et lui seul** : les boutons ne s'affichent que pour le
+  volet déjà enregistré (un autre volet choisi sans enregistrer dit « le choix n'est pas
+  enregistré »), chaque bouton porte l'identité du volet qu'il commande, et l'envoi la revérifie :
+  on ne peut plus confirmer un ordre sur un volet affiché et en commander un autre — ou rien, au
+  premier branchement. Un volet en mouvement refuse aussi l'ordre inverse d'une confirmation
+  demandée avant le mouvement ; seul l'arrêt passe.
+- **Ouvrir et Fermer respectent les capacités du volet** : un volet qui ne sait pas s'ouvrir ou
+  se fermer (bits `OPEN` / `CLOSE` de `supported_features`, comme l'arrêt teste le sien) n'a pas
+  le bouton correspondant, avec le motif au survol, et l'ordre est refusé à l'envoi. Un attribut
+  absent ne bloque rien : on ne refuse pas sur ce qu'on ne sait pas.
+- **Dernière commande et prochaine action du pilote** : la carte du garage et le bloc
+  « Pilotage » de l'onglet Tonte disent ce que le pilote a envoyé en dernier (« départ,
+  aujourd'hui à 20 h 02 ») ; la carte du garage annonce aussi la prochaine action prévue du
+  volet, en précisant qu'elle n'est qu'affichée quand le pilotage est en observation.
+- **« Fermé » n'est plus un avertissement** : c'est l'état normal du volet au repos, affiché en
+  neutre. Il n'est signalé (en ambre) que si la tondeuse est dehors.
+- **Libellé corrigé** : « Ouvrir automatiquement le garage pour le retour ? » devient « …dès que
+  la tondeuse est dehors ou rentre ? » — ce réglage ouvre aussi le volet pour un départ lancé
+  depuis l'appli, ce que l'ancien libellé ne disait pas.
+- **Vérifié** : suite complète avec 2 333 tests et 3 261 sous-tests, ruff et mypy (53
+  fichiers) verts ; la carte est rendue dans chaque état du volet, les clics sont rejoués (y
+  compris l'état qui change entre les deux clics), avec trente-cinq variantes cassées
+  volontairement, toutes détectées.
+## 1.0.0-rc.20
+
+- **Un capteur de pluie resté allumé dans le vide n'immobilise plus la tondeuse** : le
+  drapeau « pluie en cours » de la station du jardin était la seule source de la « pause
+  pluie » de la tondeuse. Relevé le 02/10/2026 : passé à `on` à 23 h 39, il n'est jamais
+  retombé — 12 h 30 plus tard la tondeuse était toujours indisponible, alors que le cumul
+  n'avait monté que de 0,2 mm, que l'intensité valait 0, que la station annonçait elle-même
+  « sunny » et que le détecteur de la tondeuse était éteint. Le drapeau est maintenant écarté
+  quand TOUT concorde : il est allumé, aucune autre source ne conclut à une pluie en ce moment
+  (intensité, hausse récente du pluviomètre, prévision), et le pluviomètre n'a pas monté depuis
+  3 h. Une mesure absente (station muette, premier cycle) ne prouve rien : le drapeau reste
+  alors respecté, comme avant. Le drapeau écarté reste visible (`tondeuse_pluie_ignoree`) et
+  une trace est écrite au journal, une seule fois par épisode.
+- **Vérifié** : suite complète avec 2 284 tests et 3 247 sous-tests, ruff et mypy (53 fichiers)
+  verts ; cinq mutations de la garde (drapeau jamais écarté, source concordante ignorée, mesure
+  absente acceptée, pluie instantanée oubliée, borne exclue) sont toutes tuées par les tests.
+## 1.0.0-rc.19
+
+- **Un sous-créneau « idéal » le soir, pour les nouveaux départs réglés sur « idéal
+  seulement »** : ce réglage ne laissait partir un nouveau cycle que dans la fenêtre du
+  matin (10h-14h) — une tondeuse prête, autorisée, par ailleurs disponible, attendait le
+  lendemain matin même si une bonne partie de soirée dégagée restait disponible. Un
+  sous-créneau « idéal » du soir, par défaut de 2h à 30 min avant le coucher du soleil
+  (ancré sur le coucher réel, comme le créneau acceptable existant), lui donne désormais
+  le même statut que le matin sans changer le créneau acceptable plus large qui l'englobe.
+  Réglable (`tonte_soir_ideal_debut_avant_coucher` / `tonte_soir_ideal_fin_avant_coucher`,
+  page Gazon → Réglages → Tonte). Les blocages existants (vent, chaleur, pluie, soirée
+  chaude d'été) gardent la priorité, comme pour le créneau acceptable.
+- **La page dessine le même créneau idéal que le moteur** : le sous-créneau idéal ne vit
+  qu'à l'intérieur de la fenêtre acceptable du soir. Avec des réglages non par défaut (soir
+  resserré à 1 h, idéal de 2 h à 30 min), l'aperçu de la page Tonte et sa phrase annonçaient
+  un idéal dès 18 h alors que le moteur ne le publiait qu'à partir de 19 h ; quand le
+  sous-créneau tombe entièrement hors de la fenêtre du soir, la page ne l'annonce plus du
+  tout. Comparé minute par minute au moteur, sur plusieurs jeux de réglages.
+- **Vérifié** : suite complète avec 2 285 tests et 6 860 sous-tests, ruff et mypy (53
+  fichiers) verts.
+
 ## 1.0.0-rc.17
 
 - **Le motif affiché pendant un rappel de tonte dit enfin la vraie cause** : quand

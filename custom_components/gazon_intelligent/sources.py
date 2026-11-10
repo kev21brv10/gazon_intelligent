@@ -192,7 +192,7 @@ SOURCES: tuple[Source, ...] = (
         CONF_CAPTEUR_ROSEE, "Rosée sur l'herbe", "la rosée sur l'herbe", "air",
         "Un capteur d'humidité du feuillage. Ce n'est pas le point de rosée : au-dessus de 0, "
         "l'herbe est mouillée et la tonte attend.",
-        "Une rosée estimée : air à moins de 2 °C de son point de rosée, humidité d'au moins 88 %, brouillard ou pluie.",
+        "Une rosée estimée : air à moins de 2 °C de son point de rosée, humidité d'au moins 88 %, brouillard ou pluie ; une fois présente, elle reste jusqu'à 2,5 °C d'écart et 86 % d'humidité.",
         indices=("foliaire", "feuillage", "leaf_wetness", "leaf_moisture"),
         unites_refusees=UNITES_TEMPERATURE,
         classes_refusees=("temperature",),

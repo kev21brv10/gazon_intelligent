@@ -49,6 +49,12 @@ SEMIS_WINDOW_END_HOUR = 17
 # Vent (km/h) à partir duquel les graines ne sont plus arrosées : l'eau tombe à côté. La valeur
 # était écrite en dur dans les deux branches semis ; nommée pour que la page puisse la régler.
 SEMIS_VENT_MAX_KMH = 15.0
+# ⚠️ SOL SATURÉ (09/10/2026) : remplissage du stock du registre (en % de sa capacité) à partir duquel le cycle de
+# surface du programme graines est reporté. Le programme (1 cycle par jour en enracinement) ne lisait NI le stock
+# du registre NI de capteur de sol : du 28/09 au 08/10, 47,5 mm reçus (pluie + arrosage) pour 22,4 mm d'évaporation,
+# stock plein 10 jours sur 11, et un cycle de 2,2 mm chaque jour. Hors germination seulement : la germination exige
+# une surface toujours humide, quel que soit le fond du sol. 100 % désactive la garde.
+SEMIS_SOL_SATURE_POURCENT = 90.0
 EVENING_START_HOUR = 18
 EVENING_END_HOUR = 20
 # Marge de séchage : un arrosage du soir doit finir au moins ce nombre de minutes avant
@@ -626,6 +632,9 @@ def _sursemis_micro_apport_decision(
     reglages: Mapping[str, Any] | None = None,
     ajustement_precedent: str | None = None,
     pluie_active: bool = False,
+    reserve_stock_mm: float | None = None,
+    reserve_stock_max_mm: float | None = None,
+    reserve_from_soil_ledger: bool = False,
 ) -> dict[str, Any]:
     policy_key = str(policy.get("policy_key") or "enracinement_prudent")
     watering_stage, stage_program = resolve_semis_stage_program(
@@ -676,6 +685,28 @@ def _sursemis_micro_apport_decision(
         elif pluie_24h >= pluie_24h_max or pluie_demain >= pluie_demain_max:
             block_reason = "pluie_prevue_suffisante"
             reason = "pluie récente ou prévue, stratégie semis_frequent reportée."
+
+    # ⚠️ SOL SATURÉ — hors germination, et seulement si le registre est fiable. Le stock du registre (0 à son
+    # plafond) dit si le sol peut encore boire : plein, un cycle de surface ne fait que drainer. Une autre cause de
+    # report (pluie, probabilité, froid) garde son motif : on n'écrase pas la première explication.
+    if (
+        sous_phase not in {"Germination", "Levée"}
+        and reserve_from_soil_ledger
+        and reserve_stock_mm is not None
+        and reserve_stock_max_mm is not None
+        and reserve_stock_max_mm > 0.0
+        and not block_reason
+    ):
+        seuil_sature = float(lire(reglages, "graines_sol_sature", SEMIS_SOL_SATURE_POURCENT))
+        remplissage = 100.0 * float(reserve_stock_mm) / float(reserve_stock_max_mm)
+        # 100 % = garde DÉSACTIVÉE (le réglage le promet) : un stock plein vaut 100 % et serait sinon encore bloqué
+        # (contre-vérification du 09/10/2026).
+        if seuil_sature < 100.0 and remplissage >= seuil_sature:
+            block_reason = "sol_deja_humide"
+            reason = (
+                f"sol saturé ({remplissage:.0f} % de sa capacité, seuil {seuil_sature:.0f} %) : "
+                "le cycle de surface est reporté."
+            )
 
     # Garde germination basse température — placé APRÈS le bloc générique pour avoir le dernier
     # mot. Posé avant, il fixait bien `block_reason = "temperature_trop_basse_germination"`, mais
@@ -2247,6 +2278,9 @@ def _profile_for_sursemis(ctx: _WateringCtx) -> dict[str, Any]:
         reglages=ctx.reglages,
         ajustement_precedent=ctx.semis_ajustement_precedent,
         pluie_active=is_active_rain_weather(ctx.weather_profile),
+        reserve_stock_mm=_to_float(ctx.water_balance.get("reserve_stock_mm")),
+        reserve_stock_max_mm=_to_float(ctx.water_balance.get("reserve_stock_max_mm")),
+        reserve_from_soil_ledger=bool(ctx.water_balance.get("reserve_from_soil_ledger")),
     )
     mm_cible = float(sursemis_state.get("surface_cycle_mm") or 0.0) if sursemis_state["allowed"] else 0.0
     block_reason = sursemis_state["block_reason"]

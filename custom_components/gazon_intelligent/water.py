@@ -1099,6 +1099,8 @@ def compute_advanced_context(
         # `advanced_context`. Un test part de la sortie RÉELLE du coordinateur et l'exige.
         "pluie_mesuree_lame_mm": weather_profile.get("pluie_mesuree_lame_mm"),
         "pluie_cumul_lame_mm": weather_profile.get("pluie_cumul_lame_mm"),
+        # Gain de pluie rejeté (saut impossible) côté capteur « pluie du jour » : trace, jamais un rejet silencieux.
+        "pluie_mesuree_gain_rejete_mm": weather_profile.get("pluie_mesuree_gain_rejete_mm"),
     }
 
 

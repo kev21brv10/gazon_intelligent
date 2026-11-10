@@ -10,9 +10,22 @@ DEFAULT_MOWER_CONTROL_COMMAND_COOLDOWN_MINUTES = 10
 # affiché change), ne relance rien et n'annule rien — la commande reste due tant qu'aucun
 # signal frais ne l'a confirmée.
 MOWER_MANAGED_START_TIMEOUT_MINUTES = 15
+# Un travail inachevé (recharge à mi-travail) garde le volet ouvert au plus ce temps après la rentrée :
+# la recharge dure environ 70 min ; passé ce délai, un vieux travail abandonné ne doit pas bloquer
+# la fermeture pour toujours.
+MOWER_JOB_HOLD_MAX_MINUTES = 180
 DEFAULT_MOWER_GARAGE_OPEN_BEFORE_START = True
 DEFAULT_MOWER_GARAGE_OPEN_FOR_RETURN = True
 DEFAULT_MOWER_GARAGE_CLOSE_AFTER_DOCK = True
-DEFAULT_MOWER_GARAGE_OPEN_LEAD_MINUTES = 2
+# Délais du volet réglés en SECONDES sur la page (le moteur les lit en minutes : même valeur, autre unité).
+DEFAULT_MOWER_GARAGE_OPEN_LEAD_SECONDS = 120
+DEFAULT_MOWER_GARAGE_CLOSE_DELAY_SECONDS = 120
+DEFAULT_MOWER_GARAGE_OPEN_LEAD_MINUTES = DEFAULT_MOWER_GARAGE_OPEN_LEAD_SECONDS / 60
 DEFAULT_MOWER_GARAGE_MIN_OPEN_POSITION = 95
-DEFAULT_MOWER_GARAGE_CLOSE_DELAY_MINUTES = 2
+DEFAULT_MOWER_GARAGE_CLOSE_DELAY_MINUTES = DEFAULT_MOWER_GARAGE_CLOSE_DELAY_SECONDS / 60
+# Volet « porte de la tondeuse » (réglage facultatif) : ouvert seulement pour la laisser sortir ou rentrer,
+# refermé dès qu'elle tond et derrière elle une fois à quai (un chat ne peut pas entrer pendant la tonte).
+DEFAULT_MOWER_GARAGE_CLOSE_WHILE_MOWING = False
+# Attente, une fois la tondeuse en tonte, avant de refermer le volet (elle a passé la porte), en SECONDES
+# (réglable à la seconde, de 0 à 300).
+DEFAULT_MOWER_GARAGE_CLOSE_WHILE_MOWING_DELAY_SECONDS = 15
