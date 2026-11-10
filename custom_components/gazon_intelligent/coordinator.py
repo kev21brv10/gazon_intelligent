@@ -172,6 +172,7 @@ from .coordinator_states import (
     get_float_state,
     get_state_unit,
     get_text_state,
+    minutes_since_state_change,
     validate_sensor_value,
 )
 from .coordinator_weather import (
@@ -1682,19 +1683,28 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         raw_state = str(mower_state.state or "").strip()
         available = raw_state.lower() not in {"unavailable", "unknown"}
-        rain_raw = self._get_bool_state(
-            self._resolve_mower_related_entity_id(
-                mower_entity_id,
-                CONF_CAPTEUR_TONDEUSE_PLUIE,
-                "binary_sensor",
-                "capteur_de_pluie",
-            )
+        rain_entity_id = self._resolve_mower_related_entity_id(
+            mower_entity_id,
+            CONF_CAPTEUR_TONDEUSE_PLUIE,
+            "binary_sensor",
+            "capteur_de_pluie",
         )
+        rain_raw = self._get_bool_state(rain_entity_id)
         # ⚠️ Un drapeau « pluie » allumé dans le vide ne doit pas immobiliser la machine : voir
         # `mower_adapter.rain_flag_is_stale` (relevé du 02/10/2026, 12 h 30 de pause fantôme).
         rain_ignored = rain_flag_is_stale(
             rain_raw,
             minutes_since_rain_rise=(weather_profile or {}).get("pluie_mesuree_minutes_depuis_hausse"),
+            # ⚠️ L'âge du DRAPEAU, pas celui de la dernière hausse du pluviomètre : une averse qui
+            # commence allume le drapeau alors que le cumul est calme depuis des heures. Un drapeau
+            # tout neuf ne peut pas être « resté allumé dans le vide ». Inconnu = respecté.
+            flag_on_minutes=(
+                minutes_since_state_change(
+                    getattr(self, "hass", None), rain_entity_id, self._current_utc_datetime()
+                )
+                if rain_raw is True
+                else None
+            ),
             # La pluie INSTANTANÉE (intensité > 0) n'entre pas encore dans `is_active_rain_weather`
             # (observation seule, cf. `_lire_pluie_actuelle`) : elle est pourtant la preuve la plus
             # directe qu'il pleut, et le drapeau doit alors rester respecté.

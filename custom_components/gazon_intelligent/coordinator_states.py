@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from logging import Logger
 from math import isfinite
 from typing import Any
@@ -83,6 +84,28 @@ def get_text_state(hass: Any, entity_id: str | None) -> str | None:
     if text.lower() in _UNAVAILABLE_STATES:
         return None
     return text or None
+
+
+def minutes_since_state_change(hass: Any, entity_id: str | None, now: datetime) -> float | None:
+    """Depuis combien de minutes l'état de cette entité est passé à sa valeur actuelle, ou `None`.
+
+    Lu sur `last_changed` (pas `last_updated` : un simple changement d'attribut ne doit pas
+    rajeunir un état). `None` quand on ne peut rien affirmer : entité absente, date absente ou
+    illisible, ou date POSTÉRIEURE à `now` (décalage d'horloge). Appelant : traiter `None`
+    comme « inconnu », jamais comme « ancien ».
+    """
+    if not entity_id:
+        return None
+    state = hass.states.get(entity_id)
+    changed = getattr(state, "last_changed", None)
+    if not isinstance(changed, datetime) or not isinstance(now, datetime):
+        return None
+    if changed.tzinfo is None:
+        changed = changed.replace(tzinfo=timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    minutes = (now - changed).total_seconds() / 60.0
+    return minutes if minutes >= 0.0 else None
 
 
 def get_bool_state(hass: Any, entity_id: str | None) -> bool | None:
