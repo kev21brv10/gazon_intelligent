@@ -3492,6 +3492,232 @@ class LaMachineNEffacePasLeVerdictDuGazonTests(unittest.TestCase):
         )
 
 
+class TondreAvantLOrageTests(unittest.TestCase):
+    """05/10/2026 : un orage de 17 mm annoncé pour mercredi bloquait la tonte du lundi (« Conditions
+    défavorables », score 67 pour un seuil de 65) et repoussait la « prochaine tonte » au jeudi — alors que
+    tondre AVANT la pluie est le bon moment. Seule la pluie TOMBÉE, la pluie en cours et le ressuyage comptent."""
+
+    PREVISION = dict(pluie_demain=1.2, pluie_j2=17.0, pluie_3j=18.2)  # Météo-France du 05/10/2026
+    AUCUNE = dict(pluie_demain=0.0, pluie_j2=0.0, pluie_3j=0.0)
+    MOWER = {"tondeuse_connectee": True, "tondeuse_prete": True, "mower_coordination_ready": True, "mower_is_docked": True}
+
+    @staticmethod
+    def _arrosage(jour, debut, fin):
+        return {
+            "type": "arrosage", "date": jour, "started_at": debut, "ended_at": fin,
+            "source": "auto_irrigation", "total_mm": 2.2, "watering_cause": "hydrique",
+        }
+
+    def _context(self, hour_local, pluie, history=None, **extra):
+        a5 = self._arrosage("2026-10-05", "2026-10-05T08:00:07+00:00", "2026-10-05T08:26:37+00:00")
+        a4 = self._arrosage("2026-10-04", "2026-10-04T08:00:04+00:00", "2026-10-04T08:26:34+00:00")
+        histoire = history if history is not None else [
+            {"type": "Sursemis", "date": "2026-09-16"}, {"type": "tonte", "date": "2026-09-24"},
+            {"type": "tonte", "date": "2026-10-02"}, a4, a5,
+        ]
+        maintenant = datetime(2026, 10, 5, 0, 0, tzinfo=timezone.utc) + timedelta(hours=hour_local - 2)
+        params = dict(
+            history=histoire, today=date(2026, 10, 5), hour_of_day=hour_local, temperature=25.6,
+            pluie_24h=0.1, humidite=56, type_sol="limoneux", etp_capteur=3.4, vent=1.8,
+            hauteur_gazon=4.5, hauteur_min_tondeuse_cm=3.0, hauteur_max_tondeuse_cm=6.0,
+            reglages={"sursemis_ecart_tontes": 3}, mower_context=dict(self.MOWER),
+            runtime_context={"now_utc": maintenant.isoformat(), "last_irrigation_execution": a5},
+        )
+        params.update(pluie)
+        params.update(extra)
+        return decision.DecisionContext.from_legacy_args(**params)
+
+    def _bundle(self, hour_local, pluie, **extra):
+        ctx = self._context(hour_local, pluie, **extra)
+        phase = decision.build_phase_bundle(ctx)
+        water = decision.build_water_bundle(ctx, phase)
+        risk = decision.build_risk_bundle(ctx, phase, water)
+        return decision.build_mowing_bundle(ctx, phase, water, risk), risk
+
+    def test_etalonnage_le_rejeu_redonne_le_capteur_reel(self) -> None:
+        """PRÉMISSE : sans elle le banc ne prouverait rien. Le capteur réel affichait « ~2 h » à 12 h 40 et
+        « ~1 h » à 13 h 40, motif `recent_watering`."""
+        for heure, restant in ((12.67, "~2h"), (13.67, "~1h")):
+            with self.subTest(heure=heure):
+                bundle, _risk = self._bundle(heure, self.PREVISION)
+                self.assertEqual(bundle.get("mowing_block_reason_code"), "recent_watering")
+                self.assertIn(restant, bundle.get("mowing_block_reason_label") or "")
+
+    def test_la_tonte_est_autorisee_apres_le_delai_malgre_l_orage_annonce(self) -> None:
+        for heure in (15.67, 17.0, 18.5):
+            with self.subTest(heure=heure):
+                bundle, risk = self._bundle(heure, self.PREVISION)
+                self.assertTrue(bundle["tonte_autorisee"], bundle.get("mowing_block_reason_code"))
+                self.assertIsNone(bundle.get("mowing_block_reason_code"))
+                self.assertLess(risk["scores"]["score_tonte"], 65)
+                self.assertEqual(bundle["next_mowing_date"], "2026-10-05")
+
+    def test_la_prevision_ne_peut_que_soulager_le_score_et_ne_change_pas_le_verdict(self) -> None:
+        """La prévision n'AJOUTE plus de points à la tonte. Elle peut seulement en retirer : une pluie annoncée
+        soulage le stress hydrique, dont une part est reportée sur le score de tonte (47 contre 49 ici)."""
+        avec, risk_avec = self._bundle(17.0, self.PREVISION)
+        sans, risk_sans = self._bundle(17.0, self.AUCUNE)
+        self.assertLessEqual(risk_avec["scores"]["score_tonte"], risk_sans["scores"]["score_tonte"])
+        self.assertEqual(avec["tonte_autorisee"], sans["tonte_autorisee"])
+        self.assertTrue(avec["tonte_autorisee"])
+
+    def test_pendant_le_delai_la_date_affichee_est_aujourd_hui(self) -> None:
+        """Le même capteur disait « attendre ~1 h » ET « prochaine tonte jeudi » : la date ne suit plus la prévision."""
+        for heure in (12.67, 13.67, 15.0):
+            with self.subTest(heure=heure):
+                bundle, _risk = self._bundle(heure, self.PREVISION)
+                self.assertEqual(bundle["next_mowing_date"], "2026-10-05")
+                self.assertEqual(bundle["next_mowing_display"], "05/10/2026")
+
+    def test_la_pluie_tombee_bloque_toujours(self) -> None:
+        """Contrepartie : 6,5 mm tombés dans les dernières 24 h rendent bien les conditions défavorables."""
+        ctx = self._context(17.0, self.AUCUNE)
+        ctx.pluie_24h = 6.5
+        phase = decision.build_phase_bundle(ctx)
+        water = decision.build_water_bundle(ctx, phase)
+        risk = decision.build_risk_bundle(ctx, phase, water)
+        bundle = decision.build_mowing_bundle(ctx, phase, water, risk)
+        self.assertGreaterEqual(risk["scores"]["score_tonte"], 65)
+        self.assertFalse(bundle["tonte_autorisee"])
+
+    # ── Projection : seule la journée de pluie elle-même est écartée ─────────────────────
+    def _projection(self, motif, pluie, hour_local=21.0, history=None):
+        ctx = self._context(hour_local, pluie, history=history)
+        phase = decision.build_phase_bundle(ctx)
+        water = decision.build_water_bundle(ctx, phase)
+        return decision_mowing._project_next_mowing_date(ctx, phase, water, False, motif)
+
+    def test_une_pluie_a_j2_n_ecarte_pas_demain(self) -> None:
+        # Nuit du soir : « demain » (06/10) est faisable, l'orage n'est que le 07/10.
+        date_iso, _affiche, _hint = self._projection("mowing_night", self.PREVISION)
+        self.assertEqual(date_iso, "2026-10-06")
+
+    def test_une_journee_de_pluie_est_ecartee(self) -> None:
+        # Orage DEMAIN (06/10) : la nuit renvoie « demain » → écarté, première journée sans pluie annoncée = 07/10.
+        date_iso, _affiche, hint = self._projection("mowing_night", dict(pluie_demain=17.0, pluie_j2=0.3, pluie_3j=17.3))
+        self.assertEqual(date_iso, "2026-10-07")
+        self.assertEqual(hint, "pluie_annoncee")
+
+    def test_deux_journees_de_pluie_de_suite_sont_toutes_deux_ecartees(self) -> None:
+        date_iso, _affiche, _hint = self._projection("mowing_night", dict(pluie_demain=9.0, pluie_j2=6.0, pluie_3j=15.0))
+        self.assertEqual(date_iso, "2026-10-08")
+
+    def test_une_pluie_apres_j2_ou_cumulee_n_ecarte_rien(self) -> None:
+        date_iso, _affiche, _hint = self._projection("mowing_night", dict(pluie_demain=0.0, pluie_j2=0.0, pluie_3j=0.0))
+        self.assertEqual(date_iso, "2026-10-06")
+        # pluie_3j seule (jour d'aujourd'hui) : on ne sait pas la dater, elle n'écarte aucun jour futur.
+        date_iso, _affiche, _hint = self._projection("mowing_night", dict(pluie_demain=1.0, pluie_j2=0.5, pluie_3j=20.0))
+        self.assertEqual(date_iso, "2026-10-06")
+
+    def test_toutes_les_branches_donnent_la_meme_regle(self) -> None:
+        """Avant : « nuit » et « espacement » ignoraient la prévision, les autres motifs ajoutaient jusqu'à 3 jours
+        — la date sautait selon le motif du moment. Maintenant aucune branche ne renvoie une journée de pluie."""
+        pluie = dict(pluie_demain=17.0, pluie_j2=0.3, pluie_3j=17.3)  # 06/10 pluvieux
+        for motif in ("recent_watering", "mowing_night", "mowing_spacing", "wet_grass", "stress_thermique",
+                      "watering_cooldown", "rosee_persistante", "conditions_defavorables"):
+            with self.subTest(motif=motif):
+                date_iso, _affiche, _hint = self._projection(motif, pluie, hour_local=10.0)
+                self.assertNotEqual(date_iso, "2026-10-06", "journée de pluie annoncée : ne doit pas être proposée")
+                self.assertIsNotNone(date_iso)
+
+    def test_un_jour_ou_la_tonte_est_permise_reste_aujourd_hui(self) -> None:
+        ctx = self._context(17.0, dict(pluie_demain=17.0, pluie_j2=17.0, pluie_3j=34.0))
+        phase = decision.build_phase_bundle(ctx)
+        water = decision.build_water_bundle(ctx, phase)
+        date_iso, _affiche, _hint = decision_mowing._project_next_mowing_date(ctx, phase, water, True, None)
+        self.assertEqual(date_iso, "2026-10-05")
+
+    def test_le_seuil_d_une_journee_de_pluie_est_2_mm(self) -> None:
+        deux = self._projection("mowing_night", dict(pluie_demain=2.0, pluie_j2=0.0, pluie_3j=2.0))
+        presque = self._projection("mowing_night", dict(pluie_demain=1.9, pluie_j2=0.0, pluie_3j=1.9))
+        self.assertEqual(deux[0], "2026-10-07", "2,0 mm = journée de pluie : écartée")
+        self.assertEqual(presque[0], "2026-10-06", "1,9 mm = pas une journée de pluie")
+
+    def test_une_prevision_absente_ne_decale_rien(self) -> None:
+        """Prévision indisponible (valeurs None) : traitée comme « pas de pluie annoncée », jamais une erreur ni un
+        jour écarté à tort (contre-vérification du 05/10/2026)."""
+        for pluie in (
+            dict(pluie_demain=None, pluie_j2=None, pluie_3j=None),
+            dict(pluie_demain=None, pluie_j2=17.0, pluie_3j=None),
+            dict(pluie_demain=17.0, pluie_j2=None, pluie_3j=None),
+        ):
+            with self.subTest(pluie=pluie):
+                date_iso, _affiche, _hint = self._projection("mowing_night", pluie)
+                attendu = "2026-10-07" if pluie["pluie_demain"] == 17.0 else "2026-10-06"
+                self.assertEqual(date_iso, attendu)
+
+    def test_les_decalages_dus_a_l_etat_reel_du_gazon_restent(self) -> None:
+        """On a retiré la PLUIE ANNONCÉE du décalage, pas le reste : herbe qui sèche mal, séchage faible."""
+        ctx = self._context(13.0, self.AUCUNE, humidite=90.0)
+        phase = decision.build_phase_bundle(ctx)
+        decalage, raisons = decision_mowing._mowing_projection_forecast_offset_days(ctx, phase)
+        self.assertEqual(decalage, 1)
+        self.assertIn("ressuyage_lent", raisons)
+        couvert = self._context(
+            13.0, self.AUCUNE, temperature=14.0,
+            weather_profile={"weather_cloud_coverage": 95.0, "weather_wind_speed": 3.0},
+        )
+        decalage, raisons = decision_mowing._mowing_projection_forecast_offset_days(couvert, phase)
+        self.assertEqual(decalage, 1)
+        self.assertIn("sechage_faible", raisons)
+        sec = self._context(13.0, self.AUCUNE)
+        self.assertEqual(decision_mowing._mowing_projection_forecast_offset_days(sec, phase), (0, []))
+
+    def test_le_decalage_de_projection_ne_compte_plus_la_pluie_annoncee(self) -> None:
+        ctx = self._context(13.0, dict(pluie_demain=17.0, pluie_j2=17.0, pluie_3j=34.0), pluie_probabilite_max_3j=95.0)
+        phase = decision.build_phase_bundle(ctx)
+        decalage, raisons = decision_mowing._mowing_projection_forecast_offset_days(ctx, phase)
+        self.assertEqual(decalage, 0)
+        self.assertEqual([r for r in raisons if r.startswith("meteo_")], [])
+
+
+class LeCumulDesBlocagesMachineSuitLeVraiDetailTests(unittest.TestCase):
+    """Le bundle réel (`build_mowing_bundle`) publie le détail que le coordinateur cumule : pause pluie, charge, tonte,
+    hors ligne… (05/10/2026 : « Robot indisponible » en bloc masquait que l'essentiel était la pause pluie)."""
+
+    BASE = {"tondeuse_connectee": True, "tondeuse_prete": True, "mower_coordination_ready": True}
+    CAS = {
+        "rain_delayed": {"mower_operation_state": "rain_delayed"},
+        "charging": {"tondeuse_en_charge": True},
+        "mowing": {"mower_operation_state": "tonte", "mower_is_mowing": True},
+        "returning": {"mower_is_returning": True},
+        "starting": {"mower_reason_code": "mower_starting"},
+        "zoning": {"mower_reason_code": "mower_zoning"},
+        "searching_zone": {"mower_reason_code": "mower_searching_zone"},
+        "offline": {"tondeuse_connectee": False},
+        "error": {"mower_operation_state": "error", "tondeuse_erreur": "blade_blocked"},
+        "escaped_digital_fence": {"mower_reason_code": "mower_escaped_digital_fence"},
+        "unreliable": {"mower_reason_code": "unreliable"},
+        "not_ready": {"tondeuse_prete": False},
+    }
+
+    def _bundle(self, mower_context):
+        ctx = decision.DecisionContext.from_legacy_args(
+            history=[{"type": "tonte", "date": "2026-07-28"}],
+            today=date(2026, 8, 6), hour_of_day=13, temperature=22.0, pluie_24h=0, pluie_demain=0,
+            humidite=55, type_sol="limoneux", etp_capteur=4.0,
+        )
+        ctx.mower_context = {**self.BASE, **mower_context}
+        phase = decision.build_phase_bundle(ctx)
+        water = decision.build_water_bundle(ctx, phase)
+        risk = decision.build_risk_bundle(ctx, phase, water)
+        return decision.build_mowing_bundle(ctx, phase, water, risk)
+
+    def test_chaque_situation_machine_est_cumulee_sous_son_detail(self) -> None:
+        from custom_components.gazon_intelligent import const
+        for detail, contexte in self.CAS.items():
+            with self.subTest(detail=detail):
+                bundle = self._bundle(contexte)
+                self.assertEqual(bundle.get("mowing_block_reason_code"), "machine_unavailable")
+                self.assertEqual(bundle.get("mowing_machine_unavailable_detail"), detail)
+                self.assertEqual(
+                    const.mowing_block_tally_code(
+                        bundle.get("mowing_block_reason_code"), bundle.get("mowing_machine_unavailable_detail")
+                    ),
+                    f"machine_{detail}",
+                )
+
+
 class LeRobotDejaEnTonteNEcrasePlusLeVraiMotifTests(unittest.TestCase):
     """Le motif affiché pendant un rappel ne doit pas mentir sur la cause.
 
@@ -3767,6 +3993,157 @@ class LHeurePasseAvantLesVerdictsAEviterTests(unittest.TestCase):
         etat, motif = self._fenetre(hour=23, temperature=35.0)
         self.assertEqual(etat, "blocked")
         self.assertIn("trop élevée", motif)
+
+
+class FenetreIdealeDuSoirTests(unittest.TestCase):
+    """Sous-créneau « idéal » du soir, demande du 01/10/2026 : le réglage
+    « créneaux de départ : idéal seulement » ne laissait partir un nouveau cycle que
+    10h-14h, forçant la tondeuse à attendre le lendemain matin même par belle soirée
+    dégagée. Bornes par défaut : de 2h à 30 min avant le coucher du soleil.
+
+    Coucher fixé à 20:00 (minute 1200) pour tout ce bloc : fenêtre idéale du soir
+    attendue 18:00 → 19:30 (minutes 1080 → 1170).
+    """
+
+    SUNSET = 1200  # 20:00
+
+    def _fenetre(self, *, hour, temperature=None, vent=None, sunset=SUNSET, today=date(2026, 9, 1)):
+        ctx = decision_mowing.DecisionContext(
+            history=[], today=today, hour_of_day=hour,
+            temperature=temperature, vent=vent,
+        )
+        weather_profile = {} if sunset is None else {"sunset_minute": sunset}
+        return decision_mowing._resolve_mowing_window(ctx, weather_profile=weather_profile)
+
+    def test_a_l_interieur_de_la_sous_fenetre_cest_ideal(self) -> None:
+        etat, motif = self._fenetre(hour=18.5, temperature=20.0, vent=5.0)  # 18:30
+        self.assertEqual(etat, "ideal")
+        self.assertIn("idéale", motif)
+        self.assertIn("journée", motif, "le motif doit se distinguer de « Fenêtre idéale du matin »")
+
+    def test_juste_avant_la_sous_fenetre_reste_acceptable(self) -> None:
+        # 17:59, une minute avant l'ouverture de la sous-fenêtre idéale (18:00).
+        etat, motif = self._fenetre(hour=17 + 59 / 60, temperature=20.0, vent=5.0)
+        self.assertEqual(etat, "acceptable")
+        self.assertIn("acceptable", motif)
+
+    def test_juste_apres_la_sous_fenetre_redevient_acceptable(self) -> None:
+        # 19:30 pile : borne exclue (comme la fenêtre idéale du matin).
+        etat, motif = self._fenetre(hour=19.5, temperature=20.0, vent=5.0)
+        self.assertEqual(etat, "acceptable")
+        self.assertIn("acceptable", motif)
+
+    def test_la_borne_de_debut_est_incluse(self) -> None:
+        etat, _ = self._fenetre(hour=18.0, temperature=20.0, vent=5.0)
+        self.assertEqual(etat, "ideal")
+
+    def test_sans_coucher_connu_pas_de_sous_fenetre_ideale(self) -> None:
+        """Repli : sans soleil, on reste sur le simple « acceptable » du repli fixe
+        (17h-19h), comme avant ce réglage — pas de plage idéale inventée."""
+        etat, motif = self._fenetre(hour=18.0, temperature=20.0, vent=5.0, sunset=None)
+        self.assertEqual(etat, "acceptable")
+        self.assertIn("acceptable", motif)
+
+    def test_la_chaleur_deconseille_avant_meme_la_sous_fenetre_ideale(self) -> None:
+        """Garde-fou : le verdict « à éviter » de la chaleur (déjà vérifié AVANT les bornes
+        horaires, cf. `LHeurePasseAvantLesVerdictsAEviterTests`) garde la priorité sur la
+        nouvelle sous-fenêtre idéale du soir — même ordre que pour l'acceptable existant,
+        la sous-fenêtre ne doit jamais court-circuiter un « à éviter » déjà posé."""
+        etat, motif = self._fenetre(hour=18.5, temperature=28.5, vent=5.0)
+        self.assertEqual(etat, "discouraged")
+        self.assertIn("Température élevée", motif)
+
+    def test_reglages_inverses_naffichent_jamais_ideal(self) -> None:
+        """Garde-fou : si `fin_avant_coucher` dépasse `debut_avant_coucher` (réglage
+        incohérent, que la contrainte de reglages.py empêche normalement), la plage est vide
+        et ne doit jamais se déclencher — jamais de crash, jamais un « ideal » inventé."""
+        ctx = decision_mowing.DecisionContext(
+            history=[], today=date(2026, 9, 1), hour_of_day=18.5,
+            temperature=20.0, vent=5.0,
+        )
+        ctx.reglages = {
+            "tonte_soir_ideal_debut_avant_coucher": 30,
+            "tonte_soir_ideal_fin_avant_coucher": 120,
+        }
+        etat, motif = decision_mowing._resolve_mowing_window(
+            ctx, weather_profile={"sunset_minute": self.SUNSET}
+        )
+        self.assertEqual(etat, "acceptable")
+        self.assertIn("acceptable", motif)
+
+
+class FinDeLIdealApresLeCoucherTests(unittest.TestCase):
+    """Une fin d'idéal NÉGATIVE (après le coucher) prolonge aussi le soir et repousse la nuit.
+
+    Sans ce couplage, l'idéal serait écrêté en silence par la fin du soir (coucher + 30 min), ou
+    pire : la nuit tomberait avant la fin d'un créneau annoncé « idéal ».
+    """
+
+    SUNSET = 1200  # 20:00
+
+    def _contexte(self, hour, *, fin_avant=None, apres=None, soleil=None):
+        ctx = decision_mowing.DecisionContext(
+            history=[], today=date(2026, 9, 1), hour_of_day=hour, temperature=20.0, vent=5.0,
+        )
+        reglages = {}
+        if fin_avant is not None:
+            reglages["tonte_soir_ideal_fin_avant_coucher"] = fin_avant
+        if apres is not None:
+            reglages["tonte_soir_apres_coucher"] = apres
+        ctx.reglages = reglages
+        if soleil is not None:
+            ctx.sun_context = {"sun_state": soleil}
+        return ctx
+
+    def _fenetre(self, hour, **kw):
+        ctx = self._contexte(hour, **kw)
+        return decision_mowing._resolve_mowing_window(ctx, weather_profile={"sunset_minute": self.SUNSET})
+
+    def test_l_ideal_peut_continuer_apres_le_coucher(self) -> None:
+        # 20:30 = coucher + 30 min. Par défaut le soir est fini (« tardive »). Avec une fin
+        # d'idéal à 1 h APRÈS le coucher (-60), le créneau est idéal.
+        self.assertEqual(self._fenetre(20.5)[0], "discouraged")
+        etat, motif = self._fenetre(20.5, fin_avant=-60)
+        self.assertEqual(etat, "ideal")
+        self.assertIn("journée", motif)
+
+    def test_la_borne_de_fin_apres_le_coucher_est_exclue(self) -> None:
+        self.assertEqual(self._fenetre(20 + 59 / 60, fin_avant=-60)[0], "ideal")
+        self.assertNotEqual(self._fenetre(21.0, fin_avant=-60)[0], "ideal")
+
+    def test_le_reglage_apres_le_coucher_plus_long_garde_la_main(self) -> None:
+        # Fin d'idéal à 30 min après (-30) mais soir réglé à 90 min : le soir va jusqu'à 90 min,
+        # l'idéal s'arrête à 30 — la fin du soir ne rétrécit jamais.
+        self.assertEqual(self._fenetre(20 + 45 / 60, fin_avant=-30, apres=90)[0], "acceptable")
+        self.assertEqual(self._fenetre(20 + 15 / 60, fin_avant=-30, apres=90)[0], "ideal")
+
+    def test_une_fin_d_ideal_avant_le_coucher_ne_raccourcit_pas_le_soir(self) -> None:
+        # fin à 1 h AVANT le coucher (60) et soir réglé à 60 après : le soir va bien jusqu'à +60.
+        self.assertEqual(self._fenetre(20 + 45 / 60, fin_avant=60, apres=60)[0], "acceptable")
+
+    def test_la_nuit_ne_tombe_pas_avant_la_fin_d_un_ideal_apres_le_coucher(self) -> None:
+        # Soleil couché depuis 45 min. Par défaut : nuit. Avec l'idéal prolongé de 60 min : encore
+        # le jour pour tondre.
+        ctx = self._contexte(20.75, soleil="below_horizon")
+        self.assertTrue(decision_mowing._est_la_nuit(ctx, {"sunset_minute": self.SUNSET}))
+        ctx = self._contexte(20.75, fin_avant=-60, soleil="below_horizon")
+        self.assertFalse(decision_mowing._est_la_nuit(ctx, {"sunset_minute": self.SUNSET}))
+        self.assertEqual(
+            decision_mowing._resolve_mowing_window(ctx, weather_profile={"sunset_minute": self.SUNSET})[0],
+            "ideal",
+        )
+
+    def test_la_nuit_tombe_bien_apres_la_fin_prolongee(self) -> None:
+        ctx = self._contexte(21.0, fin_avant=-60, soleil="below_horizon")  # coucher + 60 min
+        self.assertTrue(decision_mowing._est_la_nuit(ctx, {"sunset_minute": self.SUNSET}))
+
+    def test_la_fin_du_soir_est_le_plus_tardif_des_deux_reglages(self) -> None:
+        fin = decision_mowing._fin_du_soir_apres_coucher
+        self.assertEqual(fin({}), 30)
+        self.assertEqual(fin({"tonte_soir_ideal_fin_avant_coucher": -60}), 60)
+        self.assertEqual(fin({"tonte_soir_ideal_fin_avant_coucher": -20}), 30)
+        self.assertEqual(fin({"tonte_soir_ideal_fin_avant_coucher": 60, "tonte_soir_apres_coucher": 45}), 45)
+        self.assertEqual(fin({"tonte_soir_ideal_fin_avant_coucher": -90, "tonte_soir_apres_coucher": 0}), 90)
 
 
 class AmortissementDuRisqueTests(unittest.TestCase):

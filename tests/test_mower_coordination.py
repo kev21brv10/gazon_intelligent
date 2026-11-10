@@ -246,6 +246,97 @@ class MowingBeatsChargingTests(unittest.TestCase):
         )
 
 
+class StartingBeatsChargingTests(unittest.TestCase):
+    """⚠️ Relevé réel du 04/10/2026 (22 h 11) : redémarrage autonome après une recharge. L'état brut passe à
+    `starting` alors que le capteur « en charge » reste à True : la tondeuse était classée « en charge » donc RANGÉE
+    (même défaut que pour `mowing`, corrigé en son temps), le volet restait fermé 56 s et l'arrosage la tenait pour
+    sûre alors qu'elle quittait sa station."""
+
+    def _contexte(self, **ctx):
+        base = {"tondeuse_source_entity": "lawn_mower.esperance_jr", "tondeuse_connectee": True}
+        base.update(ctx)
+        return base
+
+    def test_l_etat_brut_starting_prime_sur_le_capteur_de_charge(self) -> None:
+        for en_charge, statut in ((True, ""), (True, "en_charge"), (False, "en_charge"), (False, "")):
+            with self.subTest(en_charge=en_charge, statut=statut):
+                self.assertEqual(
+                    _mc._operation_state(self._contexte(
+                        tondeuse_etat_brut="starting", tondeuse_en_charge=en_charge, tondeuse_statut=statut)),
+                    "starting",
+                )
+
+    def test_une_tondeuse_qui_demarre_en_charge_est_dehors_et_pas_sure_pour_l_arrosage(self) -> None:
+        payload = build_mower_coordination_context(
+            self._contexte(tondeuse_etat_brut="starting", tondeuse_en_charge=True, tondeuse_statut="en_charge"),
+            enabled=True,
+        )
+        self.assertEqual(payload["mower_operation_state"], "starting")
+        self.assertEqual(payload["mower_presence_state"], "dehors")
+        self.assertIs(payload["mower_is_docked"], False)
+        self.assertIs(payload["mower_is_outside"], True)
+        self.assertIs(payload["mower_is_safe_for_watering"], False)
+        self.assertIs(payload["mower_dock_signal_fort"], False)
+
+    def test_les_etats_de_station_restent_en_charge(self) -> None:
+        for brut in ("docked", "charging", "parked", "home"):
+            with self.subTest(brut=brut):
+                self.assertEqual(
+                    _mc._operation_state(self._contexte(tondeuse_etat_brut=brut, tondeuse_en_charge=True)), "charging")
+
+    def test_la_tonte_prime_toujours(self) -> None:
+        self.assertEqual(
+            _mc._operation_state(self._contexte(tondeuse_etat_brut="mowing", tondeuse_en_charge=True)), "tonte")
+
+    def test_un_demarrage_sans_charge_reste_un_demarrage(self) -> None:
+        self.assertEqual(_mc._operation_state(self._contexte(tondeuse_etat_brut="starting")), "starting")
+
+
+class ReturningBeatsChargingTests(unittest.TestCase):
+    """Constat A-014 (revue du 04/10/2026) : `returning` brut + capteur « en charge » périmé à True + statut `retour_station`
+    était classé « en charge », donc rangée, « sûre pour l'arrosage », signal de quai fort — et le volet n'était pas ouvert
+    pour elle. Même latence que pour `mowing` et `starting`."""
+
+    def _contexte(self, **ctx):
+        return {"tondeuse_source_entity": "lawn_mower.esperance_jr", "tondeuse_connectee": True, **ctx}
+
+    def test_un_retour_brut_prime_sur_le_capteur_et_le_statut_de_charge(self) -> None:
+        for brut in ("returning", "going_home", "homing"):
+            for en_charge, statut in ((True, "retour_station"), (True, ""), (True, "en_charge"), (False, "retour_station"), (False, "")):
+                with self.subTest(brut=brut, en_charge=en_charge, statut=statut):
+                    payload = build_mower_coordination_context(
+                        self._contexte(tondeuse_etat_brut=brut, tondeuse_en_charge=en_charge, tondeuse_statut=statut),
+                        enabled=True,
+                    )
+                    self.assertEqual(payload["mower_operation_state"], "transit")
+                    self.assertEqual(payload["mower_presence_state"], "retour")
+                    self.assertIs(payload["mower_is_returning"], True)
+                    self.assertIs(payload["mower_is_docked"], False)
+                    self.assertIs(payload["mower_is_outside"], True)
+                    self.assertIs(payload["mower_is_safe_for_watering"], False)
+                    self.assertIs(payload["mower_dock_signal_fort"], False)
+
+    def test_la_station_la_charge_et_la_pause_pluie_restent_rangees(self) -> None:
+        """Garde-fou demandé : rien de ce qui est RANGÉ ne devient « dehors »."""
+        for brut, statut in (("docked", "au_repos"), ("charging", "en_charge"), ("parked", ""), ("home", ""),
+                             ("rain_delayed", "pluie"), ("rain_delay", "pluie")):
+            with self.subTest(brut=brut):
+                payload = build_mower_coordination_context(
+                    self._contexte(tondeuse_etat_brut=brut, tondeuse_en_charge=True, tondeuse_statut=statut), enabled=True)
+                self.assertEqual(payload["mower_presence_state"], "dockee")
+                self.assertIs(payload["mower_is_docked"], True)
+                self.assertIs(payload["mower_is_safe_for_watering"], True)
+
+    def test_la_tonte_et_le_demarrage_priment_toujours(self) -> None:
+        for brut, attendu in (("mowing", "tonte"), ("starting", "starting")):
+            self.assertEqual(
+                _mc._operation_state(self._contexte(tondeuse_etat_brut=brut, tondeuse_en_charge=True, tondeuse_statut="en_charge")),
+                attendu)
+
+    def test_un_retour_sans_charge_reste_un_retour(self) -> None:
+        self.assertEqual(_mc._operation_state(self._contexte(tondeuse_etat_brut="returning")), "transit")
+
+
 class PauseAPluieTests(unittest.TestCase):
     """Un robot en pause pluie est RANGÉ : il ne doit pas bloquer l'arrosage."""
 

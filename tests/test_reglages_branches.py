@@ -161,6 +161,29 @@ class LaTonteSuitSesReglagesTests(_Comparaison):
                      {"mowing_window_state": "acceptable"},
                      hour_of_day=21.25, sun_context={"sun_state": "below_horizon"})
 
+    def test_la_sous_fenetre_ideale_du_soir_s_elargit_vers_l_avant(self) -> None:
+        # Coucher 20:30 (défaut du harnais) ; 17:30 est dans l'acceptable (dès 15:30) mais pas
+        # dans l'idéal par défaut (dès 18:30). L'élargir à 4 h avant le coucher l'y fait entrer.
+        self.compare({"tonte_soir_ideal_debut_avant_coucher": 240}, (),
+                     {"mowing_window_state": "acceptable"}, {"mowing_window_state": "ideal"},
+                     hour_of_day=17.5)
+
+    def test_la_sous_fenetre_ideale_du_soir_retrecit_vers_le_coucher(self) -> None:
+        # 19:45 est dans l'idéal par défaut (jusqu'à 20:00). La resserrer à 1 h avant le coucher
+        # (fin à 19:30) en ressort — toujours dans l'acceptable, plus dans l'idéal.
+        self.compare({"tonte_soir_ideal_fin_avant_coucher": 60}, (),
+                     {"mowing_window_state": "ideal"}, {"mowing_window_state": "acceptable"},
+                     hour_of_day=19.75)
+
+    def test_la_sous_fenetre_ideale_du_soir_peut_finir_apres_le_coucher(self) -> None:
+        # Coucher 20:30 (défaut du harnais), soleil couché depuis 30 min (21:00) : par défaut c'est
+        # la nuit. Avec une fin d'idéal à 1 h APRÈS le coucher (-60), le soir est repoussé jusqu'à
+        # 21:30 et ce créneau est idéal.
+        self.compare({"tonte_soir_ideal_fin_avant_coucher": -60}, (),
+                     {"mowing_window_state": "blocked", "raison_blocage_code": "mowing_night"},
+                     {"mowing_window_state": "ideal"},
+                     hour_of_day=21.0, sun_context={"sun_state": "below_horizon"})
+
     def test_vent_a_eviter(self) -> None:
         self.compare({"tonte_vent_a_eviter": 12}, (),
                      {"mowing_window_state": "ideal"}, {"mowing_window_state": "discouraged"}, vent=15.0)
@@ -391,6 +414,14 @@ class LesGrainesSuiventLeursReglagesTests(_Comparaison):
                 self.compare({cle_cycles: cycles}, (),
                              {"daily_cycles_target": defauts[1]},
                              {"surface_cycle_mm": defauts[0], "daily_cycles_target": cycles}, **self._sursemis(age))
+
+    def test_sol_sature(self) -> None:
+        """Stock du registre à 22/24 (92 %) : reporté au conseil de 90 %, arrosé quand on le règle à 95 %."""
+        plein = {"reserve_mm": 22.0, "reserve_max_mm": 24.0}
+        self.compare({"graines_sol_sature": 95}, (),
+                     {"seeding_block_reason": "sol_deja_humide", "mm_final": 0.0},
+                     {"seeding_block_reason": None, "mm_final": 3.0},
+                     **self._sursemis(15, temperature=15.0, humidite=60.0, soil_balance=plein))
 
     def test_vent_maximal(self) -> None:
         self.compare({"graines_vent_max": 12}, (),
@@ -709,9 +740,17 @@ class ChaqueReglageEstBrancheTests(unittest.TestCase):
         "tondeuse_garage_ouvrir_avant_depart": "test_mower_control.py",
         "tondeuse_garage_ouvrir_pour_retour": "test_mower_control.py",
         "tondeuse_garage_fermer_apres_retour": "test_mower_control.py",
-        "tondeuse_garage_avance_ouverture": "test_mower_control.py",
+        "tondeuse_garage_avance_ouverture_secondes": "test_garage_coordinateur.py",
         "tondeuse_garage_ouverture_min": "test_mower_control.py",
-        "tondeuse_garage_delai_fermeture": "test_mower_control.py",
+        "tondeuse_garage_delai_fermeture_secondes": "test_garage_coordinateur.py",
+        # Le volet « porte » : fermé pendant la tonte, ouvert pour laisser passer la tondeuse.
+        "tondeuse_garage_ferme_pendant_tonte": "test_mower_control_volet_porte.py",
+        "tondeuse_garage_delai_fermeture_tonte_secondes": "test_mower_control_volet_porte.py",
+        # Le volet : porte des ordres, alerte et délai d'un volet ouvert à la main.
+        "tondeuse_garage_delai_fermeture_manuel_secondes": "test_garage_coordinateur.py",
+        "tondeuse_garage_delai_reprise_secondes": "test_garage_coordinateur.py",
+        "tondeuse_garage_tentatives_max": "test_garage_guard.py",
+        "tondeuse_garage_delai_max_mouvement_secondes": "test_garage_coordinateur.py",
     }
 
     def test_chaque_reglage_a_son_scenario(self) -> None:

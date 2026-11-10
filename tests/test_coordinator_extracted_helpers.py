@@ -1058,5 +1058,215 @@ class CoordinatorWeatherTests(unittest.TestCase):
         )
 
 
+class RoseeAvecMemoireTests(unittest.TestCase):
+    """La règle d'entrée seule bascule à chaque tic de capteur autour de 2,0 °C d'écart.
+
+    Le 27/10/2026 elle a fait basculer l'autorisation de tondre 5 fois en 1 h 25 (écart 2,0 ↔ 2,2 °C,
+    humidité 87 ↔ 88 %), et le pilote automatique a rappelé puis relancé la tondeuse à chaque fois.
+    """
+
+    PARIS = ZoneInfo("Europe/Paris")
+    T0 = datetime(2026, 10, 27, 11, 0, tzinfo=ZoneInfo("Europe/Paris"))
+
+    # Station du jardin, 27/10/2026, moyennes de 5 min : (heure, température, point de rosée, humidité).
+    SERIE_REELLE = [
+        ('10:30', 15.0, 13.5, 91),
+        ('10:35', 15.3, 13.5, 89),
+        ('10:40', 15.5, 13.5, 88),
+        ('10:45', 15.7, 13.7, 88),
+        ('10:50', 16.0, 13.8, 87),
+        ('10:55', 15.9, 13.7, 87),
+        ('11:00', 15.8, 13.6, 87),
+        ('11:05', 15.7, 13.7, 88),
+        ('11:10', 15.8, 13.8, 88),
+        ('11:15', 15.9, 13.7, 87),
+        ('11:20', 15.9, 13.7, 87),
+        ('11:25', 15.8, 13.7, 87),
+        ('11:30', 15.8, 13.8, 88),
+        ('11:35', 15.8, 13.8, 88),
+        ('11:40', 15.8, 13.8, 88),
+        ('11:45', 15.8, 13.8, 88),
+        ('11:50', 15.9, 13.9, 88),
+        ('11:55', 16.1, 13.9, 87),
+        ('12:00', 16.1, 13.9, 87),
+        ('12:05', 16.0, 13.8, 87),
+        ('12:10', 16.2, 14.0, 87),
+        ('12:15', 16.5, 14.2, 87),
+        ('12:20', 16.7, 14.3, 86),
+        ('12:25', 16.7, 14.3, 86),
+        ('12:30', 16.6, 14.2, 86),
+        ('12:35', 16.6, 14.3, 86),
+        ('12:40', 16.7, 14.4, 86),
+        ('12:45', 17.0, 14.6, 86),
+        ('12:50', 17.2, 14.7, 85),
+        ('12:55', 17.2, 14.7, 85),
+        ('13:00', 17.2, 14.6, 85),
+        ('13:05', 17.1, 14.6, 85),
+        ('13:10', 17.2, 14.7, 85),
+    ]
+
+    def _avec(self, temperature, point_de_rosee, humidite, memoire=None, maintenant=None, profil=None):
+        return coordinator_weather.estimate_rosee_avec_memoire(
+            profil or {}, temperature, humidite, point_de_rosee, memoire, maintenant or self.T0
+        )
+
+    def _memoire(self, valeur=1.0, il_y_a_minutes=1.0, **extra):
+        return {"valeur": valeur, "maj_a": (self.T0 - timedelta(minutes=il_y_a_minutes)).isoformat(), **extra}
+
+    # ── L'entrée est l'ancienne règle, à l'identique ────────────────────────────────────
+    def test_sans_memoire_c_est_exactement_l_ancienne_regle(self) -> None:
+        cas = [
+            ({"weather_dew_point": 18.0}, 20.0, 50.0, None),
+            ({}, 20.0, 88.0, None),
+            ({}, 20.0, 87.9, None),
+            ({"weather_condition": "fog"}, 20.0, 50.0, None),
+            ({}, 20.0, 50.0, 17.9),
+            ({}, None, None, None),
+        ]
+        for profil, temperature, humidite, point_de_rosee in cas:
+            with self.subTest(profil=profil, temperature=temperature, humidite=humidite):
+                attendu = coordinator_weather.estimate_rosee(profil, temperature, humidite, point_de_rosee)
+                valeur, _ = self._avec(temperature, point_de_rosee, humidite, profil=profil)
+                self.assertEqual(valeur, attendu)
+
+    def test_une_rosee_detectee_est_memorisee_avec_son_horodatage(self) -> None:
+        valeur, memoire = self._avec(20.0, 18.0, 70.0)
+        self.assertEqual(valeur, 1.0)
+        self.assertEqual(memoire, {"valeur": 1.0, "maj_a": self.T0.isoformat(), "maintenue": False})
+
+    def test_sans_rosee_et_sans_memoire_rien_n_est_memorise(self) -> None:
+        self.assertEqual(self._avec(20.0, 10.0, 50.0), (None, None))
+
+    # ── Le maintien ─────────────────────────────────────────────────────────────────────
+    def test_la_rosee_est_maintenue_entre_2_0_et_2_5_degres(self) -> None:
+        valeur, memoire = self._avec(20.0, 17.7, 80.0, memoire=self._memoire())  # écart 2,3 °C
+        self.assertEqual(valeur, 1.0)
+        self.assertIs(memoire["maintenue"], True)
+        self.assertEqual(memoire["maj_a"], self.T0.isoformat())
+
+    def test_la_rosee_est_maintenue_entre_86_et_88_pour_cent(self) -> None:
+        valeur, memoire = self._avec(20.0, 10.0, 86.0, memoire=self._memoire(0.8))
+        self.assertEqual(valeur, 0.8)
+        self.assertIs(memoire["maintenue"], True)
+
+    def test_la_valeur_maintenue_est_celle_d_avant_jamais_renforcee(self) -> None:
+        valeur, _ = self._avec(20.0, 17.7, 80.0, memoire=self._memoire(0.8))
+        self.assertEqual(valeur, 0.8)
+
+    def test_les_bornes_de_sortie_sont_incluses_cote_humide(self) -> None:
+        # Écart exactement 2,5 °C : encore humide ; humidité exactement 86 % : encore humide.
+        self.assertEqual(self._avec(20.0, 17.5, 80.0, memoire=self._memoire())[0], 1.0)
+        self.assertEqual(self._avec(20.0, 10.0, 86.0, memoire=self._memoire())[0], 1.0)
+
+    def test_la_frontiere_ne_depend_pas_du_bruit_de_l_arithmetique_flottante(self) -> None:
+        # 17,2 - 14,6 vaut 2,5999999999999996 en flottant : bien au-dessus de 2,5 une fois arrondi ;
+        # 17,2 - 14,7 vaut 2,5 : sur la borne, donc maintenu.
+        self.assertIsNone(self._avec(17.2, 14.6, 85.0, memoire=self._memoire())[0])
+        self.assertEqual(self._avec(17.2, 14.7, 85.0, memoire=self._memoire())[0], 1.0)
+        # 16,1 - 13,6 vaut 2,5000000000000018 en flottant, alors que l'écart lu est exactement 2,5.
+        self.assertEqual(self._avec(16.1, 13.6, 80.0, memoire=self._memoire())[0], 1.0)
+
+    # ── La sortie ───────────────────────────────────────────────────────────────────────
+    def test_la_sortie_exige_les_deux_conditions(self) -> None:
+        # Écart 2,6 °C ET humidité 85 % : rosée levée, mémoire effacée.
+        self.assertEqual(self._avec(20.0, 17.4, 85.0, memoire=self._memoire()), (None, None))
+        # Écart assez grand mais humidité encore à 86 % : maintenu.
+        self.assertEqual(self._avec(20.0, 17.4, 86.0, memoire=self._memoire())[0], 1.0)
+        # Humidité basse mais écart encore à 2,4 °C : maintenu.
+        self.assertEqual(self._avec(20.0, 17.6, 60.0, memoire=self._memoire())[0], 1.0)
+
+    def test_une_lecture_absente_ne_maintient_rien(self) -> None:
+        """« Pas de lecture ≠ rosée » : sans écart ni humidité lisibles, la rosée est levée."""
+        self.assertEqual(self._avec(None, None, None, memoire=self._memoire()), (None, None))
+        self.assertEqual(self._avec(20.0, None, 60.0, memoire=self._memoire()), (None, None))
+        # Un seul témoin lisible suffit à maintenir, dans son seul sens.
+        self.assertEqual(self._avec(20.0, None, 86.0, memoire=self._memoire())[0], 1.0)
+        self.assertEqual(self._avec(None, None, 60.0, memoire=self._memoire()), (None, None))
+
+    def test_une_valeur_illisible_est_une_lecture_absente(self) -> None:
+        # La règle d'entrée n'est pas en cause ici (elle a ses propres tests) : on ne passe que des
+        # valeurs qu'elle laisse sèches, pour n'observer que le chemin de SORTIE.
+        for illisible in (float("nan"), float("inf"), "illisible"):
+            with self.subTest(temperature=illisible):
+                self.assertEqual(self._avec(illisible, 17.7, 60.0, memoire=self._memoire()), (None, None))
+        for illisible in (float("nan"), "illisible"):
+            with self.subTest(humidite=illisible):
+                self.assertEqual(self._avec(20.0, 14.0, illisible, memoire=self._memoire()), (None, None))
+
+    def test_un_nombre_fini_refuse_booleens_nan_et_infini(self) -> None:
+        for refuse in (True, False, float("nan"), float("inf"), float("-inf"), "x", None, [], {}):
+            with self.subTest(refuse=refuse):
+                self.assertIsNone(coordinator_weather._nombre_fini(refuse))
+        self.assertEqual(coordinator_weather._nombre_fini("86.5"), 86.5)
+        self.assertEqual(coordinator_weather._nombre_fini(0), 0.0)
+
+    def test_le_point_de_rosee_de_l_entite_meteo_sert_a_la_sortie_comme_a_l_entree(self) -> None:
+        profil = {"weather_dew_point": 17.7}
+        self.assertEqual(self._avec(20.0, None, 80.0, memoire=self._memoire(), profil=profil)[0], 1.0)
+        # Le capteur dédié passe devant, dans les deux sens.
+        self.assertIsNone(self._avec(20.0, 15.0, 80.0, memoire=self._memoire(), profil=profil)[0])
+
+    # ── La mémoire ──────────────────────────────────────────────────────────────────────
+    def test_une_memoire_perimee_n_est_plus_un_etat(self) -> None:
+        self.assertEqual(self._avec(20.0, 17.7, 80.0, memoire=self._memoire(il_y_a_minutes=30.0))[0], 1.0)
+        self.assertEqual(
+            self._avec(20.0, 17.7, 80.0, memoire=self._memoire(il_y_a_minutes=30.1)), (None, None)
+        )
+
+    def test_une_memoire_illisible_est_ignoree(self) -> None:
+        bonne = self._memoire()
+        for memoire in (
+            None, "texte", [], {}, {"valeur": 1.0}, {**bonne, "valeur": 0.0}, {**bonne, "valeur": -1.0},
+            {**bonne, "valeur": "x"}, {**bonne, "valeur": True}, {**bonne, "maj_a": "pas une date"},
+            {**bonne, "valeur": float("nan")}, {**bonne, "valeur": float("inf")},
+            {**bonne, "maj_a": "2026-10-27T10:59:00"},                      # sans fuseau
+            {**bonne, "maj_a": (self.T0 + timedelta(minutes=5)).isoformat()},  # dans le futur
+        ):
+            with self.subTest(memoire=memoire):
+                self.assertEqual(self._avec(20.0, 17.7, 80.0, memoire=memoire), (None, None))
+
+    def test_une_nouvelle_detection_rearme_la_memoire(self) -> None:
+        _, memoire = self._avec(20.0, 17.7, 80.0, memoire=self._memoire(il_y_a_minutes=29.0))
+        self.assertIs(memoire["maintenue"], True)
+        _, memoire = self._avec(20.0, 18.0, 70.0, memoire=memoire)
+        self.assertIs(memoire["maintenue"], False)
+
+    def test_un_temps_de_brouillard_ou_de_pluie_passe_par_la_regle_d_entree(self) -> None:
+        for condition in ("fog", "rainy", "pouring"):
+            with self.subTest(condition=condition):
+                valeur, memoire = self._avec(20.0, 10.0, 50.0, profil={"weather_condition": condition})
+                self.assertEqual(valeur, 1.0)
+                self.assertIs(memoire["maintenue"], False)
+
+    # ── Le cas réel du 27/10/2026 ───────────────────────────────────────────────────────
+    def _rejouer(self, avec_memoire: bool):
+        etats, memoire = [], None
+        for heure, temperature, point_de_rosee, humidite in self.SERIE_REELLE:
+            h, m = (int(x) for x in heure.split(":"))
+            maintenant = self.T0.replace(hour=h, minute=m)
+            if avec_memoire:
+                valeur, memoire = coordinator_weather.estimate_rosee_avec_memoire(
+                    {}, temperature, humidite, point_de_rosee, memoire, maintenant
+                )
+            else:
+                valeur = coordinator_weather.estimate_rosee({}, temperature, humidite, point_de_rosee)
+            etats.append((heure, valeur is not None))
+        return etats
+
+    @staticmethod
+    def _bascules(etats):
+        return [b[0] for a, b in zip(etats, etats[1:]) if a[1] != b[1]]
+
+    def test_l_ancienne_regle_basculait_cinq_fois_dans_la_matinee_du_27_10(self) -> None:
+        self.assertEqual(self._bascules(self._rejouer(False)), ["10:50", "11:05", "11:15", "11:30", "11:55"])
+
+    def test_la_memoire_supprime_les_cinq_bascules_et_ne_garde_que_la_vraie_sortie(self) -> None:
+        etats = self._rejouer(True)
+        # Mouillé sans interruption jusqu'à 12:55, sec dès 13:00 (écart 2,6 °C, humidité 85 %).
+        self.assertEqual(self._bascules(etats), ["13:00"])
+        self.assertTrue(all(mouille for heure, mouille in etats if heure <= "12:55"))
+        self.assertFalse(dict(etats)["13:00"])
+
+
 if __name__ == "__main__":
     unittest.main()

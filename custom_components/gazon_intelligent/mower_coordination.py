@@ -74,10 +74,21 @@ def _operation_state(context: dict[str, Any]) -> str:
     # l'arrosage pouvait donc partir sur une tondeuse en pleine tonte.
     if raw_state in _MOWING_RAW_STATES:
         return "tonte"
-    if charging or raw_state == "charging" or status == "en_charge":
-        return "charging"
+    # ⚠️ IDEM POUR LE DÉMARRAGE (relevé réel du 04/10/2026, 22 h 11 : redémarrage AUTONOME après une recharge).
+    # L'état brut passe à `starting` pendant que le capteur « en charge » reste à True : classée « en charge »,
+    # la tondeuse était tenue pour RANGÉE (`mower_is_docked`, « sûre pour l'arrosage ») et le pilote n'ouvrait
+    # pas le volet avant le passage suivant du coordinateur — 56 s plus tard, alors que le démarrage dure
+    # 45 à 70 s. Un `starting` brut est une tondeuse qui QUITTE la station : dehors, volet à ouvrir.
     if raw_state in _STARTING_RAW_STATES:
         return "starting"
+    # ⚠️ ET POUR LE RETOUR (constat A-014 de la relecture croisée, reproduit sans HA) : un `returning` brut avec un
+    # capteur « en charge » périmé à True — la tondeuse vient de quitter sa station et fait demi-tour avant que le
+    # capteur ne retombe — était classé « en charge » : rangée, sûre pour l'arrosage, signal de quai fort, et AUCUNE
+    # ouverture de volet pour elle. Un retour brut est une tondeuse qui ROULE vers sa station.
+    if raw_state in _RETURNING_RAW_STATES:
+        return "transit"
+    if charging or raw_state == "charging" or status == "en_charge":
+        return "charging"
     if status == "tonte_en_cours":
         return "tonte"
     if raw_state in _RETURNING_RAW_STATES or status == "retour_station":

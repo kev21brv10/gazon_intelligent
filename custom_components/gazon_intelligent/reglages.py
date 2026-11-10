@@ -28,6 +28,7 @@ moteur s'applique : c'est elle, et non le défaut recopié ici, qui fait foi à 
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -57,6 +58,10 @@ class Reglage:
     unite: str = ""
     source: str = ""
     avertissement: str = ""
+    # Échelle à DEUX pas (délais du volet) : de `minimum` à `seuil`, la valeur avance de `pas` ; au-delà de `seuil`,
+    # de `pas_haut` (1, 2, 3… secondes, puis 1 min, 2 min…). `pas_haut` à 0 : pas unique, comme les autres réglages.
+    seuil: float = 0.0
+    pas_haut: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -130,6 +135,23 @@ REGLAGES: tuple[Reglage, ...] = (
         "Ensuite il fait nuit : la tondeuse rentre à sa base.",
         "duree", 30, 0, 90, 5,
         source="decision_mowing._MOWING_EVENING_END_AFTER_SUNSET_MIN (fin du crépuscule civil)",
+    ),
+    Reglage(
+        "tonte_soir_ideal_debut_avant_coucher", "tonte",
+        "Le soir, combien de temps avant le coucher du soleil commence le meilleur moment ?",
+        "Un sous-créneau du soir compté aussi « idéal », pour qu'un départ réglé sur "
+        "« créneaux de départ : idéal seulement » n'attende pas forcément le lendemain matin.",
+        "duree", 120, 30, 240, 15,
+        source="decision_mowing._MOWING_EVENING_IDEAL_START_BEFORE_SUNSET_MIN",
+    ),
+    Reglage(
+        "tonte_soir_ideal_fin_avant_coucher", "tonte",
+        "Le soir, jusqu'à quand dure le meilleur moment, par rapport au coucher du soleil ?",
+        "Avant le coucher, pour laisser sécher l'herbe coupée ; au coucher ou après, pour tondre "
+        "jusqu'à la tombée de la nuit. Une valeur négative l'étend après le coucher (jusqu'à 1 h 30) : "
+        "il repousse alors aussi la fin du soir, la tondeuse ne rentre pas avant.",
+        "duree", 30, -90, 120, 5,
+        source="decision_mowing._MOWING_EVENING_IDEAL_END_BEFORE_SUNSET_MIN",
     ),
     Reglage(
         "tonte_vent_a_eviter", "tonte",
@@ -377,6 +399,14 @@ REGLAGES: tuple[Reglage, ...] = (
         source="watering_policy.SEMIS_STAGE_PROGRAMS['levee']",
     ),
     Reglage(
+        "graines_sol_sature", "graines",
+        "À partir de quel remplissage le sol est-il trop plein pour arroser les graines ?",
+        "Une fois la germination passée, l'arrosage de surface est reporté tant que le sol est aussi plein : l'eau ne ferait que le noyer. 100 % désactive cette protection.",
+        "nombre", 90, 70, 100, 1, "%",
+        source="guidance.SEMIS_SOL_SATURE_POURCENT",
+        avertissement="Réglage sensible : trop bas, les jeunes pousses peuvent manquer d'eau ; à 100 %, le sol saturé est arrosé comme avant.",
+    ),
+    Reglage(
         "graines_fenetre_debut", "graines",
         "Dès quelle heure arroser les graines ?",
         "Les graines s'arrosent en journée, quand la surface commence à sécher.",
@@ -581,27 +611,51 @@ REGLAGES: tuple[Reglage, ...] = (
     ),
     Reglage(
         "tondeuse_garage_ouvrir_pour_retour", "installation",
-        "Ouvrir automatiquement le garage pour le retour ?",
-        "Sinon, l'intégration n'ordonne pas le retour tant que le volet n'est pas confirmé ouvert.",
+        "Ouvrir automatiquement le garage dès que la tondeuse est dehors ou rentre ?",
+        "Le volet s'ouvre dès que la tondeuse est détectée dehors : pour son retour, mais aussi pour un "
+        "départ lancé depuis l'appli. Sinon, l'intégration n'ordonne pas le retour tant que le volet n'est "
+        "pas confirmé ouvert.",
         "interrupteur", True, 0, 1, 1,
         source="mower_control_constants.DEFAULT_MOWER_GARAGE_OPEN_FOR_RETURN",
         avertissement="Réglage sensible : désactivé, le volet doit être ouvert avant qu'une autre automatisation rappelle la tondeuse.",
     ),
     Reglage(
+        "tondeuse_garage_ferme_pendant_tonte", "installation",
+        "Garder le volet fermé pendant la tonte ?",
+        "Le volet ne s'ouvre que pour laisser sortir la tondeuse, se referme dès qu'elle tond, se rouvre quand elle "
+        "rentre et se referme derrière elle une fois à quai : un chat ne peut pas entrer pendant la tonte. "
+        "Éteint, le volet reste ouvert tant que la tondeuse est dehors.",
+        "interrupteur", False, 0, 1, 1,
+        source="mower_control_constants.DEFAULT_MOWER_GARAGE_CLOSE_WHILE_MOWING",
+        avertissement="Réglage sensible : le volet est fermé quand la tondeuse rentre ; il s'ouvre dès qu'elle est vue en retour, "
+        "mais elle peut l'atteindre avant. Un volet qui ne s'ouvre pas déclenche l'alerte « volet fermé ».",
+    ),
+    Reglage(
+        "tondeuse_garage_delai_fermeture_tonte_secondes", "installation",
+        "Une fois la tondeuse en tonte, combien de secondes attendre avant de fermer le volet ?",
+        "Une petite marge pour que la tondeuse ait passé la porte, comptée depuis le moment où l'intégration la voit "
+        "en tonte (le signal de la tondeuse met lui-même quelques secondes à arriver). Sans effet si le volet n'est "
+        "pas gardé fermé pendant la tonte.",
+        "nombre", 15, 0, 300, 1, "s", seuil=60, pas_haut=60,
+        source="mower_control_constants.DEFAULT_MOWER_GARAGE_CLOSE_WHILE_MOWING_DELAY_SECONDS",
+        avertissement="Réglage sensible : à zéro, le volet peut se fermer sur la tondeuse encore dans l'embrasure.",
+    ),
+    Reglage(
         "tondeuse_garage_fermer_apres_retour", "installation",
         "Fermer automatiquement le garage après la rentrée ?",
-        "Sinon, le volet reste ouvert jusqu'à sa fermeture manuelle.",
+        "Il se ferme après la rentrée quand la tondeuse n'a plus de départ prévu (quota du jour atteint, créneau non "
+        "autorisé, batterie à recharger) et se rouvre avant le prochain. Sinon, il reste ouvert jusqu'à sa fermeture manuelle.",
         "interrupteur", True, 0, 1, 1,
         source="mower_control_constants.DEFAULT_MOWER_GARAGE_CLOSE_AFTER_DOCK",
         avertissement="Réglage sensible : la fermeture automatique exige toujours une rentrée fortement confirmée.",
     ),
     Reglage(
-        "tondeuse_garage_avance_ouverture", "installation",
+        "tondeuse_garage_avance_ouverture_secondes", "installation",
         "Après l'ouverture du garage, combien de temps attendre avant le départ ?",
-        "La tondeuse ne démarre qu'après l'ouverture confirmée puis ce délai de sécurité.",
-        "duree", 2, 0, 10, 0.25,
-        source="mower_control_constants.DEFAULT_MOWER_GARAGE_OPEN_LEAD_MINUTES",
-        avertissement="Réglage sensible : zéro minute réduit la marge laissée au volet pour libérer complètement le passage.",
+        "La tondeuse ne démarre qu'après l'ouverture confirmée puis ce délai de sécurité, en secondes.",
+        "nombre", 120, 0, 600, 1, "s", seuil=60, pas_haut=60,
+        source="mower_control_constants.DEFAULT_MOWER_GARAGE_OPEN_LEAD_SECONDS",
+        avertissement="Réglage sensible : zéro seconde réduit la marge laissée au volet pour libérer complètement le passage.",
     ),
     Reglage(
         "tondeuse_garage_ouverture_min", "installation",
@@ -612,12 +666,50 @@ REGLAGES: tuple[Reglage, ...] = (
         avertissement="Réglage sensible : une valeur trop basse peut autoriser le passage sous un volet encore partiellement fermé.",
     ),
     Reglage(
-        "tondeuse_garage_delai_fermeture", "installation",
+        "tondeuse_garage_delai_fermeture_secondes", "installation",
         "Après la rentrée confirmée, combien de temps attendre avant de fermer ?",
-        "Le volet reste ouvert après un signal fort de station ou de charge, puis se ferme.",
-        "duree", 2, 1, 15, 0.25,
-        source="mower_control_constants.DEFAULT_MOWER_GARAGE_CLOSE_DELAY_MINUTES",
+        "Le volet reste ouvert après un signal fort de station ou de charge, puis se ferme après ce délai, en secondes.",
+        "nombre", 120, 0, 900, 1, "s", seuil=60, pas_haut=60,
+        source="mower_control_constants.DEFAULT_MOWER_GARAGE_CLOSE_DELAY_SECONDS",
         avertissement="Réglage sensible : un délai trop court peut fermer le volet alors que la tondeuse termine sa manœuvre.",
+    ),
+    Reglage(
+        "tondeuse_garage_delai_fermeture_manuel_secondes", "installation",
+        "Si le volet a été ouvert à la main, combien de temps attendre avant de le refermer ?",
+        "Tondeuse à quai, un volet ouvert sans ordre de l'intégration est refermé après ce délai, compté "
+        "depuis son ouverture. Il n'est jamais plus court que le délai après une rentrée.",
+        "nombre", 1800, 0, 14400, 1, "s", seuil=60, pas_haut=60,
+        source="garage_guard.DEFAULT_GARAGE_MANUAL_CLOSE_DELAY_SECONDS",
+    ),
+    Reglage(
+        "tondeuse_garage_delai_reprise_secondes", "installation",
+        "Si le volet ne bouge pas, combien de temps attendre avant de renvoyer l'ordre ?",
+        "Un ordre d'ouverture ou de fermeture n'est renvoyé qu'après ce délai. Il remplace, pour le volet, "
+        "le délai commun à toutes les commandes. Une ouverture ou une fermeture complète prend une dizaine de secondes.",
+        "nombre", 120, 5, 600, 1, "s", seuil=60, pas_haut=60,
+        source="garage_guard.DEFAULT_GARAGE_RETRY_DELAY_SECONDS",
+        avertissement="Réglage sensible : un délai plus court que la course du volet (une dizaine de secondes) peut envoyer "
+        "plusieurs fois le même ordre au moteur.",
+    ),
+    Reglage(
+        "tondeuse_garage_tentatives_max", "installation",
+        "Combien de tentatives automatiques avant de considérer le volet bloqué ?",
+        "Après ce nombre d'ordres sans effet, le pilote s'arrête et une alerte demande une intervention sur "
+        "place. Il reste arrêté tant que le volet n'a pas atteint sa position, 24 h au plus : passé ce délai, "
+        "une nouvelle série de tentatives est autorisée.",
+        "nombre", 3, 1, 10, 1, "fois",
+        source="garage_guard.DEFAULT_GARAGE_MAX_ATTEMPTS",
+        avertissement="Réglage sensible : une valeur élevée fait insister sur le moteur d'un volet coincé.",
+    ),
+    Reglage(
+        "tondeuse_garage_delai_max_mouvement_secondes", "installation",
+        "Au bout de combien de temps un volet qui n'a pas atteint sa position est-il bloqué ?",
+        "Compté depuis le premier ordre ; ensuite une alerte est envoyée. Une ouverture ou une fermeture "
+        "complète prend une dizaine de secondes.",
+        "nombre", 180, 5, 900, 1, "s", seuil=60, pas_haut=60,
+        source="garage_guard.DEFAULT_GARAGE_MAX_TRAVEL_SECONDS",
+        avertissement="Réglage sensible : un délai plus court que la course du volet (une dizaine de secondes) le déclare "
+        "bloqué à tort.",
     ),
 )
 
@@ -681,6 +773,13 @@ CHOIX: tuple[Choix, ...] = (
 CONTRAINTES: tuple[Contrainte, ...] = (
     Contrainte("tonte_fenetre_ideale_debut", "tonte_fenetre_ideale_fin",
                "Le début du meilleur moment doit venir avant sa fin."),
+    Contrainte("tonte_soir_ideal_fin_avant_coucher", "tonte_soir_ideal_debut_avant_coucher",
+               "La fenêtre idéale du soir doit se terminer plus près du coucher qu'elle ne commence."),
+    # Le moteur ne rend « idéal » qu'à l'intérieur de la fenêtre acceptable du soir : un idéal qui
+    # commencerait avant l'ouverture du soir serait écrêté en silence (voire disparaîtrait).
+    Contrainte("tonte_soir_ideal_debut_avant_coucher", "tonte_soir_avant_coucher",
+               "Le meilleur moment du soir ne peut pas commencer avant l'ouverture du soir.",
+               stricte=False),
     Contrainte("tonte_vent_a_eviter", "tonte_vent_bloque",
                "Le vent « à éviter » doit être plus faible que le vent « interdit »."),
     Contrainte("tonte_temperature_a_eviter", "tonte_temperature_bloquee",
@@ -740,8 +839,34 @@ def _fr(x: float) -> str:
 
 
 def _tombe_sur_le_pas(r: Reglage, v: float) -> bool:
-    crans = (v - r.minimum) / r.pas
+    if r.pas_haut and v > r.seuil:
+        crans = (v - r.seuil) / r.pas_haut
+    else:
+        crans = (v - r.minimum) / r.pas
     return abs(crans - round(crans)) < 1e-6
+
+
+def caler(r: Reglage, valeur: float) -> float:
+    """La valeur de l'échelle la plus proche (à égalité, la plus haute), bornée à [minimum, maximum].
+
+    Pour les échelles à deux pas (délais du volet : 1, 2, 3… secondes, puis 1 min, 2 min…). Sert à reprendre sans
+    la perdre une ancienne valeur qui tombe entre deux crans (90 s n'existe plus : 1 min ou 2 min).
+    """
+    v = float(valeur)
+    if r.pas_haut and v > r.seuil:
+        crans = math.floor((v - r.seuil) / r.pas_haut + 0.5)
+        v = r.seuil + crans * r.pas_haut
+    else:
+        crans = math.floor((v - r.minimum) / r.pas + 0.5)
+        v = r.minimum + crans * r.pas
+    return min(r.maximum, max(r.minimum, v))
+
+
+def _message_de_pas(r: Reglage) -> str:
+    if r.pas_haut:
+        return (f"Jusqu'à {_fr(r.seuil)}, la valeur avance de {_fr(r.pas)} en {_fr(r.pas)} ; "
+                f"au-delà, de {_fr(r.pas_haut)} en {_fr(r.pas_haut)}.")
+    return f"La valeur avance de {_fr(r.pas)} en {_fr(r.pas)}."
 
 
 def _erreur_de_valeur(r: Reglage, valeur: Any) -> str | None:
@@ -754,7 +879,7 @@ def _erreur_de_valeur(r: Reglage, valeur: Any) -> str | None:
     if not all(r.minimum <= float(v) <= r.maximum for v in nombres):
         return f"Sélectionner une valeur entre {_fr(r.minimum)} et {_fr(r.maximum)}."
     if not all(_tombe_sur_le_pas(r, float(v)) for v in nombres):
-        return f"La valeur avance de {_fr(r.pas)} en {_fr(r.pas)}."
+        return _message_de_pas(r)
     return None
 
 
@@ -808,6 +933,29 @@ def _egal_au_defaut(r: Reglage, valeur: Any) -> bool:
     return abs(float(valeur) - float(r.defaut)) < 1e-9
 
 
+# Réglages enregistrés AVANT leur passage en secondes : ancienne clé (minutes) → nouvelle clé (secondes).
+# Sans cela, la valeur choisie serait écartée en silence et le conseil reprendrait.
+_ANCIENNES_CLES_EN_MINUTES = {
+    "tondeuse_garage_avance_ouverture": "tondeuse_garage_avance_ouverture_secondes",
+    "tondeuse_garage_delai_fermeture": "tondeuse_garage_delai_fermeture_secondes",
+    "tondeuse_garage_delai_fermeture_manuel": "tondeuse_garage_delai_fermeture_manuel_secondes",
+    "tondeuse_garage_delai_reprise": "tondeuse_garage_delai_reprise_secondes",
+    "tondeuse_garage_delai_max_mouvement": "tondeuse_garage_delai_max_mouvement_secondes",
+}
+
+
+def _migrer_anciennes_cles(brut: Mapping[str, Any]) -> dict[str, Any]:
+    """Les minutes d'avant deviennent des secondes ; une valeur déjà réglée en secondes l'emporte."""
+    migre = dict(brut)
+    for ancienne, nouvelle in _ANCIENNES_CLES_EN_MINUTES.items():
+        if ancienne not in migre:
+            continue
+        valeur = migre.pop(ancienne)
+        if nouvelle not in migre and _est_un_nombre(valeur) and math.isfinite(float(valeur)):
+            migre[nouvelle] = round(float(valeur) * 60)
+    return migre
+
+
 def nettoyer(brut: Any) -> dict[str, Any]:
     """Les réglages enregistrés d'une instance, tels que le moteur peut les lire sans risque.
 
@@ -821,8 +969,12 @@ def nettoyer(brut: Any) -> dict[str, Any]:
     if not isinstance(brut, Mapping):
         return {}
     gardees: dict[str, Any] = {}
-    for cle, valeur in brut.items():
+    for cle, valeur in _migrer_anciennes_cles(brut).items():
         r = _PAR_CLE.get(cle)
+        # Échelle à deux pas : une valeur dans les bornes mais entre deux crans (une ancienne durée de 90 s) est
+        # ramenée au cran le plus proche au lieu d'être écartée en silence.
+        if r is not None and r.pas_haut and _est_un_nombre(valeur) and r.minimum <= valeur <= r.maximum:
+            valeur = caler(r, valeur)
         if r is None or _erreur_de_valeur(r, valeur) is not None:
             continue
         gardees[cle] = _normaliser(r, valeur)
