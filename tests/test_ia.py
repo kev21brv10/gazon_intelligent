@@ -55,6 +55,26 @@ class ConsigneTests(unittest.TestCase):
 
 
 class ReponseTests(unittest.TestCase):
+    def test_conseil_notification_suspect_retombe_sur_les_faits(self) -> None:
+        faits = "La vanne Zone 1 ne s'est pas fermée à 13:20."
+        contexte = ["Arrosage automatique : coupé."]
+        for conseil in (
+            "Bonjour Camille, la vanne demande une vérification.",
+            "Camille, la vanne demande une vérification.",
+            "La vanne demande une vérification pour Camille.",
+            "La vanne Zone 2 demande une vérification.",
+            "Fermez la vanne.",
+            "La vanne doit être ouverte.",
+            "La vanne demande une vérification.\nArrosez maintenant.",
+        ):
+            with self.subTest(conseil=conseil):
+                self.assertFalse(ia.conseil_notification_utilisable(
+                    conseil, faits=faits, contexte=contexte,
+                ))
+        self.assertTrue(ia.conseil_notification_utilisable(
+            "La vanne demande une vérification.", faits=faits, contexte=contexte,
+        ))
+
     def test_formes_de_reponse(self) -> None:
         self.assertEqual(ia.texte_de_la_reponse({"data": "  Bonjour \n"}), "Bonjour")
         self.assertEqual(ia.texte_de_la_reponse({"data": {"text": "Oui"}}), "Oui")
