@@ -9831,6 +9831,79 @@ class PasseTravailTermineParLeVraiRafraichissementTests(unittest.TestCase):
         self.assertEqual(journal[-1]["fin_motif"], "retour_autonome")
         self.assertIs(journal[-1]["travail_termine"], True)
 
+    def test_la_progression_lue_sur_le_capteur_arrive_au_carnet_sans_rien_injecter(self) -> None:
+        """Même scénario, mais `_lire_progression_tonte` n'est PAS remplacée : elle lit le capteur
+        `sensor.<tondeuse>_progression_de_la_tonte` dans les états de Home Assistant, comme en
+        production. Seuls les états publiés sont simulés ; le chemin capteur → lecture → carnet de
+        passes est celui du vrai cycle, sans qu'aucun test ne pose `mower_job_progress_pct`."""
+        coordinator = self._coord()
+        capteur = "sensor.esperance_jr_progression_de_la_tonte"
+        etats: dict[str, object] = {}
+        coordinator._resolve_mower_selection = lambda: {"entity_id": "lawn_mower.esperance_jr"}
+        coordinator.hass = types.SimpleNamespace(
+            states=types.SimpleNamespace(get=lambda entity_id: etats.get(entity_id))
+        )
+        t0 = datetime(2026, 10, 2, 18, 40, tzinfo=timezone.utc)
+        etapes = [
+            dict(tonte=True, garage=False, batterie=95, progression=43, autorisee=True),
+            dict(tonte=True, garage=False, batterie=70, progression=90, autorisee=True),
+            dict(tonte=False, garage=False, batterie=61, progression=100, autorisee=False),
+            dict(tonte=False, garage=True, batterie=58, progression=100, autorisee=False),
+        ]
+        for i, etape in enumerate(etapes):
+            instant = t0 + timedelta(minutes=10 * i)
+            coordinator._current_datetime = lambda t=instant: t
+            coordinator._current_date = lambda t=instant: t.date()
+            etats[capteur] = types.SimpleNamespace(
+                state=str(etape["progression"]), attributes={"task_id": "tache-1", "task_status": 1},
+            )
+            coordinator.brain.last_result = types.SimpleNamespace(tonte_autorisee=etape["autorisee"])
+            coordinator._build_mower_snapshot = lambda *a, e=etape, **k: {  # noqa: ARG005
+                "tondeuse_connectee": True, "tondeuse_erreur": None,
+                "mower_is_mowing": e["tonte"], "mower_is_docked": e["garage"],
+                "mower_battery": e["batterie"],
+            }
+            asyncio.run(coordinator._async_update_data())
+            if i == 2:
+                en_cours = coordinator._runtime_state["mower_passes"]["en_cours"]
+                self.assertIs(
+                    en_cours["travail_termine_vu"], True,
+                    "la progression lue sur le capteur n'est pas parvenue au carnet de passes",
+                )
+        journal = coordinator._runtime_state["mower_passes"]["journal"]
+        self.assertEqual(journal[-1]["fin_motif"], "retour_autonome")
+        self.assertIs(journal[-1]["travail_termine"], True)
+
+    def test_sans_capteur_de_progression_le_vrai_cycle_garde_la_passe_rappelee(self) -> None:
+        """Contre-épreuve : même cycle, capteur absent. Aucune progression n'est connue, donc
+        aucun « travail terminé » n'est conclu — le comportement antérieur à la correction."""
+        coordinator = self._coord()
+        coordinator._resolve_mower_selection = lambda: {"entity_id": "lawn_mower.esperance_jr"}
+        coordinator.hass = types.SimpleNamespace(
+            states=types.SimpleNamespace(get=lambda entity_id: None)
+        )
+        t0 = datetime(2026, 10, 2, 18, 40, tzinfo=timezone.utc)
+        etapes = [
+            dict(tonte=True, garage=False, batterie=95, autorisee=True),
+            dict(tonte=True, garage=False, batterie=70, autorisee=True),
+            dict(tonte=False, garage=False, batterie=61, autorisee=False),
+            dict(tonte=False, garage=True, batterie=58, autorisee=False),
+        ]
+        for i, etape in enumerate(etapes):
+            instant = t0 + timedelta(minutes=10 * i)
+            coordinator._current_datetime = lambda t=instant: t
+            coordinator._current_date = lambda t=instant: t.date()
+            coordinator.brain.last_result = types.SimpleNamespace(tonte_autorisee=etape["autorisee"])
+            coordinator._build_mower_snapshot = lambda *a, e=etape, **k: {  # noqa: ARG005
+                "tondeuse_connectee": True, "tondeuse_erreur": None,
+                "mower_is_mowing": e["tonte"], "mower_is_docked": e["garage"],
+                "mower_battery": e["batterie"],
+            }
+            asyncio.run(coordinator._async_update_data())
+        journal = coordinator._runtime_state["mower_passes"]["journal"]
+        self.assertEqual(journal[-1]["fin_motif"], "rappelee")
+        self.assertIs(journal[-1]["travail_termine"], False)
+
 
 class ProgressionTonteTests(unittest.TestCase):
     """La progression du TRAVAIL, publiée sans qu'elle décide de rien.
