@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -111,15 +112,28 @@ class PastilleTonteTests(unittest.TestCase):
         self.assertNotIn("possible dès maintenant", bloquee)
         self.assertIn("conditions non réunies", sans_motif)
 
-    def test_un_seul_badge_decrit_le_gazon_sans_le_confondre_avec_la_machine(self) -> None:
+    def test_une_seule_porte_decrit_le_gazon_sans_le_confondre_avec_la_machine(self) -> None:
+        # Deux axes, deux portes : le gazon (prêt ?) et la machine (disponible ?). Jamais fusionnés.
+        # (Refonte 1.0 : les badges « Gazon : … » sont devenus des portes ; l'invariant est le même.)
         autorisee, deconseillee, interdite = _rendre()
-        self.assertIn("Gazon : prêt", autorisee)
-        self.assertIn("Pas disponible", autorisee)
-        self.assertIn("Gazon : tonte à éviter", deconseillee)
-        self.assertIn("Gazon : pas prêt", interdite)
+
+        def portes(html: str) -> dict[str, tuple[str, str]]:
+            trouvees = re.findall(r'data-axe="(\w+)" data-etat="(\w+)">\s*<h4>[^<]*</h4><div class="etat">([^<]*)</div>', html)
+            self.assertEqual(len(trouvees), len({axe for axe, _, _ in trouvees}), "une porte par axe")
+            return {axe: (etat, texte) for axe, etat, texte in trouvees}
+
+        p_autorisee, p_deconseillee, p_interdite = portes(autorisee), portes(deconseillee), portes(interdite)
+        self.assertEqual(p_autorisee["gazon"], ("oui", "Prêt"))
+        self.assertEqual(p_autorisee["machine"], ("non", "Pas disponible"))
+        self.assertEqual(p_deconseillee["gazon"], ("attention", "Tonte à éviter"))
+        self.assertEqual(p_deconseillee["machine"], ("oui", "Disponible"))
+        self.assertEqual(p_interdite["gazon"], ("non", "Pas prêt"))
+        self.assertEqual(p_interdite["machine"], ("oui", "Disponible"))
         for html in (autorisee, deconseillee, interdite):
-            self.assertEqual(html.count("Gazon :"), 1)
+            self.assertEqual(html.count('data-axe="gazon"'), 1)
+            self.assertEqual(html.count('data-axe="machine"'), 1)
             self.assertNotIn("Tonte :", html)
+            self.assertNotIn("Gazon :", html)
 
     def test_un_travail_inacheve_a_quai_est_affiche_en_pause(self) -> None:
         source = PANNEAU.read_text(encoding="utf-8")

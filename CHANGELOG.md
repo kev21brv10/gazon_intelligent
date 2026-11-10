@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.0.0-rc.25
+
+- **Numérotation** : la suite saute de rc.17 à rc.25. Les numéros rc.18 à rc.24 sont déjà portés
+  par une installation locale jamais publiée ; en reprendre un ferait passer HACS pour une version
+  plus ancienne que celle qui tourne.
+- **Le panneau est redessiné, sans changer une seule décision** : tout ce qui s'affiche vient des
+  mêmes valeurs qu'avant, lues par les mêmes fonctions ; seuls la mise en page, la typographie et
+  quelques repères visuels changent. Le bandeau « En ce moment » devient le titre de la page, sur un
+  gazon rayé, avec la frise des 24 heures (arrosage, tonte, soleil et curseur « maintenant »). La
+  tonte y est hachurée tant que le gazon ou la machine la retiennent. Une police condensée (Barlow
+  Condensed, licence SIL OFL 1.1, fichier de licence joint) est embarquée pour les titres.
+- **Aperçu** : le sol est une éprouvette avec le trait de déclenchement de l'arrosage, le risque une
+  échelle à quatre crans ; les actions sont en rangées, la principale sur toute la largeur.
+- **Arrosage** : une bande de gazon par zone dans la frise ; le débit d'une zone se modifie depuis
+  la liste des zones (administrateur seulement), dans la même entité que Réglages → Installation,
+  avec l'effet annoncé avant de valider. La fenêtre « Arroser maintenant » montre l'eau de la
+  semaine avant et après, et ne parle de plafond qu'en phase Normal (ailleurs c'est un repère).
+- **Tonte** : trois portes séparées (gazon, créneau, machine) — la tondeuse sort quand les trois
+  sont au vert ; une règle graduée de la hauteur de coupe (plage de la machine, lame réglée, hauteur
+  conseillée) ; la lame se déclare depuis la page, bornée par la machine et par l'entité.
+- **Gazon** : le mode du gazon ouvre la page ; en Semis et Sursemis, un escalier montre les étapes
+  des graines (bornes des réglages), le jour en cours et la bande d'attente de la tondeuse.
+- **Météo** : la température est le titre ; chaque jour a sa plage de température (placée sur
+  l'étendue de la semaine) et sa barre de pluie ; une courbe des prochaines heures précède les
+  vignettes.
+- **Produits** : le produit conseillé est le titre, avec sa barre de pertinence.
+- **Données absentes** : quand l'entité de l'assistant ne répond pas, le titre disait « Unavailable » ;
+  il dit maintenant « On attend les données », et une météo muette s'affiche « Météo en attente ».
+  La liste « Capteurs : N sur M répondent » n'apparaît que si un capteur branché ne répond pas ; une
+  entrée non branchée n'est jamais comptée, et le texte ne prétend pas connaître la cause.
+- **Vérifié** : suite complète avec 2 365 tests et 3 255 sous-tests, ruff vert ; les nouvelles
+  règles du panneau ont été éprouvées en altérant le code pour constater que les tests échouent.
+
 ## 1.0.0-rc.17
 
 - **Le motif affiché pendant un rappel de tonte dit enfin la vraie cause** : quand
