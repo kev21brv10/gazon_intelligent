@@ -192,6 +192,16 @@ def evaluate_mower_control(
     completion_state = str(snapshot.get("mower_job_completion_state") or "").lower()
     progress = _number(snapshot.get("mower_job_progress_pct"))
     mowing_forbidden = snapshot.get("gazon_permet_tonte") is False
+    # RAPPEL DE SÉCURITÉ DÛ : la tondeuse est dehors et le gazon retire son autorisation. Défini UNE fois,
+    # car deux endroits doivent le juger de la même façon : la fermeture du volet « porte » pendant la
+    # tonte (qui doit lui céder le pas, voir plus bas) et l'envoi du `dock` lui-même. Hors commande manuelle :
+    # tant que l'utilisateur pilote la sortie, le pilote ne rappelle pas la tondeuse.
+    recall_due = (
+        (outside or mowing)
+        and mowing_forbidden
+        and not returning
+        and snapshot.get("mower_manual_active") is not True
+    )
 
     # Un départ envoyé par l'intégration ouvre un seul cycle autonome. Une fois la machine
     # sortie, ses retours batterie et ses redéparts appartiennent au constructeur : nous ne
@@ -396,7 +406,14 @@ def evaluate_mower_control(
 
     # VOLET « PORTE » : la tondeuse tond, elle a passé la porte → le volet se referme derrière elle après
     # une courte attente (elle peut encore être dans l'embrasure juste après son démarrage).
-    if gate_mode and cover_entity and working and cover in _COVER_OPEN | _COVER_OPENING:
+    # ⚠️ LE RAPPEL DE SÉCURITÉ PASSE AVANT CETTE FERMETURE (relevé en revue de la PR #85). Cette branche
+    # retourne dans tous ses cas — attente, ordre de fermeture, ou « volet bloqué » après les tentatives
+    # épuisées — donc, placée devant le rappel, elle le retardait du délai de fermeture, puis le supprimait
+    # tant que le volet ne se fermait pas : la tondeuse continuait de tondre malgré l'interdiction. La
+    # fermeture « pour les chats » est facultative, le rappel est une règle de sécurité : quand il est dû,
+    # on laisse l'évaluation tomber plus bas, sur l'envoi du `dock`. Le volet restera alors ouvert, ce qui
+    # est aussi ce dont la tondeuse a besoin pour rentrer ; sa fermeture reprendra derrière elle, à quai.
+    if gate_mode and cover_entity and working and not recall_due and cover in _COVER_OPEN | _COVER_OPENING:
         wait = _number(settings.get("tondeuse_garage_delai_fermeture_tonte_secondes"))
         if wait is None:
             wait = DEFAULT_MOWER_GARAGE_CLOSE_WHILE_MOWING_DELAY_SECONDS
@@ -508,7 +525,7 @@ def evaluate_mower_control(
 
     # On rappelle uniquement quand le GAZON retire son autorisation. Une donnée machine incertaine
     # ne suffit pas : elle pourrait produire des rappels inutiles à chaque indisponibilité réseau.
-    if (outside or mowing) and mowing_forbidden and not returning:
+    if recall_due:
         return command("dock", "retour_demande", "Les conditions du gazon ne permettent plus la tonte.")
 
     # Une interdiction forte peut apparaître pendant une recharge intermédiaire. Même déjà à la
