@@ -270,9 +270,12 @@ class UnDrapeauPluieAllumeDansLeVideEstEcarteTests(unittest.TestCase):
     (depuis 23:39) alors que le cumul n'avait monté que de 0,2 mm, que l'intensité valait 0 et
     que la station annonçait « sunny » — la tondeuse restait « en pause pluie »."""
 
-    def _perime(self, rain=True, minutes=240.0, ailleurs=False):
+    def _perime(self, rain=True, minutes=240.0, ailleurs=False, allume=240.0):
         return rain_flag_is_stale(
-            rain, minutes_since_rain_rise=minutes, rain_active_elsewhere=ailleurs
+            rain,
+            minutes_since_rain_rise=minutes,
+            flag_on_minutes=allume,
+            rain_active_elsewhere=ailleurs,
         )
 
     def test_allume_et_aucune_goutte_depuis_longtemps_est_perime(self) -> None:
@@ -281,6 +284,20 @@ class UnDrapeauPluieAllumeDansLeVideEstEcarteTests(unittest.TestCase):
     def test_la_borne_est_incluse(self) -> None:
         self.assertTrue(self._perime(minutes=RAIN_FLAG_STALE_MINUTES))
         self.assertFalse(self._perime(minutes=RAIN_FLAG_STALE_MINUTES - 0.1))
+        self.assertTrue(self._perime(allume=RAIN_FLAG_STALE_MINUTES))
+        self.assertFalse(self._perime(allume=RAIN_FLAG_STALE_MINUTES - 0.1))
+
+    def test_un_drapeau_qui_vient_de_s_allumer_n_est_pas_perime(self) -> None:
+        """Le pluviomètre est calme depuis longtemps quand l'averse COMMENCE : ce n'est pas
+        l'âge de la dernière hausse qui dit depuis quand le drapeau est allumé."""
+        for allume in (0.0, 1.0, 60.0, RAIN_FLAG_STALE_MINUTES - 0.1):
+            with self.subTest(allume=allume):
+                self.assertFalse(self._perime(minutes=600.0, allume=allume))
+
+    def test_un_age_de_drapeau_inconnu_ne_prouve_rien(self) -> None:
+        for allume in (None, "inconnu", True):
+            with self.subTest(allume=allume):
+                self.assertFalse(self._perime(minutes=600.0, allume=allume))
 
     def test_une_pluie_recente_garde_le_drapeau_valide(self) -> None:
         self.assertFalse(self._perime(minutes=30.0))

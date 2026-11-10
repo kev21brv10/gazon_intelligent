@@ -3943,10 +3943,18 @@ class CoordinatorMowerResolutionTests(unittest.TestCase):
         self.assertIn("sensor.esperance_jr_prochain_programme", source_ids)
         self.assertIn("number.esperance_jr_hauteur_de_coupe", source_ids)
 
-    def _coord_drapeau_pluie_de_la_station(self):
-        """Le « pluie en cours » de la station est allumé, le détecteur du robot est éteint."""
+    def _coord_drapeau_pluie_de_la_station(self, *, allume_depuis_min: float | None = 750.0):
+        """Le « pluie en cours » de la station est allumé, le détecteur du robot est éteint.
+
+        `allume_depuis_min` : depuis combien de minutes le drapeau est passé à `on` (12 h 30 par
+        défaut, comme le relevé du 02/10/2026) ; `None` = la date de passage est inconnue.
+        """
         instant = datetime(2026, 10, 2, 10, 30, tzinfo=timezone.utc)
-        return self._build_coordinator(
+        drapeau = _FakeState(
+            "on",
+            None if allume_depuis_min is None else instant - timedelta(minutes=allume_depuis_min),
+        )
+        coord = self._build_coordinator(
             entry_data={"capteur_tondeuse_pluie": "binary_sensor.station_meteo_jardin_pluie_en_cours"},
             mower_states=[
                 _FakeMowerState(entity_id="lawn_mower.esperance_jr", state="docked", name="Esperance Jr"),
@@ -3956,10 +3964,12 @@ class CoordinatorMowerResolutionTests(unittest.TestCase):
                 "sensor.esperance_jr_batterie": _FakeState("100", instant),
                 "binary_sensor.esperance_jr_en_charge": _FakeState("off", instant),
                 "binary_sensor.esperance_jr_capteur_de_pluie": _FakeState("off", instant),
-                "binary_sensor.station_meteo_jardin_pluie_en_cours": _FakeState("on", instant),
+                "binary_sensor.station_meteo_jardin_pluie_en_cours": drapeau,
                 "sensor.esperance_jr_erreur": _FakeState("no_error", instant),
             },
         )
+        coord._current_utc_datetime = lambda: instant
+        return coord
 
     def test_un_drapeau_pluie_allume_dans_le_vide_n_immobilise_plus_la_tondeuse(self) -> None:
         """Relevé le 02/10/2026 : `rain_status` allumé depuis 23:39, 12 h 30 de « pause pluie »
@@ -4020,6 +4030,62 @@ class CoordinatorMowerResolutionTests(unittest.TestCase):
         self.assertEqual(len(messages), 2, messages)
         self.assertIn("WARNING", messages[0])
         self.assertIn("INFO", messages[1])
+
+    def test_un_drapeau_pluie_qui_vient_de_s_allumer_reste_respecte(self) -> None:
+        """Le pluviomètre peut être calme depuis des heures quand l'averse COMMENCE : le drapeau
+        s'allume avant que le cumul ne monte. Son âge est celui de son passage à `on`, pas celui
+        de la dernière hausse du pluviomètre ; sinon la seule alerte active est écartée au tout
+        premier cycle et la tondeuse part sous la pluie."""
+        calme = {
+            "pluie_mesuree_minutes_depuis_hausse": 270.0,
+            "pluie_mesuree_active": False,
+            "pluie_actuelle_active": False,
+        }
+        for age in (0.0, 1.0, 60.0, 179.0):
+            with self.subTest(allume_depuis_min=age):
+                coord = self._coord_drapeau_pluie_de_la_station(allume_depuis_min=age)
+                snapshot = coord._build_mower_snapshot(calme)
+                self.assertFalse(snapshot["tondeuse_pluie_ignoree"])
+                self.assertTrue(snapshot["tondeuse_pluie"])
+                self.assertEqual(snapshot["tondeuse_statut"], "pluie")
+                self.assertFalse(snapshot["tondeuse_prete"])
+
+    def test_un_drapeau_allume_depuis_trois_heures_sans_goutte_est_ecarte(self) -> None:
+        calme = {
+            "pluie_mesuree_minutes_depuis_hausse": 270.0,
+            "pluie_mesuree_active": False,
+            "pluie_actuelle_active": False,
+        }
+        for age in (180.0, 181.0, 750.0):
+            with self.subTest(allume_depuis_min=age):
+                coord = self._coord_drapeau_pluie_de_la_station(allume_depuis_min=age)
+                snapshot = coord._build_mower_snapshot(calme)
+                self.assertTrue(snapshot["tondeuse_pluie_ignoree"])
+                self.assertTrue(snapshot["tondeuse_prete"])
+
+    def test_un_drapeau_ancien_mais_une_goutte_recente_reste_respecte(self) -> None:
+        """Les deux délais doivent être écoulés : un drapeau vieux de 5 h n'est pas écarté si le
+        pluviomètre a monté il y a moins de 3 h."""
+        coord = self._coord_drapeau_pluie_de_la_station(allume_depuis_min=300.0)
+        snapshot = coord._build_mower_snapshot({
+            "pluie_mesuree_minutes_depuis_hausse": 100.0,
+            "pluie_actuelle_active": False,
+        })
+        self.assertFalse(snapshot["tondeuse_pluie_ignoree"])
+        self.assertEqual(snapshot["tondeuse_statut"], "pluie")
+
+    def test_un_drapeau_dont_on_ignore_l_age_reste_respecte(self) -> None:
+        """Sans date de passage à `on`, rien ne prouve qu'il est périmé : choix prudent."""
+        calme = {"pluie_mesuree_minutes_depuis_hausse": 600.0, "pluie_actuelle_active": False}
+        coord = self._coord_drapeau_pluie_de_la_station(allume_depuis_min=None)
+        snapshot = coord._build_mower_snapshot(calme)
+        self.assertFalse(snapshot["tondeuse_pluie_ignoree"])
+        self.assertEqual(snapshot["tondeuse_statut"], "pluie")
+        # Une date postérieure à l'horloge (décalage d'horloge) ne prouve rien non plus.
+        coord = self._coord_drapeau_pluie_de_la_station(allume_depuis_min=-750.0)
+        snapshot = coord._build_mower_snapshot(calme)
+        self.assertFalse(snapshot["tondeuse_pluie_ignoree"])
+        self.assertEqual(snapshot["tondeuse_statut"], "pluie")
 
     def _coord_idle_dans_le_jardin(self):
         """Le robot annonce `idle`, sans code d'erreur, batterie à 52 % et pas en charge."""

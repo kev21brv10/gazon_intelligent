@@ -286,10 +286,11 @@ def derive_related_entity_id(source_entity_id: str | None, platform: str, suffix
     return f"{platform}.{object_id}_{suffix}"
 
 
-# Délai sans AUCUNE goutte mesurée au-delà duquel un drapeau « pluie en cours » resté allumé est
-# jugé périmé. Même plafond que le ressuyage maximal après une averse (180 min) : passé ce délai,
-# l'herbe mouillée est déjà gérée côté gazon (rosée, ressuyage), et la machine n'a plus de raison
-# de rester en « pause pluie » sur la foi d'un seul booléen.
+# Durée sans AUCUNE confirmation au-delà de laquelle un drapeau « pluie en cours » resté allumé est
+# jugé périmé : le drapeau est allumé depuis au moins ce délai ET le pluviomètre n'a pas monté
+# depuis au moins ce délai. Même plafond que le ressuyage maximal après une averse (180 min) :
+# passé ce délai, l'herbe mouillée est déjà gérée côté gazon (rosée, ressuyage), et la machine
+# n'a plus de raison de rester en « pause pluie » sur la foi d'un seul booléen.
 RAIN_FLAG_STALE_MINUTES = 180.0
 
 
@@ -297,6 +298,7 @@ def rain_flag_is_stale(
     rain: bool | None,
     *,
     minutes_since_rain_rise: Any,
+    flag_on_minutes: Any,
     rain_active_elsewhere: bool,
     stale_minutes: float = RAIN_FLAG_STALE_MINUTES,
 ) -> bool:
@@ -310,15 +312,26 @@ def rain_flag_is_stale(
 
     ⚠️ CONSERVATEUR, DANS LES DEUX SENS. Le drapeau n'est écarté que si TOUT concorde : il est
     allumé, aucune autre source ne conclut à une pluie en ce moment (`rain_active_elsewhere` :
-    pluie instantanée, hausse récente du pluviomètre, prévision), et le pluviomètre nous dit
-    explicitement qu'il n'a pas monté depuis `stale_minutes`. Une mesure ABSENTE (`None`, station
-    muette, premier cycle) ne prouve rien : le drapeau reste alors respecté, comme avant.
+    pluie instantanée, hausse récente du pluviomètre, prévision), le pluviomètre nous dit
+    explicitement qu'il n'a pas monté depuis `stale_minutes`, ET le drapeau lui-même est allumé
+    depuis `stale_minutes` (`flag_on_minutes`, lu sur le passage de CE capteur à `on`).
+
+    ⚠️ L'ÂGE EST CELUI DU DRAPEAU, pas seulement celui de la dernière hausse du pluviomètre. Une
+    averse qui COMMENCE allume le drapeau avant que le cumul ne bouge : le pluviomètre peut être
+    calme depuis des heures à cet instant, et jugé sur lui seul le drapeau tout neuf serait écarté
+    au premier cycle, la seule alerte active supprimée, la tondeuse « prête » sous la pluie.
+
+    Une mesure ABSENTE (`None`, station muette, premier cycle) ou un âge de drapeau INCONNU
+    (date de passage à `on` absente ou incohérente) ne prouve rien : le drapeau reste respecté.
     """
     if rain is not True or rain_active_elsewhere:
         return False
-    if isinstance(minutes_since_rain_rise, bool) or not isinstance(minutes_since_rain_rise, (int, float)):
-        return False
-    return float(minutes_since_rain_rise) >= float(stale_minutes)
+    for minutes in (minutes_since_rain_rise, flag_on_minutes):
+        if isinstance(minutes, bool) or not isinstance(minutes, (int, float)):
+            return False
+        if float(minutes) < float(stale_minutes):
+            return False
+    return True
 
 
 def build_mower_context(
