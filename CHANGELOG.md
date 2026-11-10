@@ -2,6 +2,29 @@
 
 ## 1.0.0-rc.26
 
+- **Une tonte en retard n'est plus bloquée par une hauteur seulement estimée** : sans capteur de
+  hauteur d'herbe, la hauteur est estimée à partir de celle de la dernière tonte et d'une pousse
+  modélisée, très faible en saison froide. Cette estimation pouvait retenir la tondeuse pendant
+  neuf jours (« herbe trop courte ») alors que l'herbe, mesurée à la règle, dépassait la lame.
+  Quand la hauteur n'est qu'estimée ET que la tonte est en retard (au moins 1,5 fois l'intervalle
+  visé), ce blocage n'est plus posé ; la raison publiée le dit (« hauteur estimée sous la lame,
+  mais non mesurée : le retard prime »). Inchangés : un capteur de hauteur mesuré garde le dernier
+  mot, la règle du tiers, la nuit, l'herbe et le sol mouillés, et l'hiver (fréquence nulle : jamais
+  de retard). Après une tonte le retard repart à zéro : le modèle de pousse lui-même n'est pas
+  modifié.
+- **Un drapeau « pluie » de la tondeuse tout neuf n'est plus écarté comme périmé** : il l'était
+  dès le premier cycle quand le pluviomètre était calme depuis 3 h, ce qui supprimait la seule
+  alerte pluie active et pouvait autoriser un départ sous la pluie. La péremption exige maintenant
+  que le pluviomètre n'ait pas monté depuis 3 h ET que le drapeau soit allumé depuis 3 h (lu sur
+  le passage du capteur à « on »). Âge inconnu : le drapeau est respecté. Le garde-fou contre un
+  drapeau resté bloqué sur « on » sans pluie reste en place.
+- **Le garde-fou du conseil IA refuse aussi les ordres déguisés et les nombres en lettres** : un
+  conseil comme « Il faudrait arroser pendant deux heures. » passait. Sont maintenant refusés les
+  quantités et horaires écrits en toutes lettres (« deux heures », « midi ») absents des faits, les
+  ordres au conditionnel ou en périphrase de conseil (« il faudrait », « il est conseillé de »,
+  « je recommande de »), l'impératif en -ez et l'infinitif d'ordre en tête de phrase. Les
+  observations factuelles restent acceptées, et la consigne envoyée à l'IA demande d'éviter ces
+  formes pour limiter les rejets.
 - **Garde-fou sur le conseil IA ajouté aux notifications** : quand la source des notifications
   est « Conseiller Gazon », le texte renvoyé par l'IA remplaçait intégralement le message
   factuel de l'intégration, borné seulement en longueur. Un conseil qui invente un prénom, un
@@ -20,9 +43,19 @@
 - **Une tondeuse en `idle` hors de sa station n'est plus confondue avec un retour** : cet état
   intermédiaire (mi-tonte, en pause) tombait dans le même groupe que `docked`/`charging` et
   déclenchait une fausse notification « tondeuse rentrée ».
-- **Vérifié** : suite complète avec 2 277 tests et 3 251 sous-tests, ruff et mypy (53 fichiers)
-  verts. Chaque correctif vérifié par mutation (code restauré à l'ancien comportement → le test
-  dédié échoue comme attendu, puis repasse).
+- **La CI lance enfin tous les tests** : le job `unit-tests` exécutait `unittest discover`, qui ne
+  collecte pas les fonctions de test de niveau module. 47 tests (tout `tests/test_mower_control.py`,
+  le pilote tondeuse et garage, et 3 de la consommation d'eau) n'étaient jamais lancés : une garde
+  d'ouverture du garage désactivée laissait la CI verte. Le job installe `requirements-dev.txt`
+  (outils épinglés) et lance `python -m pytest tests/ -q`, sous le même nom de check.
+- **Tests ajoutés** : réouverture du volet d'une sortie manuelle dans les trois modes du pilote
+  (désactivé, observation, actif) et pour le volet « porte » ; progression de la tonte lue par le
+  vrai cycle de mise à jour, sans injection ; eau datée après le jour de l'application quand
+  l'incorporation est reportée.
+- **Vérifié** : suite complète avec 3 189 tests sous pytest 8.4 (3 142 sous l'ancienne commande),
+  ruff et mypy (55 fichiers) verts. Chaque correctif a été éprouvé en altérant le code pour
+  constater que les tests échouent.
+
 ## 1.0.0-rc.25
 
 - **Numérotation** : les numéros rc.18 à rc.24, portés jusqu'ici par une installation locale,
@@ -334,6 +367,7 @@
   fichiers) verts ; la carte est rendue dans chaque état du volet, les clics sont rejoués (y
   compris l'état qui change entre les deux clics), avec trente-cinq variantes cassées
   volontairement, toutes détectées.
+
 ## 1.0.0-rc.21
 
 - **Une passe finie parce que le travail est terminé n'est plus étiquetée « rappelée »** :
@@ -355,6 +389,7 @@
   garantir.
 - **Vérifié** : suite complète avec 2 305 tests et 8 310 sous-tests, ruff et mypy (53
   fichiers) verts.
+
 ## 1.0.0-rc.20
 
 - **Un capteur de pluie resté allumé dans le vide n'immobilise plus la tondeuse** : le
@@ -371,6 +406,7 @@
 - **Vérifié** : suite complète avec 2 284 tests et 3 247 sous-tests, ruff et mypy (53 fichiers)
   verts ; cinq mutations de la garde (drapeau jamais écarté, source concordante ignorée, mesure
   absente acceptée, pluie instantanée oubliée, borne exclue) sont toutes tuées par les tests.
+
 ## 1.0.0-rc.19
 
 - **Un sous-créneau « idéal » le soir, pour les nouveaux départs réglés sur « idéal
@@ -413,6 +449,7 @@
   tout. Comparé minute par minute au moteur, sur plusieurs jeux de réglages.
 - **Vérifié** : suite complète avec 2 285 tests et 6 860 sous-tests, ruff et mypy (53
   fichiers) verts.
+
 ## 1.0.0-rc.18
 
 - **La « dernière application » suit enfin la vraie date, pas l'ordre de déclaration** : une
@@ -433,6 +470,7 @@
   application de l'après-midi du même jour.
 - **Vérifié** : suite complète avec 2 276 tests et 3 242 sous-tests, ruff et mypy (53 fichiers)
   verts.
+
 ## 1.0.0-rc.17
 
 - **Le motif affiché pendant un rappel de tonte dit enfin la vraie cause** : quand
