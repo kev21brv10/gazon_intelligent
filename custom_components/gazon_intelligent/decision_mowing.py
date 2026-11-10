@@ -2399,8 +2399,17 @@ def _select_mowing_block_reason(
     target_height: float,
     effective_max: float,
     lame_connue: bool = True,
+    hauteur_levee_par_retard: bool = False,
 ) -> tuple[str | None, str | None, bool]:
-    """Résout une cause de blocage unique selon une priorité métier explicite."""
+    """Résout une cause de blocage unique selon une priorité métier explicite.
+
+    `hauteur_levee_par_retard` : la hauteur n'est qu'ESTIMÉE (aucun capteur) et la tonte est en
+    retard — le garde-fou « hauteur trop faible » n'est alors pas posé, et le motif suivant (s'il
+    y en a un) est évalué normalement. Ce n'est volontairement PAS un motif de
+    `_OVERDUE_SOFT_OVERRIDE_CODES` : l'y ajouter lèverait aussi le blocage d'une hauteur MESURÉE
+    par un capteur, et publierait une tonte autorisée portant encore le code `hauteur_trop_faible`
+    et le statut « déconseillée » (`height_rule_blocked` resterait vrai).
+    """
     phase_dominante = str(phase_bundle["phase_dominante"])
     min_height_after_cut = None if current_height is None else current_height * (2.0 / 3.0)
     last_mowing = _last_mowing_date(context)
@@ -2483,24 +2492,25 @@ def _select_mowing_block_reason(
 
     if current_height is not None:
         if current_height <= target_height:
-            candidates.append(
-                (
-                    _MOWING_BLOCK_PRIORITIES["hauteur_trop_faible"],
-                    "hauteur_trop_faible",
+            if not hauteur_levee_par_retard:
+                candidates.append(
                     (
-                        f"Hauteur actuelle trop faible: la lame coupe à {target_height:.1f} cm, "
-                        f"attends que le gazon la dépasse."
+                        _MOWING_BLOCK_PRIORITIES["hauteur_trop_faible"],
+                        "hauteur_trop_faible",
+                        (
+                            f"Hauteur actuelle trop faible: la lame coupe à {target_height:.1f} cm, "
+                            f"attends que le gazon la dépasse."
+                        )
+                        if lame_connue
+                        # Lame inconnue : le seuil est la hauteur CONSEILLÉE, pas un réglage mesuré —
+                        # « la lame coupe à 6,5 cm » contredisait l'historique des tontes.
+                        else (
+                            f"Hauteur actuelle trop faible: la hauteur conseillée est {target_height:.1f} cm "
+                            f"(réglage de lame inconnu), attends que le gazon la dépasse."
+                        ),
+                        True,
                     )
-                    if lame_connue
-                    # Lame inconnue : le seuil est la hauteur CONSEILLÉE, pas un réglage mesuré —
-                    # « la lame coupe à 6,5 cm » contredisait l'historique des tontes.
-                    else (
-                        f"Hauteur actuelle trop faible: la hauteur conseillée est {target_height:.1f} cm "
-                        f"(réglage de lame inconnu), attends que le gazon la dépasse."
-                    ),
-                    True,
                 )
-            )
         elif min_height_after_cut is not None and target_height < min_height_after_cut:
             if effective_max < min_height_after_cut:
                 candidates.append(
@@ -2873,6 +2883,7 @@ def build_mowing_bundle(
     # `_recommended_mowing_height` pour calculer la hauteur conseillée. Le capteur physique
     # garde la priorité quand il existe (mesure > estimation).
     current_height = water_bundle["advanced_context"].get("hauteur_gazon")
+    hauteur_estimee = current_height is None
     if current_height is None:
         current_height = _estimated_grass_height_cm(context, phase_bundle, water_bundle)
     height_rule_blocked = False
@@ -2880,6 +2891,24 @@ def build_mowing_bundle(
         current_height_float = float(current_height) if current_height is not None else None
     except (TypeError, ValueError):
         current_height_float = None
+    # ⚠️ UNE HAUTEUR ESTIMÉE NE PEUT PAS BLOQUER LONGTEMPS UNE TONTE EN RETARD.
+    # L'estimation repart de la hauteur enregistrée à la dernière tonte et y ajoute une pousse
+    # modélisée ; en novembre, celle-ci vaut au plus 0,5 mm/j, freinée par la température de l'air
+    # (~0,13 mm/j). Relevé le 10/11/2026 : estimée 4,5 cm, lame à 5,0 cm → « attends que le gazon
+    # la dépasse » pendant 9 jours, alors que la règle donnait 5 à 6 cm. Le retard de tonte
+    # (≥ 1,5 × l'intervalle cible) est le signal inverse, mesuré, qu'il est temps de tondre.
+    # La borne ne vaut que pour une hauteur ESTIMÉE : un capteur physique garde le dernier mot
+    # (une mesure vaut mieux qu'un modèle). Le retard est nul quand la fréquence cible l'est
+    # (décembre à février), donc rien n'est levé en hiver. La règle du tiers n'est pas touchée.
+    # `_mowing_overdue_state` ne lit que `context` et `phase_bundle` : sans effet de bord, la
+    # valeur sert aussi plus bas pour le retard affiché et les motifs levés par le retard.
+    mowing_is_overdue, overdue_factor, overdue_days = _mowing_overdue_state(context, phase_bundle)
+    hauteur_levee_par_retard = bool(
+        hauteur_estimee
+        and mowing_is_overdue
+        and current_height_float is not None
+        and current_height_float <= target_height
+    )
     effective_max = float(height_recommendation["_hauteur_tonte_effective_max_cm"] or 0.0)
 
     post_application_active, post_application_code, post_application_label = _post_application_mowing_block(context)
@@ -2945,6 +2974,7 @@ def build_mowing_bundle(
         target_height=target_height,
         effective_max=effective_max,
         lame_connue=_hauteur_coupe_reelle_cm(context) is not None,
+        hauteur_levee_par_retard=hauteur_levee_par_retard,
     )
     selected_reason = reason
     selected_reason_code = reason_code
@@ -2971,8 +3001,8 @@ def build_mowing_bundle(
     # avancé ici, sans effet de bord, `_mowing_overdue_state` ne lit que `context`/`phase_bundle`)
     # alors que le verdict dirait « Tonte recommandée » : publier ce motif comme s'il bloquait
     # encore serait aussi trompeur que le défaut d'origine (signalé en revue, 30/09/2026). Cette
-    # même valeur sert plus bas pour `overdue_relaxed_baseline` — pas recalculée deux fois.
-    mowing_is_overdue, overdue_factor, overdue_days = _mowing_overdue_state(context, phase_bundle)
+    # même valeur sert plus bas pour `overdue_relaxed_baseline` — pas recalculée deux fois
+    # (elle l'est plus haut, avant le choix du motif : voir `hauteur_levee_par_retard`).
     selected_reason_would_be_overdue_relaxed = False
     if selected_reason_code in _OVERDUE_SOFT_OVERRIDE_CODES and mowing_is_overdue:
         _extended_threshold_preview = 65 if overdue_factor < 2.0 else 70
@@ -3171,6 +3201,11 @@ def build_mowing_bundle(
         )
         if tonte_ok:
             reason = overdue_prefix + "Tonte recommandée."
+            if hauteur_levee_par_retard:
+                reason += (
+                    f" Hauteur estimée ({current_height_float:.1f} cm) sous la lame "
+                    f"({target_height:.1f} cm), mais non mesurée : le retard prime."
+                )
         else:
             base = reason or ""
             if next_mowing_display:

@@ -2615,6 +2615,113 @@ class TestMowingOverdue(unittest.TestCase):
         self.assertTrue(bundle["tonte_autorisee"], "Le soft override overdue doit lever conditions_defavorables borderline")
 
 
+class TestRetardEtHauteurEstimee(unittest.TestCase):
+    """Une hauteur ESTIMÉE sous la lame ne bloque pas une tonte en retard.
+
+    Relevé le 10/11/2026 : tonte à l'arrêt 9 jours (retard 1,93) parce que la hauteur estimée
+    (4,5 cm) restait sous la lame (5,0 cm), alors que la règle donnait 5 à 6 cm. Le retard est
+    le signal inverse. Garde-fous à tenir : un CAPTEUR physique garde le dernier mot, les motifs
+    de priorité inférieure que « hauteur trop faible » masque (rosée, sol humide) restent
+    évalués, et rien n'est levé hors retard (donc rien en hiver, fréquence cible nulle).
+    """
+
+    # Dernière tonte le 01/11 à 45 mm ; lame réglée à 50 mm ; 10/11 à 11 h → 9 jours, facteur 1,93.
+    HISTORIQUE = [{"type": "tonte", "date": "2026-11-01", "hauteur_coupe_mm": 45}]
+
+    def _bundle(self, *, history=None, today=date(2026, 11, 10), hour=11, **kwargs):
+        context = decision.DecisionContext.from_legacy_args(
+            history=self.HISTORIQUE if history is None else history,
+            today=today,
+            hour_of_day=hour,
+            temperature=12,
+            pluie_24h=0,
+            pluie_demain=0,
+            humidite=55,
+            type_sol="limoneux",
+            etp_capteur=1.0,
+            **kwargs,
+        )
+        context.mower_context = {"tondeuse_hauteur_coupe_mm": 50}
+        phase_bundle = decision_phase.build_phase_bundle(context)
+        water_bundle = decision_watering.build_water_bundle(context, phase_bundle)
+        risk_bundle = decision_risk.build_risk_bundle(context, phase_bundle, water_bundle)
+        return decision_mowing.build_mowing_bundle(context, phase_bundle, water_bundle, risk_bundle)
+
+    def test_le_retard_leve_le_blocage_d_une_hauteur_estimee_sous_la_lame(self) -> None:
+        bundle = self._bundle()
+        # Prémisses : l'estimation est bien SOUS la lame (5,0) et la tonte bien en retard —
+        # sans elles, le test ne passerait par aucune des deux branches qu'il prétend couvrir.
+        self.assertLessEqual(bundle["gazon_hauteur_estimee_cm"], 5.0)
+        self.assertTrue(bundle["mowing_is_overdue"])
+        self.assertGreaterEqual(bundle["mowing_overdue_factor"], 1.5)
+
+        self.assertTrue(bundle["tonte_autorisee"], bundle["tonte_reason"])
+        self.assertIsNone(bundle["raison_blocage_code"])
+        # Le statut ne doit pas rester « déconseillée » : la règle de hauteur n'est plus posée.
+        self.assertNotEqual(bundle["tonte_statut"], "deconseillee")
+        # Et on dit POURQUOI une hauteur sous la lame n'empêche plus de tondre.
+        self.assertIn("le retard prime", bundle["tonte_reason"])
+
+    def test_pas_de_phrase_trompeuse_quand_la_hauteur_depasse_deja_la_lame(self) -> None:
+        # Tonte précédente à 60 mm : l'estimation est AU-DESSUS de la lame (50) — il n'y a rien à
+        # lever, donc rien à expliquer : dire « sous la lame » serait faux.
+        bundle = self._bundle(history=[{"type": "tonte", "date": "2026-11-01", "hauteur_coupe_mm": 60}])
+        self.assertTrue(bundle["mowing_is_overdue"])
+        self.assertGreater(bundle["gazon_hauteur_estimee_cm"], 5.0)
+        self.assertTrue(bundle["tonte_autorisee"], bundle["tonte_reason"])
+        self.assertNotIn("le retard prime", bundle["tonte_reason"])
+
+    def test_sans_retard_le_garde_fou_de_hauteur_tient_toujours(self) -> None:
+        # Tonte il y a 3 jours : intervalle cible 4,7 j → facteur 0,64, pas en retard.
+        bundle = self._bundle(history=[{"type": "tonte", "date": "2026-11-07", "hauteur_coupe_mm": 45}])
+        self.assertFalse(bundle["mowing_is_overdue"])
+        self.assertEqual(bundle["raison_blocage_code"], "hauteur_trop_faible")
+        self.assertFalse(bundle["tonte_autorisee"])
+        self.assertEqual(bundle["tonte_statut"], "deconseillee")
+
+    def test_un_capteur_physique_n_est_jamais_leve_par_le_retard(self) -> None:
+        # Une MESURE sous la lame vaut mieux qu'un modèle : le retard n'y change rien.
+        bundle = self._bundle(hauteur_gazon=4.5)
+        self.assertTrue(bundle["mowing_is_overdue"])
+        self.assertEqual(bundle["raison_blocage_code"], "hauteur_trop_faible")
+        self.assertFalse(bundle["tonte_autorisee"])
+
+    def test_lever_la_hauteur_n_ouvre_pas_la_tonte_sur_herbe_ou_sol_mouille(self) -> None:
+        """Lever le garde-fou de hauteur ne doit jamais, à lui seul, autoriser la tonte.
+
+        Rosée et sol humide sont aussi imposés par `_resolve_mowing_block` : ils tiennent donc
+        déjà. Ce test garde contre une régression qui forcerait l'autorisation dès que la
+        hauteur est levée. La référence (capteur à 6 cm, donc aucun motif de hauteur) donne le
+        même motif : c'est lui qui doit rester affiché, ni un motif de hauteur ni une autorisation.
+        """
+        cas = {
+            "rosee": dict(rosee=2.0),
+            "sol_humide": dict(humidite_sol=80),
+        }
+        for nom, entrees in cas.items():
+            with self.subTest(cas=nom):
+                reference = self._bundle(hauteur_gazon=6.0, **entrees)
+                estime = self._bundle(**entrees)
+                self.assertIsNotNone(reference["raison_blocage_code"], "prémisse : un motif existe")
+                self.assertNotEqual(reference["raison_blocage_code"], "hauteur_trop_faible")
+                self.assertTrue(estime["mowing_is_overdue"])
+                self.assertEqual(estime["raison_blocage_code"], reference["raison_blocage_code"])
+                self.assertFalse(estime["tonte_autorisee"])
+
+    def test_la_nuit_n_est_jamais_levee_par_ce_retard(self) -> None:
+        bundle = self._bundle(hour=23)
+        self.assertTrue(bundle["mowing_is_overdue"])
+        self.assertEqual(bundle["raison_blocage_code"], "mowing_night")
+        self.assertFalse(bundle["tonte_autorisee"])
+
+    def test_en_hiver_rien_n_est_leve_la_frequence_cible_etant_nulle(self) -> None:
+        # Décembre : fréquence cible 0 → jamais « en retard » → le garde-fou de hauteur tient.
+        bundle = self._bundle(today=date(2026, 12, 10))
+        self.assertFalse(bundle["mowing_is_overdue"])
+        self.assertEqual(bundle["raison_blocage_code"], "hauteur_trop_faible")
+        self.assertFalse(bundle["tonte_autorisee"])
+
+
 class TestEstimatedGrassHeight(unittest.TestCase):
     """Tests pour l'estimation de la hauteur du gazon sans capteur physique."""
 
