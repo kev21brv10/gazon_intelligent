@@ -30,7 +30,10 @@
   il dit maintenant « On attend les données », et une météo muette s'affiche « Météo en attente ».
   La liste « Capteurs : N sur M répondent » n'apparaît que si un capteur branché ne répond pas ; une
   entrée non branchée n'est jamais comptée, et le texte ne prétend pas connaître la cause.
-- **Vérifié** : suite complète avec 2 371 tests et 3 255 sous-tests, ruff vert ; les nouvelles
+- **Taille d'ensemble** : tout le panneau (textes, titres, cartes, espaces, fenêtres de dialogue,
+  barre « Enregistrer » et confirmation) est ramené à 90 % de la maquette, par un seul réglage ; le
+  calcul des rangées de la mosaïque en tient compte pour que les cadres ne se chevauchent pas.
+- **Vérifié** : suite complète avec 2 373 tests et 3 255 sous-tests, ruff vert ; les nouvelles
   règles du panneau ont été éprouvées en altérant le code pour constater que les tests échouent.
 
 ## 1.0.0-rc.17

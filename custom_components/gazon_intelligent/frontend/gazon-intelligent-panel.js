@@ -63,6 +63,10 @@ const COULOIRS = {
 };
 
 const RANGEE_MOSAIQUE_PX = 4;
+// Échelle d'ensemble du panneau : toutes les tailles (textes, cartes, espaces) à 90 %. Un seul réglage,
+// appliqué en CSS (`zoom`) ; le navigateur rapporte alors les mesures à l'écran, d'où la division
+// dans `_caserMosaique`, dont les rangées de 4 px sont, elles, dans l'espace de mise en page.
+const ECHELLE_PANNEAU = 0.9;
 
 // ─── Mise en page des onglets du registre ────────────────────────────────────────────────
 // Un réglage du registre absent d'ici n'est pas perdu : il tombe dans « Autres réglages ».
@@ -3257,6 +3261,10 @@ dialog.dialogue::backdrop { background: rgba(10, 18, 12, .6); }
 
 
 @container page (max-width: 640px) { .dialogue-corps { padding: 8px 18px; } .dialogue-pied { padding: 14px 18px 20px; } }
+
+/* Échelle d'ensemble (voir ECHELLE_PANNEAU). La page, la fenêtre de dialogue (hors de la page, dans la
+   couche supérieure), la barre « Enregistrer » et la confirmation sont réduites d'un même cran. */
+.page, .dialogue, .barre-enregistrer, .toast { zoom: ${ECHELLE_PANNEAU}; }
 `;
 
 // ─── Le composant ────────────────────────────────────────────────────────────────────────
@@ -3732,7 +3740,7 @@ class GazonIntelligentPanel extends HTMLElement {
     const mesures = cases.filter((c) => c.isConnected && c.parentElement).map((c) => {
       const grille = c.parentElement;
       if (!ecarts.has(grille)) ecarts.set(grille, Number.parseFloat(getComputedStyle(grille).columnGap) || 16);
-      const hauteur = c.getBoundingClientRect().height;
+      const hauteur = c.getBoundingClientRect().height / ECHELLE_PANNEAU;
       return [c, `span ${Math.max(1, Math.ceil((hauteur + ecarts.get(grille)) / RANGEE_MOSAIQUE_PX))}`];
     });
     for (const [c, rangees] of mesures) {
