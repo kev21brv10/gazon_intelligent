@@ -471,6 +471,56 @@ class MemoryCatalogTests(unittest.TestCase):
         self.assertEqual(state["application_post_watering_remaining_mm"], 5.0)
         self.assertNotEqual(state["application_post_watering_status"], "termine")
 
+    def test_water_dated_after_application_day_counts_when_incorporation_was_postponed(self) -> None:
+        """Branche « arrosage daté APRÈS le jour de l'application » : seule la fenêtre d'une
+        incorporation reportée par le blocage d'une AUTRE application y mène (le pending ne
+        vaut que le jour même). Fongicide bloquant jusqu'au lendemain 16 h, engrais « sol »
+        déclaré la veille au soir : l'arrosage du lendemain soir est bien de l'eau reçue depuis
+        l'engrais — l'incorporation est faite, pas à refaire."""
+        base = [
+            {
+                "type": "Traitement",
+                "date": "2026-09-12",
+                "declared_at": "2026-09-12T16:00:00+00:00",
+                "produit": "Fongicide",
+                "application_type": "foliaire",
+                "application_irrigation_block_hours": 24,
+            },
+            {
+                "type": "Fertilisation",
+                "date": "2026-09-12",
+                "declared_at": "2026-09-12T19:00:00+00:00",
+                "produit": "Engrais racinaire",
+                "application_type": "sol",
+                "application_requires_watering_after": True,
+                "application_post_watering_mm": 5.0,
+                "application_irrigation_block_hours": 0,
+                "application_irrigation_mode": "auto",
+            },
+        ]
+        reference_now = memory.datetime(2026, 9, 13, 19, 30, tzinfo=memory.timezone.utc)
+        today = date(2026, 9, 13)
+
+        # Sans eau : l'incorporation reste due après la levée du blocage (non-régression).
+        avant = memory.compute_application_state(base, now=reference_now, today=today)
+        self.assertTrue(avant["application_post_watering_pending"])
+        self.assertEqual(avant["application_post_watering_remaining_mm"], 5.0)
+
+        # 5 mm le lendemain, après l'engrais : l'incorporation est faite.
+        arrose = base + [
+            {
+                "type": "arrosage",
+                "date": "2026-09-13",
+                "declared_at": "2026-09-13T17:00:00+00:00",
+                "total_mm": 5.0,
+                "source": "manual",
+            }
+        ]
+        apres = memory.compute_application_state(arrose, now=reference_now, today=today)
+        self.assertEqual(apres["application_post_watering_remaining_mm"], 0.0)
+        self.assertFalse(apres["application_post_watering_pending"])
+        self.assertEqual(apres["application_post_watering_status"], "termine")
+
     def test_compute_application_state_marks_completed_post_watering(self) -> None:
         state = memory.compute_application_state(
             [
