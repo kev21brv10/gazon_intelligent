@@ -440,7 +440,8 @@ class CeQueLaPageLitTests(unittest.TestCase):
         self.assertIn(".meteo-ligne span:nth-child(n + 5) { display: none; }", page)
         self.assertIn(".meteo-heure { display: none; }", page)
         self.assertIn(".meteo-haut > ha-icon { display: none; }", page)
-        self.assertIn("font-size: 16.5px; line-height: 1.15", page)
+        # Le titre du bandeau reste une grande phrase en condensé, même sur téléphone (refonte 1.0.0).
+        self.assertIn("font-size: 28px; line-height: 1", page)
         self.assertIn("font-size: 10.75px; line-height: 1.2", page)
         self.assertIn("padding: 7px 10px; border-radius: 9px; font-size: 12.5px", page)
 
