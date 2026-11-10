@@ -133,6 +133,32 @@ def resolve_history_moment(
     )
 
 
+def history_moment_is_precise(item: dict[str, Any]) -> bool:
+    """`resolve_history_moment` connaît-il un instant RÉELLEMENT su, pas l'heure de repli ?
+
+    ⚠️ Comparer deux instants dont l'un n'est que `fallback_hour` revient à comparer une heure
+    connue à une heure inventée : ça ne prouve rien sur l'ordre réel des deux événements. Signalé
+    en revue (contre-exemple du 30/09/2026, deux horodatages réels le même jour comparés à tort
+    à égalité de granularité jour). Un appelant qui doit trancher un ordre fin entre deux entrées
+    du MÊME jour doit d'abord vérifier que les deux côtés sont précis avant de comparer leurs
+    instants — sinon rester permissif (ou comparer au jour, pas à l'heure).
+    """
+    if not isinstance(item, dict):
+        return False
+    for field in _HISTORY_EXACT_MOMENT_FIELDS:
+        if _parse_history_moment_value(item.get(field)) is not None:
+            return True
+    declared_date = _history_declared_date(item)
+    declared_at = _parse_history_moment_value(item.get("declared_at"))
+    if declared_at is not None and (
+        declared_date is None
+        or declared_at.date() == declared_date
+        or _date_locale(declared_at) == declared_date
+    ):
+        return True
+    return False
+
+
 # JUMEAU : soil_balance.SOIL_RESERVE_BASE_MM — même réserve utile du sol par type de sol.
 # Les deux modules sont volontairement découplés (pas d'import croisé), on garde donc les deux
 # tables identiques à la main (cf. tests/test_soil_balance.py::TestSoilReserveTwins).

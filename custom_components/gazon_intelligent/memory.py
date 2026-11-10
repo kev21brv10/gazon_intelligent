@@ -39,7 +39,12 @@ from .const import (
     PRODUCT_USAGE_MODES,
 )
 from .phases import PHASE_DURATIONS_DAYS, SIGNIFICANT_WATERING_THRESHOLD_MM
-from .water import _watering_item_mm, compute_recent_watering_mm, resolve_history_moment
+from .water import (
+    _watering_item_mm,
+    compute_recent_watering_mm,
+    history_moment_is_precise,
+    resolve_history_moment,
+)
 
 APPLICATION_DEFAULTS: dict[str, dict[str, Any]] = {
     "Traitement": {
@@ -353,12 +358,60 @@ def _is_application_relevant_item(item: dict[str, Any]) -> bool:
 
 def _latest_application_item(
     history: list[dict[str, Any]],
+    *,
+    today: date | None = None,
 ) -> tuple[int | None, dict[str, Any] | None]:
-    for idx in range(len(history) - 1, -1, -1):
-        item = history[idx]
-        if _is_application_relevant_item(item):
-            return idx, item
-    return None, None
+    """La plus RÉCENTE par date réelle, pas la dernière insérée dans l'historique.
+
+    ⚠️ Une déclaration rétroactive (un apport du 16/09 enregistré après celui du 28/09) se
+    retrouve après lui dans l'historique, alors qu'elle date d'avant. L'ancien code prenait le
+    dernier élément pertinent de la LISTE et affichait cet apport plus ancien comme « la
+    dernière application » — et `compute_application_state` s'en sert pour de vraies décisions
+    (arrosage post-application encore dû, eau comptée depuis cet index), pas seulement pour
+    l'affichage (signalé en revue, 30/09/2026). On compare désormais la date réelle de chaque
+    entrée ; à date égale (ou toutes deux sans date exploitable), la dernière insérée l'emporte
+    encore — c'est le seul ordre connu entre deux entrées du même jour.
+
+    ⚠️ COMPARAISON PAR JOUR, PAS PAR INSTANT EXACT (`resolve_history_moment`) — premier jet
+    corrigé après un test existant cassé. `resolve_history_moment` retombe sur une heure fixe
+    arbitraire (6 h UTC) pour une entrée qui n'a qu'une date, sans `declared_at` exploitable.
+    Comparer cet instant fabriqué à l'instant EXACT d'une autre entrée du même jour crée un
+    ordre artificiel entre deux entrées qui n'ont simplement pas la même précision — un
+    arrosage du jour même, sans horodatage fin, se retrouvait « avant » une application déclarée
+    à 8 h alors que les deux datent du même jour. Le jour civil reste la seule granularité que
+    toutes les entrées partagent de façon fiable.
+
+    ⚠️ UNE APPLICATION FUTURE N'A PAS ENCORE EU LIEU (signalé en revue GitHub, 30/09/2026) :
+    exactement le défaut déjà corrigé plus bas pour les blocages (« une application datée dans
+    le futur bloquait l'arrosage dès sa déclaration ») rejoué ici pour la sélection elle-même.
+    Sans cette garde, une application pré-déclarée pour demain passerait pour « la dernière »
+    dès aujourd'hui et masquerait celle réellement faite ce jour.
+
+    ⚠️ `today`, PAS `now.date()` — deuxième jet corrigé après un AUTRE test existant cassé.
+    Cette fonction n'a pas de notion d'horloge murale propre : le jour de référence doit venir
+    de l'appelant (qui connaît, lui, le `today` explicite d'un test ou d'un rejeu), jamais d'un
+    `_current_datetime()` par défaut. `compute_application_state` fait déjà cette distinction
+    (`reference_today = today or now.date()`) précisément parce que ses appelants passent
+    `today` sans `now` — un `now()` figé par un test (ou un redémarrage tardif) ne doit jamais
+    faire passer une application bien réelle du jour pour « future ».
+    """
+    reference_date = today or _current_date()
+    best_idx: int | None = None
+    best_item: dict[str, Any] | None = None
+    best_date: date | None = None
+    for idx, item in enumerate(history):
+        if not _is_application_relevant_item(item):
+            continue
+        item_date = _application_date(item)
+        if item_date is not None and item_date > reference_date:
+            continue
+        if (
+            best_item is None
+            or (item_date is not None and (best_date is None or item_date >= best_date))
+            or (item_date is None and best_date is None)
+        ):
+            best_idx, best_item, best_date = idx, item, item_date
+    return best_idx, best_item
 
 
 def _application_runtime_fields(item: dict[str, Any]) -> dict[str, Any]:
@@ -930,15 +983,15 @@ def compute_application_state(
     today: date | None = None,
 ) -> dict[str, Any]:
     now = now or _current_datetime()
+    reference_today = today or now.date()
     history = [item for item in history if isinstance(item, dict)]
-    latest_index, latest_item = _latest_application_item(history)
+    latest_index, latest_item = _latest_application_item(history, today=reference_today)
 
     if latest_item is None:
         return _default_application_state()
 
     summary = build_application_summary(latest_item)
     runtime_fields = _application_runtime_fields(latest_item)
-    reference_today = today or now.date()
     contraintes = _contraintes_des_applications_recentes(history, now, reference_today)
     # Le blocage ACTIF vient des contraintes (toutes les applications, moment déjà passé) ; à défaut
     # on publie celui de la dernière application, pour l'affichage, mais il ne bloque pas.
@@ -964,8 +1017,42 @@ def compute_application_state(
         if fin_locale >= jour_derniere and (report_jusqu_au is None or fin_locale > report_jusqu_au):
             report_jusqu_au = fin_locale
 
+    # ⚠️ PAR JOUR RÉEL, PAS PAR INDEX DE LISTE (signalé en revue GitHub, 30/09/2026). La
+    # sélection de `latest_item` suit désormais la date réelle, pas la position dans la liste :
+    # un arrosage inséré AVANT cet index peut très bien avoir eu lieu APRÈS l'application (ex.
+    # application déclarée en retard), et inversement un arrosage antidaté inséré après elle
+    # peut être plus ancien qu'elle. `history[latest_index + 1:]` ne le distinguerait pas.
+    #
+    # ⚠️ MÊME JOUR : L'INSTANT EXACT PRIME QUAND LES DEUX CÔTÉS LE CONNAISSENT (contre-exemple
+    # en revue, 30/09/2026) — deuxième jet. Comparer au jour seul comptait À TORT un arrosage de
+    # 08 h comme reçu après une application de 10 h le même jour. Mais comparer systématiquement
+    # à l'instant exact (`resolve_history_moment`) avait cassé un autre cas : son heure de repli
+    # arbitraire (6 h UTC) pour une entrée SANS horodatage fin n'est pas une preuve d'ordre face
+    # à l'instant exact d'une autre entrée. Les deux jours différents restent tranchés au jour
+    # (fiable des deux côtés) ; à jour égal, l'instant exact ne tranche que si `_precise` est vrai
+    # des DEUX côtés — sinon on reste permissif, comme avant ce correctif.
     water_after_application = 0.0
-    if latest_index is not None:
+    if jour_derniere is not None:
+        application_moment = resolve_history_moment(latest_item)
+        application_precise = history_moment_is_precise(latest_item)
+        for item in history:
+            if item.get("type") != "arrosage":
+                continue
+            watering_date = _application_date(item)
+            if watering_date is None or watering_date < jour_derniere:
+                continue
+            if watering_date > jour_derniere:
+                water_after_application += float(_watering_item_mm(item) or 0.0)
+                continue
+            # Même jour : trancher à l'instant exact seulement si les deux côtés sont précis.
+            if application_precise and application_moment is not None and history_moment_is_precise(item):
+                watering_moment = resolve_history_moment(item)
+                if watering_moment is not None and watering_moment <= application_moment:
+                    continue  # précisément antérieur ou simultané : ne compte pas
+            water_after_application += float(_watering_item_mm(item) or 0.0)
+    elif latest_index is not None:
+        # Repli : application sans aucune date exploitable (donnée dégradée). Aucun ordre
+        # fiable n'est connu — on garde l'ancien comportement plutôt que de tout ignorer.
         for item in history[latest_index + 1 :]:
             if item.get("type") != "arrosage":
                 continue
@@ -1185,8 +1272,9 @@ def compute_memory(
             "raison_decision": decision.get("raison_decision"),
         }
 
-    _, last_application = _latest_application_item(history)
-    application_state = compute_application_state(history, now=_current_datetime(), today=today)
+    memory_now = _current_datetime()
+    _, last_application = _latest_application_item(history, today=today)
+    application_state = compute_application_state(history, now=memory_now, today=today)
     feedback_observation = build_feedback_observation(history, previous_memory, decision, today=today)
 
     return {

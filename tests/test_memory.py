@@ -305,6 +305,172 @@ class MemoryCatalogTests(unittest.TestCase):
         self.assertFalse(yesterday["application_post_watering_pending"])
         self.assertFalse(yesterday["application_post_watering_ready"])
 
+    def test_latest_application_item_prefers_real_date_over_insertion_order(self) -> None:
+        """Signalé en revue (30/09/2026) : une application plus ancienne déclarée APRÈS une
+        plus récente (rétroactivement) ne doit pas passer pour « la dernière », ni dans
+        `_latest_application_item` seule ni dans les décisions qui en découlent."""
+        history = [
+            {
+                "type": "Fertilisation",
+                "date": "2026-09-28",
+                "declared_at": "2026-09-28T08:00:00+00:00",
+                "produit": "Humuslight",
+                "application_type": "sol",
+                "application_requires_watering_after": True,
+                "application_post_watering_mm": 5.0,
+                "application_irrigation_block_hours": 0.0,
+                "application_irrigation_delay_minutes": 0.0,
+                "application_irrigation_mode": "auto",
+            },
+            {
+                # Déclaré APRÈS le Humuslight (dernier de la liste), mais daté d'AVANT :
+                # l'ancien code le prenait quand même pour « la dernière application ».
+                "type": "Fertilisation",
+                "date": "2026-09-16",
+                "declared_at": "2026-09-30T08:00:00+00:00",
+                "produit": "Engrais racinaire Team Green",
+                "application_type": "sol",
+                "application_requires_watering_after": False,
+            },
+        ]
+
+        reference_now = memory.datetime(2026, 9, 28, 9, 0, tzinfo=memory.timezone.utc)
+        idx, item = memory._latest_application_item(history, today=date(2026, 9, 28))
+        self.assertEqual(idx, 0)
+        self.assertEqual(item["produit"], "Humuslight")
+
+        state = memory.compute_application_state(history, now=reference_now)
+        self.assertEqual(state["date_action"], "2026-09-28")
+        self.assertEqual(state["derniere_application"]["produit"], "Humuslight")
+        self.assertTrue(state["application_requires_watering_after"])
+        self.assertEqual(state["application_post_watering_mm"], 5.0)
+        self.assertTrue(state["application_post_watering_pending"])
+
+    def test_latest_application_item_same_date_keeps_last_inserted(self) -> None:
+        """Garde-fou inverse : à date égale, le comportement historique (dernier inséré)
+        doit survivre — c'est le seul ordre connu entre deux applications du même jour."""
+        history = [
+            {
+                "type": "Fertilisation",
+                "date": "2026-09-28",
+                "produit": "Premier apport du jour",
+                "application_requires_watering_after": False,
+            },
+            {
+                "type": "Fertilisation",
+                "date": "2026-09-28",
+                "produit": "Second apport du jour",
+                "application_requires_watering_after": False,
+            },
+        ]
+        idx, item = memory._latest_application_item(history, today=date(2026, 9, 28))
+        self.assertEqual(idx, 1)
+        self.assertEqual(item["produit"], "Second apport du jour")
+
+    def test_latest_application_item_excludes_future_dated_entries(self) -> None:
+        """Signalé en revue GitHub (30/09/2026, P2) : une application pré-déclarée pour
+        demain ne doit pas passer pour « la dernière » aujourd'hui et masquer celle
+        réellement faite ce jour — même logique que le blocage, déjà protégée plus bas
+        (`_contraintes_des_applications_recentes` : « une application datée dans le futur
+        bloquait l'arrosage dès sa déclaration »)."""
+        history = [
+            {
+                "type": "Fertilisation",
+                "date": "2026-09-30",
+                "declared_at": "2026-09-30T08:00:00+00:00",
+                "produit": "Apport du jour",
+                "application_requires_watering_after": True,
+                "application_post_watering_mm": 5.0,
+            },
+            {
+                # Pré-déclarée pour demain : pas encore active.
+                "type": "Fertilisation",
+                "date": "2026-10-01",
+                "declared_at": "2026-09-30T08:05:00+00:00",
+                "produit": "Apport programmé demain",
+                "application_requires_watering_after": False,
+            },
+        ]
+        reference_now = memory.datetime(2026, 9, 30, 9, 0, tzinfo=memory.timezone.utc)
+        idx, item = memory._latest_application_item(history, today=date(2026, 9, 30))
+        self.assertEqual(idx, 0)
+        self.assertEqual(item["produit"], "Apport du jour")
+
+        state = memory.compute_application_state(history, now=reference_now)
+        self.assertEqual(state["derniere_application"]["produit"], "Apport du jour")
+        self.assertTrue(state["application_post_watering_pending"])
+
+    def test_water_after_application_follows_real_moment_not_list_position(self) -> None:
+        """Signalé en revue GitHub (30/09/2026, P1) : `water_after_application` comptait
+        l'eau par POSITION dans la liste (`history[latest_index + 1:]`), pas par moment
+        réel. Une application sélectionnée comme « la dernière » peut avoir un index plus
+        BAS que d'autres entrées présentes avant elle dans la liste — un arrosage antidaté
+        (plus ancien que l'application mais inséré après elle) ne doit pas être compté."""
+        history = [
+            {
+                "type": "Fertilisation",
+                "date": "2026-09-28",
+                "declared_at": "2026-09-28T08:00:00+00:00",
+                "produit": "Humuslight",
+                "application_type": "sol",
+                "application_requires_watering_after": True,
+                "application_post_watering_mm": 5.0,
+                "application_irrigation_delay_minutes": 0.0,
+            },
+            {
+                # Inséré APRÈS l'application dans la liste, mais son eau date d'AVANT elle
+                # (arrosage du 20/09, saisi tardivement) : ne doit pas compter comme reçue
+                # depuis l'application du 28/09.
+                "type": "arrosage",
+                "date": "2026-09-20",
+                "declared_at": "2026-09-29T07:00:00+00:00",
+                "objectif_mm": 4.0,
+                "source": "manual",
+            },
+        ]
+        # Le jour même de l'application (le pending ne vaut que ce jour-là, cf.
+        # `test_post_watering_pending_only_on_application_day` — sans ça, l'assertion ne
+        # testerait plus le comptage de l'eau mais cette autre règle).
+        reference_now = memory.datetime(2026, 9, 28, 18, 0, tzinfo=memory.timezone.utc)
+        state = memory.compute_application_state(history, now=reference_now)
+        self.assertEqual(state["derniere_application"]["produit"], "Humuslight")
+        # L'arrosage antidaté n'a pas dû être compté : le besoin post-application reste entier.
+        self.assertTrue(state["application_post_watering_pending"])
+        self.assertEqual(state["application_post_watering_remaining_mm"], 5.0)
+
+    def test_water_before_application_same_day_with_known_instants_not_counted(self) -> None:
+        """Contre-exemple signalé en revue (30/09/2026) : un arrosage à 8 h et une
+        application à 10 h, LE MÊME JOUR, avec les deux instants exacts connus. La
+        comparaison au jour seul comptait à tort ces 5 mm comme reçus APRÈS l'application
+        (fausse l'incorporation) — les deux instants exacts doivent trancher quand ils sont
+        tous les deux connus, pas seulement le jour civil."""
+        history = [
+            {
+                "type": "arrosage",
+                "date": "2026-09-30",
+                "declared_at": "2026-09-30T08:00:00+00:00",
+                "total_mm": 5.0,
+                "source": "manual",
+            },
+            {
+                "type": "Fertilisation",
+                "date": "2026-09-30",
+                "declared_at": "2026-09-30T10:00:00+00:00",
+                "produit": "Engrais racinaire",
+                "application_type": "sol",
+                "application_requires_watering_after": True,
+                "application_post_watering_mm": 5.0,
+                "application_irrigation_delay_minutes": 0.0,
+            },
+        ]
+        reference_now = memory.datetime(2026, 9, 30, 11, 0, tzinfo=memory.timezone.utc)
+        state = memory.compute_application_state(history, now=reference_now)
+        self.assertEqual(state["derniere_application"]["produit"], "Engrais racinaire")
+        # Les 5 mm ont précédé le produit : l'incorporation reste due.
+        self.assertTrue(state["application_post_watering_pending"])
+        self.assertEqual(state["application_post_watering_remaining_mm"], 5.0)
+        self.assertNotEqual(state["application_post_watering_status"], "termine")
+
     def test_compute_application_state_marks_completed_post_watering(self) -> None:
         state = memory.compute_application_state(
             [
