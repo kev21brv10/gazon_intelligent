@@ -43,6 +43,20 @@
 - **Une tondeuse en `idle` hors de sa station n'est plus confondue avec un retour** : cet état
   intermédiaire (mi-tonte, en pause) tombait dans le même groupe que `docked`/`charging` et
   déclenchait une fausse notification « tondeuse rentrée ».
+- **Le rappel de sécurité passe avant la fermeture du volet « porte » pendant la tonte** : la
+  branche « fermer derrière la tondeuse qui tond » retournait dans tous ses cas (attente du délai,
+  ordre de fermeture, volet bloqué après les tentatives épuisées), donc avant l'envoi du `dock`.
+  Quand le gazon retirait son autorisation pendant une tonte, le rappel était retardé du délai de
+  fermeture, puis supprimé tant que le volet ne se fermait pas : la tondeuse continuait de tondre
+  malgré l'interdiction. Le rappel est maintenant jugé une seule fois et l'emporte sur cette
+  fermeture facultative, qui reprend derrière la tondeuse, à quai. Tonte permise et commande
+  manuelle en cours : inchangées.
+- **Un retour manuel ne laisse plus le pilote en « cycle autonome »** : après un `lawn_mower.dock`
+  manuel réussi pendant un cycle lancé par le pilote, le travail interrompu restait « en pause »
+  sous 100 % et le cycle géré n'était jamais refermé : volet laissé ouvert, départs automatiques
+  bloqués même après la suspension de quatre heures. Le cycle, le départ envoyé non encore observé
+  et le suivi du travail sont purgés après un retour manuel réussi. Une recharge sans intervention
+  manuelle reste un cycle autonome, et un ordre refusé ne purge rien.
 - **La CI lance enfin tous les tests** : le job `unit-tests` exécutait `unittest discover`, qui ne
   collecte pas les fonctions de test de niveau module. 47 tests (tout `tests/test_mower_control.py`,
   le pilote tondeuse et garage, et 3 de la consommation d'eau) n'étaient jamais lancés : une garde
@@ -52,7 +66,7 @@
   (désactivé, observation, actif) et pour le volet « porte » ; progression de la tonte lue par le
   vrai cycle de mise à jour, sans injection ; eau datée après le jour de l'application quand
   l'incorporation est reportée.
-- **Vérifié** : suite complète avec 3 189 tests sous pytest 8.4 (3 142 sous l'ancienne commande),
+- **Vérifié** : suite complète avec 3 219 tests sous pytest 8.4 (3 172 sous l'ancienne commande),
   ruff et mypy (55 fichiers) verts. Chaque correctif a été éprouvé en altérant le code pour
   constater que les tests échouent.
 
