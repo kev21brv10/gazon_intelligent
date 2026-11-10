@@ -102,6 +102,35 @@ class RubanJourTests(unittest.TestCase):
         # Le texte du motif est échappé (l'apostrophe devient &#39;) : jamais de HTML brut venu d'une entité.
         self.assertIn("fermée : sursemis : tonte suspendue jusqu&#39;à J+7", retenue)
 
+    def test_la_machine_indisponible_ou_le_blocage_du_moteur_hachurent_meme_quand_le_gazon_est_pret(self) -> None:
+        # Le moteur ne laisse sortir la tondeuse que si gazon, machine ET absence de blocage sont réunis
+        # (`action_possible`) : le statut du gazon seul ne doit jamais afficher « fenêtres ouvertes ».
+        machine, machine_motif, bloquee = _rendre([
+            {"attrs": {"tonte_autorisee": {"tonte_statut": "autorisee", "machine_permet_tonte": False}}},
+            {"attrs": {"tonte_autorisee": {"tonte_statut": "autorisee", "machine_permet_tonte": False,
+                                           "mowing_block_reason_label": "Tondeuse en erreur."}}},
+            {"attrs": {"tonte_autorisee": {"tonte_statut": "autorisee", "machine_permet_tonte": True,
+                                           "mowing_blocked": True, "mowing_block_reason_label": "Garage fermé."}}},
+        ])
+        for html in (machine, machine_motif, bloquee):
+            self.assertIn("b-ferme", html)
+            self.assertNotIn("b-ouvert", html)
+            self.assertNotIn("fenêtres ouvertes", html)
+        self.assertIn("fermée : machine indisponible", machine)
+        self.assertIn("fermée : tondeuse en erreur", machine_motif)
+        self.assertNotIn("machine indisponible", machine_motif)
+        self.assertIn("fermée : garage fermé", bloquee)
+
+    def test_une_machine_disponible_ou_non_renseignee_laisse_la_tonte_ouverte(self) -> None:
+        disponible, ancien = _rendre([
+            {"attrs": {"tonte_autorisee": {"tonte_statut": "autorisee", "machine_permet_tonte": True, "mowing_blocked": False}}},
+            {"attrs": {"tonte_autorisee": {"tonte_statut": "autorisee"}}},
+        ])
+        for html in (disponible, ancien):
+            self.assertIn("b-ouvert", html)
+            self.assertNotIn("b-ferme", html)
+            self.assertIn("fenêtres ouvertes", html)
+
     def test_le_motif_d_un_blocage_n_entre_jamais_en_html_brut(self) -> None:
         (html,) = _rendre([{"attrs": {"tonte_autorisee": {
             "tonte_statut": "interdite", "mowing_block_reason_label": '<img src=x onerror="alert(1)">',

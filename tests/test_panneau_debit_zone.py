@@ -63,13 +63,36 @@ def _rendre(cas: list[dict]) -> list[str]:
 class DebitZoneTests(unittest.TestCase):
     def test_l_effet_dit_la_duree_pour_la_dose_du_jour_avec_l_ancienne_valeur(self) -> None:
         (html,) = _rendre([{"valeur": "17"}])
-        self.assertIn("Pour 3 mm d'eau, cette zone arrosera <b>11 min</b> (avant : 13 min)", html)
+        # 3 mm à 17 mm/h = 10,59 min, arrondi à la demi-minute par le moteur : 10 min 30 s (et non 11 min).
+        self.assertIn("Pour 3 mm d'eau, cette zone arrosera <b>10 min 30 s</b> (avant : 13 min)", html)
         self.assertNotIn("note alerte", html)
 
     def test_l_effet_utilise_l_objectif_du_jour_quand_il_existe(self) -> None:
         (html,) = _rendre([{"valeur": "14", "objectif": 5}])
         self.assertIn("Pour 5 mm d'eau", html)
-        self.assertIn("<b>21 min</b>", html)
+        self.assertIn("<b>21 min 30 s</b>", html)
+
+    def test_la_duree_est_plafonnee_a_trois_heures_comme_le_plan_du_moteur(self) -> None:
+        # 5 mm à 1 mm/h = 5 h brutes : `build_watering_plan` borne chaque zone à 180 minutes.
+        (html,) = _rendre([{"valeur": "1", "objectif": 5, "actuel": 14}])
+        self.assertIn("cette zone arrosera <b>3 h</b>", html)
+        self.assertIn("plafonne chaque zone à 3 h", html)
+        self.assertNotIn("5 h", html)
+
+    def test_exactement_trois_heures_n_est_pas_un_plafonnement(self) -> None:
+        # 3 mm à 1 mm/h = 180 minutes pile : le moteur les garde telles quelles.
+        (html,) = _rendre([{"valeur": "1", "actuel": 14}])
+        self.assertIn("cette zone arrosera <b>3 h</b>", html)
+        self.assertNotIn("plafonne", html)
+
+    def test_pas_de_mention_de_plafond_quand_la_duree_tient_dans_les_trois_heures(self) -> None:
+        (html,) = _rendre([{"valeur": "14"}])
+        self.assertNotIn("plafonne", html)
+
+    def test_une_dose_minuscule_ne_descend_pas_sous_trente_secondes(self) -> None:
+        # 0,1 mm à 60 mm/h = 6 s brutes : le moteur garde au moins 30 s.
+        (html,) = _rendre([{"valeur": "60", "objectif": 0.1, "actuel": 60, "max": 200}])
+        self.assertIn("<b>30 s</b>", html)
 
     def test_un_ecart_de_plus_de_30_pour_cent_avertit_et_pas_avant(self) -> None:
         sous, au_dessus = _rendre([{"valeur": "18"}, {"valeur": "19"}])
@@ -89,7 +112,7 @@ class DebitZoneTests(unittest.TestCase):
 
     def test_la_virgule_francaise_est_comprise(self) -> None:
         (html,) = _rendre([{"valeur": "17,5"}])
-        self.assertIn("<b>10 min</b>", html)
+        self.assertIn("<b>10 min 30 s</b>", html)
 
     def test_le_calcul_ramene_un_test_court_a_l_heure(self) -> None:
         trente, dix, une_heure, vide = _rendre([

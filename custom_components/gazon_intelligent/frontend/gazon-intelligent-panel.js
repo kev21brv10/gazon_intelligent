@@ -5261,10 +5261,16 @@ class GazonIntelligentPanel extends HTMLElement {
       : "aucune fenêtre";
 
     // Tonte : les fenêtres idéale et du soir, pleines ou hachurées selon l'état d'aujourd'hui.
+    // Le moteur ne laisse sortir la tondeuse que si le gazon, la machine ET l'absence de blocage sont
+    // réunis (`action_possible`, binary_sensor.py) : le statut du gazon seul ne suffit pas.
     const statut = String(this._a("tonte_autorisee", "tonte_statut") || "");
-    const libre = statut === "" || statut === "autorisee" || statut === "autorisee_avec_precaution";
+    const gazonLibre = statut === "" || statut === "autorisee" || statut === "autorisee_avec_precaution";
+    const machineOk = this._a("tonte_autorisee", "machine_permet_tonte");
+    const bloqueeParLeMoteur = this._a("tonte_autorisee", "mowing_blocked") === true;
+    const libre = gazonLibre && machineOk !== false && !bloqueeParLeMoteur;
     const tonte = fenetres(segmenter((m) => classeTonte(m, v, c.soleil), 0, 1440), ["ideal"], ["possible"]);
-    const motif = String(this._a("tonte_autorisee", "mowing_block_reason_label") || "").replace(/\.\s*$/, "");
+    const motif = String(this._a("tonte_autorisee", "mowing_block_reason_label") || "").replace(/\.\s*$/, "")
+      || (machineOk === false && gazonLibre ? "machine indisponible" : "");
     const legendeTonte = libre ? "fenêtres ouvertes" : `fermée${motif ? ` : ${motif.charAt(0).toLowerCase()}${motif.slice(1)}` : ""}`;
 
     // Soleil : du lever au coucher.
@@ -7253,8 +7259,19 @@ class GazonIntelligentPanel extends HTMLElement {
     }
     const objectif = nombreOuNul(this._s("objectif")) ?? 0;
     const dose = objectif > 0 ? objectif : 3;
-    const minutes = (debit) => Math.max(1, Math.round((dose / debit) * 60));
-    let html = `<p>Pour ${esc(mmFr(dose))} d'eau, cette zone arrosera <b>${esc(dureeFr(minutes(v)))}</b>${avant > 0 ? ` (avant : ${esc(dureeFr(minutes(avant)))})` : ""}.</p>`;
+    // La durée du plan, pas un simple quotient : le moteur arrondit à la demi-minute, ne descend pas
+    // sous 30 s et plafonne chaque zone à 3 h (`planArrosage`, comparé au moteur par un test).
+    const minutes = (debit) => {
+      const plan = planArrosage(dose, [{ debit }]);
+      return plan ? plan.eauS / 60 : null;
+    };
+    const apres = minutes(v);
+    const plafonne = (dose / v) * 60 > DUREE_ZONE_MAX_MIN;
+    const duree = (m) => (m === null ? "—" : dureeFr(m));
+    let html = `<p>Pour ${esc(mmFr(dose))} d'eau, cette zone arrosera <b>${esc(duree(apres))}</b>${avant > 0 ? ` (avant : ${esc(duree(minutes(avant)))})` : ""}.</p>`;
+    if (plafonne) {
+      html += `<p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>Le plan plafonne chaque zone à ${esc(dureeFr(DUREE_ZONE_MAX_MIN))} : la dose entière ne passerait pas en une fois.</span></p>`;
+    }
     if (avant > 0 && Math.abs(v - avant) / avant > 0.3) {
       html += `<p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>Le débit change de plus de 30 %. Vérifier la mesure : elle fixe toutes les durées de cette zone.</span></p>`;
     }
