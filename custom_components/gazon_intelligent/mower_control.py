@@ -144,6 +144,36 @@ def _departure_held(snapshot: Mapping[str, Any], settings: Mapping[str, Any]) ->
     return battery is None or battery < minimum
 
 
+def managed_cycle_release_updates(runtime: Mapping[str, Any]) -> dict[str, Any]:
+    """Ce qu'il faut effacer quand un cycle lancé par ce pilote est INTERROMPU À LA MAIN.
+
+    Un cycle géré (`managed_cycle_active`) ne se referme que par la FIN du travail (état « terminé », ou
+    100 % vus après un état inachevé). Un retour demandé depuis la page interrompt volontairement le
+    travail : il reste « en pause » sous 100 % et ne se termine jamais, donc le cycle restait géré — pris
+    pour une recharge qui repartira seule. Le pilote répondait alors `cycle_autonome` à chaque évaluation,
+    avant la fermeture du volet comme avant la suspension des départs (relevé en revue de la PR #85).
+
+    Vide si le pilote ne suit aucun cycle : un retour manuel ordinaire ne doit rien écrire. Un départ
+    envoyé mais pas encore observé (`managed_start_pending`) est rendu lui aussi, avec sa référence : le
+    pilote verrait sinon la tondeuse dehors au cycle suivant et ouvrirait le cycle qu'on vient d'interrompre.
+    La reprise due (`resume_required`) n'est PAS touchée : c'est la dette d'un rappel du pilote, pas de
+    l'utilisateur.
+    """
+    if runtime.get("managed_cycle_active") is not True and runtime.get("managed_start_pending") is not True:
+        return {}
+    return {
+        "managed_start_pending": False,
+        "managed_cycle_active": False,
+        "managed_job_seen_incomplete": False,
+        "managed_job_id": None,
+        "managed_start_baseline_captured": False,
+        "managed_start_baseline_job_id": None,
+        "managed_start_baseline_progress": None,
+        "managed_start_baseline_completion_state": None,
+        "managed_start_requested_at": None,
+    }
+
+
 def evaluate_mower_control(
     snapshot: Mapping[str, Any],
     *,

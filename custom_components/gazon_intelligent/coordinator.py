@@ -93,7 +93,7 @@ from .mower_adapter import build_mower_context, derive_related_entity_id, rain_f
 from .mower_coordination import build_mower_coordination_context
 from . import garage_guard
 from . import manual_command
-from .mower_control import evaluate_mower_control
+from .mower_control import evaluate_mower_control, managed_cycle_release_updates
 from .entity_ids import public_entity_id, resolve_entry_instance_slug
 from .shared_state import get_shared_state, resolve_effective_config
 from .soil_balance import appliquer_cliquet_pluie
@@ -4248,6 +4248,14 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             )
                         )
                         runtime["garage_opened_at"] = None
+                    elif action["service"] == "lawn_mower.dock":
+                        # ⚠️ Un retour MANUEL réussi interrompt volontairement le travail : le cycle que le pilote
+                        # suivait n'est plus « une recharge qui repartira seule », il est fini. Sans cette purge,
+                        # `managed_cycle_active` restait posé (le travail « en pause » sous 100 % ne se termine
+                        # jamais) et le pilote répondait `cycle_autonome` : volet laissé ouvert, départs
+                        # automatiques bloqués même après la suspension (revue de la PR #85). Pas de reprise due :
+                        # c'est l'utilisateur qui a rappelé la tondeuse, pas le pilote.
+                        runtime.update(managed_cycle_release_updates(runtime))
                 else:
                     # Ordre refusé : rien n'est parti, donc ni « envoyé », ni suspension des départs.
                     updates = {"etape": "erreur", "erreur": "commande_refusee"}
