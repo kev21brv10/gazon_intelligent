@@ -1300,7 +1300,13 @@ class CoordinateurAlertesTests(unittest.TestCase):
         self.assertEqual(services.appels[-1][2]["message"], "Le capteur ne répond plus.")
 
     def test_conseiller_gazon_rejette_un_prenom_ou_une_nouvelle_consigne(self) -> None:
-        for reponse in ("Bonjour Camille, vérifiez la vanne.", "Fermez la vanne maintenant."):
+        for reponse in (
+            "Bonjour Camille, vérifiez la vanne.",
+            "Fermez la vanne maintenant.",
+            # Ordre au conditionnel et durée en lettres : rien que des mots, aucun chiffre.
+            "Il faudrait arroser pendant deux heures.",
+            "La vanne reste ouverte, mieux vaut couper l'eau.",
+        ):
             with self.subTest(reponse=reponse):
                 services = _Services(ia={"data": reponse})
                 hass = types.SimpleNamespace(services=services)
