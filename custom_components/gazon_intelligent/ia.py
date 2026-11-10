@@ -13,6 +13,7 @@ est choisie dans la page. Chaque appel peut avoir un coût chez le fournisseur c
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
@@ -26,6 +27,17 @@ DELAI_NOTIFICATION_S = 15
 MESSAGE_NOTIFICATION_MAX_CARACTERES = 1000
 # Au-delà, une question n'est plus une question : c'est un document collé par erreur.
 QUESTION_MAX_CARACTERES = 1000
+
+_DEBUTS_NEUTRES = frozenset({
+    "après", "avant", "ce", "cela", "cette", "ces", "des", "en", "il", "la", "le", "les",
+    "lorsque", "on", "pour", "quand", "si", "sur", "un", "une",
+})
+_NOMBRE = re.compile(r"\d+(?:[,.]\d+)?")
+_MOT_MAJUSCULE = re.compile(r"\b[A-ZÀ-ÖØ-Þ][a-zà-ÿ]{2,}\b")
+_ORDRE = re.compile(
+    r"\b(?:il faut|doit|devrait|ouvrez|fermez|activez|arrêtez|démarrez|lancez)\b",
+    re.IGNORECASE,
+)
 
 
 class IaIndisponible(Exception):
@@ -91,14 +103,37 @@ def consigne_notification(
     return (
         "Tu rédiges une notification claire en français pour la personne qui suit le gazon.\n"
         "Réponds uniquement par le message final, sans titre, sans markdown, en 3 phrases au plus.\n"
-        "Utilise une formulation neutre, sans nom, tutoiement ni détail personnel non fourni.\n"
-        "Conserve exactement les faits, nombres, horaires, noms d'appareils et action demandée. "
+        "Utilise une formulation neutre, sans nom, salutation, tutoiement ni détail personnel. "
+        "Le message factuel est affiché séparément : ton complément n'ajoute aucun nombre, "
+        "horaire ni nouvelle action.\n"
+        "Ne modifie pas les faits ni leur urgence. "
         "N'invente rien, ne minimise jamais une urgence et ne prétends commander aucun appareil.\n"
         f"Niveau fixé par l'intégration : {niveau}.\n"
         f"Titre fixé par l'intégration : {titre}\n"
         f"Message factuel : {message}\n"
         f"Contexte du {maintenant.strftime('%d/%m/%Y à %H:%M')} :\n{contexte}"
     )
+
+
+def conseil_notification_utilisable(texte: str, *, faits: str, contexte: Sequence[str]) -> bool:
+    """Rejette une réponse suspecte ; un faux rejet conserve le message factuel."""
+    if not texte or "\n" in texte or len(texte) > MESSAGE_NOTIFICATION_MAX_CARACTERES:
+        return False
+    if re.search(r"\b(?:bonjour|bonsoir|salut|cher|chère|hello)\b", texte, re.IGNORECASE):
+        return False
+    autorise = f"{faits} {' '.join(contexte)}"
+    if not set(_NOMBRE.findall(texte)) <= set(_NOMBRE.findall(autorise)):
+        return False
+    if _ORDRE.search(texte):
+        return False
+    mots_autorises = {mot.casefold() for mot in _MOT_MAJUSCULE.findall(autorise)}
+    for mot in _MOT_MAJUSCULE.finditer(texte):
+        if mot.group().casefold() in mots_autorises:
+            continue
+        debut_phrase = not texte[:mot.start()].strip() or texte[:mot.start()].rstrip().endswith((".", "!", "?"))
+        if not debut_phrase or mot.group().casefold() not in _DEBUTS_NEUTRES:
+            return False
+    return True
 
 
 def texte_de_la_reponse(reponse: Any) -> str:
