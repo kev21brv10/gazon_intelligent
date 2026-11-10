@@ -5,9 +5,13 @@ from .mower_control_constants import (
     DEFAULT_MOWER_START_WINDOW_POLICY as DEFAULT_MOWER_START_WINDOW_POLICY,
     DEFAULT_MOWER_GARAGE_CLOSE_AFTER_DOCK as DEFAULT_MOWER_GARAGE_CLOSE_AFTER_DOCK,
     DEFAULT_MOWER_GARAGE_CLOSE_DELAY_MINUTES as DEFAULT_MOWER_GARAGE_CLOSE_DELAY_MINUTES,
+    DEFAULT_MOWER_GARAGE_CLOSE_DELAY_SECONDS as DEFAULT_MOWER_GARAGE_CLOSE_DELAY_SECONDS,
+    DEFAULT_MOWER_GARAGE_CLOSE_WHILE_MOWING as DEFAULT_MOWER_GARAGE_CLOSE_WHILE_MOWING,
+    DEFAULT_MOWER_GARAGE_CLOSE_WHILE_MOWING_DELAY_SECONDS as DEFAULT_MOWER_GARAGE_CLOSE_WHILE_MOWING_DELAY_SECONDS,
     DEFAULT_MOWER_GARAGE_OPEN_BEFORE_START as DEFAULT_MOWER_GARAGE_OPEN_BEFORE_START,
     DEFAULT_MOWER_GARAGE_OPEN_FOR_RETURN as DEFAULT_MOWER_GARAGE_OPEN_FOR_RETURN,
     DEFAULT_MOWER_GARAGE_OPEN_LEAD_MINUTES as DEFAULT_MOWER_GARAGE_OPEN_LEAD_MINUTES,
+    DEFAULT_MOWER_GARAGE_OPEN_LEAD_SECONDS as DEFAULT_MOWER_GARAGE_OPEN_LEAD_SECONDS,
     DEFAULT_MOWER_GARAGE_MIN_OPEN_POSITION as DEFAULT_MOWER_GARAGE_MIN_OPEN_POSITION,
     MOWER_CONTROL_MODES as MOWER_CONTROL_MODES,
     MOWER_START_WINDOW_POLICIES as MOWER_START_WINDOW_POLICIES,
@@ -325,6 +329,62 @@ BLOCK_REASON_DISPLAY_LABELS: dict[str, str] = {
     "wet_grass": "Herbe mouillée",
 }
 
+# ⚠️ Codes de blocage de la TONTE seule (`mowing_block_reason_code`) qui n'avaient AUCUN libellé : la carte
+# « Motifs de blocage » les affichait en anglais, tirets bas remplacés (« mowing spacing », « mowing night ») —
+# relevé le 05/10/2026 sur la capture d'écran du propriétaire. Table SÉPARÉE de la précédente à dessein : celle-ci
+# alimente les états traduits du capteur « prochain blocage » (arrosage, cinq langues), où ces motifs de tonte
+# n'ont pas leur place. Seul `block_reason_display_label` (repli compris) les lit. Un test compare les codes
+# écrits dans `decision_mowing` aux deux tables.
+MOWING_BLOCK_REASON_DISPLAY_LABELS: dict[str, str] = {
+    "mowing_night": "Nuit: attendre le lever du soleil.",
+    "mowing_spacing": "Espacement entre deux tontes",
+    "phase_sursemis": "Semis / sursemis en cours",
+    "phase_traitement": "Phase Traitement",
+    "phase_hivernage": "Phase Hivernage",
+    "pluie_en_cours": "Pluie en cours ou imminente",
+    "vent_fort": "Vent fort",
+    "hauteur_trop_faible": "Herbe trop courte",
+    "regle_tiers": "Règle du tiers",
+    "regle_tiers_impossible": "Règle du tiers impossible",
+    "rosee_persistante": "Rosée présente",
+    "stress_thermique": "Stress thermique",
+    "conditions_defavorables": "Conditions défavorables",
+}
+
+# ⚠️ « ROBOT INDISPONIBLE » N'EST PAS UNE CAUSE. Le code public `machine_unavailable` réunit douze situations très
+# différentes (`decision_mowing._machine_unavailable_detail`) — pause pluie, charge, tonte en cours, retour, hors
+# ligne, erreur… — et la carte « Motifs de blocage » les additionnait sous un titre qui évoque une panne (relevé du
+# 05/10/2026 : l'essentiel de ce motif était la pause pluie à quai). Le CUMUL se fait donc par détail ; le code
+# public, lui, ne change pas (contrat consommé par les automatisations et les cinq traductions). Un détail inconnu
+# retombe sur `machine_unavailable`. Un test relit les détails réellement renvoyés par `decision_mowing`.
+MACHINE_BLOCK_DETAIL_LABELS: dict[str, str] = {
+    "rain_delayed": "Pause pluie du robot",
+    "charging": "Robot en charge",
+    "mowing": "Robot en tonte",
+    "returning": "Robot en retour à la base",
+    "starting": "Robot au démarrage",
+    "zoning": "Robot en changement de zone",
+    "searching_zone": "Robot en recherche de zone",
+    "offline": "Robot hors ligne",
+    "error": "Robot en erreur",
+    "escaped_digital_fence": "Robot hors du périmètre",
+    "unreliable": "Robot instable",
+    "not_ready": "Robot pas prêt",
+}
+MOWING_BLOCK_REASON_DISPLAY_LABELS.update(
+    {f"machine_{detail}": label for detail, label in MACHINE_BLOCK_DETAIL_LABELS.items()}
+)
+
+
+def mowing_block_tally_code(code: object, detail: object) -> str:
+    """Code sous lequel un blocage de tonte est CUMULÉ : le détail machine quand il est connu."""
+    normalized = str(code or "").strip()
+    if normalized == "machine_unavailable":
+        detail_code = str(detail or "").strip().lower()
+        if detail_code in MACHINE_BLOCK_DETAIL_LABELS:
+            return f"machine_{detail_code}"
+    return normalized
+
 
 def block_reason_label(value: object) -> str | None:
     """Libellé court d'un code de motif, ou None s'il n'en a pas. SOURCE UNIQUE (0.88.0).
@@ -343,7 +403,9 @@ def block_reason_display_label(value: object) -> str | None:
     normalized = str(value or "").strip().lower()
     if not normalized:
         return None
-    return BLOCK_REASON_DISPLAY_LABELS.get(normalized, normalized.replace("_", " "))
+    return BLOCK_REASON_DISPLAY_LABELS.get(
+        normalized, MOWING_BLOCK_REASON_DISPLAY_LABELS.get(normalized, normalized.replace("_", " "))
+    )
 
 # ⚠️ SOURCE UNIQUE des causes d'arrosage reconnues. Elle a existé en DEUX exemplaires —
 # `_normalize_watering_cause` (coordinator) et `record_watering` (gazon_brain) — et la

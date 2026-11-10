@@ -2257,6 +2257,61 @@ class DecisionResultChainTests(unittest.TestCase):
             "Cycle de semis en attente",
         )
 
+    def test_les_motifs_de_blocage_de_tonte_ont_tous_un_libelle_francais(self) -> None:
+        """Relevé du 05/10/2026 (capture de la carte « Motifs de blocage ») : « mowing spacing », « mowing night » en
+        anglais. Chaque code de blocage de tonte écrit dans `decision_mowing` doit avoir un libellé, jamais le repli."""
+        import re
+        from custom_components.gazon_intelligent import const
+        source = (Path(__file__).resolve().parents[1] / "custom_components" / "gazon_intelligent" / "decision_mowing.py").read_text(encoding="utf-8")
+        # Les couples (code, phrase) des candidats de blocage, les codes de phase, et les clés de priorité émises telles quelles.
+        codes = set(re.findall(r'"([a-z][a-z_]+)",\s*\n\s*f?"[A-ZÉ]', source))
+        codes |= set(re.findall(r'"(phase_(?:sursemis|traitement|hivernage))"', source))
+        codes |= {"mowing_spacing", "hauteur_trop_faible", "regle_tiers", "regle_tiers_impossible"}
+        # Ce ne sont pas des motifs de BLOCAGE : consignes de hauteur de coupe des semis.
+        codes -= {c for c in codes if c.startswith("semis_hauteur_")}
+        self.assertGreaterEqual(len(codes), 14, "le balayage du source doit retrouver les codes connus")
+        for code in sorted(codes):
+            with self.subTest(code=code):
+                libelle = const.block_reason_display_label(code)
+                self.assertNotEqual(libelle, code.replace("_", " "), f"{code} n'a de libellé dans aucune des deux tables")
+                self.assertIn(code, {*const.BLOCK_REASON_DISPLAY_LABELS, *const.MOWING_BLOCK_REASON_DISPLAY_LABELS})
+                self.assertEqual(sensor._block_reason_display_label(code), libelle)
+        # Une table de plus, pas une copie : aucun code n'a deux libellés différents.
+        communs = set(const.BLOCK_REASON_DISPLAY_LABELS) & set(const.MOWING_BLOCK_REASON_DISPLAY_LABELS)
+        self.assertEqual(communs, set(), "un code ne vit que dans UNE table")
+        for code, attendu in (("mowing_spacing", "Espacement entre deux tontes"), ("mowing_night", "Nuit: attendre le lever du soleil.")):
+            self.assertEqual(sensor._block_reason_display_label(code), attendu)
+
+    def test_chaque_detail_machine_a_son_code_de_cumul_et_son_libelle(self) -> None:
+        """Le cumul de « Robot indisponible » se fait par détail : tout détail que `_machine_unavailable_detail` peut
+        renvoyer doit avoir un libellé (sinon la carte affiche « machine rain delayed »), et la table ne doit pas en
+        garder un que le moteur ne renvoie plus."""
+        import ast
+        from custom_components.gazon_intelligent import const
+        chemin = Path(__file__).resolve().parents[1] / "custom_components" / "gazon_intelligent" / "decision_mowing.py"
+        arbre = ast.parse(chemin.read_text(encoding="utf-8"))
+        fonction = next(n for n in ast.walk(arbre) if isinstance(n, ast.FunctionDef) and n.name == "_machine_unavailable_detail")
+        details = {
+            r.value.elts[0].value
+            for r in ast.walk(fonction)
+            if isinstance(r, ast.Return) and isinstance(r.value, ast.Tuple) and r.value.elts
+            and isinstance(r.value.elts[0], ast.Constant) and isinstance(r.value.elts[0].value, str)
+        }
+        self.assertGreaterEqual(len(details), 12, "le balayage doit retrouver les douze détails connus")
+        self.assertEqual(details, set(const.MACHINE_BLOCK_DETAIL_LABELS))
+        for detail in sorted(details):
+            with self.subTest(detail=detail):
+                code = const.mowing_block_tally_code("machine_unavailable", detail)
+                self.assertEqual(code, f"machine_{detail}")
+                libelle = const.block_reason_display_label(code)
+                self.assertNotEqual(libelle, code.replace("_", " "))
+                self.assertEqual(libelle, const.MACHINE_BLOCK_DETAIL_LABELS[detail])
+                self.assertEqual(sensor._block_reason_display_label(code), libelle)
+        # Le motif public, lui, garde son libellé (anciennes journées archivées, détail inconnu).
+        self.assertEqual(const.block_reason_display_label("machine_unavailable"), "Robot indisponible")
+        self.assertEqual(const.mowing_block_tally_code("machine_unavailable", None), "machine_unavailable")
+        self.assertEqual(const.mowing_block_tally_code("wet_grass", "charging"), "wet_grass")
+
     def test_application_entities_surface_latest_application_state(self) -> None:
         coordinator = _FakeCoordinator(
             entry=_FakeEntry(),
@@ -4408,7 +4463,9 @@ class LeSuiviDesPlantulesAtteintLeCapteurTests(unittest.TestCase):
             "semis_mode": "Sursemis",
             "semis_age_jours": 23,
             "plantules_levee_date": "2026-09-23",
-            "plantules_hauteur_estimee_cm": 6.4,
+            # Tonte fictive du 08/10 (J+22), hauteur non enregistrée : les plantules sont ramenées à la
+            # lame du sursemis (4,0 cm), puis 1 jour de pousse à 0,4 cm. L'ancien 6,4 ignorait la coupe.
+            "plantules_hauteur_estimee_cm": 4.4,
             "plantules_premiere_coupe_date": "2026-10-08",
             "plantules_coupes": 1,
         }

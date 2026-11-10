@@ -102,7 +102,9 @@ ctx.window = ctx;
 vm.createContext(ctx);
 vm.runInContext(fs.readFileSync(chemin, "utf8"), ctx);
 
-function html(choisie) {
+let clesVues = null;
+
+function html(choisie, surcharges = {}) {
   const panel = Object.create(ctx.Classe.prototype);
   panel._hass = {
     user: { is_admin: true },
@@ -123,15 +125,32 @@ function html(choisie) {
   panel._valeur = (cle) => ({
     tondeuse_garage_ouvrir_avant_depart: true,
     tondeuse_garage_ouverture_min: 95,
-    tondeuse_garage_avance_ouverture: 2,
+    tondeuse_garage_avance_ouverture_secondes: 120,
     tondeuse_garage_ouvrir_pour_retour: true,
     tondeuse_garage_fermer_apres_retour: true,
-    tondeuse_garage_delai_fermeture: 2,
+    tondeuse_garage_delai_fermeture_secondes: 120,
+    tondeuse_garage_ferme_pendant_tonte: false,
+    tondeuse_garage_delai_fermeture_tonte_secondes: 15,
+    tondeuse_garage_delai_fermeture_manuel_secondes: 1800,
+    tondeuse_garage_tentatives_max: 3,
+    tondeuse_garage_delai_max_mouvement_secondes: 180,
+    ...surcharges,
   })[cle];
+  const rendreSection = panel._sectionReglageHtml.bind(panel);
+  panel._sectionReglageHtml = (options) => { clesVues = options.cles; return rendreSection(options); };
   return panel._garageTondeuseHtml();
 }
 
-process.stdout.write(JSON.stringify({ avec: html("cover.garage_tondeuse"), sans: html(null) }));
+process.stdout.write(JSON.stringify({
+  avec: html("cover.garage_tondeuse"),
+  cles: clesVues,
+  sans: html(null),
+  // Réglages en SECONDES : 45 s avant le départ, 90 s avant la fermeture, 0 s en tonte.
+  secondes: html("cover.garage_tondeuse", {
+    tondeuse_garage_avance_ouverture_secondes: 45, tondeuse_garage_delai_fermeture_secondes: 90,
+    tondeuse_garage_ferme_pendant_tonte: true, tondeuse_garage_delai_fermeture_tonte_secondes: 0,
+  }),
+}));
 """
 
 SCRIPT_BARRE = r"""
@@ -270,6 +289,28 @@ class GarageTondeuseAffichageTests(unittest.TestCase):
         self.assertIn("passage à 95 %", self.rendu["avec"])
         self.assertIn('data-reglage="tondeuse_garage_ouvrir_avant_depart"', self.rendu["avec"])
         self.assertIn('data-reglage="tondeuse_garage_ouverture_min"', self.rendu["avec"])
+
+    def test_les_delais_du_volet_s_affichent_en_secondes_pas_en_minutes_arrondies(self) -> None:
+        """⚠️ Réglés à la seconde : « attente 45 s », « fermeture après 1 min 30 s » — jamais « 0,75 min »."""
+        nbsp = "\u00a0"                         # `dureeFr` sépare le nombre et l'unité par une espace insécable
+        self.assertIn(f"attente 2{nbsp}min", self.rendu["avec"])
+        self.assertIn(f"fermeture après 2{nbsp}min", self.rendu["avec"])
+        self.assertIn(f"attente 45{nbsp}s", self.rendu["secondes"])
+        self.assertIn(f"fermeture après 1{nbsp}min{nbsp}30{nbsp}s", self.rendu["secondes"])
+        self.assertIn("sans attente", self.rendu["secondes"])
+        for texte in (self.rendu["avec"], self.rendu["secondes"]):
+            self.assertNotIn("0,75", texte)
+            self.assertNotIn("attente 120", texte)
+            self.assertNotIn("NaN", texte)
+        self.assertIn('data-reglage="tondeuse_garage_avance_ouverture_secondes"', self.rendu["avec"])
+        self.assertIn('data-reglage="tondeuse_garage_delai_fermeture_secondes"', self.rendu["avec"])
+
+    def test_le_groupe_du_garage_liste_les_deux_cles_en_secondes_et_plus_les_anciennes(self) -> None:
+        cles = self.rendu["cles"]
+        for cle in ("tondeuse_garage_avance_ouverture_secondes", "tondeuse_garage_delai_fermeture_secondes"):
+            self.assertIn(cle, cles)
+        for ancienne in ("tondeuse_garage_avance_ouverture", "tondeuse_garage_delai_fermeture"):
+            self.assertNotIn(ancienne, cles)
 
     def test_sans_volet_les_automatismes_restent_masques(self) -> None:
         self.assertIn("Sélectionner un volet", self.rendu["sans"])

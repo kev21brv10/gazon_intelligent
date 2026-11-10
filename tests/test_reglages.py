@@ -68,6 +68,103 @@ class LeRegistreEstCoherentTests(unittest.TestCase):
                 if r.avertissement:
                     self.assertTrue(r.avertissement.startswith("Réglage sensible :"))
 
+    def test_les_deux_delais_du_volet_se_reglent_a_la_seconde_puis_a_la_minute(self) -> None:
+        """Demande du 04/10/2026 : « tout en seconde pour 1, 2, 3, 4… et après 1 minute, 2 minutes, etc. »."""
+        for cle, valeurs_ok, hors in (
+            ("tondeuse_garage_avance_ouverture_secondes", (0, 1, 2, 3, 4, 15, 45, 59, 60, 120, 180, 540, 600), (-1, 61, 90, 599, 601, 0.5)),
+            ("tondeuse_garage_delai_fermeture_secondes", (0, 1, 2, 3, 4, 59, 60, 120, 180, 840, 900), (-1, 61, 90, 899, 901, 90.5)),
+        ):
+            for v in valeurs_ok:
+                with self.subTest(cle=cle, valeur=v):
+                    self.assertEqual(reglages.valider({cle: v}), {})
+            for v in hors:
+                with self.subTest(cle=cle, hors=v):
+                    self.assertIn(cle, reglages.valider({cle: v}))
+            self.assertEqual(reglages.reglage(cle).unite, "s")
+
+    def test_les_valeurs_deja_enregistrees_en_minutes_sont_reprises_en_secondes(self) -> None:
+        """⚠️ Les deux clés existaient en MINUTES (versions publiées) : une valeur choisie ne doit pas être perdue en silence."""
+        ouv, fer = "tondeuse_garage_avance_ouverture", "tondeuse_garage_delai_fermeture"
+        ouv_s, fer_s = ouv + "_secondes", fer + "_secondes"
+        self.assertEqual(reglages.nettoyer({ouv: 0.25}), {ouv_s: 15})
+        self.assertEqual(reglages.nettoyer({ouv: 0}), {ouv_s: 0})
+        self.assertEqual(reglages.nettoyer({ouv: 10}), {ouv_s: 600})
+        self.assertEqual(reglages.nettoyer({ouv: 0.0833}), {ouv_s: 5})
+        self.assertEqual(reglages.nettoyer({fer: 1}), {fer_s: 60})
+        self.assertEqual(reglages.nettoyer({fer: 2.5}), {fer_s: 180}, "150 s n'existe plus : le cran le plus proche (à égalité, le plus haut)")
+        self.assertEqual(reglages.nettoyer({fer: 1.5}), {}, "90 s → 2 min = le conseil : rien à garder")
+        self.assertEqual(reglages.nettoyer({fer: 15}), {fer_s: 900})
+        self.assertEqual(reglages.nettoyer({ouv: 0.25, fer: 3}), {ouv_s: 15, fer_s: 180})
+
+    def test_les_trois_autres_delais_du_volet_sont_eux_aussi_repris_en_secondes(self) -> None:
+        """Les cinq délais du volet existaient en MINUTES : aucune valeur choisie n'est perdue en silence."""
+        for ancienne, minutes, attendu in (
+            ("tondeuse_garage_delai_fermeture_manuel", 5, 300), ("tondeuse_garage_delai_fermeture_manuel", 30, None),
+            ("tondeuse_garage_delai_fermeture_manuel", 90, 5400), ("tondeuse_garage_delai_fermeture_manuel", 240, 14400),
+            ("tondeuse_garage_delai_reprise", 1, 60), ("tondeuse_garage_delai_reprise", 0.5, 30),
+            ("tondeuse_garage_delai_reprise", 1.5, None), ("tondeuse_garage_delai_reprise", 10, 600),
+            ("tondeuse_garage_delai_max_mouvement", 1, 60), ("tondeuse_garage_delai_max_mouvement", 2.5, None),
+            ("tondeuse_garage_delai_max_mouvement", 6, 360), ("tondeuse_garage_delai_max_mouvement", 15, 900),
+        ):
+            with self.subTest(cle=ancienne, minutes=minutes):
+                sortie = reglages.nettoyer({ancienne: minutes})
+                nouvelle = ancienne + "_secondes"
+                if attendu is None:                         # égal au conseil : rien à garder
+                    self.assertEqual(sortie, {})
+                else:
+                    self.assertEqual(sortie, {nouvelle: attendu})
+
+    def test_une_valeur_entre_deux_crans_est_ramenee_au_plus_proche_et_jamais_perdue(self) -> None:
+        for cle, brut, attendu in (
+            ("tondeuse_garage_delai_fermeture_secondes", 61, 60), ("tondeuse_garage_delai_fermeture_secondes", 89, 60),
+            ("tondeuse_garage_delai_fermeture_tonte_secondes", 90, 120), ("tondeuse_garage_delai_fermeture_tonte_secondes", 119, 120),
+            ("tondeuse_garage_delai_fermeture_secondes", 59.6, 60), ("tondeuse_garage_delai_fermeture_secondes", 3.4, 3),
+            ("tondeuse_garage_avance_ouverture_secondes", 599, 600), ("tondeuse_garage_delai_fermeture_tonte_secondes", 270, 300),
+        ):
+            with self.subTest(cle=cle, brut=brut):
+                self.assertEqual(reglages.nettoyer({cle: brut}), {cle: attendu})
+        # Hors bornes ou illisible : toujours écarté, pas ramené.
+        for brut in (-1, 901, 10 ** 6, "x", None, True, float("nan")):
+            with self.subTest(brut=brut):
+                self.assertEqual(reglages.nettoyer({"tondeuse_garage_delai_fermeture_secondes": brut}), {})
+
+    def test_la_migration_retire_elle_meme_les_anciennes_cles(self) -> None:
+        """Pas seulement parce que `nettoyer` écarte ensuite les clés inconnues : la migration est propre toute seule."""
+        migre = reglages._migrer_anciennes_cles({
+            "tondeuse_garage_avance_ouverture": 0.25, "tondeuse_garage_delai_fermeture": "x", "tonte_vent_bloque": 40,
+        })
+        self.assertEqual(migre, {"tondeuse_garage_avance_ouverture_secondes": 15, "tonte_vent_bloque": 40})
+
+    def test_une_ancienne_valeur_egale_au_conseil_ou_invalide_ne_laisse_rien(self) -> None:
+        ouv, fer = "tondeuse_garage_avance_ouverture", "tondeuse_garage_delai_fermeture"
+        self.assertEqual(reglages.nettoyer({ouv: 2, fer: 2}), {}, "2 min = 120 s = le conseil : rien à garder")
+        for invalide in ("abc", None, True, [], float("nan"), float("inf"), -3, 99):
+            with self.subTest(invalide=invalide):
+                self.assertEqual(reglages.nettoyer({ouv: invalide, fer: invalide}), {}, "écartée, jamais d'exception")
+
+    def test_la_valeur_en_secondes_l_emporte_sur_l_ancienne_et_l_ancienne_cle_disparait(self) -> None:
+        brut = {"tondeuse_garage_avance_ouverture": 5, "tondeuse_garage_avance_ouverture_secondes": 30}
+        self.assertEqual(reglages.nettoyer(brut), {"tondeuse_garage_avance_ouverture_secondes": 30})
+        for cle in reglages.nettoyer({"tondeuse_garage_avance_ouverture": 0.25, "tondeuse_garage_delai_fermeture": 3}):
+            self.assertTrue(cle.endswith("_secondes"), "aucune clé en minutes ne ressort jamais de nettoyer")
+        self.assertEqual(brut["tondeuse_garage_avance_ouverture"], 5, "l'entrée n'est pas modifiée")
+
+    def test_les_valeurs_effectives_montrent_l_ancien_reglage_en_secondes(self) -> None:
+        effectives = reglages.valeurs_effectives({"tondeuse_garage_delai_fermeture": 4})
+        self.assertEqual(effectives["tondeuse_garage_delai_fermeture_secondes"], 240)
+        self.assertEqual(effectives["tondeuse_garage_avance_ouverture_secondes"], 120, "le conseil pour l'autre")
+
+    def test_le_delai_de_fermeture_en_tonte_se_regle_a_la_seconde_de_0_a_300(self) -> None:
+        """Demande du propriétaire : 0, 1, 2, 3, 4… secondes, pas seulement des quarts de minute."""
+        cle = "tondeuse_garage_delai_fermeture_tonte_secondes"
+        for secondes in (0, 1, 2, 3, 4, 5, 7, 13, 15, 59, 60, 120, 180, 240, 300):
+            with self.subTest(secondes=secondes):
+                self.assertEqual(reglages.valider({cle: secondes}), {})
+        for hors in (-1, 61, 90, 299, 301, 0.5):
+            with self.subTest(hors=hors):
+                self.assertIn(cle, reglages.valider({cle: hors}))
+        self.assertEqual(reglages.reglage(cle).unite, "s")
+
     def test_les_valeurs_par_defaut_sont_valides(self) -> None:
         self.assertEqual(reglages.valider({}), {})
         self.assertEqual(reglages.valider(reglages.valeurs_par_defaut()), {})
@@ -88,6 +185,41 @@ class LeRegistreEstCoherentTests(unittest.TestCase):
             reglages.valider({"sursemis_pousse_plantules": 2}),
             {"sursemis_pousse_plantules": "Sélectionner une valeur entre 0,1 et 1."},
         )
+
+    def test_la_fin_de_l_ideal_du_soir_se_regle_jusqu_a_apres_le_coucher(self) -> None:
+        cle = "tonte_soir_ideal_fin_avant_coucher"
+        # Négatif = après le coucher, jusqu'à 1 h 30 ; au-delà, ou hors pas de 5 min, c'est refusé.
+        for ok in (-90, -60, -5, 0, 30, 115):
+            with self.subTest(valeur=ok):
+                self.assertEqual(reglages.valider({cle: ok}), {})
+        self.assertEqual(reglages.valider({cle: -95}), {cle: "Sélectionner une valeur entre -90 et 120."})
+        self.assertIn(cle, reglages.valider({cle: -62}))
+
+    def test_l_ideal_du_soir_ne_commence_pas_avant_l_ouverture_du_soir(self) -> None:
+        debut, ouverture = "tonte_soir_ideal_debut_avant_coucher", "tonte_soir_avant_coucher"
+        # Réglages d'un exemple relevé en revue : soir ouvert 1 h avant le coucher, idéal dès 4 h.
+        erreurs = reglages.valider({ouverture: 60, debut: 240})
+        self.assertIn("avant l'ouverture du soir", erreurs[debut])
+        # Égalité permise (l'idéal occupe alors tout le début du soir) ; inférieur aussi.
+        self.assertEqual(reglages.valider({ouverture: 120, debut: 120}), {})
+        self.assertEqual(reglages.valider({ouverture: 300, debut: 210}), {})
+        # Juger la modification d'un SEUL des deux contre l'autre valeur en vigueur (défaut 300) :
+        # fermer le soir à 1 h alors que l'idéal commence encore à 2 h doit être refusé aussi.
+        self.assertIn(debut, reglages.valider({ouverture: 60}))
+        # Les valeurs par défaut restent cohérentes entre elles.
+        valeurs = reglages.valeurs_par_defaut()
+        self.assertLessEqual(valeurs[debut], valeurs[ouverture])
+
+    def test_le_remplissage_qui_sature_le_sol_se_regle_de_70_a_100(self) -> None:
+        for valeur in (70, 90, 100):
+            with self.subTest(valeur=valeur):
+                self.assertEqual(reglages.valider({"graines_sol_sature": valeur}), {})
+        for valeur in (69, 101):
+            with self.subTest(valeur=valeur):
+                self.assertEqual(
+                    reglages.valider({"graines_sol_sature": valeur}),
+                    {"graines_sol_sature": "Sélectionner une valeur entre 70 et 100."},
+                )
 
     def test_une_contrainte_violee_est_refusee_en_clair(self) -> None:
         erreurs = reglages.valider({"tonte_fenetre_ideale_debut": 14 * 60})
@@ -165,6 +297,7 @@ class LeRegistreEstCoherentTests(unittest.TestCase):
                 "rafraichissement_dose",
                 "graines_germination_dose",
                 "graines_germination_cycles",
+                "graines_sol_sature",
                 "graines_fenetre_fin",
                 "semis_reprise_tonte_jours",
                 "mode_scarification_temperature_min",
@@ -173,9 +306,14 @@ class LeRegistreEstCoherentTests(unittest.TestCase):
                 "tondeuse_garage_ouvrir_avant_depart",
                 "tondeuse_garage_ouvrir_pour_retour",
                 "tondeuse_garage_fermer_apres_retour",
-                "tondeuse_garage_avance_ouverture",
+                "tondeuse_garage_avance_ouverture_secondes",
                 "tondeuse_garage_ouverture_min",
-                "tondeuse_garage_delai_fermeture",
+                "tondeuse_garage_delai_fermeture_secondes",
+                "tondeuse_garage_delai_reprise_secondes",
+                "tondeuse_garage_tentatives_max",
+                "tondeuse_garage_delai_max_mouvement_secondes",
+                "tondeuse_garage_ferme_pendant_tonte",
+                "tondeuse_garage_delai_fermeture_tonte_secondes",
             },
         )
 
@@ -194,6 +332,8 @@ class LesValeursParDefautSontCellesDuMoteurTests(unittest.TestCase):
             "tonte_fenetre_ideale_fin": dm._MOWING_WINDOW_IDEAL_END * 60,
             "tonte_soir_avant_coucher": dm._MOWING_EVENING_START_BEFORE_SUNSET_MIN,
             "tonte_soir_apres_coucher": dm._MOWING_EVENING_END_AFTER_SUNSET_MIN,
+            "tonte_soir_ideal_debut_avant_coucher": dm._MOWING_EVENING_IDEAL_START_BEFORE_SUNSET_MIN,
+            "tonte_soir_ideal_fin_avant_coucher": dm._MOWING_EVENING_IDEAL_END_BEFORE_SUNSET_MIN,
             "tonte_vent_a_eviter": dm._MOWING_WINDOW_DISCOURAGED_WIND,
             "tonte_vent_bloque": dm._MOWING_WINDOW_BLOCK_WIND,
             "tonte_temperature_a_eviter": dm._MOWING_WINDOW_DISCOURAGED_TEMP_MIN,
@@ -270,6 +410,7 @@ class LesValeursParDefautSontCellesDuMoteurTests(unittest.TestCase):
             "graines_enracinement_cycles": programmes["enracinement"].daily_cycles_optimal,
             "graines_reprise_dose": programmes["levee"].surface_cycle_mm_optimal,
             "graines_reprise_cycles": programmes["levee"].daily_cycles_optimal,
+            "graines_sol_sature": gu.SEMIS_SOL_SATURE_POURCENT,
             "graines_fenetre_debut": gu.SEMIS_WINDOW_START_HOUR * 60,
             "graines_fenetre_fin": gu.SEMIS_WINDOW_END_HOUR * 60,
             # Une alerte, pas une décision : le délai du module qui la lance.
@@ -351,15 +492,22 @@ class LesValeursParDefautSontCellesDuMoteurTests(unittest.TestCase):
 
     def test_pilotage_tondeuse(self) -> None:
         mc = _module("mower_control_constants")
+        gg = _module("garage_guard")
         attendu = {
             "tondeuse_pilotage_batterie_min": mc.DEFAULT_MOWER_CONTROL_MIN_BATTERY,
             "tondeuse_pilotage_delai_commandes": mc.DEFAULT_MOWER_CONTROL_COMMAND_COOLDOWN_MINUTES,
-            "tondeuse_garage_avance_ouverture": mc.DEFAULT_MOWER_GARAGE_OPEN_LEAD_MINUTES,
+            "tondeuse_garage_avance_ouverture_secondes": mc.DEFAULT_MOWER_GARAGE_OPEN_LEAD_SECONDS,
             "tondeuse_garage_ouverture_min": mc.DEFAULT_MOWER_GARAGE_MIN_OPEN_POSITION,
-            "tondeuse_garage_delai_fermeture": mc.DEFAULT_MOWER_GARAGE_CLOSE_DELAY_MINUTES,
+            "tondeuse_garage_delai_fermeture_secondes": mc.DEFAULT_MOWER_GARAGE_CLOSE_DELAY_SECONDS,
             "tondeuse_garage_ouvrir_avant_depart": mc.DEFAULT_MOWER_GARAGE_OPEN_BEFORE_START,
             "tondeuse_garage_ouvrir_pour_retour": mc.DEFAULT_MOWER_GARAGE_OPEN_FOR_RETURN,
             "tondeuse_garage_fermer_apres_retour": mc.DEFAULT_MOWER_GARAGE_CLOSE_AFTER_DOCK,
+            "tondeuse_garage_ferme_pendant_tonte": mc.DEFAULT_MOWER_GARAGE_CLOSE_WHILE_MOWING,
+            "tondeuse_garage_delai_fermeture_tonte_secondes": mc.DEFAULT_MOWER_GARAGE_CLOSE_WHILE_MOWING_DELAY_SECONDS,
+            "tondeuse_garage_delai_fermeture_manuel_secondes": gg.DEFAULT_GARAGE_MANUAL_CLOSE_DELAY_SECONDS,
+            "tondeuse_garage_delai_reprise_secondes": gg.DEFAULT_GARAGE_RETRY_DELAY_SECONDS,
+            "tondeuse_garage_tentatives_max": gg.DEFAULT_GARAGE_MAX_ATTEMPTS,
+            "tondeuse_garage_delai_max_mouvement_secondes": gg.DEFAULT_GARAGE_MAX_TRAVEL_SECONDS,
         }
         for cle, valeur in attendu.items():
             with self.subTest(cle=cle):

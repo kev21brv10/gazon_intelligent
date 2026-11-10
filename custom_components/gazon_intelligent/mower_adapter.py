@@ -286,6 +286,41 @@ def derive_related_entity_id(source_entity_id: str | None, platform: str, suffix
     return f"{platform}.{object_id}_{suffix}"
 
 
+# Délai sans AUCUNE goutte mesurée au-delà duquel un drapeau « pluie en cours » resté allumé est
+# jugé périmé. Même plafond que le ressuyage maximal après une averse (180 min) : passé ce délai,
+# l'herbe mouillée est déjà gérée côté gazon (rosée, ressuyage), et la machine n'a plus de raison
+# de rester en « pause pluie » sur la foi d'un seul booléen.
+RAIN_FLAG_STALE_MINUTES = 180.0
+
+
+def rain_flag_is_stale(
+    rain: bool | None,
+    *,
+    minutes_since_rain_rise: Any,
+    rain_active_elsewhere: bool,
+    stale_minutes: float = RAIN_FLAG_STALE_MINUTES,
+) -> bool:
+    """Le drapeau « pluie en cours » de la tondeuse est-il resté allumé dans le vide ?
+
+    ⚠️ RELEVÉ LE 02/10/2026. Le drapeau `rain_status` de la station du jardin est passé à `on` à
+    23:39 et n'est jamais retombé : 12 h 30 plus tard, la tondeuse était encore « en pause pluie »,
+    donc indisponible, alors que le cumul n'avait monté que de 0,2 mm (deux pics de quelques
+    secondes), que l'intensité valait 0, que la station elle-même annonçait « sunny » et que
+    le détecteur de pluie de la tondeuse était éteint. Un booléen seul pilotait la machine.
+
+    ⚠️ CONSERVATEUR, DANS LES DEUX SENS. Le drapeau n'est écarté que si TOUT concorde : il est
+    allumé, aucune autre source ne conclut à une pluie en ce moment (`rain_active_elsewhere` :
+    pluie instantanée, hausse récente du pluviomètre, prévision), et le pluviomètre nous dit
+    explicitement qu'il n'a pas monté depuis `stale_minutes`. Une mesure ABSENTE (`None`, station
+    muette, premier cycle) ne prouve rien : le drapeau reste alors respecté, comme avant.
+    """
+    if rain is not True or rain_active_elsewhere:
+        return False
+    if isinstance(minutes_since_rain_rise, bool) or not isinstance(minutes_since_rain_rise, (int, float)):
+        return False
+    return float(minutes_since_rain_rise) >= float(stale_minutes)
+
+
 def build_mower_context(
     *,
     entity_id: str | None,
@@ -294,6 +329,7 @@ def build_mower_context(
     available: bool,
     charging: bool | None = None,
     rain: bool | None = None,
+    rain_ignored: bool = False,
     error_raw: Any = None,
     battery_percent: float | None = None,
     next_schedule_raw: Any = None,
@@ -350,6 +386,10 @@ def build_mower_context(
         "tondeuse_raison": reason,
         "tondeuse_en_charge": charging,
         "tondeuse_pluie": rain,
+        # Vrai quand le drapeau brut disait « pluie » mais a été écarté comme périmé
+        # (`rain_flag_is_stale`) : `tondeuse_pluie` vaut alors False, et c'est ce champ qui
+        # garde la trace de ce que le capteur affichait.
+        "tondeuse_pluie_ignoree": bool(rain_ignored),
         "tondeuse_erreur": error_code,
         "tondeuse_erreur_libelle": _human_label(error_code),
         "tondeuse_batterie": battery_percent,

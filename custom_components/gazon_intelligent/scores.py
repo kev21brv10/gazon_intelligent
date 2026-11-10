@@ -102,12 +102,14 @@ _STRESS_WIND_WEIGHTS = (
     (8.0, 4.0),
 )
 
+# ⚠️ LA PRÉVISION DE PLUIE NE PÈSE PAS SUR LA TONTE (05/10/2026). Seule la pluie TOMBÉE (24 h) compte : c'est
+# elle qui mouille l'herbe. Jusqu'à cette date, la pluie annoncée à J+1, J+2 et sur 3 jours (et sa probabilité)
+# ajoutait jusqu'à ~38 points : un orage de 17 mm prévu après-demain faisait passer le score de 49 à 67
+# (seuil 65) et l'intégration refusait de tondre un lundi sec et ensoleillé — alors que tondre AVANT la pluie
+# est le bon moment (demande du 05/10/2026). La pluie en cours ou imminente reste bloquée par sa propre
+# porte (`pluie_en_cours`), l'herbe mouillée après coup par le ressuyage : le score n'a pas à les doubler.
 _TONTE_RAIN_WEIGHTS = {
     "pluie_24h": ((6.0, 30.0), (3.0, 18.0)),
-    "pluie_demain": ((5.0, 12.0), (2.0, 6.0)),
-    "pluie_j2": ((5.0, 10.0), (2.0, 4.0)),
-    "pluie_3j": ((8.0, 10.0), (4.0, 4.0)),
-    "pluie_probabilite_max_3j": ((80.0, 6.0),),
 }
 
 _TONTE_HUMIDITY_WEIGHTS = (
@@ -305,10 +307,6 @@ def _compute_score_tonte(
     phase_dominante: str,
     sous_phase: str,
     pluie_24h: float,
-    pluie_demain: float,
-    pluie_j2: float,
-    pluie_3j: float,
-    pluie_probabilite_max_3j: float,
     humidite: float,
     arrosage_recent: float,
     hauteur_gazon: float | None,
@@ -317,13 +315,7 @@ def _compute_score_tonte(
 ) -> int:
     score_tonte = 0.0
     score_tonte += _apply_grouped_metric_thresholds(
-        {
-            "pluie_24h": pluie_24h,
-            "pluie_demain": pluie_demain,
-            "pluie_j2": pluie_j2,
-            "pluie_3j": pluie_3j,
-            "pluie_probabilite_max_3j": pluie_probabilite_max_3j,
-        },
+        {"pluie_24h": pluie_24h},
         _TONTE_RAIN_WEIGHTS,
     )
     score_tonte += _threshold_score(humidite, _TONTE_HUMIDITY_WEIGHTS)
@@ -448,10 +440,6 @@ def compute_internal_scores(
         phase_dominante=phase_dominante,
         sous_phase=sous_phase,
         pluie_24h=pluie_24h,
-        pluie_demain=pluie_demain,
-        pluie_j2=pluie_j2,
-        pluie_3j=pluie_3j,
-        pluie_probabilite_max_3j=pluie_probabilite_max_3j,
         humidite=humidite,
         arrosage_recent=arrosage_recent,
         hauteur_gazon=hauteur_gazon,

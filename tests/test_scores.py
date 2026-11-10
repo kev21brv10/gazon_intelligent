@@ -87,6 +87,52 @@ class ScoresContractTests(unittest.TestCase):
         self.assertGreaterEqual(result["score_hydrique"], 0)
         self.assertLessEqual(result["score_tonte"], 100)
 
+    def _scores_avec_pluie(self, deficit=0.0, **pluie):
+        reglage = dict(pluie_24h=0.0, pluie_demain=0.0, pluie_j2=0.0, pluie_3j=0.0, pluie_probabilite_max_3j=0.0)
+        reglage.update(pluie)
+        return scores.compute_internal_scores(
+            history=[],
+            today=None,
+            phase_dominante="Normal",
+            sous_phase="Normal",
+            water_balance={"deficit_jour": deficit, "deficit_3j": deficit, "deficit_7j": deficit},
+            advanced_context={"hauteur_gazon": 6.0},
+            humidite=60.0,
+            temperature=20.0,
+            etp=2.0,
+            **reglage,
+        )
+
+    def test_la_pluie_annoncee_ne_pese_pas_sur_la_tonte(self) -> None:
+        """05/10/2026 : tondre AVANT l'orage est le bon moment. Un orage de 17 mm prévu après-demain faisait
+        passer le score de tonte de 49 à 67 (seuil 65) et la tonte était refusée un lundi sec."""
+        sec = self._scores_avec_pluie()
+        for nom, pluie in (
+            ("demain", dict(pluie_demain=17.0)),
+            ("après-demain", dict(pluie_j2=17.0)),
+            ("trois jours", dict(pluie_3j=30.0)),
+            ("probabilité", dict(pluie_probabilite_max_3j=95.0)),
+            ("tout à la fois", dict(pluie_demain=17.0, pluie_j2=17.0, pluie_3j=34.0, pluie_probabilite_max_3j=95.0)),
+        ):
+            with self.subTest(prevision=nom):
+                self.assertEqual(self._scores_avec_pluie(**pluie)["score_tonte"], sec["score_tonte"])
+
+    def test_la_pluie_tombee_pese_toujours_sur_la_tonte(self) -> None:
+        """Seule la pluie TOMBÉE mouille l'herbe : elle garde son poids (contrepartie du test précédent)."""
+        sec = self._scores_avec_pluie()["score_tonte"]
+        self.assertGreater(self._scores_avec_pluie(pluie_24h=3.5)["score_tonte"], sec)
+        self.assertGreater(
+            self._scores_avec_pluie(pluie_24h=6.5)["score_tonte"],
+            self._scores_avec_pluie(pluie_24h=3.5)["score_tonte"],
+        )
+
+    def test_la_prevision_pese_toujours_sur_le_score_hydrique(self) -> None:
+        """Le changement ne touche que la tonte : l'arrosage continue de tenir compte de la pluie à venir."""
+        sec = self._scores_avec_pluie(deficit=8.0)["score_hydrique"]
+        pluvieux = self._scores_avec_pluie(deficit=8.0, pluie_3j=30.0, pluie_probabilite_max_3j=95.0)["score_hydrique"]
+        self.assertGreater(sec, 0, "prémisse : un déficit donne un score hydrique non nul, sinon le plancher masque la pluie")
+        self.assertLess(pluvieux, sec)
+
     def test_stress_transfer_to_tonte_remains_explicit(self) -> None:
         base = scores.compute_internal_scores(
             history=[],

@@ -100,6 +100,19 @@ _MOWING_EVENING_START_BEFORE_SUNSET_MIN = 300
 # fin de la fenêtre. 30 min après le coucher, c'est la fin du crépuscule civil, qui dure en France
 # métropolitaine de 28 min (sud, équinoxes) à 47 min (nord, juin).
 _MOWING_EVENING_END_AFTER_SUNSET_MIN = 30
+# FENÊTRE IDÉALE DU SOIR — sous-ensemble de la fenêtre acceptable ci-dessus, demandé le
+# 01/10/2026 : le réglage « créneaux de départ : idéal seulement » (mower_control_constants)
+# ne laissait partir un nouveau cycle qu'entre `_MOWING_WINDOW_IDEAL_START` et `_END` (le
+# matin), forçant la tondeuse à attendre le lendemain matin même une bonne partie de soirée
+# dégagée. Même ancrage sur le coucher réel que la fenêtre acceptable, pas une heure figée.
+_MOWING_EVENING_IDEAL_START_BEFORE_SUNSET_MIN = 120
+# Finit 30 min avant le coucher, pas au coucher : même marge de séchage que la fin de la
+# fenêtre acceptable ci-dessus, pour une herbe coupée en fin de fenêtre idéale du soir.
+_MOWING_EVENING_IDEAL_END_BEFORE_SUNSET_MIN = 30
+# Une valeur NÉGATIVE de ce réglage place la fin de l'idéal APRÈS le coucher (demandé le
+# 03/10/2026 : « tondre idéalement jusqu'à 1 h après le coucher »). Elle repousse alors aussi la
+# fin du soir et le début de la nuit (`_fin_du_soir_apres_coucher`) : sinon l'idéal serait écrêté
+# en silence par la fin du soir, ou pire, la nuit tomberait avant la fin d'un créneau « idéal ».
 # Repli quand le coucher est inconnu (sun.sun absent au démarrage) : les anciennes bornes fixes.
 # Volontairement conservateur — cf. la falaise de minuit, où un repli optimiste a coûté cher.
 _MOWING_WINDOW_ACCEPTABLE_START = 17
@@ -603,10 +616,22 @@ def _encore_le_jour_apres_le_coucher(
     if hour is None or sunset is None:
         return False
     # Minutes entières, comme la fenêtre du soir : les deux frontières doivent tomber ensemble.
-    # Même réglage que la fin de la fenêtre du soir, pour la même raison.
+    # Même fonction que la fin de la fenêtre du soir, pour la même raison.
     minute = round(float(hour) * 60.0)
-    apres_coucher = int(lire(context.reglages, "tonte_soir_apres_coucher", _MOWING_EVENING_END_AFTER_SUNSET_MIN))
-    return 12 * 60 <= minute < sunset + apres_coucher
+    return 12 * 60 <= minute < sunset + _fin_du_soir_apres_coucher(context.reglages)
+
+
+def _fin_du_soir_apres_coucher(reglages: Any) -> int:
+    """Minutes après le coucher où finit le soir (et où commence la nuit). SOURCE UNIQUE.
+
+    Le réglage « après le coucher », sauf si la fin de l'idéal du soir tombe plus tard : un
+    créneau « idéal » ne doit jamais être coupé par la nuit ni par la fin de la fenêtre.
+    """
+    apres_coucher = int(lire(reglages, "tonte_soir_apres_coucher", _MOWING_EVENING_END_AFTER_SUNSET_MIN))
+    ideal_fin_avant = int(
+        lire(reglages, "tonte_soir_ideal_fin_avant_coucher", _MOWING_EVENING_IDEAL_END_BEFORE_SUNSET_MIN)
+    )
+    return max(apres_coucher, -ideal_fin_avant)
 
 
 def _resolve_mowing_window(
@@ -644,7 +669,13 @@ def _resolve_mowing_window(
     ideal_debut = int(lire(reglages, "tonte_fenetre_ideale_debut", _MOWING_WINDOW_IDEAL_START * 60))
     ideal_fin = int(lire(reglages, "tonte_fenetre_ideale_fin", _MOWING_WINDOW_IDEAL_END * 60))
     soir_avant_coucher = int(lire(reglages, "tonte_soir_avant_coucher", _MOWING_EVENING_START_BEFORE_SUNSET_MIN))
-    soir_apres_coucher = int(lire(reglages, "tonte_soir_apres_coucher", _MOWING_EVENING_END_AFTER_SUNSET_MIN))
+    soir_apres_coucher = _fin_du_soir_apres_coucher(reglages)
+    soir_ideal_debut_avant_coucher = int(
+        lire(reglages, "tonte_soir_ideal_debut_avant_coucher", _MOWING_EVENING_IDEAL_START_BEFORE_SUNSET_MIN)
+    )
+    soir_ideal_fin_avant_coucher = int(
+        lire(reglages, "tonte_soir_ideal_fin_avant_coucher", _MOWING_EVENING_IDEAL_END_BEFORE_SUNSET_MIN)
+    )
     vent_a_eviter = float(lire(reglages, "tonte_vent_a_eviter", _MOWING_WINDOW_DISCOURAGED_WIND))
     vent_bloque = float(lire(reglages, "tonte_vent_bloque", _MOWING_WINDOW_BLOCK_WIND))
     chaleur_a_eviter = float(lire(reglages, "tonte_temperature_a_eviter", _MOWING_WINDOW_DISCOURAGED_TEMP_MIN))
@@ -659,12 +690,19 @@ def _resolve_mowing_window(
     minute_courante = round(float(hour) * 60.0)
     soir_debut: float = _MOWING_WINDOW_ACCEPTABLE_START * 60.0
     soir_fin: float = _MOWING_WINDOW_ACCEPTABLE_END * 60.0
+    # Sous-fenêtre « idéale » du soir : seulement quand le coucher réel est connu — sans lui,
+    # rester sur le simple « acceptable » (comme avant ce réglage) plutôt qu'inventer une plage
+    # fixe de plus pour le repli.
+    soir_ideal_debut: float | None = None
+    soir_ideal_fin: float | None = None
     sunset = _minute_du_coucher(weather_profile)
     if sunset is not None:
         # Quand le coucher est tôt (décembre, ~16:55), l'ouverture calculée (11:55) tombe dans
         # l'idéale : sans effet, l'idéale est testée AVANT, et le soir prend le relais à 14:00.
         soir_debut = sunset - soir_avant_coucher
         soir_fin = sunset + soir_apres_coucher
+        soir_ideal_debut = sunset - soir_ideal_debut_avant_coucher
+        soir_ideal_fin = sunset - soir_ideal_fin_avant_coucher
 
     if is_active_rain_weather(weather_profile):
         return "blocked", "Pluie en cours ou imminente."
@@ -705,6 +743,12 @@ def _resolve_mowing_window(
     if soir_debut <= minute_courante < soir_fin:
         if month in {7, 8} and temperature is not None and float(temperature) >= 28:
             return "discouraged", "Fin de journée chaude: à éviter."
+        if (
+            soir_ideal_debut is not None
+            and soir_ideal_fin is not None
+            and soir_ideal_debut <= minute_courante < soir_ideal_fin
+        ):
+            return "ideal", "Fenêtre idéale de fin de journée."
         return "acceptable", "Fenêtre acceptable de fin de journée."
     if ideal_fin <= minute_courante < soir_debut:
         if month in {7, 8} and temperature is not None and float(temperature) >= 28:
@@ -1208,47 +1252,25 @@ def _mowing_projection_forecast_offset_days(
     context: DecisionContext,
     phase_bundle: dict[str, Any],
 ) -> tuple[int, list[str]]:
-    """Décale la projection si la fenêtre sèche des prochains jours reste mauvaise."""
+    """Décale la projection quand le gazon lui-même mettra du temps à pouvoir être tondu.
+
+    ⚠️ LA PLUIE ANNONCÉE N'EST PLUS UN DÉCALAGE (05/10/2026). Elle ajoutait de +1 à +3 jours à TOUTE date
+    projetée dès qu'un orage était prévu à J+1, J+2 ou sur trois jours — un orage de 17 mm mercredi repoussait la
+    « prochaine tonte » de lundi à jeudi alors que tondre AVANT la pluie est le bon moment (demande du
+    05/10/2026 ; le score de tonte ne compte plus la prévision non plus). Seule la journée de pluie ELLE-MÊME est
+    écartée, par `_skip_forecast_rain_days`. Restent ici les décalages dus à l'état réel du gazon : ressuyage lent
+    (humidité, rosée), séchage faible, semis ou traitement en cours.
+    """
     offsets: list[int] = [0]
     reasons: list[str] = []
 
-    pluie_demain = float(context.pluie_demain or 0.0)
-    pluie_j2 = float(context.pluie_j2 or 0.0)
-    pluie_3j = float(context.pluie_3j or 0.0)
-    pluie_probabilite_max_3j = float(context.pluie_probabilite_max_3j or 0.0)
     humidite = float(context.humidite or 0.0)
     rosee = context.rosee
     weather_profile = context.weather_profile if isinstance(context.weather_profile, dict) else {}
-    precip_probability = float(
-        weather_profile.get("weather_precipitation_probability")
-        or pluie_probabilite_max_3j
-        or 0.0
-    )
     cloud_coverage = float(weather_profile.get("weather_cloud_coverage") or 0.0)
     wind = float(context.vent or weather_profile.get("weather_wind_speed") or 0.0)
     temperature = float(context.temperature or 0.0)
     phase_dominante = str(phase_bundle.get("phase_dominante") or "")
-
-    if pluie_demain >= 2.0 or precip_probability >= 85.0:
-        offsets.append(1)
-        reasons.append("meteo_j1_humide")
-    elif pluie_demain >= 1.0 or precip_probability >= 70.0:
-        offsets.append(1)
-        reasons.append("meteo_j1_incertaine")
-
-    if pluie_j2 >= 2.0:
-        offsets.append(2)
-        reasons.append("meteo_j2_humide")
-    elif pluie_j2 >= 1.0 and precip_probability >= 75.0:
-        offsets.append(2)
-        reasons.append("meteo_j2_incertaine")
-
-    if pluie_3j >= 6.0:
-        offsets.append(3)
-        reasons.append("meteo_3j_tres_humide")
-    elif pluie_3j >= 3.0 and precip_probability >= 80.0:
-        offsets.append(3)
-        reasons.append("meteo_3j_humide")
 
     if humidite >= 88.0 or (rosee is not None and float(rosee) > 0):
         offsets.append(1)
@@ -1269,6 +1291,26 @@ def _mowing_projection_forecast_offset_days(
         reasons.append(f"phase={phase_dominante.lower()}")
 
     return max(offsets), reasons
+
+
+# Une journée est « de pluie » à partir de 2 mm annoncés : c'est le seuil que la projection appliquait déjà à J+1 et
+# J+2 (`meteo_j1_humide`, `meteo_j2_humide`). Seuls ces deux jours sont connus séparément (`pluie_demain`, `pluie_j2`).
+_RAINY_FORECAST_DAY_MM = 2.0
+
+
+def _skip_forecast_rain_days(context: DecisionContext, projected: date) -> date:
+    """Premier jour à partir de `projected` qui n'est PAS une journée de pluie annoncée.
+
+    Tondre avant l'orage est le bon moment : une date n'est repoussée que si elle tombe sur la journée de pluie
+    elle-même (J+1 ou J+2), jamais parce qu'une pluie est annoncée plus tard. Appliqué à toutes les branches de la
+    projection, pour que la date ne saute plus selon le motif du moment (« 05/10 » la nuit, « 08/10 » dès l'arrosage
+    fini, 73 changements en deux jours).
+    """
+    rainy_mm = {1: float(context.pluie_demain or 0.0), 2: float(context.pluie_j2 or 0.0)}
+    day = projected
+    while rainy_mm.get((day - context.today).days, 0.0) >= _RAINY_FORECAST_DAY_MM:
+        day += timedelta(days=1)
+    return day
 
 
 def _mowing_projection_application_offset_hours(context: DecisionContext) -> tuple[float, list[str]]:
@@ -1798,7 +1840,30 @@ def _project_next_mowing_date(
     tonte_ok: bool,
     reason_code: str | None,
 ) -> tuple[str | None, str | None, str | None]:
-    """Projette la prochaine date de tonte autorisable."""
+    """Projette la prochaine date de tonte autorisable, en écartant les journées de pluie annoncée."""
+    date_iso, display, hint = _project_next_mowing_date_ignoring_rain(
+        context, phase_bundle, water_bundle, tonte_ok, reason_code
+    )
+    if tonte_ok or date_iso is None:
+        return date_iso, display, hint
+    try:
+        projected = date.fromisoformat(date_iso)
+    except ValueError:
+        return date_iso, display, hint
+    after_rain = _skip_forecast_rain_days(context, projected)
+    if after_rain == projected:
+        return date_iso, display, hint
+    return after_rain.isoformat(), after_rain.strftime("%d/%m/%Y"), "pluie_annoncee"
+
+
+def _project_next_mowing_date_ignoring_rain(
+    context: DecisionContext,
+    phase_bundle: dict[str, Any],
+    water_bundle: dict[str, Any],
+    tonte_ok: bool,
+    reason_code: str | None,
+) -> tuple[str | None, str | None, str | None]:
+    """Projette la prochaine date de tonte autorisable (sans tenir compte des journées de pluie annoncée)."""
     if tonte_ok:
         today_iso = context.today.isoformat()
         return today_iso, context.today.strftime("%d/%m/%Y"), None
@@ -1990,9 +2055,9 @@ def _age_du_dernier_semis(context: DecisionContext) -> int | None:
     return None if dernier is None else (context.today - dernier[1]).days
 
 
-def _tontes_depuis(context: DecisionContext, debut: date) -> int:
-    """Nombre de tontes déclarées à partir de `debut`, ce jour compris."""
-    total = 0
+def _tontes_datees(context: DecisionContext, debut: date) -> list[tuple[date, dict[str, Any]]]:
+    """Tontes déclarées de `debut` à aujourd'hui (bornes comprises), avec leur date."""
+    tontes: list[tuple[date, dict[str, Any]]] = []
     for item in context.history:
         if not isinstance(item, dict) or item.get("type") != "tonte":
             continue
@@ -2001,15 +2066,63 @@ def _tontes_depuis(context: DecisionContext, debut: date) -> int:
         except (TypeError, ValueError):
             continue
         if debut <= jour <= context.today:
-            total += 1
-    return total
+            tontes.append((jour, item))
+    return tontes
+
+
+def _tontes_depuis(context: DecisionContext, debut: date) -> int:
+    """Nombre de tontes déclarées à partir de `debut`, ce jour compris."""
+    return len(_tontes_datees(context, debut))
+
+
+def _hauteur_coupe_de_la_tonte_cm(item: dict[str, Any], context: DecisionContext) -> float:
+    """Hauteur à laquelle cette tonte a coupé, en cm.
+
+    Celle ENREGISTRÉE avec la tonte d'abord ; à défaut le réglage actuel de la tondeuse (comme
+    `_grass_growth_details`) ; à défaut la lame du sursemis, qui est ce que le moteur conseillait.
+    """
+    candidats = (item.get("hauteur_coupe_mm"), (context.mower_context or {}).get("tondeuse_hauteur_coupe_mm"))
+    for brut in candidats:
+        try:
+            hauteur_mm = float(brut) if brut is not None else 0.0
+        except (TypeError, ValueError):
+            continue
+        if hauteur_mm > 0:
+            return hauteur_mm / 10.0
+    return hauteur_coupe_sursemis_cm(context.reglages)
+
+
+def _hauteur_plantules_cm(context: DecisionContext, jour_semis: date, levee: int) -> float:
+    """Hauteur estimée des plantules : la pousse depuis la levée, RAMENÉE par chaque coupe.
+
+    ⚠️ Une tonte ne rajoute rien et n'enlève que ce qui dépasse la lame : après elle, les plantules
+    mesurent au plus la hauteur de coupe, puis repoussent à partir de là. Le calcul d'origine
+    multipliait les jours depuis la levée par la pousse quotidienne SANS jamais soustraire une
+    coupe : le sursemis du 16/09/2026 annonçait 9,6 cm le 17/10 (24 jours × 0,4) puis 14,0 cm le
+    28/10, alors que `plantules_coupes` comptait bien les tontes du 15/10 (5,0 cm), du 21/10 et du
+    27/10 (4,5 cm). Une tonte plus haute que les plantules ne les touche pas.
+
+    La hauteur est donc la plus basse de ces bornes : la pousse depuis la levée, et pour chaque
+    tonte « sa hauteur de coupe + la pousse depuis ce jour-là ». Le résultat ne dépend pas de
+    l'ordre dans lequel les tontes ont été déclarées.
+    """
+    pousse = pousse_plantules_cm_jour(context.reglages)
+    levee_date = jour_semis + timedelta(days=levee)
+    hauteur = max(0, (context.today - levee_date).days) * pousse
+    for jour, item in _tontes_datees(context, levee_date):
+        hauteur = min(
+            hauteur,
+            _hauteur_coupe_de_la_tonte_cm(item, context) + (context.today - jour).days * pousse,
+        )
+    return hauteur
 
 
 def _etat_plantules(context: DecisionContext) -> dict[str, Any] | None:
     """Suivi ESTIMÉ des plantules du dernier semis, sol nu ou sursemis — ou None hors semis.
 
     Répond à une question posée (16/09/2026) : « au bout de combien de temps elles sont à la
-    bonne taille ». Nulles jusqu'à la levée, puis `PLANTULES_POUSSE_CM_JOUR`. Première coupe quand
+    bonne taille ». Nulles jusqu'à la levée, puis `PLANTULES_POUSSE_CM_JOUR`, ramenées à la hauteur de
+    coupe par chaque tonte déclarée depuis la levée (`_hauteur_plantules_cm`). Première coupe quand
     elles atteignent une fois et demie la hauteur de coupe du sursemis (UC IPM). Une tonte déclarée
     à partir de cette date compte comme une coupe des plantules.
     """
@@ -2021,7 +2134,7 @@ def _etat_plantules(context: DecisionContext) -> dict[str, Any] | None:
     if age >= phase_duration_days(type_semis, context.reglages):
         return None
     levee = levee_sursemis_jours(context.reglages)
-    hauteur = max(0.0, (age - levee) * pousse_plantules_cm_jour(context.reglages))
+    hauteur = _hauteur_plantules_cm(context, jour_semis, levee)
     premiere_coupe = jour_semis + timedelta(days=jours_avant_premiere_coupe(context.reglages))
     coupes = _tontes_depuis(context, premiere_coupe) if context.today >= premiere_coupe else 0
     return {
