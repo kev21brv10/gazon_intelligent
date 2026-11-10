@@ -1,5 +1,60 @@
 # Changelog
 
+## 1.0.0-rc.26
+
+- **Garde-fou sur le conseil IA ajouté aux notifications** : quand la source des notifications
+  est « Conseiller Gazon », le texte renvoyé par l'IA remplaçait intégralement le message
+  factuel de l'intégration, borné seulement en longueur. Un conseil qui invente un prénom, un
+  nouveau nombre, un nouvel horaire ou un ordre direct (« fermez la vanne ») passait donc tel
+  quel. La notification affiche désormais le conseil de l'IA en complément du fait vérifié
+  (« Conseil IA : … » suivi de « Faits vérifiés : … »), et rejette le conseil — retombant sur le
+  seul message factuel — s'il contient un nombre, un horaire ou un nom propre absent des faits et
+  du contexte fournis, un ordre direct, une salutation ou un saut de ligne. Le contexte transmis
+  à l'IA est aussi désormais filtré par catégorie d'alerte (tonte, graines, arrosage…) au lieu de
+  lui donner tout l'état du gazon pour chaque notification.
+- **Deux bascules simultanées (erreur + changement d'état) de la tondeuse ou du garage
+  redeviennent deux notifications** : la résolution d'une erreur de commande et le changement
+  d'état réel (retour à la station, ouverture du garage) partageaient la même branche `elif` et
+  s'excluaient donc mutuellement — seule la résolution de l'erreur était annoncée, le retour à la
+  station silencieusement perdu.
+- **Une tondeuse en `idle` hors de sa station n'est plus confondue avec un retour** : cet état
+  intermédiaire (mi-tonte, en pause) tombait dans le même groupe que `docked`/`charging` et
+  déclenchait une fausse notification « tondeuse rentrée ».
+- **Vérifié** : suite complète avec 2 277 tests et 3 251 sous-tests, ruff et mypy (53 fichiers)
+  verts. Chaque correctif vérifié par mutation (code restauré à l'ancien comportement → le test
+  dédié échoue comme attendu, puis repasse).
+## 1.0.0-rc.25
+
+- **Numérotation** : les numéros rc.18 à rc.24, portés jusqu'ici par une installation locale,
+  sont publiés en même temps que celui-ci ; la série reprend ensuite en rc.26.
+- **Le panneau est redessiné, sans changer une seule décision** : tout ce qui s'affiche vient des
+  mêmes valeurs qu'avant, lues par les mêmes fonctions ; seuls la mise en page, la typographie et
+  quelques repères visuels changent. Le bandeau « En ce moment » devient le titre de la page, sur un
+  gazon rayé, avec la frise des 24 heures (arrosage, tonte, soleil et curseur « maintenant »). La
+  tonte y est hachurée tant que le gazon ou la machine la retiennent. Une police condensée (Barlow
+  Condensed, licence SIL OFL 1.1, fichier de licence joint) est embarquée pour les titres.
+- **Aperçu** : le sol est une éprouvette avec le trait de déclenchement de l'arrosage, le risque une
+  échelle à quatre crans ; les actions sont en rangées, la principale sur toute la largeur.
+- **Arrosage** : une bande de gazon par zone dans la frise ; le débit d'une zone se modifie depuis
+  la liste des zones (administrateur seulement), dans la même entité que Réglages → Installation,
+  avec l'effet annoncé avant de valider. La fenêtre « Arroser maintenant » montre l'eau de la
+  semaine avant et après, et ne parle de plafond qu'en phase Normal (ailleurs c'est un repère).
+- **Tonte** : trois portes séparées (gazon, créneau, machine) — la tondeuse sort quand les trois
+  sont au vert ; une règle graduée de la hauteur de coupe (plage de la machine, lame réglée, hauteur
+  conseillée) ; la lame se déclare depuis la page, bornée par la machine et par l'entité.
+- **Gazon** : le mode du gazon ouvre la page ; en Semis et Sursemis, un escalier montre les étapes
+  des graines (bornes des réglages), le jour en cours et la bande d'attente de la tondeuse.
+- **Météo** : la température est le titre ; chaque jour a sa plage de température (placée sur
+  l'étendue de la semaine) et sa barre de pluie ; une courbe des prochaines heures précède les
+  vignettes.
+- **Produits** : le produit conseillé est le titre, avec sa barre de pertinence.
+- **Données absentes** : quand l'entité de l'assistant ne répond pas, le titre disait « Unavailable » ;
+  il dit maintenant « On attend les données », et une météo muette s'affiche « Météo en attente ».
+  La liste « Capteurs : N sur M répondent » n'apparaît que si un capteur branché ne répond pas ; une
+  entrée non branchée n'est jamais comptée, et le texte ne prétend pas connaître la cause.
+- **Vérifié** : suite complète avec 2 371 tests et 3 255 sous-tests, ruff vert ; les nouvelles
+  règles du panneau ont été éprouvées en altérant le code pour constater que les tests échouent.
+
 ## 1.0.0-rc.24
 
 - **Commander la tondeuse depuis la page** : nouvelle carte « Commander la tondeuse » dans l'onglet
@@ -279,6 +334,27 @@
   fichiers) verts ; la carte est rendue dans chaque état du volet, les clics sont rejoués (y
   compris l'état qui change entre les deux clics), avec trente-cinq variantes cassées
   volontairement, toutes détectées.
+## 1.0.0-rc.21
+
+- **Une passe finie parce que le travail est terminé n'est plus étiquetée « rappelée »** :
+  quand la progression du travail atteint 100 %, l'espacement minimal entre deux tontes retire
+  l'autorisation de tondre dans le même cycle. Le carnet de passes y voyait un rappel
+  (`mower_last_pass_end_reason: rappelee`) alors qu'aucune commande de retour n'avait été
+  envoyée : la tondeuse rentrait parce qu'elle avait fini. Relevé sur un vrai travail (100 % à
+  19:55, batterie 61 %). La passe sortait aussi de `mower_autonomous_return_battery_median`,
+  la mesure du niveau auquel la machine décide d'elle-même que c'est fini. Elle est maintenant
+  `retour_autonome` et compte dans cette médiane. Le travail est dit « terminé » seulement si la
+  progression a été vue sous 100 % puis atteint 100 % dans la même passe (un ancien 100 au
+  départ, ou une progression figée à 100, n'en est pas un) ; une vraie passe rappelée, la
+  batterie vide et les passes bloquées gardent leur étiquette. Le fait brut est conservé au
+  carnet (`travail_termine`).
+- **Vérifié** : suite complète avec 2 280 tests et 3 242 sous-tests, ruff et mypy (53
+  fichiers) verts ; le classement est rejoué sur le scénario réel et sur six variantes cassées
+  volontairement, toutes détectées. Le cycle lit désormais la progression du travail AVANT le
+  carnet de passes (elle lui arrivait vide), et un test fait tourner le vrai cycle pour le
+  garantir.
+- **Vérifié** : suite complète avec 2 305 tests et 8 310 sous-tests, ruff et mypy (53
+  fichiers) verts.
 ## 1.0.0-rc.20
 
 - **Un capteur de pluie resté allumé dans le vide n'immobilise plus la tondeuse** : le
@@ -357,83 +433,6 @@
   application de l'après-midi du même jour.
 - **Vérifié** : suite complète avec 2 276 tests et 3 242 sous-tests, ruff et mypy (53 fichiers)
   verts.
-## 1.0.0-rc.18
-
-- **Garde-fou sur le conseil IA ajouté aux notifications** : quand la source des notifications
-  est « Conseiller Gazon », le texte renvoyé par l'IA remplaçait intégralement le message
-  factuel de l'intégration, borné seulement en longueur. Un conseil qui invente un prénom, un
-  nouveau nombre, un nouvel horaire ou un ordre direct (« fermez la vanne ») passait donc tel
-  quel. La notification affiche désormais le conseil de l'IA en complément du fait vérifié
-  (« Conseil IA : … » suivi de « Faits vérifiés : … »), et rejette le conseil — retombant sur le
-  seul message factuel — s'il contient un nombre, un horaire ou un nom propre absent des faits et
-  du contexte fournis, un ordre direct, une salutation ou un saut de ligne. Le contexte transmis
-  à l'IA est aussi désormais filtré par catégorie d'alerte (tonte, graines, arrosage…) au lieu de
-  lui donner tout l'état du gazon pour chaque notification.
-- **Deux bascules simultanées (erreur + changement d'état) de la tondeuse ou du garage
-  redeviennent deux notifications** : la résolution d'une erreur de commande et le changement
-  d'état réel (retour à la station, ouverture du garage) partageaient la même branche `elif` et
-  s'excluaient donc mutuellement — seule la résolution de l'erreur était annoncée, le retour à la
-  station silencieusement perdu.
-- **Une tondeuse en `idle` hors de sa station n'est plus confondue avec un retour** : cet état
-  intermédiaire (mi-tonte, en pause) tombait dans le même groupe que `docked`/`charging` et
-  déclenchait une fausse notification « tondeuse rentrée ».
-- **Vérifié** : suite complète avec 2 277 tests et 3 251 sous-tests, ruff et mypy (53 fichiers)
-  verts. Chaque correctif vérifié par mutation (code restauré à l'ancien comportement → le test
-  dédié échoue comme attendu, puis repasse).
-## 1.0.0-rc.21
-
-- **Une passe finie parce que le travail est terminé n'est plus étiquetée « rappelée »** :
-  quand la progression du travail atteint 100 %, l'espacement minimal entre deux tontes retire
-  l'autorisation de tondre dans le même cycle. Le carnet de passes y voyait un rappel
-  (`mower_last_pass_end_reason: rappelee`) alors qu'aucune commande de retour n'avait été
-  envoyée : la tondeuse rentrait parce qu'elle avait fini. Relevé sur un vrai travail (100 % à
-  19:55, batterie 61 %). La passe sortait aussi de `mower_autonomous_return_battery_median`,
-  la mesure du niveau auquel la machine décide d'elle-même que c'est fini. Elle est maintenant
-  `retour_autonome` et compte dans cette médiane. Le travail est dit « terminé » seulement si la
-  progression a été vue sous 100 % puis atteint 100 % dans la même passe (un ancien 100 au
-  départ, ou une progression figée à 100, n'en est pas un) ; une vraie passe rappelée, la
-  batterie vide et les passes bloquées gardent leur étiquette. Le fait brut est conservé au
-  carnet (`travail_termine`).
-- **Vérifié** : suite complète avec 2 280 tests et 3 242 sous-tests, ruff et mypy (53
-  fichiers) verts ; le classement est rejoué sur le scénario réel et sur six variantes cassées
-  volontairement, toutes détectées. Le cycle lit désormais la progression du travail AVANT le
-  carnet de passes (elle lui arrivait vide), et un test fait tourner le vrai cycle pour le
-  garantir.
-- **Vérifié** : suite complète avec 2 305 tests et 8 310 sous-tests, ruff et mypy (53
-  fichiers) verts.
-## 1.0.0-rc.25
-
-- **Numérotation** : la suite saute de rc.17 à rc.25. Les numéros rc.18 à rc.24 sont déjà portés
-  par une installation locale jamais publiée ; en reprendre un ferait passer HACS pour une version
-  plus ancienne que celle qui tourne.
-- **Le panneau est redessiné, sans changer une seule décision** : tout ce qui s'affiche vient des
-  mêmes valeurs qu'avant, lues par les mêmes fonctions ; seuls la mise en page, la typographie et
-  quelques repères visuels changent. Le bandeau « En ce moment » devient le titre de la page, sur un
-  gazon rayé, avec la frise des 24 heures (arrosage, tonte, soleil et curseur « maintenant »). La
-  tonte y est hachurée tant que le gazon ou la machine la retiennent. Une police condensée (Barlow
-  Condensed, licence SIL OFL 1.1, fichier de licence joint) est embarquée pour les titres.
-- **Aperçu** : le sol est une éprouvette avec le trait de déclenchement de l'arrosage, le risque une
-  échelle à quatre crans ; les actions sont en rangées, la principale sur toute la largeur.
-- **Arrosage** : une bande de gazon par zone dans la frise ; le débit d'une zone se modifie depuis
-  la liste des zones (administrateur seulement), dans la même entité que Réglages → Installation,
-  avec l'effet annoncé avant de valider. La fenêtre « Arroser maintenant » montre l'eau de la
-  semaine avant et après, et ne parle de plafond qu'en phase Normal (ailleurs c'est un repère).
-- **Tonte** : trois portes séparées (gazon, créneau, machine) — la tondeuse sort quand les trois
-  sont au vert ; une règle graduée de la hauteur de coupe (plage de la machine, lame réglée, hauteur
-  conseillée) ; la lame se déclare depuis la page, bornée par la machine et par l'entité.
-- **Gazon** : le mode du gazon ouvre la page ; en Semis et Sursemis, un escalier montre les étapes
-  des graines (bornes des réglages), le jour en cours et la bande d'attente de la tondeuse.
-- **Météo** : la température est le titre ; chaque jour a sa plage de température (placée sur
-  l'étendue de la semaine) et sa barre de pluie ; une courbe des prochaines heures précède les
-  vignettes.
-- **Produits** : le produit conseillé est le titre, avec sa barre de pertinence.
-- **Données absentes** : quand l'entité de l'assistant ne répond pas, le titre disait « Unavailable » ;
-  il dit maintenant « On attend les données », et une météo muette s'affiche « Météo en attente ».
-  La liste « Capteurs : N sur M répondent » n'apparaît que si un capteur branché ne répond pas ; une
-  entrée non branchée n'est jamais comptée, et le texte ne prétend pas connaître la cause.
-- **Vérifié** : suite complète avec 2 371 tests et 3 255 sous-tests, ruff vert ; les nouvelles
-  règles du panneau ont été éprouvées en altérant le code pour constater que les tests échouent.
-
 ## 1.0.0-rc.17
 
 - **Le motif affiché pendant un rappel de tonte dit enfin la vraie cause** : quand
