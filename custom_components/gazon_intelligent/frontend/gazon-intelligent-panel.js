@@ -746,6 +746,15 @@ function ilYA(brut, maintenant = Date.now()) {
 
 const ETATS_SANS_VALEUR = new Set(["", "unavailable", "unknown", "none"]);
 
+// La condition d'une entité météo : son état connu, sinon « Météo en attente » quand elle ne répond
+// pas (jamais « Unavailable » en toutes lettres), sinon l'état lui-même lisible.
+function conditionActuelle(etat) {
+  const brut = String(etat ?? "");
+  if (METEOS[brut]) return METEOS[brut];
+  if (ETATS_SANS_VALEUR.has(brut.toLowerCase())) return ["mdi:weather-cloudy-clock", "Météo en attente"];
+  return ["mdi:weather-cloudy-alert", majuscule(brut.replace(/[-_]/g, " "))];
+}
+
 // La valeur d'une entité, avec son unité, telle qu'on la lirait sur l'appareil.
 function valeurEtat(etat) {
   if (!etat) return "—";
@@ -1430,6 +1439,26 @@ function valider(registre, valeurs) {
 
 // ─── Styles ──────────────────────────────────────────────────────────────────────────────
 
+// ─── La police des grandes phrases et des chiffres ───────────────────────────────────────
+// Barlow Condensed SemiBold, latin (accents français compris), 22 Ko, sous licence SIL Open Font
+// License 1.1 : texte complet dans `OFL-barlow-condensed.txt`, à côté de ce fichier. Source :
+// @fontsource/barlow-condensed 5.2.8, fichier barlow-condensed-latin-600-normal.woff2
+// (SHA-256 215a93c696f442034a46fbb382958f753fda60e30490683aeea6b235fcbb2b66).
+// Embarquée plutôt que chargée d'un site : Home Assistant doit marcher hors ligne, et rien ne doit
+// partir vers un tiers. `@font-face` n'est pas appliqué dans un shadow DOM : on l'injecte une fois
+// dans le document. Si l'injection échoue, la pile `--gz-police-aff` retombe sur la police de l'appareil.
+const POLICE_CONDENSEE_BASE64 = "d09GMgABAAAAAFckABEAAAAA0vwAAFbAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGoE6G6l8HIl2BmAAhQ4IgSAJnBURCAqCrlSChXsLhCIAATYCJAOIQAQgBYN8B4h2DIFWG1O7B/DmidZyt6pkGgXpUAE79gQ4D6KsH4ejMwPBxgEQpp8v/v/PSSpjaFJdGgqoyt0OBWnbQXM5+5imduhsozCu6+5Feo6GRmPd5EJyN/wnLRyzBV65PRXVSC4kuml2zshsRSJjbj/DNytKKFLhC/HxSCgSnbgelDODBaHx2XtvQQUjuuPi2QriBUFBklgsUZfhOPdJ/sVv5C0t+u5+xR3mgfw0LVx4OfF/JE7YcnGmkCKRHk7+ifs+MzC1QHvlfovAxmVo1FonL/GBf/1Xp+/M+/RKkcUgJpHB0TrIpD6eP/XufQT8gZul9dI2TUGsEytnJjoJHTU8v82A/x/x/zdowYBWFJUUMAmpEAQDBQO/sc1td87lbW5zLvJclsu6u527W+XlriKnfW9m2ua9/+cPFmcNjbMAcW5pp3CFo4XcasC6W47sCXIZamWjXBkzORcZGyoLWJzSqf/XzV4FIYIiGMqwLJ2bVf9yiGW/bCVcM4YE1xmQ4vvd7ZsPJapJTGogBz7k5v93ZoDoQEiCxC4XDwkxJTbRK/pFvPxN937X6O62ry725+/nDyc6sSSeWJsPJDp/5Ks891VDQWubF1PqE3onBfHSybf+yvbCj5gxs+G+8Io6RsTkNupNla4ysWCbf7kBIZnI1ENpg+exLl/iZYUUnJ2K+AVPPRaiuZ3PsGSNfQPX2pVqsHRLsRg0KQ+CEE9ub2/wLHzHJIptTlSgaK69ujWr/bAtMkxgxbGsaICZBNPTtqn44/c69z91ZbCogBR4yk+1O3aADlCmhH0b0g9Kt74t6i1qddWTjwvg36+fy/v9xaDs+ArbCtsKgyTPmDy7O2eLjoTC8ShMfjY3e4BFhh2wuh+OTv3XRP++3cQVGbgJ8pro/V02UAW6rZZFHROwf2+qVfpfN5oEpNUWe0wNZ/aMuFZarz2Xyq3xmjnjwssn/vj/N7r7/24CaAAjAKQcIeoIipoBSBmQHOrQDUgLtnhXJGTcmTXWEJSolSBRhhpnOedN6F00dZlx4VZ+lc8F2WXxbXxBmF9ddBDx+7W8N5gteCRkUqK1f6KD2QsR9VAuVUq+BAV105YwwAfAmwDDKAybnB4TjIIant59VtTAcDizgUQ3oEACs7bRnfWgAfVYWg0IGlOaFdDd1/Xf+earqgdoeLFnhYZgCqJoZzGOOrbarwx1vo2q1f2fCAkJCRkkxH0u7liuamjTsRiigSJVCbTs7v3uGFN7FJL219KAqMGN7BPQ9GEJsBrAdOgfBAEKAUIl8H/vOjQhJKGGtCyQC2/ITwgUJgyKkAilSIUy5EB52kMdlUHVaqA63aAeekC99IX6GYK47TbirrvQfQ+gRx5BDRqgfx6BAhigQiMPKAhMFaYHsv2Os6tkPr39+ZakaEBPMERh1NODQmNPO+HxlkJ25D5bQrbgpJuAhxYhGLZJgl8tINh5N3h5TIJDZpBiCyD4kEMC1IIYn52dlRszHTMFtKiuQ3PrElTGI/7/MD6FPS24uMd+4vkBDNLIIh+FKEYZsGC8OxjvCMZbg/GmwXj9YLxmiPUvajcGWWBzY1QTE2iaIhr22U5AMPreppcHNPsKo2/De4hg4sl8B3QPuuHB8/Yzin1W9B2HDkJ7cDl4EB6EtnVsgNZAy2CRPY+wZEwzhg35PigFJTxotMOK6QtmHJDZLy6HdFAJVMAdYigH4kCmjfBSmM6Qf/XXFc4vo8H6rr6oj+qdeq1erDt1rS4BnrJPwzxqzI/VruEGmc9TfkuN1irAiD0Ee47oG6j+6sGw1ewgjNBixxQzFDI8GG7U2qo2jQANKBUjyCVhYvh2k4W+dMInpCjKf/mjPEAj8fwE8HR8k8/ywdnfyqt5kFu5kmdzPidzGMJmOMmU4XNGg9mXHdlEsM7cpG5eAc3wielPp0X7qSKAU8oPeU7CLYvt3AjKoJqPXI3nyWCeadctStYCX0w+7+jcdX16b/jeJN8aecBDOlPCI8st2sk2oKttg1Yjq4A32TXwqs+75RvtVNBUwvbl2fc23Jymz4e8W2Rvg9M+zYNpytLRYfaJBp4Je+Z9gmkEH1Pe75Dr3jmjT2BDMmryx7DAN/At54Fh1uClPxM49cpSe7UVMTUs/9QVCdHF09inyMuM50iu1c0ahQOH74g+luYe4Kl/731Grz04jTDhCxx73iz1s3x3A0/2/rA1ia+fAUXm2QA85BhwwwdfQgknhiya05L2Qx18ZNM2HaZVF0YWM2h+cSIEsfHiwkQD3csEmTaFWHIfAmgzzg0HJBa7Ix42mL1RTRiS38W4GwYdjzTgDU2AomDkzMcOWSE3YDnYZ4GzhoYJsWUut8ur5Zek1BQ893wckQcEHz319bilOkiReEWDWl11PHFuoeO/g34L1uGARUrsU+ZZiXxPkasjKX2+bsc6Bu/y92aEKLOBez1ksGzrbwCjbHr8Jps0dZ1aKz8Tr387NdYPPl5gW0yz8T5uQHcihravGskUJ3SINZPHgUXEhSYDpq7uHr7kcQvhiSYiIK5fUEFCSraiAkdDQavKmFWpRirLkudx4WpR3XhlrLx904dUBZsqY1fl/O8PChWGiBCJEi2JUIocjNxClcg7N62DjkQKlGNUqFTMKqi0alWkRhWrVRXqzi3h0A2nux74eunDZl+sqDTQIBKDVdoplfGzjRpcAYQI1j6VqFdZF1XKZZV2RTDKGBhCmdQBdXFQkLxUPF7jgxsWhESJ30bUS8I0HyrugXJslhwej/Kdev3u3M0poRG4YoaKJFr7ukGIJ6jVxiU2ok12QhXCiK0eLNWLB9jUiebXivVNfT9gBT32/UJj8vwHENFixIoTL0GiZCc0MypdrjxN5Gtro9EFChUpVqJUmZmsckbr7JK99H412Ck/85HctCQ1mNGRpeFGmxW7HjamHdrMaG9Dk7cEftha0DAg2eq3YOXMzVhC/A8mhiPD0TYpbsy+n8QWRwJzMhoNVmAvrwg7MESWNXwRuvl+NPvL/iEQxSqbzibYJnVYfUIEgULY/gshhufvqJRW0HOEcpf7L58yYU8CXbLhwPav5d96ic/HCaluYSZg00uc2svNxDfBZS+C/ddczC/DkRbKxKEu6xXI9Lx+CUVUP8/PULDlTdYK1DrS53qXRG2af+jcUce+bq/WhNfcI0TP+a9UlOkykMLPEy4oiviWqnYgp96RFYFMhrdY6xKPOspaI+371elTo0B4SI8BKmfgISpVikt/VZKflU6PklZSyz35+Xv2n298ysy7HGFHUktbm27QX9eMytGvE//0Xhq9egPgEaUnEjSk+iKbR1IZ3Fru/4s3y4Yi+jgUzem41xo6EuZPxEYAhzKtdNfh9JJaPefFSznSV+2tDeEX9SAqKFSooCBoMKCCgkJVKH5II3vS/GUCHxYeEmRwSNEiQ4sULXJUcChUui4ClbGPDk6p9xa1vW3q1afYqZS5pBAQwYcZEvXqgMGkHFaYUpoktMnQtT6HEEJJaxTMihVTWL4kooxS8OC/FggQQqjXTpFw4cSSIkPJ5CHZRijnL1ipNl1zXa2IdbuHa0V/fuD/VCXCgpBJgWGHTdbg4zIzIJcB8i98AkLithsrkT84Wm7cefDkxcqHLxu7CLlqOfTU9xPyK0qj1ggb+LWFyIKDwgmheiJKKY04PS5uHl4+fgHtOnRK6YLr1nNO6cjfxJPoSltILoXnXSUf3VcxhMXDJyAkGsX9q7T+gTSZEh0YmFjYOHFNo7nvLO0TkyQN5E48ePJi5Z0PKZn7tUfVvJTeS4U06TJkypItZ57bnLw+6tCYjkUFUKhIcSVQqkx5FcYqUVWk6vea9vW3ZmpzHE3qDF101W3t3r96nD0b9BL1hj71VRsY2SAaB/fRth7Yfq/vu1O99xNzFN40VmhHXsL4cpvK21CxjxORcq+AiRUkIYx7iU+gf8VmohSyEyNUqxXsywCRoS9BaNzvJCI0JzREdU1moNSP+10Qc5nEqcMNF+NKVQKET9mVzHHUAbtssMoSs0wxhX7tjzBIH90Uaicf4oww0iijjTHWOONNsNQyq6y2xib1niBGtmFVk9A4YGR223a2bxeDxWhoU+PQJpCQNdkOZvGI5hEjqOtq15IC7oWWe9bRuD7IDAiEEF06AL3+Qz2jnJ92HXabQ8fEjO0sq04dtF04Vrlbp0c023/RHrN/eEZ4DUXn7vDIaDXizlew6Jxg/WqsmRsfQaJAMAOFsU5ceQsUCYKOgbEmLqwCRICguneskbPG/IXDCEJIwUBEl10YXKpCAhw9T35CB7ZQX3oyOR0Pti8iMcd13tzztftb0fHt3Q1fuhWd+Fg84rO3qtN7zyIff9bUo2s+KO+Rt8kb5DW3pmVnzrh55EXm2dUR4nkgnf8KGnwBICSyWObJjExkSkaZllmQiiEahCgp+DgUzM1Pee8qzkPHjqzJnLk0+DCYZQwHD1g4mnAhNdSww9XMNsdc88y3wEKLLLak3lCam2gFXbpjuRVW9uoxa60bWCXT4SlMe7ZH7Id5WKaTkVMxmrFxYyAHcfsHhzzDELm1PPjB0sw05IT6I9rph8g3CCVXOwOfRH4RDBBmBYX+V1Pk80YqHzuDMHVqtv9AgiaaBVTtKB6EuyIFZFNUzKGqsy0hBDCtqlCXWgcZv6kK/zHzquqPU1HREsws6nAT7ImsoOQIAx0MAlQSqOjxqB2LykA7vwXZTcAQzyQkfFbSrFR4eeHSAj14/8chUN3GrdFZXI0oUJeI68BuZ86RAqIJmDQBl1ed5Cdk/31HtugQWGkB9FUnwWg9jIuA1wLSJA+wQpMC8FnzUVClq4/Y9APtN5oBmMFPuAH+E9tF6lLdqnfqvYFI0ZSAcr1YQr4wTygWyoVaYbmwVviY44oZYvZEBJjBwi7CoqiFa5yhg0ANFP9ZTGGWMOfmGqGJ8wdikQMWtfjf0f/bm8GMDR6FAP/9nDvA97flaN7KLSf/L/093/M9QIANgX3dBrkhW2aLctX3misy+tvWYLebDrnvvY/edsRRBz2x3Snb1Nthp1deeGmvD2BiEjIcDS0dPbNGLJy5cOPDxo+dvwChwoSLEOWEw05651wwiJYsRZqMQYzZurHbraMV4xfhWIue4+ivHsf8cstbd+xx10P3PPLbr0Hhi8WueuO0r0mD776xwcZQocEnz4UG6w1zzRabbbUPH4MlxCMgIqWmoKTixMDIRM6VF3cerDw901iIQEGCRfJVK36gpCaKu/okqXJkypKtlWaaayFdJyUzs6yB51ffTWdddNVbpT68lfvrP49CHqd+kZ130SUXXKzFy6K6AdKo2fg5rhuh4k9TFlA7t5Mk9rUPB77Nvnx/Ty+Bei0TBLRtbrRdD4vy/6++6Khn8OfIj/bdn6SO/LfxgW8U+HAGZekDUyu/PCddjLbCAumDTVKN5xnK0Hdz2TfWEp8QR6lHEDoGV5CAdrooSCFWbEEBGA6F5hsXXMWyIwSXaXPlclB0JPVvS5AFUq/iQHFxOdJMxoOjc3LProtHpeXi4R4qReLGMpcNeGY0Xv2BjgZTu0gsEoy6e8KTyND47q/BAL7tKSa/xohlb+YNU2PeUlCd/fYjxSZ9LHxd7Jh8c7hoDiy2FJltiQMjp3VhkzTgA3H0tgALpDexgnJmaHNbgOea0gzN0kF1oAmpkvmceNcTD3vTNg3jJGuwNRPPVJqLTXsm0beqQ1QSK7Q4kF4mDRenBSWgAUWNA5h2TSOmg2MmOGPtYC4tmEo6JmT9OX3osCajtswoyM/hlNJmTqlg3f13JPvlT7Y8KAkoJns+9CbO1ItaBfmKJ27A0Tw6XcE0mPXpCJptlCnMBicg9hUi6eGC5CjNdCFms0DIxYrPz0T6Vhk+sjxVlgj1+svlMGZr6di4icUPyrvxZDFTGWIibqaoobUjeRFDyh3U84IbOIvytKUpqM2qLU1E1hKnPwuouEEKGdflH8rVJIz13hqxOrEFC8g0M8bvzVsKqogGIFvw93rCeX9wSrUL3hXqpKEiLmlqpsOZSN8lL7Los0aKuMA6JGct4cM3n8XjWh9TPpFlG5W37vkPX49xY6NcXlZDRsm/G6V0BEl0LJqOrJ+qy4UTqCUkrQIKuvOcxMEU1aU3Yn2LWrAyHOmwjBCi4YRe+pQF7xaMYckjZ9Vk8rwZaAo1iRPbd8J8vmwdFzJ07JtnKTg0VIKjHCgZMJpa+yyBJJ5W2i+iSNfI3QQOQ5snApeRtfKYf1jXIy1oIEO3ApkSQRWJoqokoJokorokoYaUQldSGllSBl1L2Y0xJB8zMpV++OYFJcne7MFLbYen1Qg8rNxtDQOPHycbF1jYuEnEgWNycEWJzmFzCY/wiYAIiSYRES2iTY4esEHfpX8NrKSopLpVE8wagxy8h+HYABbDolEoPy5DAB2y2yNxRep89WLcQIBG7NCTldIxBJ6Kw0KWuKXxTzVWa5yk6gVzE+BV+BumuMAOMOY4S2IBVR5sCuMTAPa3ZCVPWI/44zIDNtBFkSaOARu/QHOUtzYKLiRiJHJ4qHSJTMlQlD5LeLOn7116MxGe/gi/b4pwaXDjgknL9YkrTkAYr+YZF/VFudOZUXXavE8PUi8AG2kBq1klURqNMdWOqOAa/7rElPIlfyjKVduk/cnVmrrCuz3nSJ5aTNq1bsoXLw/Fjz2kphE9DELJ4xDCtXg0xEPh81TMRMFMQSJtXDGxKOctqWbU1UEDNlyYKTIPOclIGhNP3izFxBdJTSHVCmuZQ0PPzjUgJqSUlLC0bKwoWjcJ5oSMFohtMpWdWwE6JgY3bq/wvi+xIdZEjhzB2SJfPKWtce9eZVguK1JemzIekN+5u9Mp0C48vO94jjyS6TSHmAmUODm76b43M/XY0DIPWJtaVt3ffGb6Ax8MVK32fh/BxOwWnsCVJXsjRDvEtJAoYspLDubQOQGDpFYCfzqSrSwB5GrIYC9KWXFSfEHOFauD/Y7sp0RHZRIZqWbvviErxpImZTVYdLMRiUFj3rbwlrKy1WLSEwF3lj77nRHL3LgmBmeFtbnve0AGqcU5J+PRaC4z9HQmGGOCEm3yImTOM3CNNeFK0QtGcRIXP1M+IjRSDKQlbpQjSiPV+DUcEjiyeokxSLNgHYJolziDdMvzHHuOf1cEjQyDaIlb40jSyDSqmAUXJ/LG2oI1WJSwYg0WNdqwBosWjx0yJY/2XfnkxcksgQFYPqaeroAzpr4NQTQrkBcFaF1PNQ2bQGEbqNgxeoO9dkMHBeiowDydrYNzYHAJDK6BwU1j6K4APRSYT2g9vAKHd+DwCRy+GkM/BQj5G4Xk/sB7/kX3njPVNYqZojEv1lhVN2XmhEJ/v3xk37XCZhD2hMOAzA6oFZp3bblPgZV3JcDoZFC/Imy4NoHy+arVRYSCDCSKQ4LM1anvy4wsYn1dWY00vdzeYGRlYpEf7gB1Q2Tv5V6xjJX3ZF/u2qQfoHRFtiLd+2U/sf6cgs1JBJAehS9+sWGmrjstV8L42iFwhVw+PVZOJ/1ph0FLe7ewvtLD1hq/8tIzq+YWeUOW472qWI1OMO6oVtfshYrSZIwrbbIl1xVfXlqWGXeuw5a8k2VPifeeslYcedJSIqaqTNe76i5yI6WaYV3FFveVZNpFMmmacdvz2ceqL2UtTWFM1VsQVxSarjY9TXdx+TrStYirjRujm+m+q9mRpnU0y0uPD9NNrNpRsUhVZCar3zAsZixW7j9nXFQdjixLvWUZDKRc4fmRrXxxeU+BOmcqq1RqTrWvKpWSD7WZIvtPpSkjjkWubPVUFsNfUlJgBaXCmN9bEFZVtfuNPmTYB11AoAjGQNKEAIciUUh047RpoKGsENzqBeGzlFOesyGCrH2CKjGm70CeWcWlxD5jN04/mY97WTmYeUh+eP/PoQKSIBLPLhE4CvcEZSiNk0/MQ4F4B+0qXIDzki9p+sA0IGwfAKdC+LXtHCYihHjlX8xCzqnQek/dxCeJkG86j0Ti9dmPQZCm3oFERu6E/sbqEbzADEI1mC1lGm0WPMQIU61qODgjpmKIJw1M8EFwzicnnhiLAZ/0lzAyDrRMTIl6A0TN/CD/Jy/Vh4RVVBDxq5zXnRrC4Xl2BclSZD212EWproV+8HGTRqWBoStNdqpGYqec6zgZYSNdKHm0HhTeR9EthUxatmJoQI9dFsph8HvykdIIz9c1UaDvThttyxwRs1JHOu/tDyxjU8Wy92bix56GPFEGBHv/BWgAU23IXKWWmbVDcvp+xHYyH/WvvSB5JHGbNG8Uxju3JmHfF0Mah57AKBbm24cRj5lEn3ufHEWZJs9Jcc2GcsGVYXa9JYIgJruQIEkmBcj4Kaq8jRLzkKhA7XUbOXoKa2rzsyIZCuD4dzN32q2MySEG/ZcTBYM6VJF7TR9NRZivCI540KbeSlC2lXmqkVsruLwN6jE6vZ58FhUuSrwwhltCKoGx00zUFjBNE2DoFYzd6HopS6keFMcNhBqKgaYEmyajpbStAKujgcKEmcGTENI6a2htUZ6xFLDjrP6RIHxVp0l+GE4qEBtOMsvAvSEFTxutkmUdqXxMWWREDby5R0j1E1xw8H6yEcxRCB85cug77xJgmuLCTHalyvvysHpWWysn6KwYfUG7QdOEHOewdHarkALGNjsji4k6j7CtRC+MP8wY7g6z0IIpgyKmQBv2EnMcKshmYXPHosTcyqfmN97WtJOK3MRzdtYD5JlCJLn+d0XZ/Swgsjwaj1QTh6J6zR2aHWLE3xodTe9Gyoc3U3I/kOUksuxj/ECRvc1+fd13Ij/ypj2qolFshK7uTpfCR/wH+vNaftLXTEWfu8Lri2cVw4GJkU7fv9FUd3Jh0kiXYvxXlVCsxo7I45gGYmfdVMA3TjcX8nxUllCWr4o2YoxHQjlzLvKT54bOKJPaJFBNrAkZ3ZQ6JXNj9xTbmr3RoKcJxysHASgBCHMrva1MjAllNICIzvH5Pr5F1nGCxsicPhTXuBVuVmYiIodSrV9aB3Baj909H+BuZtYTvpKWMp1xmhhk7Cen1gIAy5rebjgzg+A22/urKbU7EB0jFxIHWd9dcWavotQN9uV2NGBcr1yKYe/UWfZfMgYMmMSWIKnpO5WdZO18ta+qurpg7C9tBlYOS+TVw6QQS1OZh34iOcXuxqvWm87tmZC51VSuYK1G+tVyIr+N88MfzbNjj4u7zDdVwGW49s8KHHgSYh6mhYlrpeIjv8fyPBWLT/O55XRy39MERSPY2lfjO85s7WK+rL6FewMzxXcb2Vqu8LsfLXf2c3XMZ8IPsilaC7kI7Jhk8ciRM8XCxHM46YjDRkJSn7aj60RcTw3GWQdOsseIsEs24tutdO50rqqDXp/6ohm4CgxOgtPgejWCrjuxkwetVVuKaCWOkPYxncK8KVhi3m9gkb/MxuKhXPaDLX/abt16ZiFKjAOnQviPeoQgWHPARCT9mH1F5FQVWkzZQcJTUbfeAfP6513cS3+ml7FUUFNkfuSQVOq+5Rgl+hr8weV84Eo5CO4vIEpWgFHPHLB4jB9BaqbYZzzo6ExvFHSOvKOdzXZg0VY/DTULEK2LgzzjanGUXHoiYRnWJPaZQmH+/1v64Mmzot/+LWPhr6TYG3ZTCSIjMfJDFK5ONhqJISNVFUsL62J/SoXAaVX6Rmrsyc9rkOzWMFqbqRxAaKWhFV9EimvtJn5MrH9O1tPT965YmruZT7J7QitFa13pF4a1y6x0yUZlfd0qsin/BZopLB01Ko4gswmgJPJUcFaNeKJEcWup5dZLMhpRyrOvE+i4Dct4dYFgURXZBKvWz+xoZa0ozKXPlTiwUh/WpdRiyDsKFXoCzJvLUPI0z9VlgfQkeenNXpCM1Ta0+O8nrAd537HuNL1RpPdkLs9QEEQCQ4wxZobkPL2ZC2Ga5K3aCBvF/vj0ko1ebxBGXtAu2R7SDz1q6gP2GBW/Pyv4wma9lxlmIApna3nGVvAv8RBONpel0FKnAun5Ki8Vmy+YhU5lAPGUUzBJiWnHa+3pc0hdxD5M8dUtx8gq7uGS3BxbQPE+xGDLSeFGrXo6O6+PHI3t+SeKxeGU04v6n4KqNSemdLGQjMyFa4ikTzyAAtMaMf6wLLpbXlm5G2U8UKkm8g7hyAGTKsNO2P2vibQcGyUXCilvCjzQKTNvSaZF2nImNlGobhszMuzQRgAYiRWFlT/Ts1CIjyeyKE1A+8tw6PuGZUrRdD2zqdDBjNc3CthoN3oF69JK2QWoJPaEbg88FhtAUMt0OE/KZCUmbe/nZRmo/LdIoztBp220tOuApkGo0JI7OREXVUbEoUTZKMjCb7nMQTKrsddGp0oyr1uu8Trlah2TISohLsg1hWf8OED1GdCn2rJU45raUAf2JSbrjaKLWqUSKoES14uYaZzK6Tj+X6KO/rKodBUTU2oxs+Rk/lzh+IHHj6rgsOqw3tKY7Sju7EU+Xc1yA+O5ys2wj+mU9aK5GS2L8v1OltN7eQaIKoB2E0ffufPb0p+7S+prklOrKpVg77EOQZwRhL8hPBVrpbPbrqAyKcyQxlLZyJ7qR0gmfINQZhipKh1YeWiVc4OJT8pjacQjb+1dRb0aEQ9LKWbmWoMuP3Xy7v/RnZ0SJC96KDMB0nEA/NWcLnFr4j/s0JE3JZtc1SOokE902+BqAx/vGNVPtSB6Z7PCuT2UMielHn4zSUWjWuaT/D1u2NL7pS27LLF14f5zr1i/ZHWiFzhHPX9x/yePsZ1WC6QgI5pc8EajBAVh+6Dd2OiJpkR7bFGb3bp/Yt1PY6IbA+IxoniGvDJLuKx8JK/nbeY+9KO5UENJVle87iTG5wse07O9/RSh4xOdoF322gsGkm5nsDIxghNJxadEFJYmpTM71iMEjRUhe20wa5JZCFVP+l4zhMJ53Inecij86+4Wb4TqmEflpChsTXt73nxpXgqm0HqbstFCzKEtowVZqzuRwfX7ENDw9iWl1oyvMVSf0Wr8J4rzZxBLwihWHp3cPjIhdZwfJdZVT/OEM70qaeFFvJIxll1/u37ddMGStlZpkFG7oTByECe89UUyWw9YI9kYoVA7hjc4KYQQw6+5vIbckWWit9rsWPvdODWaFjORxxLHyHoQrLXsV25xh1RxdPu+OUgHwa9uq1xqm+GBStQfVpWV8G/vN3YJVZ5pq7HIs6yVXeR2LlU6pHIHKo1+mlnwzZO4WrpI05Paq8Lay6qjsU254mfaj1V6bglNwJhVS7/R1UweS1tB5CJb22jzpjWUWU2unxCCHGA+0K82o8ajubuRn815oJQTP5DfaZag0AsUx9QUQnN3HhBfJ97CXUWuCTy3aWhhfnnA7wCcBTn8fNw2fYcDvvjw4a4kL3eIw92Xi6LYPoADSrXHV1lhd1UVf/zusJDJ7hRWULY84HDun2h82kucegfC6AHkUTLIpkWweLpy/X4+2ofyP1cD09DW4w/JU8mwqYIEk4wVKuql5PkEDt4E4DnMLwA48DMu8uB5AN4Mpg/BPp8eAPbDzMJJBWg7xcDOHTMigyJX9ulKCekJAAjVMMwYqo6c7ezrjJ3um2P4K3BXclKypdtVZBX3FEXKqZvBswBoFa+UqB4qtO2/vDnWvVNQDsDLAJTb1lFwPBqN4alorDsVw0A3aIEwjCeZKxLOleCSuULRXAkP4FJ4+wJg0W48Nm3/n7xPmtvfbsXqtPHiUrKUFV2EWNGrrzyqSGTJYasV87d5XCa3VQVdeCyGdzdUN7h7FTvW3QlOi4ZRVfGwpAKAbwq7xjkI6BkAGFlGCXB2QLYGx3VTgkJnaziQJvEB0DYkMJrAwVtpVobkoZXfsscajs+amTU+SdzZLRJSbYFxHQXvCD847hKN9nRE8oWmUUhXikRzpSnp3CO9Uto2DlXghqOxi2H7tqhDc14ja9TNBnYIE/yhFF+dJp2D8z3dZZDS1RH29I7xSeICwSQJOH1YKIx3RDTS07JgFWNjlgvppBhkxfwg0t4hIkxFOtGCGUKSip5vZZJeF68VS9Y6QXoL6cA44l/hWzDMiO10psiJGERY5ypEnG1HJZJEsqPuPA7iQ8N7EcWGQyQzRKjpJ9Qd2jjWYJ+YOkrp6Y6FYu94rDcnrIGoc5e8Wb5LLF4TsmvEyshHP33FneeEiH1GsdOaDlpZ7abzig0eka8P9YQqNt8j1mLb/2mLMMyYn8UUu6XiNfJNM7ryEvEuuf73vI/IOCcGqejtFUp3qTJqDBmV0Xy3ina6CsIQM3WE4umc59SXQlpla2VzYkogCgAHGjhwJZfo5XfUmnuySgBeAKDSrCqss7dVxZOo3m/R5KMhEZST7sKDOexl17smNTjslo4nVXDjrrQRVi2ytNsdDYonM2J/SjZFIGiVJWStAsEUmdKiqM9jQnoAchz8xF3ShzTKlsrq0qaDKrhdSYRoaNueBnAbgCrpbZXqjrTKspTS1VnHz9WVs/KnCgTzZPzo9MvM2wUBXaSzPRzpwqNZBt5M0rPl9wvzmuXSheMP3nJspdE1FzHvHU8jwW+Nk07KrDEzCrZQ8P74D7sx/xzTRaLpBf+0Dvoh3t0fLcj3Az3BX7MfoqFdGBL+iASTQh8hWEeacu1+PoqLdiHDAqgtZN8TrN5jhBottpLWtJz5+xEsei1rPQzBUNXh0phcZGAv85FICUF/Pokogm/NfITAWwokQRnuaEUVgTfPE3xTgSaEpwkLQAcrloOFIeQhBD2EzW3kGEfCGwl9jjyqEAchqvzDLwiT9FqscRcQXgMlf9eiQnJ73Fs/4v8zY0JqRoHNFDPHmnu8zToA+NLybPazchRrx1DY1lbnTj/5utgEgE68QSJ4xLt4e1ND0t5UCYBUiuRxC/UoFidhGGTtDLgKVsQ14luRQLLJNQJw8CEARTmybM63nZ6hJtoZhGKNulwat+wwYBxrkFV8pAGPAaAU5GfncITKg+9ft0wAaCULhYJH/IkMJ3uivvsed4OtTENXQxg9F+geZJYIf+TwVnBysh6ZXjc9ysrhCC+uHaYkGrz33InGcDgZs6WjaB4QhiE8aXY2V3BRwM3OlvKRIU6o3J8Ie7I+PG1ZE+9eFfbgO3Val+oh8qzss68Eat7sG0fE7LDeNkZB/RvDIDVdU2ZzN3ju+zxRK/cnMV0N3ZNEvP6VIeTkTB3too7urpPcFM4kuM55Ew31kUSD91ypwu1UFBeNaOHNvUyVm6GiKnoh6uiaTCZR+6ueREFjtNiiT4miTC9L8YRPngPyc3I4wn1CTk5OvmBf09J3cfA+AMUCbjYXcyiQRgjggGxv8ATDiZj3fuA4aeAevn/VFBQDMH0g/AXZ2cRHTzYMqNrevvxw0Q2EYAgJi3nNde4mAjXEiTZYCl4+L2dtra5h/DnyBf1ocvvAfM6e05g/7erQC02lKKRiIFU2e8x7w++ot1YhDBXEEa4lC84JySk/wzkBJ3ubm2yNhVD5WXmlb+bk/i1zZR1eGcatKvPWzhQIXmZ33ClPXYuDL4VYo16goH0K36U0G+1xBubFsNP+Ioj3Dwpk4wWiRfWEBSUPhifV6AOZRwqGGZOPGZA2ilHfvYNJmlm1KGdOIgr3xyQVqcTOJG281i1QPyp3pRWRrc11QVjzTvnb/JwfU2991a959peNv8iZkJqhpWd5SiSxmvuCBFDKlzLrX0kiR2e+PmnzzRmKy2t4vC+sX99Mc25KR7XnB40fvmtijX9Hvh6jLJ9mUozMq7a7nqQRSRzPXZwOyU7Jhc8IcAfPjFZuhk23IVKXhue88rfULDdr1Lp+iWmIybhQruFKClFAmsx60rr/Z4EZqj/MUl3ICA9/yjyGGQpsYVnOUHLkwmb9ko9w8AEAGiEnh/t9TIE0YXdvb9D/llj8ViASTpPA2xLJ2/5wotEzv3+jfIcu4gzJY3sdDacUFBconW2Ni+yOee/53VHbHPSiFmAlpXreCm5ONuUrskJytsa7sdFOttf77/lqY7acfIQBw1+o2JMbs7wHkSDpT9XMldyqQU+ifyG469Tsarr4J67VE/Pd87pjxcyRbCoCaELmXnwzD/56gJfRgt54yLDRc3L5+5fyxTlKYBXEN1cF54JWr4XiIXalICuYzX+fy9r2/tQlLpvN0RjwBZrDDpnkdoHJWRk8/kdc5uwPStYNHS+2tfpDk8w4+Kg7PjVSn0wRo13mgnBYLm+oSqZ6W8oreAeflm8rK2smFk5uS9ApcvOKSnWC3E9Kf62HXWXQueqwgyzZto7yulIgrq1V29UBJFBuSCrQD42oH6rfSnkN6090nYkDqRn3zFUel6/rvfFx85bn/iNzetcpZn8F01AcQyrKSDCpvAzBuojpyllfKNA+8RC/70sNapS0UGYEGiGDIagzlMaIacq+z/lo8xXSSYJayf1qKOA45I//QCI9/j2TREVTiLFqqUxWvdSIpCh9+F75YbnqFTJ51fJ558lulQEXiMGERJ8LPPEjTEM7MKTSExTyQMf9WIIxHAq7N9cJLAIcRKllxwQy8k6Ag7oEiUgPnFaODRQWDdZ21yHyLfmq+V0cynGRBDtSEYapYEWXLRREwmJZNFzbSIKDaUzy0Eeb83NmyCBEVobq7RGUwbdrgnELcvqKW7PGNXXWbUD+cWMX/iy7nxSUSSqIA54P/CVxiP8tQhZ+yFfkJGCM5MHQPU3fPPbQmDrBeBTUngLYl/BYEKnifotKv7LJYYcOADa3kpUWqFQg2RpmmCgpM1do3qv06DGUVIMvV6YYN5VblZXU1U9z8gAQcg+w5fmPTwvmpw7yaeO+nWns/luzRPWPwfCNaonmawPdMoc1mz2HwZjDns2i9TOOKrBViXUl0tXXEGhYsvVR/IyhUVSY6s9vye8XCRPhwyeEyunj1Lbk3j0dSZJZlwGhKMmKPN6YLz/UzYTefafjre95TWn2VKdn0jZTsqagODc3B7ZnJvbfSEVQMNUeCrbh9RpRu3NpbfLkmw8/XYSo1R2ord7t9iVDwM7mYVgLhtEzAz/xsh75/Cpte9O73IxnIhAp8qMWwJJ5R+gS6PlaQf7mvECQ4py+XR8aLreNTjqXR/VteQAc+FsDV+CPphYae8VuBZIixzgLlgEw+ALO+NCseeSZ1pKKFJWwuzUY8MS9NG+RL/NBydnPqXg/+oz5smb3d1zV+4XIKM3VCTjA95P6NgDXIRWdCGdXunxk+8i6/2RcHuxNhAOeuI/qaZYS6rqORJ0vmQzxXnMXXIxxc4ok3ZCafq/IHm0gu6Y25fB9F0uzfvBrRLmy4Mc83qfmKQ3KsVo2eSkA0kdzGOOEIeaRpfwfITDvoEOBtjdV94dJ5ECF/k99fWVFeX2F/mtdBe/LqEYDs8r15WUV4VJDWbjE22TUmVjwgfH2nLxtqaeZ7Dv4zDzxhtRTLMZY+8AyvnxFwz02+37TbLGgyfsDhzvh0y045DvggbsLZ5aJSyBvIhx0x300j1/0uFqUJ0Usat6vZm6BzOL9npv1Q9X0TUgPsVBPvKE3J98biFO78lvyd0lEa8JHWCNSfjSOYOxKtCRN5ipdJgTbASGALF5r418KypeBSU3KA4l5UFWrpWCKUOCTfUity5OCPe2RcOeDkXTY9aGeAc1eVKP2EGGqJen3+DtDZLuU/zFPuDIgyskuiUeKtNN7cnhpX2sArH35Y5fhQ3Qm9IJVKTI71bHoIJ0JfWKrGZj/3HlVQeBvWA2dsHDV2Y+DwHRIRIxqtFqyKxkM+RNexJMPSAjaiqLiS4Zsgdcdj31Da9goYfR5nHAD5kGy51Z7PVTbwpPk0lwJ8LaHjZ2F5pFmZxBqCUE8WR/sPJSsl2JIvHzBJMnwY8JgOXPMvgDFObVNIg/Fc3l8QYu7ML8iIMrOEaumLG5gn7fF1e2Setuo7PPTIJ11Df1WBjtR+flKbW+orKpoqrB/ozUW/9FltbKlXq3REI+pjIZoSbzHpHdL2BeO54k2zXiTw/lrRliSKTww8CW7KG/xAp7gye5/OBykb54gu7U5g8cTxvV7DoXwZDSQ8v7rxD6+cIbcmkCA7IwX0mtiPkudL+FBvD7J7icFLa6ii0TRozGL8iI7F38gTK4y62/oqyw6XbUlb1xt1mVa3JwXOC463eUbuemFhv3ABHCwKgH9ww+QJJkSCEFFyGKPJAsHJTT7vjl6Zw5ZyjVmZBSwmMLNOYw7Gs2zFXm//qdOgp/RmRASzUJ8nF+M/b2Vm+NwPqFU3SyiMjBMh2EIzJJn8Ke52BzxQA7VZoVh7QotAGJn47gymVSwpiVUh8krVY0Qa7aC0zgofs8R4KHDdTdcgRUXlNLYwR8UiIkc4zg+AMDw/AzoTo2Zvt/A4okqdpeW7qoK4e6gAObNyeInC7OzFAl+1oCbVvb4sa+5/wmYB0AXpKKH8qTPuxf9tiMnV2NaVars6wtmXyMkL6ouqrGxj6AyuWkZ+czah09MIBspdVeyObJ5WdwnhOaM/CSP39JrdIBkgE12APAfIyA3ownc+a1fCvPaQwrU4L/y9rtrd83hcObs7ZXJGs+mcnJTO9ZarUM7u7jZbafrZdLU6Zlszoy5e/Eklka252Z3gbQ0UJ+TzsysfSsdyuTwM9NlRGoGnUKUpaez6VU/at/WlF5U+frCDC6WKWfa/wE853ZweA7T6hLl3D4b91q0v0VNY+Yn+LwWXRZXN5c7jfZZOuIo23nAgFRQCtj1mJQzafJmHPA+RNBQmlL1IR8ty2L4aneIBA9ycx8IRDuE1TtVSxnv8JG6WQvfQbCywsS3OECfJi9Hfhfaoa9nCgSDL46/DuSUY9dntvDBHVyw5CewW0gcGWFh/atfx4FC1WT571FlfnWeKFTARrE4BLpBhqm0MaoyhtvxaPF87uFnxrLFscekv9E97rGV//ymTdK8MeLrGchtuJs6Y/1Cnkjncuq03uWLeAtFeVtX4CAJqemhUjWJXOZgksiRepwTzqxXLXG7WKPWoIquhpIzyXFCwh4MqtooZa4LgPqIKhOmR9Qb3Y3ShYVDSFSnrtbtx0EVGWTOBHDJJ27aOQ1rHYLFCRhjre769MIutYrqoZRkX9XgJew8XP2G9KAHs1zgNbAf7FcgLeSqhNlPQ9AWRFGzITxWzN6kodhreH1oofHtYo8BaaY42dI69cM5s1SvyOqIEFwP4nnH/zTe6DG+sWBRiRcZRkZUr86erXpJGp4hu3txweblxyse1vXsRezo3p7gixXHjc5rPyeLu19wIu7RaHzxM8J9XNa3K73OMvnyjvOwsvYJz8QrrdaK5hOCczbwzdtlPFH+YrBxL+JA9o4dUzwsP2EsEy3HwWB4VvhG6QIvgrG4P7SLpngRDi5qwmcQPsl463KN6B+GP6noPom+ZluptyoVKA0JsggsEKd8tnwa9eMYx3pVgVjTlSXXKN8w6uBYOpHls1BeLUQaudvG2WfXoDSX8nEAM6pdtvAqH21h7qB0oz1NqThbK/OPx6hoCHHGdrJJMDOdxomEKA36ph0kkj+0XaBHUv79YDmqRKERY1ZQ09cRZDAMtpYHx7mJTgaM6YMCyXuDgHYdQxtQLHtvYBDUbFczeZIPG3QNtYaQax9ALY+67Nxs3bBya2DcApNsG9PDv3ckG2w5Zo1U36u0Ro4Hmx+3BY3pg5/8chIYE1oAaxdenf49huW7CuPbavERLQw6BDM8K2YSq8pfZol+7Men4YkYF6mwiuoMM/0HLQCSIQ0AWpuNDp8y2Iut1pJSi6W0VBjW2HB9n6ftOwuMAhzUeBjfL9V/7kTtd7YHO92t/1pgwgNvVvPnhWgFqu/d7c557rvo08Q/UmbvaUZDDoDUxv32YAKP+n7yFMi3CrSA/IkIxRKpoLMlRLOTaHvjCInGz/mEx/9X0gjAJnKMc1OBjAzsm0l2cG6tCN87KvmXf+zVbib0COVzvgEYQ8UnnHUA6L8wx8XDAj2dbf0Re2MgwwNRn2xESAg/zaY2904BYKQvGmkUEn2+Z8Ht8RhnVixO+yiJ5sRLga9p+g8hwiIFZofQ7JpSfu/dZPas2Fz4NCGegS0aMyJhigNhcYS+sQsH5l18GFzZp45unQhtUn1AXKYgtR8G2nicDtNbWvQkuPZ9LUyKIFXJVDDfPzZU29qq1bbEO7FqCZCQjpL3yVf31PL5tlewlnci/sV1Z5m87Yzl/vfRXSQqGkUWk6aHw6Tpw7QoZSDcd3QxUkcb7jtC3lGpGUcko06HV66244MB22aLkukbO3FgpxAbP2RsiwDAPddj5VW+5t+15jl6/oXeJWlLFP/Y9YWcKu+ePBZj9HTvRtUmV8+rcpVYuQbnDPYHEMXcwfwGPcjv9yNSG+R9pEA82VnfxenNsJDPlD6n5nJKt+1bX1uQby9UJLhwFAVKUFEItrHrDbJJBwxoOQVz2l+B5TKWRMqUy1lS6zu2wcj2KgrbTlUsuZwp7fs/ptH/h5Y6vYtiPAXW1jXZa+ZqJJ+d5WiPldKDKm4DfXpn2t1nUxQSghkxjPs0wMS/8qUq11w5y2boTOmtric8kWFaJJ/jruhp1xu9F60QWbaVAYDN2JZrDC1wuUbiwnKse9LYWDyh+/BYmZRGC2fKvEzmuEwaoyyglDMnpLkITEE6abFbYrXT0BrraKi3VrQYNZJS6/OyQEuLXxssLPZrq6sbGzUSfa7WQYeJi1zNB2zyTY0ic42EsabMbfV+IeB8etfXfEXMzQO8vIkvLkqCtU0SzZkyyU5596nxGUdw51kAmIDPPoAZ5+hu2LG6mU3mYrzeZPQM3080ujMehp8QiuAPHo+cy/t9ueWpipc/7OgOmQkRa7iysbTIHVRo/ckWLzrgp5ss/IvH/ytPOk6hCLMO6rS6J9oi4aYCm9rd3uSXDk5sNKLf5sxLpy+avD4nd/QHyUMlZay1dawr1bpvrAXHk4LEvlRXYkw4Gx62LPH5RsJ1vuEl3kgEcPFY1IW9IyO+iGK2SLFdISwqMiuIoBvUYRgtTZSRTk87kJ65Y7apc2SXQ1RYis7Tb8W1ukaDSReP64zGDRcxk6GJhXMZFc02uby2qEBurZUrCpW0taAIMeJK/6bVIqjvUYuYPU1MiPwlO16Abu7eXq2R/yMvwgYSADKRSzTkEpI5QWgX49/rkm/QGU2TQ6AwOJWbKvYYENt5ZM7PYBVDajdAsEHmYKjgz4+SXpdViBqL6iQSZbhmyfvuokJvSXGhp2gvLvYUtReXFHqLiiU+pkw2deluZ+OO8RjH8uBTrvTAPNYNVmSFoiFNux0c24OP4rx4txNXFMSB6oIxkRaIhryV1BnF4JdZitsAfzsl0CmIhrSg/MKrMA2tRRTmq/JJ3y+bVo46qGg5zenqkpLwZ9iFGspx+aHqBn05bkBdVKPejTtoJmFOtaOsGjcg3TSnBWcTKYgDceZJpSVOxK7YYrDVajQ2m0btYTdtrTrxEzdrgsOdyOLij5+xr24WrfPv81TuF70b/1hi+vAkP3Ocr/7n80zW6/FNv1sp5DL0K07Zi81ziKnnAT2m+SFlfHPD0SfTUWFaRuUrejIsHl3a6D8iKirJ55RItM3uvTflfR/EcnOjeS8ccfx7KofPITbkKrGNLU3VwqQIrKZF39OVkqXMqDDhPsklPEBwQYNMQsSW9mvrEBz4XeBfhr4rAi5Yl8Ksa2kcKnPrIra6nuAgllheqHDyQll/LMITXE9QxKJrMcO1AHfbLjdBnatecVPb2ae42cOYwV4ChtqlcC2No+SALsRCMFxPcAxLZa8Eg1gB4yOyiqLjBtyQBdYh2DXMNTPwXQM4ZV0K466lsaedkVhOUzJkh5IhT1cy5Am56bEI57EOgW/f1T9/rvOf8ItnBOAyp92MDHTsx5a3XXCD5MzxBXdSKZAHVi0YX3C3FIeVqempdOi5WtUh99qAGAVml7tELtbNj1hpJ+u7zB5ezPxskKUEzIHFMBeWtuep9nwoC+yFJmURLIYlsMReOpnysPLw3/VHuFgGrGyTU8Bgbg6B0LXzsz+wYkmY4vubW/yf8Mv/uniKzL86jjD4f1NNbIu5dpvX127La0O3IW4h6bvK9kD+EvjvvThxwy5u3MFGE3CWhIenyhX1qdUdT0SHMhSaDIgrNyzxnzI1UhOHTSb7yMWyQ7KvTTktuIGChguN7P+oTfp+8yx3j1X+ySqGt0CvMwlYvisPriMhYUJ7gWkgrwyzhd86Uj5Rh4TAtR6IrgMKDvo63hzgF3SPZbqJ97S3H4n6vXp/GGZtO0eGWey3VlUXCDCPR3tQdB11O0GEcaLVdQk+D7FkkKnXeZjLgh4UfYilFuCdeD8A38Ko4496SI3uCTVmXm8G766XhnXRsNKD/B6qy15nbSfLvRB9iDvkncoIXvQhDcjnw9+qq0LarpSpsTrMftUN8mQ1hDrkye57xhhGsG2cICTNlAIa8NTy7L7WdTz7RRLzE5myIHzAuP2IIYNfjPw+hBkz5hcPAXVHXQI8BUb4u5lrh04bJxxxPO8iVMML5u6GLeli9DuFkixdtcx80AdjapAIVdme225ypkycOrZnZx4gRdMyBvnRkrr0/7p/AXYDsr6Zbsn/XAwnMMQdxlExpF7KI6H8S/J/B/Eze0OdGn/lezlbwadIr4VQPaBwyCs4w3kAEWJMJErNMkUqkN49+IpbsQBpXF+Yjma6w5ySOnSX5aI2XcsKnYDQQAAk8AnSxiSZIjfZBvUaq8AYD8GsP6s/GXz6e76qJm7wV0HzOieorzlpYp3i5g463RuC8zzhMkCoo5Z0SHe5BEgvqHVjgh0LT8Smtd0WJIJCCuWyv1MbnsY8k4B8hNBjGjJiQIhUTNhcQG5MKTKxANjgedCL67jCpJrkvD+vTU6RuhOHhie5njf3QBTiPmHHbSSMAIfgUIK5d6fMq25OPBCNx4rfDoUPtucRrgjQRivAZESnBYX7Sngi7ulnGgh5vxTExDQWrQPI5FBmqRQjEZct4AGoAv6he7Wtyx3uPYRQ3Lw2UbN8wnN3bpWISTsLb35NgcbFBsgasLEAWOsmUBIc/OINuzja/TltHqokfP/xiSse2wL17MW1K2NwqJBVnIjwImJvTKh1Ah4qmE+bSqvoxa5QDwUu+7Pa7OIYkCVFDnTCsZAhp2SE3gWZiBBsRHbYZdZf0J+gnd5QDJmPxkz9GyDcjAsX1DBlIzfN7SygUDqw8CNBGjxI5F04PCwot+QKCTfPWP5cljFQylU/A4wwDEMkxEV/QZtenOHdTpzU9jUoDSTE1NICrJ8EUry9NURBo7qzMfMWwWESqAimHyH0Z8br9EuRsZn8gqAUuJoJpPcs9lUTZOYKDc+dHMx+HaEUaxeBgwpqtLRpbI8lKeZcOJc7jhFRYXXpq/D2ZAZyU8PsdnzdlSTJxqJjK8iD551eBzrzWV8H8uLtahHsWYwmaY+s4c+TTAvcYgmbo9Wjq1dRXQLK+eW5yGcyZvc7/ekKA78rayiGzIMzo2uQ+OKlXNnWyUCwBySOkNmj9n6nR7bXk6Z63FJbN/2/7j8aXtv1gEKg7L0FoFQkntfSVdQs0dLpUm1rBCDKaa5c5PZkx+gK28bER7xpuo44G68aaEJjphyt5Uh9MUo4ij/xx3ZT6eXA12UxuCnFdZc7jfsmwoOnoJ9hia2FQ0JW8zaTwfSO0f3KDGgBzqfKOPgfANaDLWTo+ZMZkY4pkABJLDnO0GMxWO1HmkTEIrgnrLBVXHaGlyBuF/AxLJc/eVf0DEL/eWc1VGOnP63NVrVSD5xA5EUQXRURA4EHMzluBUdTnmjGQS/TzIMzw2Dep9hoKJP8ZRwIg7QxNw+I0Ih05QJkjoa5AGCBuUsW9H2GoMoFH1PNLY3VAMICe5pknzNlWBSUBNmqVKt9VNQTW1lqnANW4pr5YLd55SXtj4ukJUunvNnXRjR+Y+UzoT7qK/+8c3SXqyXqndBvUa+dtkwCOJs332qtLpIaGbvtd5uyVFzzmmFIeWESu2p0brdJIUPxGLWsWajeCwLedIJtjv1BKFVluoXGmJ1fZAFH16iw/1bSCStqdHhakUPlnQYmjLSg2iyuOrRSo5UytKbpAA1ZhOYYE42r/rwHd97VqkW/s5c2obtJXK/Rki9TC66GQcw+g7ugHVCC2i+ANWZBTkVIjxZ7fqEEKqWOFU+1Xg3ThWDic84a3N79QmE2ayXJF/xHEitC5uJhXj0+Ao/Pjx+9987tZc/xGjYtRIx7jPf9HXbtynTNsi4QfriHjNlaZ2RcFR4CNWtmNXR/IMKjH0wyc8uko69NRXSIMQrweYWrQDemhLlwQoUa7AZga7d7RZxfwee13L2i5q+4+RrmId2d+W4Lwg+cQMbhqg2I4CUAB5NJJjn6UFK6qdhnykhNoHNVz4dxdI9q4rpATRLNxK6WjqlTmCsAiVXbRuJ1EXyrXQRtlfeugMBBf221y1Z3hvzT/d2mKSl3TFijwnAMWe4CmSFiK5YNQEFqcAI0sfSFdMmsuTkV4GziIfM7AHFFNgsvHNyjS1mcEWOUodbvcB1ZGU814LTq22MgsxMCOZKAjNpbBj7bMh3f2+b9xVlyxyROERfNvXB28GYLMESGQudYbEJi2ENvaJLhBKCMPG1C8yafP+6CguKtOzdlI1YY7jtN6ZijFjS+BuOaFb4HxjHaSA8eigURYl7QALsATYQhPsRJzP97UpDF4ezP6PVjbogkMQKcBmZvgV0MGQ1QvLnAqZZqz+h61XdZHv19rro8LF11x7+pVKS3V21IIZtoBoneom+oEar1SKSf6802iZs0WRXqDaGli3Nqjc0AdldwZyrcvXjg9n/zAIWAyipKbw9AR5eI3uBpOuFGFrrJwNmzLyuAhnIQ27+LQCDxUCDWEeL6bgXC1YflmV9J80WMcuNCypl3b7lBWcoaAhW/ILrFmdcG0ZCLc2qoJCxQelXKHGvmkppvh/AXX0rpEHaYA70PIt/M8oHsWFpM9oXOJPmvW0q0rn3kH/gc9HidZn0OfkUQCs8AVWoqYMc3/Zl1LPqZjVtTCrRKbb+OPmwjPKjbRtfN8ZMrvOZGDO6de8u3i6mtU8Uc2K1Er/uzgP/lO2fNyAb05haHYTWnVjtf/LzfbWP6Vs2rm7TVx0BLCqeJmeappQUNtYGSUq0BIz5QhoV67FtLex+bbBaure6Sv1eXPQ+ChImt4psgvbF6FUJo1oRc50e38yRgzXpTuqi7TrKa0cvWhvjZlbcqMGNlVSw0lCZa4OGLA3qsEmFdJCyY3usrbQM2CP5mvY5C5sHdSXMlBHzdnlRWUu/UvQhjeXU35j0bSwAO9mZmRWUWA7AI0P3i9TmmM+TrGKBDJDCQKBkU266N5nITBqpSQFBG68l0EaNTVZVy+r/VxGGewLW86GT3fUCI2zd57gptqohh5LkH2mWOWZjkP0aNm5bj+RTyC7sHrPC0KuhA1AR5msWJ+dNj5W5v5nUniXnksxUgTkWxcIh4zZ0jf2YA40zHn9TeEWJoa0DhOMpyEGtTCAQroRBEorR+5Ms27mkWjdYxYEKmZe99dv6HgERytl1npWjlwLu4iAckGmStdiepV3h33VlC5RnZLugNmoYcB6KM0AADvUGLF4YA39Js/W84f+MLPppI3wq888i06tY1ESkGLh+y9fmFKrx7uWEhLpfK3Pr2dKSiy3kejiHRrV2zpLX2ocyej6ZjT5wuVEL+L5u2Fdv3VP3O0tldcGSm2brwXnPUemntCp4wtwHeAdSgwMVfRSOiSg82BH7//+2Xb7786MN3Xh9uj3y17Lsiw+RxO4b7Q84aNmzO74f102sidPWN3SFEdI+6IhZDjavYrVfIrDC6tZkRBNUyXp5dV4kJtq5kqHNYFJzdgWS68XdKvAk225gaHGIRfGrhxnfffPbJB+8+3J9PoBCHPHm7/k7+Zlfo9QC5NqnPFjKNvvfZ4AjnZNbWwD2JTHeK8F5kR7HVqB03jqcZI23QXM+E51+hygwBfOcUcPq6nvc4w/2PY0eHb5Vpe1vue83duzvg7vHug9fnm/OBL+d9W2SRBIKw3P3Hee/KMwBff5Bz8z2pmVwogggVBqcb5/+2N+Joch4luET8qKLBFG6zxikittg3eTSBHwS3I72ZAdFafxi6Mlf4vG9OB6e2hzcIBhmNMpmtmO1CDK7X1mnrQvSHsQRBgvu4RnWsIIAIU5GrEihNH12Nia617kO6LLYgDLTriScdHOFckazwWoaCBEH4SKb9fdlwxBg3a/8eza75hAwOANTQFHAhw5yIzPiQiFyQkderSyBuxTI8Cnlr+yttOsp4CoVCl6GBmnJom8vDFz+e76ixqkuEZWEDgiCDdtilaUpENGNvXVEdHCsySv5HQUWe420/4q1LEPnQpYsjxKhfdAVKvC0yF3Ub9uLQWp/1bQd1QEYLz7a1xhGT6X2zYao55kzEoZDlRB2RwNf4xu6KDHRbayD0kXA+Wo+g5HPU8jyuvSVKEmz2jCGaDpF/Hysc1ROliF7b4eFGVX+518LzfUuRTgZc9Hdok9sh30PO10V9UIe1TyBL5BSxoyuvUooVUB96rMhphOf6ThEq9OrLpWuAOglwopE/0ZkUkIpNiUSPVpWivleEhUPcyggvChxnWJ5598WcNqCnZw65fDwdkgVwl2b9yiElj+R3VIpegqXEErcXmCXQ0fabe+Z5QP32m1oRsgTxQbOI0H5ToxObSokIpeIm079SneqVAnulVAt3rqBHbi/3Q0833UYKnSg5pHaGWbV2+MZNqleSRC4nQk39TYPUwvkeXoAX/3NYQb5GxZOC8Cl776dgrxUdyjav2rrVmzbwGioW8Pb/6hBDMPmOjZo+aEb7xcNx//S67MxphSIlOIwAaQkPo0JihdO755fi53IGRJSA6mw6pn1TDckGlTmW10TGl9lCPEHC4Nq1uYy40/IT3k2J1xfTm4U4FaMeRIlUbdmebqMFx93QjQYblpbtN+z9z9rFrWuBsBn8gHOIXJF63PVBlWi5fH5dG4HjMemf3UmxpjHURXgWnltyuAexuhYLP6JLBXIN26+tZZWb6F+hOyih+4GgxRXMakcnHXJpWItXmVX/KlrXUxnBzUeXjc7l1xZDr/f8OihZ1CD7nL2Gw4NghwdxdG0r07FvcXrLt7OhKiBSCgSKFxmLrkJeoYmmYdVSk6+Gvnve5+8Kt8NlMeyT6FfMf17JEVvSlmJtUn8xIvtnFP6fCvg82aiOKzTsU4ZFnzmR3kuID7X3dnBncEIX+tyLf8IueWubmeO/EVsfInnE8g6oGP7hrrRY/oUMgHJocMGovzdcD5er0w3fi3LWWmo3ADg31mNsWmTLoM+r+ZjJIi/yZqa+X+8/vwwtkyKSE3e8th0AnAo/LQJtGmN7esrHNauSvLj920XizCsPDiDByG6QJLGMCktfJ/fATHRftwm9+Km5xUnkxi+inctDQCImFKHdri+tuCGf8BIwm2h63s/HtHf/J+Gn/98KUd80edfRkAQwypI5u/xkfxa9ni7vCJqQ2/ISi5KwvVbthINL5b//dr4L/Sm6M3uzRtEeX0gpYDkiYuxb62+nfTAIfWBhrqonILuo+Gpta5IAIuuTN7kOs/8ZjrDzVKeJ/bykRvZyaj/9+M3XH3347svD/eW424QUDM/HRKE8rO6UcVITIqRZ8MT8ENXUpV0sZg+uP6MKM+KNYgDkQ82+dQiorqvACI31/juJ+JjIbzYAKIO06yxsPVwvGqDXmep/7/Asqi+jQwQDgBSCEBAWAzI2DzGYMUVW/9Wb9yiCePaZ8lL+kIO7M51yVLP2dUs+tC7qonteNBSitWRinWDCJ0u7oaXlC8PB9ITjTUn1jn1y3u5TOnLNeoU+i2wzmsCkwtA12R6cxsNAsxplY/Y6dlmtpco047AnW06+W2BWs5wXPbxFJAezvrJxNGRrvtTtbGCjJM/FwipWrrmAQV5cWzeXeg9EsO6haTLYkJHV7SClIAJSbZbWxxjbaeTMa5fTmx85lJwhJtJeOesAuQww+brFh08QyYk2DDfcvF781G1PyaSwzTdqxPLddbArCXnYGgLf7sgLbyGA4uap8Ezm9sN7L0/Lue/ahuIh3c37FU9vEnkccT3DUAxEMoGHlHGjPyQnBOhJc4yAYufkZr8bt1SoGT6bvWih1K0RotyHw8111bDlU1Af1RkzlqDx4Q6RqlHLfiQarfCyiNbImbik1hch30xmNgMm1ogTw3760lx4BcDnfPHx/Zfnuxvd+0ggDiJLDDY1JhKcrxYgX26mkNVKIcRsFkIqLrkfcEdB/w5aSsrEatIfjldkZuGsDSNCupK3FGLBnx6ItA0l4vmJe7DFJ1KwHmwePJxDBJUU+IlHSYembLQxa9oJo25f7y6hTmJSfI3/xhUBwc+QPxj2oZzRZhi9ntxxjZ7z4NCCmIGLSb4VtppEJNytWtVRefcvg8JnTqVB5BqgGOLeRGVG3vRp0uRZSbWdCjN0ZiNJ7Ppu2uwSO8KNxo2h0bxR9EpW2p6btD8BLaHPP/V9WQmfSUMKQtOyCU7W5CMTbZfTVdgIYzLbv4NIY0umhCQSTKqLnz/Myn/IR1hnzZ4IQMrYXQgIxBT0MIBUBBvXvvaEIyHXuIS6Dqgw99amA6dgKcv2Yu8FZJ99tnkmAdNDeoBkSRPLfF0hitdDSOwZvZxNtutUtF6/FtMosaXCwwQWfEKIbZyT9sKGoOz/f16O+yPyzJ4smaxtQ9fE187vQBOV2rU1j2VXbt5/zOPxKok4HJNpY1QtPs60MDxM3mfZ48GQnJMT37bfZW+75pE+dBLdryJgBRx6IDnNhnVXzGur6dYwjdYTcVk5eP0DXli1Wlq5p4/X5KR80v4T0s2zQ6rLySC0UJvKSkGiBL5GqbXsvpa1g1rqTq8HGDUdSfSI3TI9/y33mL4MX0JQk9vq/YcCPA/5hFc//BD48O/Dn7/+Eu/z3nGjf9KotjHd+Yp3580QX+48XCkc7eDCK4EYC4vphX35C3i1DQoTAmXSX7i7MC+dTrPZH6+nl9lxdugE8QtdHybfupvIlzKgRAGO5Q/g8H33XSVKXdIpyk9Qc4Egp7vO8bXOMMDu78oIQpTwPqVGqQcFKqLi4FQ1cAUivMEGYk3465UV0U9aK385HD5sbNK+iXmrFXom1qz69AQ8fTx98eH7GHgnxtyhkHAVEhX9JyVZCHBaNoFUupKxrhaixicoSNzcXjLKQ6wzNtc2lTDp3RI294rQvJH4qo0j3a3IgxPu2q/DgcG+t++O+3Uy9nWh8PA8PE5CtWChW6l7UE6sVq/tUa/dTXbPEJliudsLZFq2LlfIaHnbE25xu8hrJGkqNEyQpwGDMAIBmgLuAZedHLYPyFSedHCE4oAQjeHWLPyOn89vL7v1NDRVpm5KsCDb633eNPHmyrRILp67EDV4W6J+Xi2BxO4/OZDRHMFOf3jcrEgKJFyUCx6htptCI6shuUWj5TuCkBhYM2e203sFIFsxDN5nAC/H9Gg9QR0g5JAJfYJ6mp1Ko7ozP9LlovLhk3pgMMtYSeEKq6Vx0U6mFxUSD1OHfabjreJ6pHrP67PQYe7bcgfLQfk1IUE6d1tsWYfMwXMT4zRVI6p++csXAuD7c/jrZF7IsF8XlS3Xyruw2W+CPShuBAjk5HMHztHun6yr/DMU6iXgm0n/3Xi8uOuTKav+qyoxfDpSBSYhAAELlIoPf1hQ7nho/+zM9gTrozXKWolOWQ/Icl5I7rIWHW8Jyb9rOge7zReN6P2Eh0DBoebgnjczjjNQc674BSYjfIsPWXMVZRLi7NlFMJm3FfMFyp9lyQ3TiT8QwLO/yVhbafOAU+4U+U30OcsTOINg7fsGucCWgzzgAoyv6Whekian0OhpNje42cEZyBLqhzkCqAsxV/rqKjTNGTYnWD3mXVvZoilu+TSP7Iu8OFSHVrwoIGdYc9E0Ucca5lzL8+PyVNDvaV66m7JC3yJ7cVlP/tLT6PIXTr4uqu1CBpIwf8fwhTwyxi15xrw4Za6pV85ImNWccpQp93E5zjMneGYZGp3lkUM0eZeNIQHs4ANaCLdDDRD0ryeeSQe12eQhgTzMjOEk8Fd6GFBrwAsP1AEgM7v4CXO/83OUvC6SDxAYXeHqBIs/TG5zrUNckwZxrO6kvjKNG9xTkjG9FJVgzSLKosM33OBZ0anJKHue1T52RjQ7XnV8ro24amSJPsjmUegA96M6IB8LKo5IYT4xiMGaFGZRRJN3MjKxciVJMXmv5kfWIsCGlVlsXqHO04xedgmzqAz4yNzJ+XG2AU7wRP5JXnaW/IKX/VyG/Kw5hytW0pThMghyBM5aRlKXgxVp8P+HQE+GqBlW4VtTIuAHKIQTzj2189TGYaJOlWYcfqF1WapVMOBixkGQ2XXDmI+HcJFpPHDNTHY0GpisFAVHAgDXBFaegwJcfg4hdfQ5lBQDamnjcxgGxc9h2QWZ0l0enKxb2+EQwa+4qyJdVKhmN0W16WpWC7Mu1LiMn1wpsiQoYLMamZ4S/Y5axUqga76Yr6aNWRNvJtRmtW62qEWXhCTid2rhzyaIXZhcMVIz+RK03q9ngfxMme6ORLtSHMjSrN5CjF0Ove++KMtLY4sAdv5CWTTTocQjuZlHmTqVEEVRmXjdhSjP1x1dWXjl1+7amGU7Yst0V8hmkd2sCYnKjGNXW3iOXGPE/vvqCwL8kmd2kAKC4uaUEwqtV2SDSdx5KObpFS8lTjrtjMasvPk465zzLvBdBppZ2pBFjjUqc8VkG20SiIcbJFiIUGGuuqbcdeEiRIryRrQkzlSqdedbJFmKOqleS+PIwS9cZ+kyZMpyQzc99AwE3WUHhhy5AZCniV7y9dZXP30s1t9mTTUs1OwXY7SWWhlgkMEGaq2Nttp5a4/2DqkPGXnIRwEKYb4FlFTUy11jS0X7/7WgKEYJSlGGcnQMTCxsHFxZePiy5ciVR0BIRExCSkYuXwGFQkXt88Xv/kAn48RsLdpSLpY4YiQJlkIsEbEOOokRRx5lW2yV4Khjttluh51WW+OAgxjC+CppmP148Wu4GVEl9d4Hz7Bw1shUyxSIjzo+VwKjjDDWGOMMjYa2jl5GR6+MgZFJuQqVqlSrabz7bpog0W33PMXPnaM+H623ZPLUzsn1YS9lRn+vSqM1wJNTUweo7qSnZHJvdzuCJ/Fkb4c8+cGP2p3sq6/eofydJ34DOHlqf1f9DszUlrp08oeG8prKLU/voOl+vHeWrx0dchnobE9/7zhLS8orPhyq8xAHFnG6pTk3uMw4oatDV3+cyPEKDUGHAARdYBMAcBNyAQQ25hZzg8pqEoomoH03Sy2jZ/b/icZKluweZT0cFfwbDZKuXo1GrY9O6smvx90iL0mdXbiU1SZk6/ValXGqgfbHvQvb81M6aO2dg4nUDLZGfAQLbaB3cmo3RJfWQ4Cz7q6Ws05CuerUWc+vY510XYAyX+LkvvqbIk445LRaalOTs9/gbfsCyRtwHhOsmGPras+o/CzZ5SvrAMIjpwiUdUK3CkewFecWb/tG49v8yrQrU65MmDFEFeJSxLUMTT9QYPunh8iyfRpft5c9q6hYyrt/I6EaBNsf0vV0syn4j0NwZL7tt/442V/2ULWvKnfVKhj+BqTWl0wseSpWPy3V4GddaoKQtD0A";
+
+function installerPolice() {
+  if (typeof document === "undefined" || !document.head) return;
+  if (document.getElementById("gazon-intelligent-police")) return;
+  const style = document.createElement("style");
+  style.id = "gazon-intelligent-police";
+  style.textContent = `@font-face { font-family: "Barlow Condensed"; font-style: normal; font-weight: 600; font-display: swap;
+    src: url(data:font/woff2;base64,${POLICE_CONDENSEE_BASE64}) format("woff2"); }`;
+  document.head.appendChild(style);
+}
+
 const STYLES = `
 :host {
   display: block;
@@ -1443,6 +1472,15 @@ const STYLES = `
   height: 100dvh;
   --gz-accent: var(--gazon-accent, #10b981);
   --gz-accent-fort: #059669;
+  /* La pelouse tondue du bandeau : deux verts voisins, une craie pour les traits, une police
+     condensée pour les phrases et les chiffres (repli sur ce que l'appareil sait faire). */
+  --gz-gazon-a: #2d6832;
+  --gz-gazon-b: #357439;
+  --gz-craie: #f4f7ee;
+  --gz-ciel: #7cc8e8;
+  --gz-soleil-peint: #f2c75c;
+  --gz-encre-nuit: #0e2a38;
+  --gz-police-aff: "Barlow Condensed", "Roboto Condensed", "Arial Narrow", sans-serif-condensed, var(--paper-font-headline_-_font-family, Roboto), sans-serif;
   --gz-accent-doux: color-mix(in srgb, var(--gz-accent) 14%, transparent);
   --gz-eau: #3b82f6;
   --gz-eau-doux: color-mix(in srgb, var(--gz-eau) 32%, var(--gz-carte));
@@ -1469,6 +1507,9 @@ const STYLES = `
   -webkit-font-smoothing: antialiased;
 }
 :host([sombre]) {
+  --gz-gazon-a: #1b3a20;
+  --gz-gazon-b: #21452a;
+  --gz-craie: #eef4e9;
   --gz-nuit: #475569;
   --gz-racine: #ca8a04;
 }
@@ -1571,24 +1612,24 @@ ha-icon { --mdc-icon-size: 20px; display: inline-flex; width: var(--mdc-icon-siz
 
 /* ── Onglets ── */
 .onglets {
-  display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none;
-  scroll-snap-type: x proximity; padding: 2px;
+  display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none;
+  scroll-snap-type: x proximity;
   position: sticky; top: var(--header-height, 56px); z-index: 4;
-  background: var(--gz-fond); margin: 0 -24px; padding: 8px 24px;
+  background: var(--gz-fond); margin: 0 -24px; padding: 0 24px; border-bottom: 1px solid var(--gz-trait);
 }
 .onglets::-webkit-scrollbar { display: none; }
 .onglet {
   scroll-snap-align: start; flex: none;
   display: inline-flex; align-items: center; gap: 8px;
-  padding: 10px 14px; border-radius: 14px; border: 1px solid var(--gz-trait);
-  background: var(--gz-carte); color: var(--gz-doux);
-  cursor: pointer; font-size: 14.5px; font-weight: 500; position: relative;
-  transition: background .15s, color .15s, border-color .15s;
+  padding: 12px 14px 11px; border: none; border-bottom: 3px solid transparent; margin-bottom: -1px; border-radius: 0;
+  background: none; color: var(--gz-doux);
+  cursor: pointer; font-size: 16px; font-weight: 500; position: relative;
+  transition: color .15s, border-color .15s;
 }
 .onglet:hover { color: var(--gz-texte); }
 .onglet:active { background: var(--gz-surface); }
-.onglet[aria-selected="true"] { background: var(--gz-accent); border-color: var(--gz-accent); color: #fff; }
-.onglet[aria-selected="true"]:active { background: var(--gz-accent-fort); }
+.onglet[aria-selected="true"] { color: var(--gz-texte); border-bottom-color: var(--gz-accent-fort); }
+:host([sombre]) .onglet[aria-selected="true"] { border-bottom-color: var(--gz-accent); }
 .onglet .compteur {
   min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px;
   background: var(--gz-ambre); color: #1f2937; font-size: 12px; font-weight: 700;
@@ -1981,30 +2022,36 @@ input[type="range"][disabled] { cursor: default; opacity: .5; }
 .bascule-vues button:active { background: var(--gz-piste); }
 .panneau { display: flex; flex-direction: column; gap: 16px; }
 .onglet .signal { width: 8px; height: 8px; border-radius: 50%; background: var(--gz-eau); }
-.onglet[aria-selected="true"] .signal { background: #fff; }
 .onglet .signal.violet { background: var(--gz-produit); }
 
-/* ── Bandeau « En ce moment » ── */
+/* ── Bandeau « En ce moment » : une pelouse tondue dont les 24 bandes sont les 24 heures ── */
 .en-ce-moment {
-  --ton: #059669;
-  border-radius: var(--gz-rayon); padding: 20px 22px; color: #fff; background: var(--ton);
-  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px 24px; align-items: start;
+  --ton: var(--gz-gazon-a); --ton-b: var(--gz-gazon-b); --mx: 22px; --my: 20px;
+  border-radius: var(--gz-rayon); padding: var(--my) var(--mx); color: var(--gz-craie); background-color: var(--ton);
+  background-image: repeating-linear-gradient(90deg, transparent 0, transparent calc(100% / 24), var(--ton-b) calc(100% / 24), var(--ton-b) calc(100% / 12));
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px 24px; align-items: start; overflow: hidden;
 }
-.en-ce-moment.eau { --ton: #2563eb; }
-.en-ce-moment.alerte { --ton: #d97706; }
-.en-ce-moment.danger { --ton: #dc2626; }
+.en-ce-moment.eau { --ton: var(--gz-gazon-a); --ton-b: var(--gz-gazon-b); }
+.en-ce-moment.alerte { --ton: #4b5c4c; --ton-b: #526554; }
+.en-ce-moment.danger { --ton: #6e5b28; --ton-b: #7b6630; }
+:host([sombre]) .en-ce-moment.alerte { --ton: #26352a; --ton-b: #2c3d31; }
+:host([sombre]) .en-ce-moment.danger { --ton: #4e4121; --ton-b: #5a4b27; }
 .maintenant-principal { display: flex; gap: 16px; align-items: flex-start; min-width: 0; }
 .maintenant-icone {
   width: 58px; height: 58px; border-radius: 18px; flex: none;
   background: rgba(255, 255, 255, .18); display: flex; align-items: center; justify-content: center; --mdc-icon-size: 34px;
 }
-.maintenant-sur { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; opacity: .85; }
-.en-ce-moment h2 { margin: 2px 0 4px; font-size: 22px; font-weight: 700; line-height: 1.2; text-wrap: balance; }
-.en-ce-moment p { margin: 0; font-size: 14px; line-height: 1.4; opacity: .95; max-width: 60ch; }
-.en-ce-moment .puces { margin-top: 12px; }
-.en-ce-moment .puce { background: rgba(255, 255, 255, .18); color: #fff; }
-.en-ce-moment .progression { background: rgba(255, 255, 255, .28); margin-top: 12px; }
-.en-ce-moment .progression i { background: #fff; }
+.en-ce-moment .maintenant-icone { display: none; }
+.maintenant-sur { font-size: 15px; font-weight: 400; opacity: .88; }
+.en-ce-moment h2 {
+  margin: 4px 0 6px; font-family: var(--gz-police-aff); font-size: clamp(38px, 7cqi, 76px); font-weight: 600;
+  line-height: .96; letter-spacing: -.005em; text-wrap: balance;
+}
+.en-ce-moment p { margin: 0; font-size: 17px; line-height: 1.45; opacity: .95; max-width: 56ch; }
+.en-ce-moment .puces { margin-top: 14px; }
+.en-ce-moment .puce { background: rgba(14, 20, 16, .22); color: var(--gz-craie); border: 1.5px dashed rgba(244, 247, 238, .55); }
+.en-ce-moment .progression { background: rgba(244, 247, 238, .28); margin-top: 12px; }
+.en-ce-moment .progression i { background: var(--gz-craie); }
 .maintenant-session { display: flex; align-items: center; gap: 12px; margin-top: 10px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
 .bouton-blanc {
   border: none; border-radius: 11px; padding: 9px 14px; cursor: pointer;
@@ -2016,11 +2063,44 @@ input[type="range"][disabled] { cursor: default; opacity: .5; }
 .bouton-blanc[disabled] { opacity: .6; cursor: default; }
 .meteo { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; text-align: right; }
 .meteo-haut { display: flex; align-items: center; gap: 9px; --mdc-icon-size: 36px; }
-.meteo-temp { font-size: 26px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+.meteo-temp { font-family: var(--gz-police-aff); font-size: 32px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
 .meteo-libelle { font-size: 12px; opacity: .9; margin-top: 2px; }
 .meteo-ligne { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 11px; font-size: 12px; opacity: .95; --mdc-icon-size: 14px; }
 .meteo-ligne span { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .meteo-heure { font-size: 12px; opacity: .85; }
+
+/* ── La frise des 24 heures, pleine largeur au bas du bandeau ── */
+.ruban-jour { grid-column: 1 / -1; position: relative; margin: 6px calc(-1 * var(--mx)) calc(-1 * var(--my)); padding-top: 38px; }
+.ruban-jour .rang { margin-bottom: 12px; }
+.ruban-jour .rang-t { display: flex; flex-wrap: wrap; align-items: baseline; gap: 1px 12px; padding: 0 var(--mx); margin-bottom: 6px; max-width: 68%; font-size: 14px; }
+.ruban-jour .rang-nom { font-weight: 600; font-size: 15px; }
+.ruban-jour .rang-cap { opacity: .86; }
+.ruban-jour .piste { position: relative; height: 28px; }
+.ruban-jour .bande { position: absolute; top: 0; bottom: 0; border-radius: 4px; }
+.ruban-jour .b-eau { background: var(--gz-ciel); border: 1.5px solid var(--gz-craie); }
+.ruban-jour .b-eau.faible { opacity: .55; }
+.ruban-jour .b-ouvert { background: var(--gz-craie); }
+.ruban-jour .b-ouvert.faible { opacity: .5; }
+.ruban-jour .b-ferme { border: 1.5px dashed rgba(244, 247, 238, .82); background: repeating-linear-gradient(135deg, transparent 0 6px, rgba(244, 247, 238, .32) 6px 7.5px); }
+.ruban-jour .b-soleil { bottom: auto; height: 9px; border-radius: 5px; background: var(--gz-soleil-peint); }
+.ruban-jour .b-live { background: var(--gz-craie); border: 1.5px solid var(--gz-craie); animation: pouls-ruban 1.6s ease-in-out infinite; }
+.ruban-jour .soleil-nom { position: absolute; top: 13px; font-size: 12px; line-height: 1; }
+.ruban-jour .maintenant { position: absolute; top: 26px; bottom: 26px; width: 0; border-left: 2px solid var(--gz-craie); z-index: 3; pointer-events: none; }
+.ruban-jour .maintenant span {
+  position: absolute; top: -26px; left: 0; transform: translateX(-50%); background: var(--gz-craie); color: var(--gz-gazon-a);
+  font-size: 13px; font-weight: 600; line-height: 1; padding: 5px 8px; border-radius: 5px; white-space: nowrap;
+}
+.ruban-jour .echelle { position: relative; height: 28px; }
+.ruban-jour .echelle span { position: absolute; top: 5px; transform: translateX(-50%); font-size: 12px; opacity: .82; font-variant-numeric: tabular-nums; }
+.ruban-jour .echelle span::before { content: ""; position: absolute; left: 50%; top: -5px; height: 4px; border-left: 1px solid rgba(244, 247, 238, .55); }
+.ruban-jour .echelle span:first-child { transform: none; left: var(--mx) !important; }
+.ruban-jour .echelle span:last-child { transform: translateX(-100%); left: calc(100% - var(--mx)) !important; }
+.ruban-jour .echelle span:first-child::before, .ruban-jour .echelle span:last-child::before { display: none; }
+@keyframes pouls-ruban { 50% { opacity: .55; } }
+@container page (max-width: 640px) {
+  .ruban-jour .echelle span.mi, .ruban-jour .soleil-nom { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { .ruban-jour .b-live { animation: none; } }
 
 /* ── Bulletin ── */
 .bulletin {
@@ -2787,8 +2867,8 @@ dialog.dialogue > form { display: flex; flex-direction: column; min-height: 0; m
 
 @container page (max-width: 900px) {
   .en-ce-moment { grid-template-columns: minmax(0, 1fr); }
-  .en-ce-moment h2 { font-size: 19px; }
-  .en-ce-moment p { font-size: 13px; line-height: 1.35; }
+  .en-ce-moment h2 { font-size: clamp(34px, 9cqi, 52px); }
+  .en-ce-moment p { font-size: 15px; line-height: 1.4; }
   .meteo-temp { font-size: 22px; }
   .meteo { align-items: flex-start; text-align: left; }
   .meteo-ligne { justify-content: flex-start; }
@@ -2863,8 +2943,9 @@ dialog.dialogue > form { display: flex; flex-direction: column; min-height: 0; m
     font-size: 9.5px; line-height: 1.2; white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis;
   }
-  .en-ce-moment h2 { margin: 1px 0 2px; font-size: 16.5px; line-height: 1.15; }
-  .en-ce-moment p { font-size: 11.75px; line-height: 1.3; }
+  .en-ce-moment { --mx: 12px; --my: 10px; }
+  .en-ce-moment h2 { margin: 1px 0 2px; font-size: 28px; line-height: 1; }
+  .en-ce-moment p { font-size: 13px; line-height: 1.3; }
   .maintenant-icone { width: 34px; height: 34px; border-radius: 10px; --mdc-icon-size: 20px; }
   .en-ce-moment .puces {
     display: flex; flex-wrap: nowrap; gap: 5px; margin-top: 7px;
@@ -2935,8 +3016,7 @@ dialog.dialogue > form { display: flex; flex-direction: column; min-height: 0; m
 .resultat-titre, .intro-onglet p, .bouton-texte { font-size: 13.5px; }
 .resultat-chemin, .puce, .groupe-installation h2 { font-size: 12px; }
 .accueil h2, .produit-bandeau h2 { font-size: 17px; }
-.en-ce-moment h2 { font-size: 20px; }
-.en-ce-moment p { font-size: 13.5px; }
+.en-ce-moment p { font-size: 16px; }
 .accueil p, .section-tete p, .mode-detail-tete p, .mode-liens,
 .mode-action-corps > p, .liste-simple li, details.pourquoi, .vide { font-size: 13px; }
 .section-tete h3, .mode-detail-tete h3 { font-size: 16px; }
@@ -2975,8 +3055,7 @@ dialog.dialogue > form { display: flex; flex-direction: column; min-height: 0; m
   .page { font-size: 13.25px; }
   .barre h1 { font-size: 17.5px; }
   .accueil h2, .produit-bandeau h2 { font-size: 16.5px; }
-  .en-ce-moment h2 { font-size: 18px; }
-  .en-ce-moment p { font-size: 12.75px; }
+  .en-ce-moment p { font-size: 15px; }
   .section-tete h3, .mode-detail-tete h3 { font-size: 15.5px; }
   .ligne-textes h4, .historique b, .catalogue li b, .session-quand { font-size: 14px; }
   .tuile-valeur, .etat-bandeau b, .machine-texte b { font-size: 18px; }
@@ -2996,8 +3075,7 @@ dialog.dialogue > form { display: flex; flex-direction: column; min-height: 0; m
   .champ input:not([type="checkbox"]):not([type="radio"]), .champ select, .champ textarea { font-size: 16px; }
   .resultat-titre, .intro-onglet p, .bouton-texte { font-size: 13px; }
   .accueil h2, .produit-bandeau h2 { font-size: 16px; }
-  .en-ce-moment h2 { font-size: 16.5px; }
-  .en-ce-moment p { font-size: 11.75px; }
+  .en-ce-moment p { font-size: 13px; }
   .accueil p, .section-tete p, .mode-detail-tete p, .mode-liens,
   .mode-action-corps > p, .liste-simple li, details.pourquoi, .vide { font-size: 12.5px; }
   .section-tete h3, .mode-detail-tete h3 { font-size: 15px; }
@@ -3029,6 +3107,260 @@ dialog.dialogue > form { display: flex; flex-direction: column; min-height: 0; m
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
 }
+
+/* ── Refonte 1.0 : les instruments, le bulletin, les actions et les titres ──
+   Ce bloc est volontairement à la fin : il dit le nouveau dessin, les règles d'avant restent la base. */
+.section-tete h3, .bulletin h3 { font-family: var(--gz-police-aff); font-size: 22px; font-weight: 600; letter-spacing: .01em; line-height: 1.1; }
+@container page (max-width: 900px) { .section-tete h3, .bulletin h3 { font-size: 20px; } }
+.instruments { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.instruments .section { margin: 0; }
+
+/* Bulletin : de la prose posée sur la page, sans cadre ni icône. */
+.bulletin { background: none; border: none; border-radius: 0; padding: 4px 2px; }
+.bulletin-icone { display: none; }
+.bulletin p { font-size: 17px; line-height: 1.5; max-width: 58ch; }
+
+/* Réserve du sol : une éprouvette, le trait rouge en travers. */
+.tuile.reserve .tuile-valeur { font-family: var(--gz-police-aff); font-size: 56px; font-weight: 600; line-height: .95; }
+.tuile.reserve .tuile-valeur small { font-size: .4em; font-weight: 500; color: var(--gz-doux); }
+.eprouvette-ligne { display: flex; align-items: flex-end; gap: 18px; padding-top: 6px; }
+.eprouvette { position: relative; width: 150px; height: 170px; flex: none; }
+.eprouvette-tube {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 54px; overflow: hidden;
+  border: 2px solid color-mix(in srgb, var(--gz-texte) 28%, var(--gz-carte)); border-radius: 27px 27px 12px 12px; background: var(--gz-surface);
+}
+.eprouvette-tube i {
+  position: absolute; left: 0; right: 0; bottom: 0; transition: height .4s;
+  background: repeating-linear-gradient(0deg, rgba(255, 255, 255, .1) 0 6px, transparent 6px 12px), var(--couleur, var(--gz-eau));
+}
+.eprouvette-seuil { position: absolute; left: 0; width: 66px; border-top: 2px solid var(--gz-rouge); }
+.eprouvette-seuil span { position: absolute; left: 70px; top: -10px; width: 80px; font-size: 12.5px; line-height: 1.2; font-weight: 500; color: var(--gz-rouge); }
+
+/* Risque : quatre crans, le niveau actuel allumé. */
+.echelle-risque { list-style: none; margin: 4px 0 2px; padding: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.echelle-risque li {
+  padding: 6px 4px; text-align: center; font-size: 13px; border-radius: 6px;
+  background: var(--gz-surface); color: var(--gz-doux); border: 1px solid var(--gz-trait);
+}
+.echelle-risque li.on { background: color-mix(in srgb, var(--gz-ambre) 18%, var(--gz-carte)); color: #92400e; border-color: var(--gz-ambre); font-weight: 600; }
+.echelle-risque li.on.bas { background: color-mix(in srgb, var(--gz-accent) 16%, var(--gz-carte)); color: var(--gz-accent-fort); border-color: var(--gz-accent); }
+.echelle-risque li.on.haut { background: color-mix(in srgb, var(--gz-rouge) 16%, var(--gz-carte)); color: #b91c1c; border-color: var(--gz-rouge); }
+:host([sombre]) .echelle-risque li.on { color: #fbbf24; }
+:host([sombre]) .echelle-risque li.on.bas { color: var(--gz-accent); }
+:host([sombre]) .echelle-risque li.on.haut { color: #f87171; }
+
+/* Eau de la semaine : le repère est un trait pointillé, la barre est plus franche. */
+.budget-rail { height: 18px; border-radius: 9px; border: 1.5px solid color-mix(in srgb, var(--gz-texte) 22%, var(--gz-carte)); overflow: visible; }
+.budget-rail i { border-radius: 7px; }
+.budget-plancher { width: 0; margin-left: 0; border-left: 2px dashed var(--gz-texte); background: none; border-radius: 0; }
+
+/* Échéances : deux lignes, sans carte dans la carte. */
+.tuiles.echeances { grid-template-columns: 1fr; }
+.section .echeances .tuile { background: none; border: none; border-top: 1.5px dashed color-mix(in srgb, var(--gz-texte) 24%, var(--gz-carte)); border-radius: 0; padding: 12px 0 4px; }
+.section .echeances .tuile:first-child { border-top: none; padding-top: 2px; }
+
+/* Actions : des rangées, la principale pleine. */
+.actions-grille { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.action {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 12px; row-gap: 1px; align-items: center;
+  min-height: 0; padding: 12px 14px; border-width: 1.5px; border-radius: 12px; background: transparent;
+}
+.action-icone { grid-row: 1 / 3; width: 36px; height: 36px; }
+.action b { grid-column: 2; align-self: end; }
+.action small { grid-column: 2; align-self: start; }
+.action.eau { background: var(--gz-eau); border-color: var(--gz-eau); color: #fff; }
+.action.eau small { color: rgba(255, 255, 255, .88); }
+.action.eau .action-icone { background: rgba(255, 255, 255, .2); color: #fff; }
+.action.eau:hover { background: color-mix(in srgb, var(--gz-eau) 88%, #000); }
+
+/* Fenêtres de confirmation : un titre en condensé, de l'air, des quantités en pastilles. */
+dialog.dialogue { border-radius: 20px; box-shadow: 0 24px 80px rgba(0, 0, 0, .4); }
+dialog.dialogue::backdrop { background: rgba(10, 18, 12, .6); }
+.dialogue-tete { align-items: flex-start; padding: 22px 16px 6px 24px; }
+.dialogue-tete .action-icone { display: none; }
+.dialogue-tete h2, :host([narrow]) .dialogue-tete h2 {
+  font-family: var(--gz-police-aff); font-size: 31px; font-weight: 600; line-height: 1.05; letter-spacing: .005em; text-wrap: balance; padding-top: 2px;
+}
+.dialogue-corps { padding: 8px 24px; gap: 18px; }
+.dialogue-corps > p, :host([narrow]) .dialogue-corps > p { font-size: 15px; }
+.dialogue-pied { padding: 16px 24px 22px; border-top: none; }
+.dose output { font-family: var(--gz-police-aff); font-size: 46px; font-weight: 600; line-height: 1; }
+.raccourcis { gap: 8px; }
+.raccourcis .petit-bouton { border-radius: 999px; padding: 7px 14px; font-weight: 600; }
+.raccourcis .petit-bouton[aria-pressed="true"] { background: var(--gz-texte); color: var(--gz-carte); border-color: var(--gz-texte); }
+.choix-mode { border-width: 1.5px; border-radius: 12px; padding: 11px 14px; }
+.plan-zones { border-width: 1.5px; border-radius: 12px; }
+.effet-semaine { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; border-radius: 12px; background: var(--gz-surface); border: 1px solid var(--gz-trait); }
+.effet-semaine p { margin: 0; font-size: 15px; color: var(--gz-texte); }
+.effet-semaine .note.alerte { padding: 0; background: none; color: var(--gz-rouge); }
+
+/* Onglet Arrosage : le verdict est la phrase de la page, la frise est faite de bandes de gazon. */
+.section.tete-onglet { background: none; border: none; border-radius: 0; overflow: visible; padding: 4px 2px; }
+.tete-onglet .etat-bandeau { padding: 0 0 6px; }
+.tete-onglet .etat-icone, .tete-onglet .etat-bandeau small { display: none; }
+.tete-onglet .etat-bandeau b {
+  font-family: var(--gz-police-aff); font-size: clamp(36px, 8cqi, 64px); font-weight: 600; line-height: .96; margin: 0; text-wrap: balance;
+}
+.tete-onglet .etat-bandeau p { font-size: 17px; color: var(--gz-texte); max-width: 56ch; margin-top: 12px; }
+.tete-onglet .rangee-boutons { padding: 8px 0 4px; }
+.tete-onglet .travail, .tete-onglet .plan, .tete-onglet .deroule { margin-inline: 0; }
+.frise-rail {
+  height: 26px; border-radius: 6px; background-color: var(--gz-gazon-a);
+  background-image: repeating-linear-gradient(90deg, transparent 0, transparent calc(100% / 24), var(--gz-gazon-b) calc(100% / 24), var(--gz-gazon-b) calc(100% / 12));
+}
+.frise-rail i { top: 3px; bottom: 3px; box-shadow: 0 0 0 1.5px var(--gz-craie); }
+.session-quand { font-family: var(--gz-police-aff); font-size: 20px; font-weight: 600; letter-spacing: .01em; }
+.session-mm { font-family: var(--gz-police-aff); font-size: 28px; font-weight: 600; }
+
+/* Le débit d'une zone, modifiable d'un clic. */
+.lien-debit {
+  display: inline-flex; align-items: center; gap: 4px; padding: 0; border: none; background: none; cursor: pointer; font: inherit; color: var(--gz-doux);
+  border-bottom: 1.5px dashed color-mix(in srgb, var(--gz-texte) 35%, var(--gz-carte)); --mdc-icon-size: 14px;
+}
+.lien-debit:hover { color: var(--gz-texte); border-bottom-color: var(--gz-texte); }
+.nombre-unite { display: flex; align-items: center; gap: 10px; }
+.nombre-unite input { width: 120px; }
+.dialogue-corps details.pourquoi { border-top: 1.5px dashed color-mix(in srgb, var(--gz-texte) 24%, var(--gz-carte)); padding: 12px 0 0; font-size: 14.5px; }
+.dialogue-corps details.pourquoi summary { font-size: 14.5px; }
+.dialogue-corps details.pourquoi[open] { display: flex; flex-direction: column; gap: 12px; }
+.dialogue-corps details.pourquoi > * + * { margin-top: 12px; }
+.pas-liste { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 4px; font-size: 14.5px; list-style: decimal; }
+.deux { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@container page (max-width: 640px) { .deux { grid-template-columns: 1fr; } }
+
+/* Onglet Tonte : la machine, les trois portes, la frise des fenêtres, la règle de hauteur. */
+.machine-tete .machine { padding: 0 0 4px; gap: 16px; flex-wrap: wrap; }
+.machine-tete .machine-icone { width: 56px; height: 56px; border-radius: 14px; }
+.machine-tete .machine-texte b { font-family: var(--gz-police-aff); font-size: 30px; font-weight: 600; line-height: 1.05; }
+.machine-tete .machine-texte small { font-size: 15px; }
+.batterie { width: 120px; height: 8px; border-radius: 5px; background: var(--gz-piste); overflow: hidden; margin-top: 6px; }
+.batterie i { display: block; height: 100%; background: var(--gz-accent); }
+.machine-suite { margin-left: auto; text-align: right; }
+.machine-suite small { display: block; font-size: 13px; color: var(--gz-doux); }
+.machine-suite b { font-family: var(--gz-police-aff); font-size: 26px; font-weight: 600; line-height: 1.05; }
+.portes { display: grid; grid-template-columns: 1fr; padding: 8px 20px 14px; }
+@container page (min-width: 700px) { .portes { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.porte {
+  --etat: var(--gz-accent); position: relative; display: flex; flex-direction: column; gap: 4px; padding: 18px 16px 14px;
+  border-top: 1.5px dashed color-mix(in srgb, var(--gz-texte) 24%, var(--gz-carte));
+}
+.porte:first-child { border-top: none; }
+@container page (min-width: 700px) { .porte { border-top: none; border-left: 1.5px dashed color-mix(in srgb, var(--gz-texte) 24%, var(--gz-carte)); } .porte:first-child { border-left: none; } }
+.porte::before { content: ""; position: absolute; left: 16px; right: 16px; top: 0; height: 5px; border-radius: 3px; background: var(--etat); }
+.porte[data-etat="attention"] { --etat: var(--gz-ambre); }
+.porte[data-etat="non"] { --etat: var(--gz-rouge); }
+.porte h4 { margin: 6px 0 0; font-size: 14px; font-weight: 600; color: var(--gz-doux); }
+.porte .etat { font-family: var(--gz-police-aff); font-size: 30px; font-weight: 600; line-height: 1; color: var(--etat); }
+:host([sombre]) .porte[data-etat="oui"] .etat { color: var(--gz-accent); }
+.porte p { margin: 0; font-size: 14px; color: var(--gz-doux); line-height: 1.4; }
+.section.ruban-section {
+  --mx: 20px; border: none; color: var(--gz-craie); background-color: var(--gz-gazon-a);
+  background-image: repeating-linear-gradient(90deg, transparent 0, transparent calc(100% / 24), var(--gz-gazon-b) calc(100% / 24), var(--gz-gazon-b) calc(100% / 12));
+}
+.ruban-section .section-tete h3, .ruban-section .section-tete p { color: var(--gz-craie); }
+.ruban-section .section-tete p { opacity: .88; }
+.ruban-section .ruban-jour { margin: 0; padding-top: 38px; }
+.ruban-jour .rang-t { position: relative; z-index: 4; }
+.regle-coupe { padding: 34px 28px 6px; }
+.regle-piste {
+  position: relative; height: 16px; border-radius: 5px; border: 1px solid color-mix(in srgb, var(--gz-texte) 28%, var(--gz-carte)); background: var(--gz-surface);
+}
+.regle-plage { position: absolute; top: 0; bottom: 0; background: var(--gz-accent-doux); border-left: 2px solid var(--gz-accent); border-right: 2px solid var(--gz-accent); }
+.regle-repere { position: absolute; top: -6px; bottom: -6px; width: 0; border-left: 3px solid var(--gz-rouge); }
+.regle-repere.ok { border-left-color: var(--gz-accent); }
+.regle-repere.haut { border-left-color: var(--gz-ambre); }
+.regle-repere.conseil { border-left-color: var(--gz-accent); }
+.regle-repere span { position: absolute; top: 26px; left: 0; transform: translateX(-50%); white-space: nowrap; font-size: 13px; font-weight: 600; color: var(--gz-rouge); }
+.regle-repere.ok span { color: var(--gz-accent-fort); }
+.regle-repere.haut span { color: #92400e; }
+.regle-repere.conseil span { top: auto; bottom: 26px; color: var(--gz-accent-fort); }
+:host([sombre]) .regle-repere.ok span, :host([sombre]) .regle-repere.conseil span { color: var(--gz-accent); }
+:host([sombre]) .regle-repere.haut span { color: #fbbf24; }
+.regle-axe { position: relative; height: 22px; margin-top: 30px; font-size: 12px; color: var(--gz-doux); }
+.regle-axe span { position: absolute; transform: translateX(-50%); font-variant-numeric: tabular-nums; }
+.regle-textes { padding: 4px 20px 8px; display: flex; flex-direction: column; gap: 6px; }
+.regle-textes p { margin: 0; font-size: 14px; color: var(--gz-doux); line-height: 1.45; }
+
+/* Onglet Gazon : le mode est la phrase de la page, l'escalier montre où en sont les graines. */
+.phase-mode { margin-top: 6px !important; font-size: 14px !important; color: var(--gz-doux) !important; }
+.escalier-mode { padding: 22px 0 4px; }
+.escalier-piste { position: relative; padding-top: 30px; }
+.etapes {
+  position: relative; list-style: none; margin: 0; padding: 0; display: flex; overflow: hidden;
+  border: 1.5px solid color-mix(in srgb, var(--gz-texte) 28%, var(--gz-carte)); border-radius: 10px; background: var(--gz-surface);
+}
+.etapes li {
+  min-width: 0; padding: 14px 12px 14px; display: flex; flex-direction: column; gap: 2px;
+  border-left: 1.5px dashed color-mix(in srgb, var(--gz-texte) 24%, var(--gz-carte));
+}
+.etapes li:first-child { border-left: none; }
+.etapes li b { font-family: var(--gz-police-aff); font-size: 20px; font-weight: 600; line-height: 1.1; overflow-wrap: normal; hyphens: auto; }
+.etapes li span { font-size: 13px; color: var(--gz-doux); }
+.etapes li.ici { background: var(--gz-accent-doux); }
+.etapes .suspendu {
+  position: absolute; left: 0; bottom: 0; height: 7px;
+  background: repeating-linear-gradient(135deg, var(--gz-rouge) 0 5px, transparent 5px 9px);
+}
+.escalier-piste .ici-marque {
+  position: absolute; top: 0; transform: translateX(-50%); background: var(--gz-texte); color: var(--gz-carte);
+  font-size: 12.5px; font-weight: 600; line-height: 1; padding: 5px 8px; border-radius: 5px; white-space: nowrap;
+}
+.escalier-piste .ici-marque::after {
+  content: ""; position: absolute; left: 50%; bottom: -6px; transform: translateX(-50%); border: 6px solid transparent; border-top-color: var(--gz-texte); border-bottom: 0;
+}
+.escalier-note { margin: 8px 0 0; font-size: 13.5px; color: var(--gz-doux); }
+.tuile.hauteur .tuile-valeur { font-family: var(--gz-police-aff); font-size: 52px; font-weight: 600; line-height: .95; }
+.reservoir-rail { height: 34px; border-radius: 9px; border-width: 1.5px; }
+.reservoir-eau { background: repeating-linear-gradient(90deg, rgba(255, 255, 255, .1) 0 6px, transparent 6px 12px), var(--gz-eau); }
+@container page (max-width: 640px) { .etapes li { padding: 10px 5px; } .etapes li b { font-size: 14px; } .etapes li span { font-size: 11px; } }
+
+/* Onglet Météo : la température est le titre de la page ; les jours ont leur plage, la pluie sa barre. */
+.meteo-maintenant { padding-bottom: 6px; }
+.meteo-principal { padding: 4px 0 8px; --mdc-icon-size: 72px; }
+.meteo-principal small { text-transform: none; letter-spacing: 0; font-size: 14px; font-weight: 600; }
+.meteo-grande { font-family: var(--gz-police-aff); font-weight: 600; font-size: clamp(64px, 9cqi, 104px); line-height: .95; }
+.meteo-etat { font-size: 18px; }
+.mesures-meteo { padding: 4px 0 0; }
+.mesure-meteo { border: 1px solid var(--gz-trait); background: var(--gz-carte); }
+.mesure-meteo > b { font-family: var(--gz-police-aff); font-weight: 600; font-size: 26px; line-height: 1; }
+.jours-meteo li { grid-template-columns: minmax(92px, auto) 28px minmax(60px, 1fr) auto minmax(96px, auto); }
+.jours-meteo li { border-top: 1.5px dashed var(--gz-trait-fort, var(--gz-trait)); }
+.jours-meteo li:first-child { border-top: none; }
+.plage-t { position: relative; height: 10px; border-radius: 5px; background: var(--gz-surface); border: 1px solid var(--gz-trait); }
+.plage-t.vide-plage { border-color: transparent; background: none; }
+.plage-t i { position: absolute; top: -1px; bottom: -1px; border-radius: 5px; background: linear-gradient(90deg, var(--gz-eau), var(--gz-soleil-peint)); }
+.jour-pluie { display: grid; gap: 3px; justify-items: end; }
+.barre-pluie { display: block; width: 100%; height: 7px; border-radius: 4px; background: var(--gz-surface); border: 1px solid var(--gz-trait); position: relative; overflow: hidden; }
+.barre-pluie i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--gz-eau); }
+.courbe-heures { position: relative; padding: 6px 20px 4px; }
+.courbe-heures svg { width: 100%; height: 150px; display: block; }
+.courbe-heures .t-ligne { fill: none; stroke: var(--gz-soleil-peint); stroke-width: 2.4; vector-effect: non-scaling-stroke; stroke-linecap: round; stroke-linejoin: round; }
+.courbe-heures .pluie-b { fill: var(--gz-eau); }
+.courbe-heures .grille { stroke: var(--gz-trait); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.courbe-bornes { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--gz-doux); font-variant-numeric: tabular-nums; }
+@container page (max-width: 640px) { .jours-meteo li { grid-template-columns: minmax(84px, auto) 26px minmax(0, 1fr) auto; } .jours-meteo .jour-pluie { display: none; } }
+
+/* Onglet Produits : le produit conseillé est le titre de la page. */
+.produit-bandeau, .produit-bandeau.a-preparer { background: none; color: var(--gz-texte); padding: 4px 2px; border-radius: 0; }
+.produit-bandeau .maintenant-icone { display: none; }
+.produit-bandeau .maintenant-sur { color: var(--gz-doux); font-size: 15px; font-weight: 600; text-transform: none; letter-spacing: 0; opacity: 1; }
+.produit-bandeau h2 { font-family: var(--gz-police-aff); font-weight: 600; font-size: clamp(34px, 5cqi, 54px); line-height: .98; margin: 4px 0 8px; }
+.produit-bandeau p { opacity: 1; color: var(--gz-texte); font-size: 16px; max-width: 56ch; }
+.produit-bandeau .puce { background: #7c3aed; color: #fff; }
+.produit-bandeau.a-preparer .puce { background: #b45309; }
+.pertinence { margin-top: 12px; max-width: 260px; height: 10px; border-radius: 6px; background: var(--gz-trait); overflow: hidden; }
+.pertinence i { display: block; height: 100%; background: #7c3aed; }
+.produit-bandeau.a-preparer .pertinence i { background: #b45309; }
+
+/* Bandeau « En ce moment » : les capteurs qui ne répondent pas encore. */
+.capteurs-attente { margin-top: 12px; }
+.capteurs-attente p { margin: 0 0 8px; font-size: 15px; }
+.capteurs-attente ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.capteurs-attente li { display: inline-flex; align-items: center; gap: 5px; font-size: 14px; --mdc-icon-size: 16px; }
+.capteurs-attente li.att { opacity: .75; font-style: italic; }
+
+
+@container page (max-width: 640px) { .dialogue-corps { padding: 8px 18px; } .dialogue-pied { padding: 14px 18px 20px; } }
 `;
 
 // ─── Le composant ────────────────────────────────────────────────────────────────────────
@@ -3147,6 +3479,7 @@ class GazonIntelligentPanel extends HTMLElement {
   }
 
   connectedCallback() {
+    installerPolice();
     this.style.setProperty("--gz-page-width", `${this._page.clientWidth}px`);
     this._observateur?.observe(this._page);
     for (const c of this._page.querySelectorAll(".mosaique > .tesselle")) this._observateurCases?.observe(c);
@@ -4933,6 +5266,9 @@ class GazonIntelligentPanel extends HTMLElement {
     // Canicule = arrosage de SURVIE signalé par l'intégration, pas le score composite de chaleur.
     const canicule = a("survie_canicule_active") === true;
     const enCours = this._arrosageEnCours();
+    // L'entité de l'assistant ne répond pas encore (démarrage de Home Assistant, de l'intégration) : le
+    // panneau écrivait « Unavailable » en gros titre. Une décision connue (attribut `action`) prime.
+    const sansDonnee = !a("action") && ["unavailable", "unknown"].includes(String(this._s("assistant") ?? "").toLowerCase());
     const bloque = statut.includes("block") || ["aucune_action", "attente_conditions"].includes(action);
     const ton = canicule ? "danger" : enCours || (action === "arrosage" && !bloque) ? "eau"
       : bloque && this._blocageMeriteAlerte() ? "alerte" : "calme";
@@ -4940,6 +5276,7 @@ class GazonIntelligentPanel extends HTMLElement {
     let titre = fiche ? (bloque && fiche.attente) || fiche.titre : majuscule(action.replace(/_/g, " "));
     let icone = fiche?.icone || "mdi:timer-sand";
     if (action === "aucune_action" && statut === "no_need") titre = "Tout va bien";
+    if (sansDonnee) { titre = "On attend les données"; icone = "mdi:timer-sand"; }
     // L'assistant range « autorisee_avec_precaution » et « a_surveiller » dans le même statut
     // « pas bloqué » que « autorisee » (assistant.py, actionable_statuses) : le titre suivait donc
     // ce regroupement et annonçait « possible » sans nuance, même en précaution ou à surveiller.
@@ -4948,7 +5285,7 @@ class GazonIntelligentPanel extends HTMLElement {
       if (statutTonte === "autorisee_avec_precaution") titre = "La tonte est possible, avec précaution";
       else if (statutTonte && statutTonte !== "autorisee") titre = `Tonte ${minuscule(libelleDe(STATUTS_TONTE, statutTonte))}`;
     }
-    let sous = majuscule(a("reason") || "");
+    let sous = sansDonnee ? "Les décisions de tonte et d'arrosage reprennent dès que les données sont revenues." : majuscule(a("reason") || "");
     let session = "";
     if (enCours) {
       titre = "Arrosage en cours";
@@ -4988,11 +5325,92 @@ class GazonIntelligentPanel extends HTMLElement {
           ${sous ? `<p>${esc(sous)}</p>` : ""}
           ${canicule ? `<p><b>Canicule :</b> la survie du gazon passe avant tout.</p>` : ""}
           ${session}
+          ${this._capteursEnAttenteHtml()}
           ${puces.length ? `<div class="puces">${puces.join("")}</div>` : ""}
         </div>
       </div>
       ${this._meteoHtml()}
+      ${this._rubanJourHtml(c)}
     </section>`;
+  }
+
+  // Les capteurs branchés qui ne répondent pas (indisponibles, introuvables, illisibles) : le nombre de ceux qui répondent sur
+  // ceux qui sont branchés, puis chacun avec sa coche ou sa pause. Rien si tous répondent, et une
+  // entrée non branchée n'est pas comptée (elle est facultative). Le texte ne dit pas POURQUOI ils se
+  // taisent : un redémarrage, un capteur en panne, la page ne le sait pas.
+  _capteursEnAttenteHtml() {
+    const branches = (this._donnees?.sources || []).filter((s) => s?.entity_id);
+    const lectures = branches.map((s) => ({ s, lecture: this._lectureSource(s) }));
+    const muets = lectures.filter((l) => l.lecture.statut !== "ok");
+    if (!muets.length) return "";
+    const reponds = lectures.length - muets.length;
+    return `<div class="capteurs-attente">
+      <p><b>Capteurs : ${esc(reponds)} sur ${esc(lectures.length)} répondent.</b> Les autres ne répondent pas pour le moment.</p>
+      <ul>${lectures.map(({ s, lecture }) => `<li class="${lecture.statut !== "ok" ? "att" : ""}"><ha-icon icon="${lecture.statut !== "ok" ? "mdi:pause-circle-outline" : "mdi:check"}"></ha-icon>${esc(s.titre || s.nom || s.cle)}</li>`).join("")}</ul>
+    </div>`;
+  }
+
+  // La frise des 24 heures du bandeau. Les fenêtres sont celles des réglages, par les mêmes fonctions
+  // que les dessins de Réglages (classeMatin, classeGraines, classeTonte) : rien n'est recalculé ici.
+  // La tonte est hachurée quand le gazon ou la machine la retiennent maintenant, pleine sinon ; la
+  // séance d'arrosage en cours s'allume. Sans heure ou sans réglages (page pas encore chargée), rien.
+  _rubanJourHtml(c, { lignes = ["arrosage", "tonte", "soleil"] } = {}) {
+    const minute = c?.maintenant?.minute;
+    if (!Number.isFinite(minute)) return "";
+    let v;
+    try { v = this._toutesLesValeurs(); } catch { return ""; }
+    if (!v || !Number.isFinite(v.tonte_fenetre_ideale_debut)) return "";
+    const pc = (m) => Math.max(0, Math.min(100, m / 14.4));
+    const bande = (a, b, classe) => `<i class="bande ${classe}" style="left:${pc(a).toFixed(2)}%;width:${(pc(b) - pc(a)).toFixed(2)}%"></i>`;
+    const rang = (nom, legende, piste, classe = "") => `<div class="rang ${classe}"><div class="rang-t"><span class="rang-nom">${nom}</span>${legende ? `<span class="rang-cap">${esc(legende)}</span>` : ""}</div><div class="piste">${piste}</div></div>`;
+    const fenetres = (segments, forts, faibles) => segments.filter((s) => forts.includes(s.classe) || faibles.includes(s.classe))
+      .map((s) => ({ ...s, fort: forts.includes(s.classe) }));
+
+    // Arrosage : le programme des graines pendant un semis, la fenêtre du matin sinon.
+    const graines = Boolean(c.semis) && ["Semis", "Sursemis"].includes(c.semis.mode);
+    const arrosage = graines
+      ? fenetres(segmenter((m) => classeGraines(m, v), 0, 1440), ["ouvert"], ["parfois"])
+      : fenetres(segmenter((m) => classeMatin(m, v), 0, 1440), ["ideal"], ["possible"]);
+    const enCours = this._arrosageEnCours();
+    let vivante = "";
+    if (enCours) {
+      const debutUtc = this._a("arrosage_en_cours", "started_at_utc");
+      const t0 = debutUtc && !Number.isNaN(Date.parse(debutUtc)) ? partiesLocales(new Date(debutUtc), this._fuseau()).minute : minute - 5;
+      vivante = bande(Math.min(t0, minute), Math.max(minute, t0 + 3), "b-live");
+    }
+    const legendeArrosage = enCours ? "en cours" : arrosage.length
+      ? `${graines ? "fenêtre des graines" : "fenêtre du matin"}, de ${heureFr(arrosage[0].debut)} à ${heureFr(arrosage[arrosage.length - 1].fin)}`
+      : "aucune fenêtre";
+
+    // Tonte : les fenêtres idéale et du soir, pleines ou hachurées selon l'état d'aujourd'hui.
+    // Le moteur ne laisse sortir la tondeuse que si le gazon, la machine ET l'absence de blocage sont
+    // réunis (`action_possible`, binary_sensor.py) : le statut du gazon seul ne suffit pas.
+    const statut = String(this._a("tonte_autorisee", "tonte_statut") || "");
+    const gazonLibre = statut === "" || statut === "autorisee" || statut === "autorisee_avec_precaution";
+    const machineOk = this._a("tonte_autorisee", "machine_permet_tonte");
+    const bloqueeParLeMoteur = this._a("tonte_autorisee", "mowing_blocked") === true;
+    const libre = gazonLibre && machineOk !== false && !bloqueeParLeMoteur;
+    const tonte = fenetres(segmenter((m) => classeTonte(m, v, c.soleil), 0, 1440), ["ideal"], ["possible"]);
+    const motif = String(this._a("tonte_autorisee", "mowing_block_reason_label") || "").replace(/\.\s*$/, "")
+      || (machineOk === false && gazonLibre ? "machine indisponible" : "");
+    const legendeTonte = libre ? "fenêtres ouvertes" : `fermée${motif ? ` : ${motif.charAt(0).toLowerCase()}${motif.slice(1)}` : ""}`;
+
+    // Soleil : du lever au coucher.
+    const soleil = c.soleil
+      ? bande(c.soleil.lever, c.soleil.coucher, "b-soleil")
+        + `<span class="soleil-nom" style="left:${pc(c.soleil.lever).toFixed(2)}%;margin-left:2px">lever ${heureFr(c.soleil.lever)}</span>`
+        + `<span class="soleil-nom" style="left:${pc(c.soleil.coucher).toFixed(2)}%;transform:translateX(-100%);margin-left:-2px">coucher ${heureFr(c.soleil.coucher)}</span>`
+      : "";
+    const echelle = [];
+    for (let h = 0; h <= 24; h += 3) echelle.push(`<span${h % 6 ? ' class="mi"' : ""} style="left:${pc(h * 60).toFixed(2)}%">${h}\u00a0h</span>`);
+    const resume = `Journée de 0 h à 24 h. Arrosage : ${legendeArrosage}. Tonte : ${legendeTonte}.`;
+    return `<div class="ruban-jour" role="img" aria-label="${esc(resume)}">
+      ${lignes.includes("arrosage") ? rang("Arrosage", legendeArrosage, arrosage.map((s) => bande(s.debut, s.fin, `b-eau${s.fort ? "" : " faible"}`)).join("") + vivante) : ""}
+      ${lignes.includes("tonte") ? rang("Tonte", legendeTonte, tonte.map((s) => bande(s.debut, s.fin, libre ? `b-ouvert${s.fort ? "" : " faible"}` : "b-ferme")).join("")) : ""}
+      ${lignes.includes("soleil") ? rang("Soleil", c.soleil ? "" : "inconnu", soleil) : ""}
+      <div class="echelle">${echelle.join("")}</div>
+      <div class="maintenant" style="left:${pc(minute).toFixed(2)}%"><span>${heureFr(minute)}</span></div>
+    </div>`;
   }
 
   _texteSession() {
@@ -5016,7 +5434,7 @@ class GazonIntelligentPanel extends HTMLElement {
     const heure = `<div class="meteo-heure" data-heure>${esc(this._texteHeure())}</div>`;
     if (!e) return `<div class="meteo">${heure}</div>`;
     const a = e.attributes || {};
-    const [icone, libelle] = METEOS[e.state] || ["mdi:weather-cloudy-alert", majuscule(String(e.state).replace(/[-_]/g, " "))];
+    const [icone, libelle] = conditionActuelle(e.state);
     const unite = a.temperature_unit || "°C";
     const p = this._prevision;
     const temp = nombreOuNul(a.temperature);
@@ -5047,9 +5465,23 @@ class GazonIntelligentPanel extends HTMLElement {
   _ongletApercuHtml(c) {
     return this._mosaique([
       [this._bulletinHtml(c) + this._pastillesHtml(), "large", "large"],
-      [this._tuilesHtml(c, { carre: true }), "etroit", "etroit"],
-      [this._actionsHtml(c), "tout", "tout"],
+      [this._instrumentsHtml(), "etroit", "etroit"],
+      [this._echeancesHtml(c), "etroitG", "etroitG"],
+      [this._actionsHtml(c), "largeD", "largeD"],
     ]);
+  }
+
+  // Les trois instruments : ce que le sol contient, ce que la semaine a reçu, ce que le gazon risque.
+  _instrumentsHtml() {
+    return `<div class="instruments">${this._tuileReserve()}${this._budgetHtml()}${this._tuileRisque()}</div>`;
+  }
+
+  // Ce qui vient : le prochain arrosage et la prochaine tonte, avec les mêmes mots que les tuiles.
+  _echeancesHtml(c) {
+    return `<section class="section">
+      <div class="section-tete"><h3>Prochaines échéances</h3></div>
+      <div class="tuiles deux echeances">${this._tuileProchainArrosage(c)}${this._tuileProchaineTonte(c)}</div>
+    </section>`;
   }
 
   // Le bulletin : des PHRASES composées sur les valeurs réelles. Rien à dire = rien d'écrit.
@@ -5172,17 +5604,34 @@ class GazonIntelligentPanel extends HTMLElement {
     </div>`;
   }
 
+  // Une éprouvette : le niveau d'eau du sol, et le trait rouge sous lequel l'arrosage se déclenche
+  // (mêmes valeurs que « Le réservoir du sol » de l'onglet Gazon).
   _tuileReserve() {
     const ratio = nombreOuNul(this._a("etat_hydrique", "reserve_available_ratio") ?? this._a("reserve", "reserve_available_ratio"));
     const mm = nombreOuNul(this._a("etat_hydrique", "reserve_actuelle_mm") ?? this._s("reserve"));
+    const utile = nombreOuNul(this._a("reserve", "reserve_utile_mm")) ?? 12;
+    const seuil = nombreOuNul(this._a("etat_hydrique", "reserve_minimale_mm") ?? this._a("reserve", "reserve_minimale_mm"));
     const pct = ratio !== null ? Math.round(ratio * 100) : null;
     const ton = ratio === null ? "" : ratio < 0.25 ? "danger" : ratio < 0.5 ? "attention" : "ok";
-    const couleur = ton === "danger" ? "var(--gz-rouge)" : ton === "attention" ? "var(--gz-ambre)" : "var(--gz-accent)";
-    return this._tuile({
-      icone: "mdi:cup-water", titre: "Réserve du sol", ton,
-      valeur: pct !== null ? `${pct} %` : mm !== null ? esc(mmFr(mm)) : "—",
-      sous: mm !== null ? esc(mmFr(mm)) : "", jauge: pct, couleur,
-    });
+    const couleur = ton === "danger" ? "var(--gz-rouge)" : ton === "attention" ? "var(--gz-ambre)" : "var(--gz-eau)";
+    const niveau = pct !== null ? pct : mm !== null ? pourcent(mm, 0, utile) : null;
+    if (niveau === null) {
+      return this._tuile({ icone: "mdi:cup-water", titre: "Réserve du sol", ton, valeur: mm !== null ? esc(mmFr(mm)) : "—" });
+    }
+    const resume = `Réserve du sol : ${pct !== null ? `${pct} %` : ""}${mm !== null ? `${pct !== null ? ", " : ""}${mmFr(mm)} sur ${mmFr(utile)}` : ""}${seuil !== null ? `. Le trait rouge est à ${mmFr(seuil)}.` : ""}`;
+    return `<div class="tuile reserve ${ton}">
+      <div class="tuile-titre"><ha-icon icon="mdi:cup-water"></ha-icon>Réserve du sol</div>
+      <div class="eprouvette-ligne">
+        <div class="eprouvette" role="img" aria-label="${esc(resume)}">
+          <div class="eprouvette-tube"><i style="height:${Math.max(0, Math.min(100, niveau))}%;--couleur:${couleur}"></i></div>
+          ${seuil !== null ? `<span class="eprouvette-seuil" style="bottom:${pourcent(seuil, 0, utile)}%"><span>Arrosage sous ${esc(mmFr(seuil))}</span></span>` : ""}
+        </div>
+        <div>
+          <div class="tuile-valeur">${pct !== null ? `${pct}<small> %</small>` : esc(mmFr(mm))}</div>
+          ${mm !== null ? `<div class="tuile-sous">${esc(mmFr(mm))} sur ${esc(mmFr(utile))}</div>` : ""}
+        </div>
+      </div>
+    </div>`;
   }
 
   _tuileRisque() {
@@ -5190,7 +5639,19 @@ class GazonIntelligentPanel extends HTMLElement {
     const ton = risque === "eleve" || risque === "critique" ? "danger" : risque === "modere" ? "attention" : "ok";
     const raisons = this._a("risque", "risque_gazon_raisons");
     const premiere = Array.isArray(raisons) && raisons.length ? majuscule(raisons[0]) : "";
-    return this._tuile({ icone: "mdi:shield-half-full", titre: "Risque pour le gazon", ton, valeur: esc(libelleDe(RISQUES, risque)), sous: esc(premiere), petite: true });
+    const crans = [["faible", "Faible"], ["modere", "Modéré"], ["eleve", "Élevé"], ["critique", "Critique"]];
+    const rang = crans.findIndex(([cle]) => cle === risque);
+    // Un niveau que la page ne connaît pas garde l'ancien affichage en texte : rien n'est inventé.
+    if (rang === -1) {
+      return this._tuile({ icone: "mdi:shield-half-full", titre: "Risque pour le gazon", ton, valeur: esc(libelleDe(RISQUES, risque)), sous: esc(premiere), petite: true });
+    }
+    return `<div class="tuile risque ${ton}">
+      <div class="tuile-titre"><ha-icon icon="mdi:shield-half-full"></ha-icon>Risque pour le gazon</div>
+      <ol class="echelle-risque" aria-label="Niveau de risque : ${esc(crans[rang][1].toLowerCase())}">
+        ${crans.map(([, nom], i) => `<li${i === rang ? ` class="on${rang === 0 ? " bas" : rang >= 2 ? " haut" : ""}"` : ""}>${esc(nom)}</li>`).join("")}
+      </ol>
+      ${premiere ? `<div class="tuile-sous">${esc(premiere)}</div>` : ""}
+    </div>`;
   }
 
   _tuileProchainArrosage(c) {
@@ -5261,11 +5722,11 @@ class GazonIntelligentPanel extends HTMLElement {
   // jauge) au milieu, le journal dans le couloir étroit. Page moyenne : deux couloirs.
   _ongletArrosageHtml(c) {
     return this._mosaique([
-      [this._etatArrosageHtml(c), "gauche", "large"],
-      [this._zonesHtml(), "gauche", "large"],
-      [this._friseArrosageHtml(), "milieu", "etroit"],
-      [this._budgetHtml(), "milieu", "large"],
-      [this._journalHtml(c), "droite", "etroit"],
+      [this._etatArrosageHtml(c), "large", "large"],
+      [this._budgetHtml(), "etroit", "etroit"],
+      [this._friseArrosageHtml(), "large", "large"],
+      [this._zonesHtml(), "etroit", "etroit"],
+      [this._journalHtml(c), "tout", "tout"],
     ]);
   }
 
@@ -5328,7 +5789,7 @@ class GazonIntelligentPanel extends HTMLElement {
       <button class="bouton-plein eau" data-dialogue="arroser"><ha-icon icon="mdi:sprinkler-variant"></ha-icon> Arroser maintenant${objectif > 0 ? ` (${esc(mmFr(objectif))} conseillés)` : ""}</button>
       <button class="bouton-contour" data-dialogue="arrose_main">Déclarer un arrosage manuel</button>
     </div>`;
-    return `<section class="section">
+    return `<section class="section tete-onglet">
       <div class="etat-bandeau ${ton}">
         <div class="etat-icone"><ha-icon icon="${icone}"></ha-icon></div>
         <div><small>L'arrosage</small><b>${esc(majuscule(titre))}</b>${texte ? `<p>${esc(texte)}</p>` : ""}</div>
@@ -5455,6 +5916,16 @@ class GazonIntelligentPanel extends HTMLElement {
     </div>`;
   }
 
+  // Le débit d'une zone, affiché dans la liste et modifiable d'un clic (administrateur) : même valeur
+  // que Réglages → Installation → Arroseurs, une seule entité derrière.
+  _debitLienHtml(z, debit) {
+    const texte = debit !== null && debit > 0 ? `${nombreFr(debit, 1)} mm/h` : "Débit à régler";
+    if (!this._estAdmin() || !this._donnees?.entites?.[`debit_zone_${z.numero}`]) {
+      return debit !== null && debit > 0 ? `${texte} · ` : "";
+    }
+    return `<button type="button" class="lien-debit" data-dialogue="debit" data-zone="${esc(z.numero)}" aria-label="Modifier le débit de la zone ${esc(z.numero)}"><span>${texte}</span><ha-icon icon="mdi:pencil-outline"></ha-icon></button> · `;
+  }
+
   _zonesHtml() {
     const zones = this._zones();
     const tete = `<div class="section-tete"><h3>Les zones</h3><p>Une vanne peut être ouverte manuellement. Pour comptabiliser l'eau dans la réserve, utiliser de préférence « Arroser maintenant ».</p></div>`;
@@ -5466,7 +5937,7 @@ class GazonIntelligentPanel extends HTMLElement {
       const occupe = this._commandesEnCours.has(`zone-${z.switch}`);
       const detail = active
         ? `Arrose depuis <span class="chrono" data-chrono="${esc(depuis || "")}">${depuis ? chronoFr(Date.now() - Date.parse(depuis)) : "…"}</span>`
-        : `${debit !== null && debit > 0 ? `${nombreFr(debit, 0)} mm/h · ` : ""}à l'arrêt`;
+        : `${this._debitLienHtml(z, debit)}à l'arrêt`;
       const boutons = active
         ? `<button class="petit-bouton arret" data-commande="zone-arret" data-switch="${esc(z.switch)}" ${occupe ? "disabled" : ""}><ha-icon icon="mdi:stop"></ha-icon>Arrêter</button>`
         : `<button class="petit-bouton" data-commande="zone-marche" data-switch="${esc(z.switch)}" ${occupe ? "disabled" : ""}><ha-icon icon="mdi:play"></ha-icon>Ouvrir</button>
@@ -5553,7 +6024,7 @@ class GazonIntelligentPanel extends HTMLElement {
       return `<span><i style="background:${z.couleur}"></i>${esc(z.nom)} : <b>${esc(dureeFr(Math.max(1, Math.round(minutes))))}</b> · ${liste.length} fois</span>`;
     }).join("");
     const vide = !zones.some((z) => sessions[z.switch].length);
-    return `<section class="section">
+    return `<section class="section frise-gazon">
       <div class="section-tete"><h3>Les 24 dernières heures</h3><p>Chaque barre est une vanne ouverte.</p></div>
       <div class="frise-zones">${lignes}</div>
       <div class="frise-heures"><span></span><div class="graduations">${graduations}</div></div>
@@ -5813,7 +6284,7 @@ class GazonIntelligentPanel extends HTMLElement {
   _meteoMaintenantHtml() {
     const id = this._donnees?.meteo;
     const meteo = id ? this._hass.states[id] : null;
-    const [icone, libelle] = meteo ? (METEOS[meteo.state] || ["mdi:weather-cloudy-alert", majuscule(String(meteo.state).replace(/[-_]/g, " "))]) : ["mdi:weather-cloudy-alert", "Entité météo introuvable"];
+    const [icone, libelle] = meteo ? conditionActuelle(meteo.state) : ["mdi:weather-cloudy-alert", "Entité météo introuvable"];
     const temp = this._mesureMeteo("capteur_temperature", "temperature");
     const origine = (m) => (m ? `<small class="origine ${m.jardin ? "jardin" : ""}">${m.jardin ? "jardin" : "prévision"}</small>` : "");
     const mesure = (icone_, titre, m, formatage) => (m ? `<div class="mesure-meteo"><ha-icon icon="${icone_}"></ha-icon><span>${esc(titre)}</span><b>${formatage(m)}</b>${origine(m)}</div>` : "");
@@ -5835,7 +6306,7 @@ class GazonIntelligentPanel extends HTMLElement {
       nombreOuNul(a.cloud_coverage) !== null ? mesure("mdi:cloud-outline", "Nuages", { valeur: nombreOuNul(a.cloud_coverage), unite: "%", jardin: false }, avecUnite(0)) : "",
     ].filter(Boolean);
     const releve = temp?.jardin && temp.etat ? `Relevé au jardin ${esc(ilYA(temp.etat.last_updated))}.` : meteo ? `Prévision mise à jour ${esc(ilYA(meteo.last_updated))}.` : "";
-    return `<section class="section meteo-maintenant">
+    return `<section class="section tete-onglet meteo-maintenant">
       <div class="meteo-principal">
         <ha-icon icon="${icone}"></ha-icon>
         <div>
@@ -5857,17 +6328,31 @@ class GazonIntelligentPanel extends HTMLElement {
     if (!p) corps = `<p class="vide">Prévisions en cours de lecture…</p>`;
     else if (!jours.length) corps = `<p class="vide">${p.jourRefuse ? "L'entité météo ne donne pas de prévision par jour." : "Aucune prévision pour les prochains jours."}</p>`;
     else {
+      const bas0 = jours.map((j) => nombreOuNul(j.templow)).filter((x) => x !== null);
+      const haut0 = jours.map((j) => nombreOuNul(j.temperature)).filter((x) => x !== null);
+      const tMin = bas0.length ? Math.min(...bas0) : null;
+      const tMax = haut0.length ? Math.max(...haut0) : null;
+      const etendue = tMin !== null && tMax !== null && tMax > tMin ? tMax - tMin : null;
+      // Une barre de pluie pleine = le plus gros jour de la semaine, mais au moins 5 mm : un jour à
+      // 0,4 mm ne doit pas ressembler à une averse.
+      const pluieMax = Math.max(5, ...jours.map((j) => nombreOuNul(j.precipitation) || 0));
       corps = `<ol class="jours-meteo">${jours.map((j) => {
         const [icone, libelle] = METEOS[j.condition] || ["mdi:weather-cloudy", majuscule(String(j.condition || "").replace(/[-_]/g, " "))];
         const pluie = nombreOuNul(j.precipitation);
         const proba = nombreOuNul(j.precipitation_probability);
         const bas = nombreOuNul(j.templow);
         const haut = nombreOuNul(j.temperature);
+        const plage = etendue !== null && bas !== null && haut !== null
+          ? `<span class="plage-t" role="img" aria-label="de ${esc(nombreFr(bas, 0))} à ${esc(nombreFr(haut, 0))} degrés"><i style="left:${(((bas - tMin) / etendue) * 100).toFixed(1)}%;width:${Math.max(4, ((haut - bas) / etendue) * 100).toFixed(1)}%"></i></span>`
+          : `<span class="plage-t vide-plage"></span>`;
+        const barre = pluie !== null && pluie > 0
+          ? `<span class="barre-pluie" aria-hidden="true"><i style="width:${Math.min(100, (pluie / pluieMax) * 100).toFixed(1)}%"></i></span>` : "";
         return `<li>
           <span class="jour-nom">${esc(jourCourt(j.datetime, c.maintenant, fuseau))}</span>
           <ha-icon icon="${icone}" title="${esc(libelle)}"></ha-icon>
+          ${plage}
           <span class="jour-temp">${bas !== null ? `${esc(nombreFr(bas, 0))}°` : ""}${bas !== null && haut !== null ? " → " : ""}${haut !== null ? `<b>${esc(nombreFr(haut, 0))}°</b>` : ""}</span>
-          <span class="jour-pluie ${pluie ? "mouille" : ""}">${pluie !== null ? esc(mmFr(pluie)) : ""}${proba !== null ? ` <small>${esc(nombreFr(proba, 0))}\u00a0%</small>` : ""}</span>
+          <span class="jour-pluie ${pluie ? "mouille" : ""}">${barre}<span>${pluie !== null ? esc(mmFr(pluie)) : ""}${proba !== null ? ` <small>${esc(nombreFr(proba, 0))}\u00a0%</small>` : ""}</span></span>
         </li>`;
       }).join("")}</ol>`;
     }
@@ -5900,8 +6385,38 @@ class GazonIntelligentPanel extends HTMLElement {
       : `<p class="vide">L'entité météo ne donne pas de prévision heure par heure.</p>`;
     return `<section class="section">
       <div class="section-tete"><h3>Les prochaines heures</h3><p>Température, pluie et vent annoncés, heure par heure.</p></div>
+      ${this._courbeHeuresHtml(heures)}
       ${corps}
     </section>`;
+  }
+
+  // La température en ligne, la pluie en barres, sur les mêmes heures que les vignettes dessous.
+  // Moins de trois points de température : pas de courbe (une ligne de deux points ne dit rien).
+  _courbeHeuresHtml(heures) {
+    const temps = heures.map((h) => nombreOuNul(h.temperature));
+    if (temps.filter((x) => x !== null).length < 3) return "";
+    const L = 240; const H = 100;
+    const vus = temps.filter((x) => x !== null);
+    const bas = Math.floor(Math.min(...vus)) - 1;
+    const haut = Math.max(Math.ceil(Math.max(...vus)) + 1, bas + 4);
+    const n = heures.length;
+    const x = (i) => (n > 1 ? (i * L) / (n - 1) : L / 2);
+    const y = (v) => H - ((v - bas) / (haut - bas)) * H;
+    const points = temps.map((v, i) => (v === null ? null : `${x(i).toFixed(1)},${y(v).toFixed(1)}`)).filter(Boolean);
+    const pluies = heures.map((h) => nombreOuNul(h.precipitation) || 0);
+    const pluieMax = Math.max(1, ...pluies);
+    const largeur = Math.max(2, Math.min(9, (L / Math.max(n, 1)) * 0.7));
+    const barres = pluies.map((p, i) => (p > 0
+      ? `<rect class="pluie-b" x="${(x(i) - largeur / 2).toFixed(1)}" y="${(H - (p / pluieMax) * 40).toFixed(1)}" width="${largeur.toFixed(1)}" height="${((p / pluieMax) * 40).toFixed(1)}" rx="1.5"/>` : "")).join("");
+    const grille = [0, 1, 2, 3].map((k) => `<line class="grille" x1="0" x2="${L}" y1="${(k * H) / 3}" y2="${(k * H) / 3}"/>`).join("");
+    const premier = temps.find((v) => v !== null);
+    const dernier = [...temps].reverse().find((v) => v !== null);
+    return `<div class="courbe-heures">
+      <svg viewBox="0 0 ${L} ${H}" preserveAspectRatio="none" role="img" aria-label="Température de ${esc(nombreFr(premier, 0))} à ${esc(nombreFr(dernier, 0))} degrés, de ${esc(nombreFr(Math.min(...vus), 0))} à ${esc(nombreFr(Math.max(...vus), 0))} degrés au plus, et pluie, sur les ${n} prochaines heures">
+        ${grille}${barres}<polyline class="t-ligne" points="${points.join(" ")}"/>
+      </svg>
+      <div class="courbe-bornes"><span>${esc(nombreFr(Math.min(...vus), 0))}°</span><span>${esc(nombreFr(Math.max(...vus), 0))}°</span></div>
+    </div>`;
   }
 
   _meteoPluieHtml(c) {
@@ -6230,19 +6745,29 @@ class GazonIntelligentPanel extends HTMLElement {
     const t = (k) => this._a("tonte_autorisee", k);
     const statut = String(t("tonte_statut") || "");
     const motifBlocage = String(t("mowing_block_reason_label") || "").trim();
-    const codeBlocage = String(t("mowing_block_reason_code") || "");
-    const pluie = codeBlocage.includes("pluie") || codeBlocage.includes("rain");
     const gazonOk = t("gazon_permet_tonte");
     const machineOk = t("machine_permet_tonte");
     const batterie = nombreOuNul(t("tondeuse_batterie"));
-    // ⚠️ DEUX AXES, DEUX BADGES : la machine (disponible ?) et le gazon (prêt ?). Jamais fusionnés.
-    const machine = `<div class="machine">
+    const date = this._a("prochaine_tonte", "target_date") || this._s("prochaine_tonte");
+    const prochaine = /^\d{4}-\d{2}-\d{2}/.test(String(date || "")) && c.maintenant ? majuscule(dateHumaine(date, c.maintenant, this._fuseau())) : "";
+
+    // En tête : la machine, sa batterie, et quand elle repartira. (Le badge « Disponible » est devenu
+    // la troisième porte.)
+    const entete = `<section class="section tete-onglet machine-tete">
+      <div class="machine">
         <div class="machine-icone"><ha-icon icon="mdi:robot-mower"></ha-icon></div>
         <div class="machine-texte"><b>${esc(t("tondeuse_nom") || "Tondeuse")}</b>
-          <small>${esc(t("tondeuse_statut_libelle") || "")}${batterie !== null ? ` · batterie ${nombreFr(batterie, 0)} %` : ""}</small></div>
-        ${machineOk === undefined ? "" : `<span class="badge ${machineOk ? "" : "arret"}">${machineOk ? "Disponible" : "Pas disponible"}</span>`}
-      </div>`;
-    const puces = [];
+          <small>${esc(t("tondeuse_statut_libelle") || "")}${batterie !== null ? ` · batterie ${nombreFr(batterie, 0)} %` : ""}</small>
+          ${batterie !== null ? `<div class="batterie" aria-hidden="true"><i style="width:${Math.max(0, Math.min(100, batterie))}%"></i></div>` : ""}</div>
+        ${prochaine ? `<div class="machine-suite"><small>Prochaine tonte</small><b>${esc(prochaine)}</b></div>` : ""}
+      </div>
+    </section>`;
+
+    // ⚠️ TROIS AXES, TROIS PORTES : le gazon (prêt ?), le créneau (ouvert ?), la machine (disponible ?).
+    // Jamais fusionnés : la tondeuse ne sort que si les trois sont au vert.
+    const ton = (x) => (x === "ok" ? "oui" : x === "attention" ? "attention" : "non");
+    const porte = (axe, titre, tonPorte, etat, detail) => `<div class="porte" data-axe="${axe}" data-etat="${tonPorte}">
+        <h4>${titre}</h4><div class="etat">${esc(etat)}</div>${detail ? `<p>${esc(detail)}</p>` : ""}</div>`;
     const libelleGazon = {
       autorisee: "prêt",
       autorisee_avec_precaution: "prêt avec précaution",
@@ -6250,15 +6775,22 @@ class GazonIntelligentPanel extends HTMLElement {
       deconseillee: "tonte à éviter",
       interdite: "pas prêt",
     }[statut] || (gazonOk === undefined ? "" : gazonOk ? "prêt" : "pas prêt");
+    const portes = [];
     if (libelleGazon) {
       const tonGazon = statut ? TONS_TONTE[statut] : gazonOk ? "ok" : "arret";
-      puces.push(`<span class="puce"><span class="point ${tonGazon === "ok" ? "" : tonGazon || "arret"}"></span>Gazon : ${esc(libelleGazon)}</span>`);
+      const detailGazon = motifBlocage || (gazonOk === false && t("raison_blocage_tonte") ? `${premierePhrase(t("raison_blocage_tonte"))}.` : "");
+      portes.push(porte("gazon", "Le gazon", ton(tonGazon), majuscule(libelleGazon), detailGazon));
     }
     if (t("mowing_window_label")) {
       const etat = t("mowing_window_state");
-      puces.push(`<span class="puce" title="${esc(t("mowing_window_reason") || "")}"><span class="point ${etat === "discouraged" ? "attention" : etat === "blocked" ? "arret" : ""}"></span>Créneau : ${esc(minuscule(t("mowing_window_label")))}</span>`);
+      portes.push(porte("creneau", "Le créneau", etat === "discouraged" ? "attention" : etat === "blocked" ? "non" : "oui", majuscule(t("mowing_window_label")), t("mowing_window_reason") || ""));
+    }
+    if (machineOk !== undefined) {
+      portes.push(porte("machine", "La machine", machineOk ? "oui" : "non", machineOk ? "Disponible" : "Pas disponible",
+        `${t("tondeuse_statut_libelle") || ""}${batterie !== null ? `${t("tondeuse_statut_libelle") ? ", " : ""}batterie ${nombreFr(batterie, 0)} %` : ""}`));
     }
     const frequence = t("mowing_frequency_label");
+    const puces = [];
     if (frequence) {
       const modeGraines = ["Semis", "Sursemis"].includes(c.semis?.mode) ? c.semis.mode : null;
       const libelleFrequence = modeGraines
@@ -6266,25 +6798,37 @@ class GazonIntelligentPanel extends HTMLElement {
         : `Ce mois-ci : ${frequence}`;
       puces.push(`<span class="puce"><ha-icon icon="mdi:calendar-sync"></ha-icon>${esc(libelleFrequence)}</span>`);
     }
-    const pourquoi = motifBlocage
-      ? `<ul class="liste-simple"><li><ha-icon icon="${pluie ? "mdi:weather-rainy" : "mdi:timer-sand"}"></ha-icon><span>${esc(motifBlocage)}</span></li></ul>`
-      : gazonOk === false && t("raison_blocage_tonte")
-        ? `<ul class="liste-simple"><li><ha-icon icon="mdi:timer-sand"></ha-icon><span>${esc(premierePhrase(t("raison_blocage_tonte")))}.</span></li></ul>`
-        : "";
     const actions = this._tonduAujourdhui(c)
       ? `<p class="vide">Une tonte est déjà inscrite aujourd'hui.</p>`
       : `<div class="rangee-boutons"><button class="bouton-plein" data-dialogue="tondu">Déclarer une tonte</button></div>`;
-    const carteMachine = `<section class="section">${machine}${puces.length ? `<div class="puces" style="padding:0 20px 14px">${puces.join("")}</div>` : ""}${pourquoi}${actions}</section>`;
+    const sectionPortes = `<section class="section portes-tonte">
+      ${portes.length ? `<div class="section-tete"><h3>${portes.length === 3 ? "La tondeuse sort quand les trois sont au vert" : "Ce qui décide de la tonte"}</h3></div>
+      <div class="portes">${portes.join("")}</div>` : ""}
+      ${puces.length ? `<div class="puces" style="padding:0 20px 14px">${puces.join("")}</div>` : ""}
+      ${actions}
+    </section>`;
     return this._mosaique([
-      [carteMachine, "gauche", "large"],
-      [this._coordinationHtml(), "gauche", "etroit"],
-      [this._commandesTondeuseHtml(), "gauche", "etroit"],
-      [this._pilotageTondeuseEtatHtml(), "gauche", "etroit"],
-      [this._travailHtml(), "milieu", "large"],
-      [this._hauteursHtml(c), "milieu", "etroit"],
-      [this._pousseHtml(), "droite", "etroit"],
+      [entete, "tout", "tout"],
+      [sectionPortes, "tout", "tout"],
+      [this._fenetresTonteHtml(c), "large", "large"],
+      [this._hauteursHtml(c), "etroit", "etroit"],
+      [this._travailHtml(), "gauche", "large"],
+      [this._commandesTondeuseHtml(), "gauche", "large"],
+      [this._pousseHtml(), "milieu", "etroit"],
+      [this._coordinationHtml() + this._pilotageTondeuseEtatHtml(), "droite", "etroit"],
       [this._motifsBlocageTonteHtml(), "droite", "etroit"],
     ]);
+  }
+
+  // Les fenêtres de la journée : la tonte (pleine si elle peut sortir, hachurée si quelque chose la
+  // retient) et le soleil, sur la même pelouse que le bandeau.
+  _fenetresTonteHtml(c) {
+    const ruban = this._rubanJourHtml(c, { lignes: ["tonte", "soleil"] });
+    if (!ruban) return "";
+    return `<section class="section ruban-section">
+      <div class="section-tete"><h3>Les fenêtres de la journée</h3><p>Pleines, la tondeuse peut sortir ; hachurées, quelque chose la retient aujourd'hui.</p></div>
+      ${ruban}
+    </section>`;
   }
 
   // Répartition des motifs de blocage sur les derniers jours (relevé HA, 28/09/2026) : sans
@@ -6353,9 +6897,10 @@ class GazonIntelligentPanel extends HTMLElement {
   }
 
   // ⚠️ DEUX HAUTEURS, ET C'EST LA LAME RÉELLE QUI FAIT FOI (arbitrage du 30/08/2026).
+  // Une règle graduée : la plage de la tondeuse, la lame réglée et la hauteur conseillée. La lame
+  // réelle fait foi (arbitrage du 30/08/2026) ; quand elle est au cran conseillé, les deux repères
+  // n'en font qu'un.
   _hauteursHtml(c) {
-    const date = this._a("prochaine_tonte", "target_date") || this._s("prochaine_tonte");
-    const resume = this._a("prochaine_tonte", "summary");
     const h = (k) => this._a("hauteur_tonte", k);
     const lameMm = nombreOuNul(this._a("tonte_etat", "tondeuse_hauteur_coupe_mm") ?? h("tondeuse_hauteur_coupe_mm"));
     const lame = lameMm !== null ? lameMm / 10 : null;
@@ -6364,22 +6909,39 @@ class GazonIntelligentPanel extends HTMLElement {
     const min = nombreOuNul(h("hauteur_tonte_min_cm"));
     const max = nombreOuNul(h("hauteur_tonte_max_cm"));
     const gardeFou = h("hauteur_tonte_garde_fou_label");
-    const sousLame = [];
-    if (lame !== null) {
-      sousLame.push("réglée sur la lame");
-      if (conseil !== null && Math.abs(conseil - lame) > 0.05) sousLame.push(`conseillé : ${cmFr(conseil)}`);
+    if (lame === null && conseil === null) return "";
+    const valeurs = [min, max, lame, conseil].filter((x) => x !== null);
+    const bas = Math.floor(Math.min(...valeurs)) - 1;
+    const haut = Math.ceil(Math.max(...valeurs)) + 1;
+    const pos = (x) => (((x - bas) / (haut - bas)) * 100).toFixed(2);
+    const confondus = lame !== null && conseil !== null && Math.abs(lame - conseil) < 0.05;
+    const ecart = lame === null || conseil === null || confondus ? "" : lame < conseil ? "bas" : "haut";
+    const graduations = [];
+    for (let x = bas; x <= haut; x += 1) graduations.push(`<span style="left:${pos(x)}%">${x}</span>`);
+    const phrases = [];
+    if (lame !== null && conseil !== null) {
+      if (confondus) phrases.push(`La lame est au cran conseillé, ${cmFr(conseil)}.`);
+      else if (ecart === "bas") phrases.push(`La lame est plus basse que le conseil (${cmFr(conseil)}). Remonter la molette, puis reporter la valeur.`);
+      else phrases.push(`La lame est plus haute que le conseil (${cmFr(conseil)}).`);
     }
-    if (motif) sousLame.push(motif);
-    if (min !== null && max !== null) sousLame.push(`la tondeuse va de ${cmFr(min)} à ${cmFr(max)}`);
-    if (gardeFou) sousLame.push(String(gardeFou));
-    return `<div class="tuiles deux">
-      ${this._tuile({ icone: "mdi:calendar-arrow-right", titre: "Prochaine tonte", petite: true,
-        valeur: date ? esc(majuscule(dateHumaine(date, c.maintenant, this._fuseau()))) : "—",
-        sous: !date && resume ? esc(resume) : "" })}
-      ${this._tuile({ icone: "mdi:content-cut", titre: "Hauteur de coupe", petite: true, ton: "ok",
-        valeur: lame !== null ? esc(cmFr(lame)) : conseil !== null ? esc(cmFr(conseil)) : "—",
-        sous: sousLame.map(esc).join(" · ") })}
-    </div>`;
+    if (motif) phrases.push(`${motif}.`);
+    if (min !== null && max !== null) phrases.push(`La tondeuse va de ${cmFr(min)} à ${cmFr(max)}.`);
+    if (gardeFou) phrases.push(String(gardeFou));
+    const resume = `Hauteur de coupe${lame !== null ? `, lame à ${cmFr(lame)}` : ""}${conseil !== null ? `, conseillée à ${cmFr(conseil)}` : ""}`;
+    const peutRegler = this._estAdmin() && Boolean(this._donnees?.entites?.hauteur_coupe_tondeuse);
+    return `<section class="section">
+      <div class="section-tete"><h3>Hauteur de coupe</h3></div>
+      <div class="regle-coupe">
+        <div class="regle-piste" role="img" aria-label="${esc(resume)}">
+          ${min !== null && max !== null ? `<div class="regle-plage" style="left:${pos(min)}%;width:${(pos(max) - pos(min)).toFixed(2)}%"></div>` : ""}
+          ${lame !== null ? `<div class="regle-repere lame ${confondus ? "ok" : ecart}" style="left:${pos(lame)}%"><span>${confondus ? `Lame et conseil ${esc(cmFr(lame))}` : `Lame ${esc(cmFr(lame))}`}</span></div>` : ""}
+          ${conseil !== null && !confondus ? `<div class="regle-repere conseil" style="left:${pos(conseil)}%"><span>Conseillé ${esc(cmFr(conseil))}</span></div>` : ""}
+        </div>
+        <div class="regle-axe">${graduations.join("")}</div>
+      </div>
+      ${phrases.length ? `<div class="regle-textes">${phrases.map((p) => `<p>${esc(p)}</p>`).join("")}</div>` : ""}
+      ${peutRegler ? `<div class="rangee-boutons"><button class="bouton-contour" data-dialogue="lame"><ha-icon icon="mdi:content-cut"></ha-icon>J'ai réglé la lame</button></div>` : ""}
+    </section>`;
   }
 
   _pousseHtml() {
@@ -6622,21 +7184,24 @@ class GazonIntelligentPanel extends HTMLElement {
       arros7 !== null ? `Arrosage sur 7 jours : <b>${esc(mmFr(arros7))}</b>` : "",
       pluie !== null && pluie > 0 ? `pluie utile : <b>${esc(mmFr(pluie))}</b>` : "",
     ].filter(Boolean).join(" · ");
-    const carteMode = `<section class="section">
+    const phase = String(this._s("phase") || "");
+    const carteMode = `<section class="section tete-onglet">
         <div class="etat-bandeau">
           <div class="etat-icone"><ha-icon icon="mdi:sprout"></ha-icon></div>
-          <div><small>Le mode du gazon</small><b>${esc(mode)}${c.semis ? ` · jour ${c.semis.age}` : ""}</b><p>${esc(MODES[mode] || "")}</p></div>
+          <div><small>Le mode du gazon</small><b>${esc(mode)}${c.semis ? ` · jour ${c.semis.age}` : ""}</b><p>${esc(MODES[mode] || "")}</p>
+            ${phase && phase !== mode ? `<p class="phase-mode">Phase : ${esc(phase)}</p>` : ""}</div>
         </div>
+        ${this._etapesModeHtml(c)}
         <div class="rangee-boutons">
           <button class="bouton-plein" data-dialogue="mode">Changer de mode</button>
           ${mode !== "Normal" ? `<button class="bouton-contour" data-dialogue="normal">Revenir au mode Normal</button>` : ""}
         </div>
       </section>`;
-    const tuiles = `<div class="tuiles">
-        ${this._tuile({ icone: "mdi:leaf", titre: "Phase", valeur: esc(this._s("phase") || "—"), petite: true })}
+    // La phase est dans la phrase du haut ; la réserve a sa carte (le réservoir) : restent la hauteur
+    // conseillée et le risque.
+    const instruments = `<div class="instruments">
+        ${this._tuile({ icone: "mdi:ruler", titre: "Hauteur conseillée", ton: "hauteur", valeur: c.hauteurConseillee !== null ? esc(cmFr(c.hauteurConseillee)) : "—", sous: esc(c.motif || "") })}
         ${this._tuileRisque()}
-        ${this._tuileReserve()}
-        ${this._tuile({ icone: "mdi:ruler", titre: "Hauteur conseillée", petite: true, valeur: c.hauteurConseillee !== null ? esc(cmFr(c.hauteurConseillee)) : "—", sous: esc(c.motif || "") })}
       </div>`;
     const risques = lignesRisque.length
       ? `<section class="section"><div class="section-tete"><h3>Ce qui menace le gazon</h3></div><ul class="liste-simple">${lignesRisque.join("")}</ul></section>`
@@ -6650,13 +7215,43 @@ class GazonIntelligentPanel extends HTMLElement {
         </div>
       </section>`;
     return this._mosaique([
-      [tuiles, "tout", "tout"],
-      [carteMode, "etroitG", "etroitG"],
-      [this._reservoirHtml(hydrique, bilan), "largeD", "largeD"],
-      [outils, "etroitG", "etroitG"],
-      [this._conseilsHtml(), "largeD", "largeD"],
+      [carteMode, "tout", "tout"],
+      [this._reservoirHtml(hydrique, bilan), "large", "large"],
+      [instruments, "etroit", "etroit"],
       [risques, "etroitG", "etroitG"],
+      [this._conseilsHtml(), "largeD", "largeD"],
+      [outils, "tout", "tout"],
     ]);
+  }
+
+  // L'escalier du semis : les étapes de la graine, le jour où l'on est, et jusqu'à quand la tondeuse
+  // attend. Les bornes sont celles des réglages (`etapesGraines`, `sursemis_levee`,
+  // `semis_reprise_tonte_jours`) : rien n'est recalculé ici. Hors Semis et Sursemis, rien.
+  _etapesModeHtml(c) {
+    if (!c?.semis || !["Semis", "Sursemis"].includes(c.semis.mode)) return "";
+    let v;
+    try { v = this._toutesLesValeurs(); } catch { return ""; }
+    const duree = Number(v?.graines_duree);
+    if (!Number.isFinite(duree) || duree <= 0) return "";
+    const age = Number(c.semis.age);
+    const reprise = c.semis.mode === "Sursemis" ? Number(v.sursemis_levee) + 1 : Number(v.semis_reprise_tonte_jours);
+    const part = (jours) => ((Math.max(0, Math.min(duree, jours)) / duree) * 100).toFixed(2);
+    const etapes = etapesGraines(v).filter((e) => Number.isFinite(e.de) && Number.isFinite(e.a) && e.a >= e.de);
+    const cases = etapes.map((e) => {
+      const ici = Number.isFinite(age) && age >= e.de && age <= e.a;
+      return `<li class="${ici ? "ici" : ""}" style="flex:${e.a - e.de + 1}" ${ici ? 'aria-current="step"' : ""}>
+        <b>${esc(e.nom)}</b><span>jours ${e.de} à ${e.a}</span></li>`;
+    });
+    const dansLeSuivi = Number.isFinite(age) && age >= 0 && age < duree;
+    const attente = Number.isFinite(reprise) && reprise > 0
+      ? `<i class="suspendu" style="width:${part(reprise)}%" title="La tondeuse attend jusqu'au jour ${reprise - 1}"></i>` : "";
+    return `<div class="escalier-mode">
+      <div class="escalier-piste">
+        ${dansLeSuivi ? `<span class="ici-marque" style="left:${part(age + 0.5)}%">Jour ${esc(age)}</span>` : ""}
+        <ol class="etapes" lang="fr" aria-label="Étapes du suivi des graines, ${esc(duree)} jours">${cases.join("")}${attente}</ol>
+      </div>
+      ${Number.isFinite(reprise) && reprise > 0 ? `<p class="escalier-note">La bande rayée marque l'attente de la tondeuse : elle peut repartir au jour ${esc(reprise)}.</p>` : ""}
+    </div>`;
   }
 
   // Les alertes (téléphones, trace dans Home Assistant) et le conseil de l'IA (0.93.0).
@@ -6735,6 +7330,7 @@ class GazonIntelligentPanel extends HTMLElement {
           <h2>${esc(i("product_name") || i("produit_nom") || "—")}</h2>
           ${i("hint") ? `<p>${esc(i("hint"))}</p>` : ""}
           <span class="puce">${esc(libelleDe(ETATS_INTERVENTION, etat))}${score !== null && score > 0 ? ` · pertinence ${nombreFr(score, 0)} %` : ""}</span>
+          ${score !== null && score > 0 ? `<div class="pertinence" role="img" aria-label="Pertinence ${esc(nombreFr(score, 0))} %"><i style="width:${Math.max(0, Math.min(100, score)).toFixed(0)}%"></i></div>` : ""}
         </div>
       </section>`;
     const contraintes = Array.isArray(i("application_constraints")) && i("application_constraints").length
@@ -6853,7 +7449,193 @@ class GazonIntelligentPanel extends HTMLElement {
 
   // ── Fenêtres d'action ──
 
-  _ouvrirDialogue(nom, { produit = null, entree = null, mode = null } = {}) {
+  // ── La lame : la hauteur réglée sur la molette de la tondeuse ──
+  // Home Assistant ne peut pas lire la molette : on la lui dit ici. Même entité que Réglages →
+  // Installation → Tondeuse, une seule valeur derrière ; les bornes sont celles de la machine.
+
+  _lameInfos() {
+    const a = this._entite("hauteur_coupe_tondeuse")?.attributes || {};
+    const facteur = a.unit_of_measurement === "cm" ? 1 : 0.1; // la valeur de l'entité est en mm
+    const brute = nombreOuNul(this._s("hauteur_coupe_tondeuse"));
+    const bornesMachine = [this._valeurEntite("hauteur_min_tondeuse_cm"), this._valeurEntite("hauteur_max_tondeuse_cm")].map((x) => (typeof x === "number" ? x : null));
+    const minEntite = Number.isFinite(Number(a.min)) ? Number(a.min) * facteur : 1;
+    const maxEntite = Number.isFinite(Number(a.max)) ? Number(a.max) * facteur : 15;
+    return {
+      facteur,
+      actuelle: brute !== null ? brute * facteur : null,
+      min: Math.max(minEntite, bornesMachine[0] ?? minEntite),
+      max: Math.min(maxEntite, bornesMachine[1] ?? maxEntite),
+      pas: (Number(a.step) || 5) * facteur,
+      conseil: nombreOuNul(this._s("hauteur_tonte")),
+    };
+  }
+
+  _lameSaisie(d) {
+    return Number.parseFloat(String(d.valeur ?? this._lameInfos().actuelle ?? "").replace(",", "."));
+  }
+
+  _lameEffetHtml(d) {
+    const i = this._lameInfos();
+    const v = this._lameSaisie(d);
+    if (!Number.isFinite(v) || v < i.min - 1e-9 || v > i.max + 1e-9) {
+      return `<p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>Saisir une hauteur entre ${esc(cmFr(i.min))} et ${esc(cmFr(i.max))} : les crans de la tondeuse.</span></p>`;
+    }
+    let html = "";
+    if (i.conseil !== null) {
+      if (Math.abs(v - i.conseil) < 0.05) html += `<p>C'est le cran conseillé, ${esc(cmFr(i.conseil))}.</p>`;
+      else if (v < i.conseil) html += `<p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>Plus bas que le conseil (${esc(cmFr(i.conseil))}).</span></p>`;
+      else html += `<p>Plus haut que le conseil (${esc(cmFr(i.conseil))}).</p>`;
+    }
+    return `${html}<p>La hauteur d'herbe à couper se calcule depuis cette lame.</p>`;
+  }
+
+  _lameBouton(d) {
+    const i = this._lameInfos();
+    const v = this._lameSaisie(d);
+    const valide = Number.isFinite(v) && v >= i.min - 1e-9 && v <= i.max + 1e-9;
+    return { texte: Number.isFinite(v) ? `Enregistrer ${cmFr(v)}` : "Enregistrer", off: !valide || (i.actuelle !== null && Math.abs(v - i.actuelle) < 1e-9) };
+  }
+
+  _majLameDialogue() {
+    const f = this._fenetre;
+    const effet = f.querySelector("[data-lame-effet]");
+    const bouton = f.querySelector("[data-valider]");
+    if (effet) effet.innerHTML = this._lameEffetHtml(this._dialogue);
+    if (bouton) {
+      const { texte, off } = this._lameBouton(this._dialogue);
+      bouton.textContent = texte;
+      bouton.disabled = off;
+    }
+  }
+
+  _lameDialogueCorps(d) {
+    const i = this._lameInfos();
+    const valeur = d.valeur ?? (i.actuelle !== null ? String(Math.round(i.actuelle * 100) / 100) : "");
+    return `<p>Régler d'abord la molette de la tondeuse, puis reporter la même valeur ici : Home Assistant ne peut pas lire la molette.</p>
+      <div class="champ"><label for="dlg-lame-cm">Hauteur de la lame</label>
+        <div class="nombre-unite"><input id="dlg-lame-cm" type="number" min="${esc(i.min)}" max="${esc(i.max)}" step="${esc(i.pas)}" value="${esc(valeur)}" inputmode="decimal"><span>cm</span></div>
+        <small>La tondeuse va de ${esc(cmFr(i.min))} à ${esc(cmFr(i.max))}${i.conseil !== null ? `, conseillé : ${esc(cmFr(i.conseil))}` : ""}.</small></div>
+      <div class="effet-semaine" data-lame-effet aria-live="polite">${this._lameEffetHtml(d)}</div>`;
+  }
+
+  // ── Le débit d'une zone : combien d'eau elle reçoit en une heure ──
+
+  _debitZone(numero) {
+    return nombreOuNul(this._s(`debit_zone_${numero}`)) ?? 0;
+  }
+
+  _debitSaisi(d) {
+    return Number.parseFloat(String(d.valeur ?? this._debitZone(d.numero)).replace(",", "."));
+  }
+
+  // Ce que la valeur saisie change, dit en durée d'arrosage pour la dose du jour (3 mm sans conseil).
+  _debitEffetHtml(d) {
+    const avant = this._debitZone(d.numero);
+    const v = this._debitSaisi(d);
+    if (!Number.isFinite(v) || v < 0) {
+      return `<p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>Saisir un nombre positif.</span></p>`;
+    }
+    if (v === 0) {
+      return `<p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>Zone pas utilisée : elle ne sera plus arrosée.</span></p>`;
+    }
+    const objectif = nombreOuNul(this._s("objectif")) ?? 0;
+    const dose = objectif > 0 ? objectif : 3;
+    // La durée du plan, pas un simple quotient : le moteur arrondit à la demi-minute, ne descend pas
+    // sous 30 s et plafonne chaque zone à 3 h (`planArrosage`, comparé au moteur par un test).
+    const minutes = (debit) => {
+      const plan = planArrosage(dose, [{ debit }]);
+      return plan ? plan.eauS / 60 : null;
+    };
+    const apres = minutes(v);
+    const plafonne = (dose / v) * 60 > DUREE_ZONE_MAX_MIN;
+    const duree = (m) => (m === null ? "—" : dureeFr(m));
+    let html = `<p>Pour ${esc(mmFr(dose))} d'eau, cette zone arrosera <b>${esc(duree(apres))}</b>${avant > 0 ? ` (avant : ${esc(duree(minutes(avant)))})` : ""}.</p>`;
+    if (plafonne) {
+      html += `<p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>Le plan plafonne chaque zone à ${esc(dureeFr(DUREE_ZONE_MAX_MIN))} : la dose entière ne passerait pas en une fois.</span></p>`;
+    }
+    if (avant > 0 && Math.abs(v - avant) / avant > 0.3) {
+      html += `<p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>Le débit change de plus de 30 %. Vérifier la mesure : elle fixe toutes les durées de cette zone.</span></p>`;
+    }
+    return html;
+  }
+
+  // Le petit calcul d'un test plus court qu'une heure : l'eau recueillie ramenée à une heure.
+  _debitCalculHtml(d) {
+    const haut = Number.parseFloat(String(d.haut ?? "").replace(",", "."));
+    const duree = Number.parseFloat(d.duree) || 60;
+    if (!(haut > 0)) return `<p class="note">Renseigner la hauteur d'eau mesurée.</p>`;
+    const debit = Math.round(((haut * 60) / duree) * 10) / 10;
+    return `<p>Soit <b>${esc(nombreFr(debit, 1))} mm par heure</b>.</p>
+      <div><button type="button" class="petit-bouton" data-debit-utiliser="${debit}">Utiliser ce débit</button></div>`;
+  }
+
+  // Le texte du bouton de validation, et s'il peut partir.
+  _debitBouton(d) {
+    const v = this._debitSaisi(d);
+    const valide = Number.isFinite(v) && v >= 0 && v <= this._debitMax(d.numero);
+    const inchange = v === this._debitZone(d.numero);
+    return { texte: Number.isFinite(v) && v > 0 ? `Enregistrer ${nombreFr(v, 1)} mm/h` : "Enregistrer : zone pas utilisée", off: !valide || inchange };
+  }
+
+  _debitMax(numero) {
+    const max = Number(this._entite(`debit_zone_${numero}`)?.attributes?.max);
+    return Number.isFinite(max) && max > 0 ? max : 60;
+  }
+
+  // Seules les parties qui changent sont redessinées : le champ garde son curseur.
+  _majDebitDialogue() {
+    const d = this._dialogue;
+    const f = this._fenetre;
+    const effet = f.querySelector("[data-debit-effet]");
+    const calcul = f.querySelector("[data-debit-calcul]");
+    const bouton = f.querySelector("[data-valider]");
+    if (effet) effet.innerHTML = this._debitEffetHtml(d);
+    if (calcul) calcul.innerHTML = this._debitCalculHtml(d);
+    if (bouton) {
+      const { texte, off } = this._debitBouton(d);
+      bouton.textContent = texte;
+      bouton.disabled = off;
+    }
+  }
+
+  _debitDialogueCorps(d) {
+    const valeur = d.valeur ?? String(this._debitZone(d.numero));
+    return `<p>Combien d'eau cette zone reçoit en une heure. C'est ce qui donne la durée de chaque arrosage.</p>
+      <div class="champ"><label for="dlg-debit">Débit de la zone</label>
+        <div class="nombre-unite"><input id="dlg-debit" type="number" min="0" max="${this._debitMax(d.numero)}" step="0.5" value="${esc(valeur)}" inputmode="decimal"><span>mm par heure</span></div>
+        <small>0 = zone pas utilisée.</small></div>
+      <details class="pourquoi"><summary>Je ne l'ai pas encore mesuré</summary>
+        <ol class="pas-liste"><li>Poser un verre à fond plat au milieu de la zone.</li><li>Arroser pendant la durée du test.</li><li>Mesurer la hauteur d'eau dans le verre.</li></ol>
+        <div class="deux">
+          <div class="champ"><label for="dlg-debit-duree">Durée du test</label>
+            <select id="dlg-debit-duree">${[["10", "10 min"], ["30", "30 min"], ["60", "1 heure"]].map(([v, n]) => `<option value="${v}" ${v === String(d.duree) ? "selected" : ""}>${n}</option>`).join("")}</select>
+            <small>Plus le test est long, plus la mesure est juste.</small></div>
+          <div class="champ"><label for="dlg-debit-haut">Eau dans le verre (mm)</label>
+            <input id="dlg-debit-haut" type="number" min="0" step="0.5" value="${esc(d.haut || "")}" inputmode="decimal"></div>
+        </div>
+        <div data-debit-calcul>${this._debitCalculHtml(d)}</div>
+      </details>
+      <div class="effet-semaine" data-debit-effet aria-live="polite">${this._debitEffetHtml(d)}</div>`;
+  }
+
+  // Ce que l'arrosage demandé ajoute à l'eau de la semaine : les deux mêmes chiffres que la carte
+  // « L'eau de la semaine ». On ne dit que l'arithmétique et le dépassement, jamais ce que le moteur en
+  // ferait. Hors de la phase Normal, le plafond n'est qu'un repère : aucun dépassement n'est signalé.
+  _semaineDialogueHtml(mm) {
+    const utilise = nombreOuNul(this._a("reserve", "arrosage_recent_7j"));
+    const plafond = nombreOuNul(this._a("fenetre_optimale", "weekly_guardrail_mm_max"));
+    if (utilise === null || plafond === null || plafond <= 0 || !Number.isFinite(mm)) return "";
+    const nouveau = utilise + mm;
+    const informatif = this._budgetEstInformatifSeul();
+    const depasse = !informatif && nouveau > plafond;
+    return `<div class="effet-semaine">
+      <p>Eau de la semaine : ${esc(mmFr(utilise))} → <b>${esc(mmFr(nouveau))}</b> sur ${esc(mmFr(plafond))} (${informatif ? "repère" : "limite"}).</p>
+      <div class="budget-rail" role="img" aria-label="${esc(`Avec cet arrosage : ${mmFr(nouveau)} sur ${mmFr(plafond)}`)}"><i style="width:${Math.min(100, (nouveau / plafond) * 100).toFixed(1)}%;background:${depasse ? "var(--gz-rouge)" : "var(--gz-eau)"}"></i></div>
+      ${depasse ? `<p class="note alerte"><ha-icon icon="mdi:alert-outline"></ha-icon><span>Cela dépasse la limite de la semaine (${esc(mmFr(plafond))}).</span></p>` : ""}
+    </div>`;
+  }
+
+  _ouvrirDialogue(nom, { produit = null, entree = null, mode = null, numero = null } = {}) {
     const objectif = nombreOuNul(this._s("objectif")) ?? 0;
     const etat = { nom };
     if (nom === "entree") {
@@ -6862,6 +7644,16 @@ class GazonIntelligentPanel extends HTMLElement {
       Object.assign(etat, { cle: ligne.cle, choix: ligne.entity_id || "", recherche: "" });
     }
     if (nom === "arroser") etat.mm = objectif > 0 ? objectif : 3;
+    if (nom === "lame") {
+      // Sans l'entité de la lame (page périmée), rien à écrire.
+      if (!this._donnees?.entites?.hauteur_coupe_tondeuse) return;
+      etat.valeur = null;
+    }
+    if (nom === "debit") {
+      // Une zone qui n'existe pas (page périmée) ne s'ouvre pas : on écrirait une entité inconnue.
+      if (!numero || !this._donnees?.entites?.[`debit_zone_${numero}`]) return;
+      Object.assign(etat, { numero: String(numero), duree: "60", haut: "" });
+    }
     if (nom === "produit" && produit) etat.produit = produit;
     if (nom === "mode") {
       const options = this._entite("mode")?.attributes?.options || Object.keys(MODES);
@@ -6933,13 +7725,28 @@ class GazonIntelligentPanel extends HTMLElement {
             <output data-dose>${esc(mmFr(d.mm))}</output>
             <button type="button" class="pas-btn" data-dlg="dose-plus" aria-label="Plus" ${d.mm >= 30 ? "disabled" : ""}><ha-icon icon="mdi:plus"></ha-icon></button>
           </div>
-          <div class="raccourcis">${raccourcis.map((v) => `<button type="button" class="petit-bouton" data-dlg="dose-${v}" data-mm="${v}">${v === objectif ? "Conseillé : " : ""}${esc(mmFr(v))}</button>`).join("")}</div>
+          <div class="raccourcis">${raccourcis.map((v) => `<button type="button" class="petit-bouton" data-dlg="dose-${v}" data-mm="${v}" aria-pressed="${v === d.mm}">${v === objectif ? "Conseillé : " : ""}${esc(mmFr(v))}</button>`).join("")}</div>
         </div>
         <div class="plan-zones">${this._planZonesHtml(d.mm)}</div>
         ${reserve !== null && utile !== null ? `<p>Réserve du sol : ${esc(mmFr(reserve))} → <b>${esc(mmFr(Math.min(reserve + d.mm, utile)))}</b> sur ${esc(mmFr(utile))}.</p>` : ""}
+        ${this._semaineDialogueHtml(d.mm)}
         ${motif ? `<p class="note alerte"><ha-icon icon="mdi:information-outline"></ha-icon><span>L'arrosage automatique attend en ce moment (${esc(minuscule(premierePhrase(motif)))}). Un arrosage lancé ici passe outre.</span></p>` : ""}
         ${heure >= 10 * 60 && heure < 18 * 60 ? `<p class="note alerte"><ha-icon icon="mdi:weather-sunny-alert"></ha-icon><span>En plein soleil, une partie de l'eau s'évapore. Le petit matin est plus efficace.</span></p>` : ""}`;
       return cadre({ icone: "mdi:sprinkler-variant", genre: "eau", titre: "Arroser maintenant", corps, bouton: `Arroser ${esc(mmFr(d.mm))}`, genreBouton: "eau" });
+    }
+
+    if (d.nom === "lame") {
+      const { texte, off } = this._lameBouton(d);
+      return cadre({ icone: "mdi:content-cut", titre: "Hauteur de la lame", corps: this._lameDialogueCorps(d), bouton: texte, occupe: off });
+    }
+
+    if (d.nom === "debit") {
+      const z = this._zones().find((x) => String(x.numero) === d.numero);
+      const { texte, off } = this._debitBouton(d);
+      return cadre({
+        icone: "mdi:water-pump", genre: "eau", titre: z ? `Débit : ${z.nom}` : `Débit de la zone ${d.numero}`,
+        corps: this._debitDialogueCorps(d), bouton: texte, occupe: off,
+      });
     }
 
     if (d.nom === "arrose_main") {
@@ -7147,6 +7954,25 @@ class GazonIntelligentPanel extends HTMLElement {
     if (d.nom === "arroser") {
       appel = ["gazon_intelligent", "start_manual_irrigation", { entity_id: entites.objectif, objectif_mm: d.mm }];
       message = `Arrosage de ${mmFr(d.mm)} lancé.`;
+    } else if (d.nom === "lame") {
+      const i = this._lameInfos();
+      const v = Number.parseFloat(val("dlg-lame-cm").replace(",", "."));
+      const entityId = entites.hauteur_coupe_tondeuse;
+      if (!entityId || !Number.isFinite(v) || v < i.min - 1e-9 || v > i.max + 1e-9) {
+        this._afficherToast(`Saisir une hauteur entre ${cmFr(i.min)} et ${cmFr(i.max)}.`, true);
+        return;
+      }
+      appel = ["number", "set_value", { entity_id: entityId, value: Math.round((v / i.facteur) * 100) / 100 }];
+      message = `Lame enregistrée à ${cmFr(v)}.`;
+    } else if (d.nom === "debit") {
+      const v = Number.parseFloat(val("dlg-debit").replace(",", "."));
+      const entityId = entites[`debit_zone_${d.numero}`];
+      if (!entityId || !Number.isFinite(v) || v < 0 || v > this._debitMax(d.numero)) {
+        this._afficherToast(`Saisir un débit entre 0 et ${nombreFr(this._debitMax(d.numero), 0)} mm/h.`, true);
+        return;
+      }
+      appel = ["number", "set_value", { entity_id: entityId, value: v }];
+      message = v > 0 ? `Débit de la zone ${d.numero} enregistré : ${nombreFr(v, 1)} mm/h.` : `La zone ${d.numero} n'est plus arrosée.`;
     } else if (d.nom === "arrose_main") {
       const mm = Number.parseFloat(val("dlg-mm"));
       if (!Number.isFinite(mm) || mm < 0 || mm > 30) {
@@ -8507,6 +9333,19 @@ class GazonIntelligentPanel extends HTMLElement {
       if (liste && ligne) liste.innerHTML = this._choixEntitesHtml(this._dialogue, ligne);
       return;
     }
+    if (this._dialogue?.nom === "lame" && this._fenetre.contains(cible)) {
+      if (cible.id === "dlg-lame-cm") this._dialogue.valeur = cible.value;
+      this._majLameDialogue();
+      return;
+    }
+    if (this._dialogue?.nom === "debit" && this._fenetre.contains(cible)) {
+      const d = this._dialogue;
+      if (cible.id === "dlg-debit") d.valeur = cible.value;
+      else if (cible.id === "dlg-debit-duree") d.duree = cible.value;
+      else if (cible.id === "dlg-debit-haut") d.haut = cible.value;
+      this._majDebitDialogue();
+      return;
+    }
     if (cible.id === "recherche-reglages") {
       // Même principe : seule la liste de résultats change, le champ garde le curseur.
       this._rechercheReglages = cible.value;
@@ -8605,6 +9444,9 @@ class GazonIntelligentPanel extends HTMLElement {
           zone.value = bouton.dataset.question;
           zone.focus();
         }
+      } else if (bouton.dataset.debitUtiliser !== undefined && this._dialogue?.nom === "debit") {
+        this._dialogue.valeur = bouton.dataset.debitUtiliser;
+        this._redessinerDialogue();
       } else if (bouton.dataset.dlg && this._dialogue?.nom === "arroser") {
         const d = this._dialogue;
         if (bouton.dataset.dlg === "dose-moins") d.mm = Math.max(0.5, Math.round((d.mm - 0.5) * 2) / 2);
@@ -8635,6 +9477,7 @@ class GazonIntelligentPanel extends HTMLElement {
           produit: dialogue.dataset.produit,
           entree: dialogue.dataset.entree,
           mode: dialogue.dataset.mode,
+          numero: dialogue.dataset.zone,
         });
       }
       return true;
