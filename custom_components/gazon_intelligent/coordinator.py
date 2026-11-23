@@ -198,6 +198,9 @@ from .watering_policy import repartir_creneaux_semis, resolve_semis_stage_progra
 _LOGGER = logging.getLogger(__name__)
 
 _MOWER_JOB_DOCKED_GRACE_MINUTES = 60
+# Marge de recul tolérée entre la dernière progression vue d'un travail inachevé et la progression
+# de départ d'une NOUVELLE tâche pour qu'elle en soit la suite (voir `_meme_couverture`).
+_MOWER_JOB_CONTINUITY_TOLERANCE_PCT = 5.0
 # États du pilote qui ATTENDENT le volet et se rejugent donc à quelques secondes d'intervalle.
 _PILOT_FAST_WAIT_STATES = frozenset(
     {
@@ -3137,6 +3140,14 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         suivi = self._runtime_state.get("mower_job_suivi")
         if not isinstance(suivi, dict):
             suivi = {}
+        # ⚠️ NOUVEL IDENTIFIANT, MÊME TRAVAIL (relevé le 23/11/2026, voir `_meme_couverture`).
+        # La tondeuse ouvre une nouvelle TÂCHE à chaque sortie, mais sa progression est la
+        # couverture CUMULÉE de la pelouse : elle continue d'une tâche à l'autre jusqu'à 100 %.
+        # Comparer les seuls identifiants coupait un travail en deux dès qu'il passait la nuit :
+        # 63 + 85 min comptées pour 148 min réellement tondues, le plancher de 90 min refusait
+        # la tonte, le retard montait à 13 jours et le pilote relançait la tondeuse chaque jour.
+        if suivi.get("task_id") != tache and self._meme_couverture(suivi, float(progression)):
+            suivi["task_id"] = tache
         if suivi.get("task_id") != tache:
             # Nouvelle tâche : on ne sait rien d'elle. Si elle apparaît déjà à 100, c'est un
             # état de repos qu'on découvre, pas un travail qu'on a vu s'accomplir.
@@ -3160,6 +3171,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     else 0.0
                 ),
                 "jour": self._current_date().isoformat(),
+                "derniere_progression": float(progression),
             }
             self._runtime_state["mower_job_suivi"] = suivi
             etat, reprise_possible, pause_depuis = self._etat_travail_tondeuse(
@@ -3174,6 +3186,7 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "mower_job_paused_since": pause_depuis,
             }
 
+        suivi["derniere_progression"] = float(progression)
         if float(progression) < 100.0:
             suivi["vu_inacheve"] = True
             self._runtime_state["mower_job_suivi"] = suivi
@@ -3200,6 +3213,45 @@ class GazonIntelligentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "mower_job_resume_possible": False,
             "mower_job_paused_since": None,
         }
+
+    @staticmethod
+    def _meme_couverture(suivi: dict[str, Any], progression: float) -> bool:
+        """Une NOUVELLE tâche est-elle la suite du travail inachevé qu'on suit ?
+
+        ⚠️ MESURÉ LE 23/11/2026 sur la tondeuse (capteurs début / fin / durée de la dernière
+        tonte et attributs du capteur de progression). Le micrologiciel ouvre une tâche par
+        SORTIE, recharge comprise, et la progression est la couverture cumulée de la pelouse,
+        visée à 100 % : elle continue d'une tâche à la suivante, puis repart à 0 après 100.
+
+            21/11  tâche 14:38 → 17:10   0 → 48 %    (≈ 85 min de lame)
+            22/11  tâche 14:34 → 15:37  49 → 100 %   (≈ 63 min)     ← un seul travail, 148 min
+            22/11  tâche 16:27 → 17:49   0 → 41 %    (≈ 81 min)
+            23/11  tâche 10:59 → 12:24  42 → 100 %   (≈ 85 min)     ← un seul travail, 166 min
+
+        L'hypothèse d'origine — « le `task_id` est stable à travers les recharges » — est vraie
+        pendant une sortie, fausse d'une sortie à l'autre : la reprise du lendemain porte un
+        nouvel identifiant. Le travail était alors coupé en deux, chaque moitié sous le plancher.
+
+        On rattache donc une nouvelle tâche au travail suivi quand, à la fois :
+          · ce travail a été VU inachevé et n'a pas été consommé (déclaré, écarté, ou vu à 100) ;
+          · sa dernière progression vue est sous 100 ;
+          · la nouvelle tâche n'est pas déjà à 100 (un état de repos, pas un travail) ;
+          · elle repart d'une progression qui n'est pas en recul de plus que la marge tolérée.
+
+        ⚠️ CE QUI NE DOIT JAMAIS ÊTRE RATTACHÉ : une COUPE DE BORDURE lancée après un travail
+        inachevé. Elle repart de 0 % — très en dessous de la dernière progression vue — donc
+        elle ouvre son propre travail, et reste jugée « trop courte ». Même chose après un
+        travail terminé : sa fin a été consommée, la tâche suivante est toujours un nouveau
+        travail (c'est ce qui a fermé le défaut du 03/09/2026).
+        """
+        if not suivi.get("task_id") or not suivi.get("vu_inacheve"):
+            return False
+        derniere = suivi.get("derniere_progression")
+        if not isinstance(derniere, (int, float)) or isinstance(derniere, bool):
+            return False
+        if float(derniere) >= 100.0 or progression >= 100.0:
+            return False
+        return progression >= float(derniere) - _MOWER_JOB_CONTINUITY_TOLERANCE_PCT
 
     def _etat_travail_tondeuse(
         self, suivi: dict[str, Any], mower_context: dict[str, Any]
