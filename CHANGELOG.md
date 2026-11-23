@@ -2,6 +2,15 @@
 
 ## 1.0.0-rc.26
 
+- **Un travail repris le lendemain sous un nouvel identifiant n'est plus coupé en deux** : la
+  tondeuse ouvre une tâche par sortie, mais sa progression est la couverture cumulée de la pelouse,
+  qui continue d'une tâche à la suivante jusqu'à 100 %. Le suivi comparait les seuls identifiants :
+  la reprise du lendemain passait pour un nouveau travail et chaque moitié restait sous le plancher
+  de 90 min (63 et 85 min comptées pour 148 et 166 min réellement tondues). Aucune tonte n'était
+  inscrite, le retard montait (13 jours le 23/11) et le pilote relançait la tondeuse chaque jour.
+  Une nouvelle tâche est maintenant rattachée au travail inachevé qu'on suit quand sa progression
+  repart de la dernière progression vue (recul toléré : 5 points). Une coupe de bordure (elle repart
+  de 0 %), un travail déjà terminé et une tâche déjà à 100 % ne sont jamais rattachés.
 - **Une tonte en retard n'est plus bloquée par une hauteur seulement estimée** : sans capteur de
   hauteur d'herbe, la hauteur est estimée à partir de celle de la dernière tonte et d'une pousse
   modélisée, très faible en saison froide. Cette estimation pouvait retenir la tondeuse pendant
@@ -66,7 +75,7 @@
   (désactivé, observation, actif) et pour le volet « porte » ; progression de la tonte lue par le
   vrai cycle de mise à jour, sans injection ; eau datée après le jour de l'application quand
   l'incorporation est reportée.
-- **Vérifié** : suite complète avec 3 219 tests sous pytest 8.4 (3 172 sous l'ancienne commande),
+- **Vérifié** : suite complète avec 3 231 tests sous pytest 8.4 (3 184 sous l'ancienne commande),
   ruff et mypy (55 fichiers) verts. Chaque correctif a été éprouvé en altérant le code pour
   constater que les tests échouent.
 
