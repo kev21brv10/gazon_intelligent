@@ -75,7 +75,7 @@
   (désactivé, observation, actif) et pour le volet « porte » ; progression de la tonte lue par le
   vrai cycle de mise à jour, sans injection ; eau datée après le jour de l'application quand
   l'incorporation est reportée.
-- **Vérifié** : suite complète avec 3 231 tests sous pytest 8.4 (3 184 sous l'ancienne commande),
+- **Vérifié** : suite complète avec 3 233 tests sous pytest 8.4 (3 186 sous l'ancienne commande),
   ruff et mypy (55 fichiers) verts. Chaque correctif a été éprouvé en altérant le code pour
   constater que les tests échouent.
 
