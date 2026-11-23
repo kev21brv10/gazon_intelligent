@@ -311,6 +311,62 @@ class CoordinatorFacadeExtractionTests(unittest.TestCase):
         self.assertEqual(coord._estimate_rosee({}, 20.0, 92.0), 0.8)
         self.assertIsNone(coord._estimate_rosee({}, 20.0, 50.0))
 
+    def test_la_rosee_garde_sa_memoire_d_un_cycle_a_l_autre(self) -> None:
+        """La façade du coordinateur applique l'hystérésis et la range dans l'état d'exécution."""
+        coord = _build_coordinator()
+        # Écart 2,0 °C : la règle d'entrée voit de la rosée, la mémoire l'enregistre.
+        self.assertEqual(coord._estimate_rosee({}, 20.0, 60.0, 18.0), 1.0)
+        self.assertIs(coord._runtime_state["rosee_memoire"]["maintenue"], False)
+        # Écart 2,3 °C : plus de rosée selon la règle d'entrée, maintenue par la mémoire.
+        self.assertEqual(coord._estimate_rosee({}, 20.0, 60.0, 17.7), 1.0)
+        self.assertIs(coord._runtime_state["rosee_memoire"]["maintenue"], True)
+        # Écart 2,6 °C et humidité 60 % : levée, et la mémoire est effacée.
+        self.assertIsNone(coord._estimate_rosee({}, 20.0, 60.0, 17.4))
+        self.assertIsNone(coord._runtime_state["rosee_memoire"])
+        # Une fois effacée, 2,3 °C ne suffit plus à faire revenir la rosée.
+        self.assertIsNone(coord._estimate_rosee({}, 20.0, 60.0, 17.7))
+
+    def test_la_memoire_de_la_rosee_depend_de_l_horloge_du_coordinateur(self) -> None:
+        coord = _build_coordinator()
+        self.assertEqual(coord._estimate_rosee({}, 20.0, 60.0, 18.0), 1.0)
+        maintenant = coord._current_datetime()
+        coord._current_datetime = lambda: maintenant + timedelta(minutes=31)
+        self.assertIsNone(coord._estimate_rosee({}, 20.0, 60.0, 17.7), "mémoire périmée maintenue")
+
+    def test_sans_etat_d_execution_la_facade_reste_sans_memoire(self) -> None:
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        self.assertEqual(coord._estimate_rosee({}, 20.0, 60.0, 18.0), 1.0)
+        self.assertIsNone(coord._estimate_rosee({}, 20.0, 60.0, 17.7))
+
+    def test_la_memoire_de_la_rosee_atteint_le_disque_et_est_relue(self) -> None:
+        """Les redémarrages sont fréquents : sans persistance, le premier cycle d'après retombait sur
+        la règle brute — donc sur une bascule de plus."""
+        coord = _build_coordinator()
+        coord._estimate_rosee({}, 20.0, 60.0, 18.0)
+        memoire = dict(coord._runtime_state["rosee_memoire"])
+        coord._ensure_irrigation_runtime_bootstrap = lambda: None
+        serialise = coord._serialized_runtime_state()
+        self.assertEqual(serialise.get("rosee_memoire"), memoire, "la mémoire n'atteint pas le disque")
+        relu = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        relu._restore_runtime_state(serialise)
+        self.assertEqual(relu._runtime_state.get("rosee_memoire"), memoire, "écrite puis ignorée au démarrage")
+
+    def test_la_rosee_maintenue_est_visible_dans_sensor_health(self) -> None:
+        coord = _build_coordinator()
+        for maintenue in (True, False):
+            with self.subTest(maintenue=maintenue):
+                sante = coordinator_mod.GazonIntelligentCoordinator._build_sensor_health(
+                    coord,
+                    temperature_source="capteur",
+                    humidite_capteur=None,
+                    vent_capteur=None,
+                    etp_capteur=None,
+                    pluie_24h_sensor=None,
+                    weather_profile={"rosee_maintenue": maintenue},
+                    eto_hourly={},
+                )
+                self.assertIs(sante["rosee_maintenue"], maintenue)
+
     def test_facades_soleil_lisent_lever_et_coucher_en_heure_locale(self) -> None:
         # Ces minutes fixent la fraction d'ET écoulée, donc le débit du bilan du sol. Les tests de
         # `_et_elapsed_fraction` remplacent ces deux façades par des lambdas : rien ne les tenait.
@@ -3887,6 +3943,150 @@ class CoordinatorMowerResolutionTests(unittest.TestCase):
         self.assertIn("sensor.esperance_jr_prochain_programme", source_ids)
         self.assertIn("number.esperance_jr_hauteur_de_coupe", source_ids)
 
+    def _coord_drapeau_pluie_de_la_station(self, *, allume_depuis_min: float | None = 750.0):
+        """Le « pluie en cours » de la station est allumé, le détecteur du robot est éteint.
+
+        `allume_depuis_min` : depuis combien de minutes le drapeau est passé à `on` (12 h 30 par
+        défaut, comme le relevé du 02/10/2026) ; `None` = la date de passage est inconnue.
+        """
+        instant = datetime(2026, 10, 2, 10, 30, tzinfo=timezone.utc)
+        drapeau = _FakeState(
+            "on",
+            None if allume_depuis_min is None else instant - timedelta(minutes=allume_depuis_min),
+        )
+        coord = self._build_coordinator(
+            entry_data={"capteur_tondeuse_pluie": "binary_sensor.station_meteo_jardin_pluie_en_cours"},
+            mower_states=[
+                _FakeMowerState(entity_id="lawn_mower.esperance_jr", state="docked", name="Esperance Jr"),
+            ],
+            entity_states={
+                "lawn_mower.esperance_jr": _FakeState("docked", instant),
+                "sensor.esperance_jr_batterie": _FakeState("100", instant),
+                "binary_sensor.esperance_jr_en_charge": _FakeState("off", instant),
+                "binary_sensor.esperance_jr_capteur_de_pluie": _FakeState("off", instant),
+                "binary_sensor.station_meteo_jardin_pluie_en_cours": drapeau,
+                "sensor.esperance_jr_erreur": _FakeState("no_error", instant),
+            },
+        )
+        coord._current_utc_datetime = lambda: instant
+        return coord
+
+    def test_un_drapeau_pluie_allume_dans_le_vide_n_immobilise_plus_la_tondeuse(self) -> None:
+        """Relevé le 02/10/2026 : `rain_status` allumé depuis 23:39, 12 h 30 de « pause pluie »
+        pour 0,2 mm cumulés, une intensité à 0 et une station qui annonçait « sunny »."""
+        coord = self._coord_drapeau_pluie_de_la_station()
+        snapshot = coord._build_mower_snapshot({
+            "pluie_mesuree_minutes_depuis_hausse": 270.0,
+            "pluie_mesuree_active": False,
+            "pluie_actuelle_active": False,
+        })
+        self.assertTrue(snapshot["tondeuse_pluie_ignoree"])
+        self.assertFalse(snapshot["tondeuse_pluie"])
+        self.assertNotEqual(snapshot["tondeuse_statut"], "pluie")
+        self.assertTrue(snapshot["tondeuse_prete"])
+
+    def test_une_pluie_recente_garde_la_tondeuse_en_pause(self) -> None:
+        coord = self._coord_drapeau_pluie_de_la_station()
+        snapshot = coord._build_mower_snapshot({
+            "pluie_mesuree_minutes_depuis_hausse": 20.0,
+            "pluie_actuelle_active": False,
+        })
+        self.assertFalse(snapshot["tondeuse_pluie_ignoree"])
+        self.assertTrue(snapshot["tondeuse_pluie"])
+        self.assertEqual(snapshot["tondeuse_statut"], "pluie")
+        self.assertFalse(snapshot["tondeuse_prete"])
+
+    def test_sans_profil_meteo_le_comportement_d_avant_est_conserve(self) -> None:
+        coord = self._coord_drapeau_pluie_de_la_station()
+        for profil in (None, {}):
+            with self.subTest(profil=profil):
+                snapshot = coord._build_mower_snapshot(profil)
+                self.assertEqual(snapshot["tondeuse_statut"], "pluie")
+                self.assertFalse(snapshot["tondeuse_pluie_ignoree"])
+
+    def test_une_pluie_instantanee_ou_prevue_garde_le_drapeau_valide(self) -> None:
+        coord = self._coord_drapeau_pluie_de_la_station()
+        base = {"pluie_mesuree_minutes_depuis_hausse": 600.0}
+        for nom, extra in (
+            ("intensité > 0", {"pluie_actuelle_active": True}),
+            ("hausse récente du pluviomètre", {"pluie_mesuree_active": True}),
+            ("prévision de pluie", {"weather_condition": "rainy"}),
+        ):
+            with self.subTest(source=nom):
+                snapshot = coord._build_mower_snapshot({**base, **extra})
+                self.assertEqual(snapshot["tondeuse_statut"], "pluie")
+                self.assertFalse(snapshot["tondeuse_pluie_ignoree"])
+
+    def test_le_drapeau_ecarte_n_est_journalise_qu_une_fois_par_episode(self) -> None:
+        coord = self._coord_drapeau_pluie_de_la_station()
+        perime = {"pluie_mesuree_minutes_depuis_hausse": 270.0, "pluie_actuelle_active": False}
+        recent = {"pluie_mesuree_minutes_depuis_hausse": 5.0, "pluie_actuelle_active": False}
+        with self.assertLogs("custom_components.gazon_intelligent.coordinator", level="INFO") as journal:
+            coord._build_mower_snapshot(perime)
+            coord._build_mower_snapshot(perime)
+            coord._build_mower_snapshot(recent)
+            coord._build_mower_snapshot(recent)
+        messages = [m for m in journal.output if "capteur de pluie de la tondeuse" in m]
+        self.assertEqual(len(messages), 2, messages)
+        self.assertIn("WARNING", messages[0])
+        self.assertIn("INFO", messages[1])
+
+    def test_un_drapeau_pluie_qui_vient_de_s_allumer_reste_respecte(self) -> None:
+        """Le pluviomètre peut être calme depuis des heures quand l'averse COMMENCE : le drapeau
+        s'allume avant que le cumul ne monte. Son âge est celui de son passage à `on`, pas celui
+        de la dernière hausse du pluviomètre ; sinon la seule alerte active est écartée au tout
+        premier cycle et la tondeuse part sous la pluie."""
+        calme = {
+            "pluie_mesuree_minutes_depuis_hausse": 270.0,
+            "pluie_mesuree_active": False,
+            "pluie_actuelle_active": False,
+        }
+        for age in (0.0, 1.0, 60.0, 179.0):
+            with self.subTest(allume_depuis_min=age):
+                coord = self._coord_drapeau_pluie_de_la_station(allume_depuis_min=age)
+                snapshot = coord._build_mower_snapshot(calme)
+                self.assertFalse(snapshot["tondeuse_pluie_ignoree"])
+                self.assertTrue(snapshot["tondeuse_pluie"])
+                self.assertEqual(snapshot["tondeuse_statut"], "pluie")
+                self.assertFalse(snapshot["tondeuse_prete"])
+
+    def test_un_drapeau_allume_depuis_trois_heures_sans_goutte_est_ecarte(self) -> None:
+        calme = {
+            "pluie_mesuree_minutes_depuis_hausse": 270.0,
+            "pluie_mesuree_active": False,
+            "pluie_actuelle_active": False,
+        }
+        for age in (180.0, 181.0, 750.0):
+            with self.subTest(allume_depuis_min=age):
+                coord = self._coord_drapeau_pluie_de_la_station(allume_depuis_min=age)
+                snapshot = coord._build_mower_snapshot(calme)
+                self.assertTrue(snapshot["tondeuse_pluie_ignoree"])
+                self.assertTrue(snapshot["tondeuse_prete"])
+
+    def test_un_drapeau_ancien_mais_une_goutte_recente_reste_respecte(self) -> None:
+        """Les deux délais doivent être écoulés : un drapeau vieux de 5 h n'est pas écarté si le
+        pluviomètre a monté il y a moins de 3 h."""
+        coord = self._coord_drapeau_pluie_de_la_station(allume_depuis_min=300.0)
+        snapshot = coord._build_mower_snapshot({
+            "pluie_mesuree_minutes_depuis_hausse": 100.0,
+            "pluie_actuelle_active": False,
+        })
+        self.assertFalse(snapshot["tondeuse_pluie_ignoree"])
+        self.assertEqual(snapshot["tondeuse_statut"], "pluie")
+
+    def test_un_drapeau_dont_on_ignore_l_age_reste_respecte(self) -> None:
+        """Sans date de passage à `on`, rien ne prouve qu'il est périmé : choix prudent."""
+        calme = {"pluie_mesuree_minutes_depuis_hausse": 600.0, "pluie_actuelle_active": False}
+        coord = self._coord_drapeau_pluie_de_la_station(allume_depuis_min=None)
+        snapshot = coord._build_mower_snapshot(calme)
+        self.assertFalse(snapshot["tondeuse_pluie_ignoree"])
+        self.assertEqual(snapshot["tondeuse_statut"], "pluie")
+        # Une date postérieure à l'horloge (décalage d'horloge) ne prouve rien non plus.
+        coord = self._coord_drapeau_pluie_de_la_station(allume_depuis_min=-750.0)
+        snapshot = coord._build_mower_snapshot(calme)
+        self.assertFalse(snapshot["tondeuse_pluie_ignoree"])
+        self.assertEqual(snapshot["tondeuse_statut"], "pluie")
+
     def _coord_idle_dans_le_jardin(self):
         """Le robot annonce `idle`, sans code d'erreur, batterie à 52 % et pas en charge."""
         instant = datetime(2026, 9, 2, 21, 54, tzinfo=timezone.utc)
@@ -6547,8 +6747,41 @@ class LesMotifsDeBlocageDeLaTonteSontCumulesTests(unittest.TestCase):
         coord.brain = brain_mod.GazonBrain()
         return coord
 
-    def _snap(self, *, bloque=False, code=None):
-        return {"mowing_blocked": bloque, "mowing_block_reason_code": code}
+    def _snap(self, *, bloque=False, code=None, detail=None):
+        snap = {"mowing_blocked": bloque, "mowing_block_reason_code": code}
+        if detail is not None:
+            snap["mowing_machine_unavailable_detail"] = detail
+        return snap
+
+    def _cumul_apres(self, code, detail, minutes=10):
+        t0 = datetime(2026, 9, 28, 10, 0, tzinfo=timezone.utc)
+        coord = self._coord(t0)
+        coord._suivre_motifs_blocage_tonte(self._snap(bloque=True, code=code, detail=detail))
+        coord._current_datetime = lambda: t0 + timedelta(minutes=minutes)
+        coord._current_date = lambda: (t0 + timedelta(minutes=minutes)).date()
+        coord._suivre_motifs_blocage_tonte(self._snap(bloque=False, code=None))
+        return coord._runtime_state["mowing_block_tally"]["reasons"]
+
+    def test_robot_indisponible_est_cumule_par_detail(self) -> None:
+        """05/10/2026 : « Robot indisponible » additionnait pause pluie, charge, tonte, hors ligne… sous un titre de
+        panne. Le cumul suit le DÉTAIL ; le code public, lui, ne change pas."""
+        for detail in ("rain_delayed", "charging", "mowing", "returning", "offline", "error", "not_ready"):
+            with self.subTest(detail=detail):
+                reasons = self._cumul_apres("machine_unavailable", detail)
+                self.assertAlmostEqual(reasons.get(f"machine_{detail}", 0.0), 10.0, places=1)
+                self.assertNotIn("machine_unavailable", reasons)
+
+    def test_un_detail_inconnu_ou_absent_garde_le_motif_public(self) -> None:
+        for detail in (None, "", "inconnu"):
+            with self.subTest(detail=detail):
+                reasons = self._cumul_apres("machine_unavailable", detail)
+                self.assertAlmostEqual(reasons.get("machine_unavailable", 0.0), 10.0, places=1)
+
+    def test_le_detail_machine_ne_touche_pas_les_autres_motifs(self) -> None:
+        """Un détail résiduel publié à côté d'un autre motif ne doit rien rebaptiser."""
+        reasons = self._cumul_apres("mowing_night", "rain_delayed")
+        self.assertAlmostEqual(reasons.get("mowing_night", 0.0), 10.0, places=1)
+        self.assertEqual([k for k in reasons if k.startswith("machine_")], [])
 
     def test_le_temps_est_credite_au_motif_precedent(self) -> None:
         t0 = datetime(2026, 9, 28, 10, 0, tzinfo=timezone.utc)
@@ -7746,6 +7979,216 @@ class AutoDeclarationTonteTests(unittest.TestCase):
         })
         self.assertIsNone(trace["mower_travail_termine_minutes_jour"],
                           "une trace inerte annonce un cumul qu'elle n'a pas calculé")
+
+
+class LeTravailSurvitAuChangementDIdentifiantDeLaTondeuseTests(unittest.TestCase):
+    """⚠️ RELEVÉ LE 23/11/2026 : aucune tonte inscrite depuis le 10/11 (13 jours de retard)
+    alors que deux travaux avaient atteint 100 % et que le pilote relançait la tondeuse chaque
+    jour.
+
+    Le micrologiciel ouvre une TÂCHE par sortie, mais sa progression est la couverture cumulée de
+    la pelouse : elle continue d'une tâche à la suivante jusqu'à 100 %. Le suivi comparait les
+    seuls identifiants : la reprise du lendemain, sous un nouvel identifiant, passait pour un
+    nouveau travail, et chaque moitié restait sous le plancher de 90 min (63 et 85 min comptées
+    pour 148 et 166 min réellement tondues).
+
+    Les chiffres ci-dessous sont ceux de l'installation (capteurs début / fin / durée de la
+    dernière tonte et progression) : ce ne sont pas des valeurs de convenance.
+    """
+
+    VEILLE = date(2026, 11, 21)
+    JOUR = date(2026, 11, 22)
+    LENDEMAIN = date(2026, 11, 23)
+
+    def _coord(self, *, seuil=90):
+        brain_mod = importlib.import_module("custom_components.gazon_intelligent.gazon_brain")
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord.brain = brain_mod.GazonBrain()
+        coord.brain.memory["auto_mowing_declaration_enabled"] = True
+        coord.brain.memory["auto_mowing_declaration_minutes"] = seuil
+        coord._current_date = lambda: self.VEILLE
+        coord._runtime_state = {}
+        return coord
+
+    def _cycle(self, coord, jour, tache, progression, minutes_du_jour):
+        """Un cycle complet du coordinateur : suivi du travail, puis déclaration."""
+        coord._current_date = lambda: jour
+        return coord._declarer_tonte_du_jour(
+            {"mower_job_id": tache, "mower_job_progress_pct": float(progression),
+             "mower_mowing_minutes_today": float(minutes_du_jour)}
+        )
+
+    def _suivre(self, coord, jour, tache, progression, minutes_du_jour):
+        coord._current_date = lambda: jour
+        return coord._suivre_travail_tondeuse(
+            {"mower_job_id": tache, "mower_job_progress_pct": float(progression),
+             "mower_mowing_minutes_today": float(minutes_du_jour)}
+        )
+
+    def _tontes(self, coord):
+        return [i for i in coord.brain.history if i.get("type") == "tonte"]
+
+    # ---- LE CAS RELEVÉ ------------------------------------------------------------------
+    def test_21_au_22_novembre_deux_taches_un_seul_travail_de_148_minutes(self) -> None:
+        coord = self._coord()
+        # 21/11 : tâche 14:38 → 17:10, progression 0 → 48 %, 85,5 min de lame.
+        self._cycle(coord, self.VEILLE, "tache-21", 0, 0.0)
+        self._cycle(coord, self.VEILLE, "tache-21", 30, 52.0)
+        fin_veille = self._cycle(coord, self.VEILLE, "tache-21", 48, 85.5)
+        self.assertEqual(fin_veille["mower_auto_declaration_state"], "travail_en_cours", "prémisse")
+
+        # 22/11 : le compteur du jour repart de zéro ; la reprise porte un NOUVEL identifiant et
+        # repart de 49 %. Elle atteint 100 % à 15:37 avec 62,9 min de lame ce jour-là.
+        reprise = self._cycle(coord, self.JOUR, "tache-22", 49, 2.0)
+        self.assertAlmostEqual(
+            reprise["mower_job_minutes_total"], 87.5, places=1,
+            msg="la reprise sous un nouvel identifiant doit prolonger le travail de la veille",
+        )
+        self._cycle(coord, self.JOUR, "tache-22", 80, 40.0)
+        fin = self._cycle(coord, self.JOUR, "tache-22", 100, 62.9)
+
+        self.assertEqual(fin["mower_auto_declaration_state"], "declaree",
+                         "un travail terminé à 100 % est une tonte, même repris le lendemain")
+        self.assertAlmostEqual(fin["mower_job_minutes_total"], 148.4, places=1)
+        self.assertAlmostEqual(fin["mower_travail_termine_minutes_jour"], 148.4, places=1)
+        tontes = self._tontes(coord)
+        self.assertEqual([t.get("date") for t in tontes], [self.JOUR.isoformat()])
+
+    def test_22_au_23_novembre_le_second_travail_est_declare_lui_aussi(self) -> None:
+        """La chaîne entière du relevé : le premier travail se termine le 22 (déclaré), un
+        second naît le même soir à 0 %, passe la nuit et se termine le 23 à 12:24."""
+        coord = self._coord()
+        self._cycle(coord, self.VEILLE, "tache-21", 0, 0.0)
+        self._cycle(coord, self.VEILLE, "tache-21", 48, 85.5)
+        self._cycle(coord, self.JOUR, "tache-22", 49, 2.0)
+        premier = self._cycle(coord, self.JOUR, "tache-22", 100, 62.9)
+        self.assertEqual(premier["mower_auto_declaration_state"], "declaree", "prémisse")
+
+        # 16:27 : un NOUVEAU travail (la couverture repart de 0 après 100). 81,4 min jusqu'à 17:49.
+        # Le compteur du jour vaut déjà 62,9 à sa naissance : ce n'est pas son travail.
+        naissance = self._cycle(coord, self.JOUR, "tache-22b", 0, 62.9)
+        self.assertAlmostEqual(
+            naissance["mower_job_minutes_total"], 0.0, places=1,
+            msg="un nouveau cycle de couverture n'hérite RIEN du travail terminé",
+        )
+        soir = self._cycle(coord, self.JOUR, "tache-22b", 41, 144.3)
+        self.assertAlmostEqual(soir["mower_job_minutes_total"], 81.4, places=1)
+
+        # 23/11 : reprise à 42 % sous un autre identifiant, fin à 100 % à 12:24 (84,9 min).
+        self._cycle(coord, self.LENDEMAIN, "tache-23", 42, 2.0)
+        fin = self._cycle(coord, self.LENDEMAIN, "tache-23", 100, 84.9)
+
+        self.assertEqual(fin["mower_auto_declaration_state"], "declaree")
+        self.assertAlmostEqual(fin["mower_job_minutes_total"], 166.3, places=1)
+        self.assertEqual(
+            sorted(t.get("date") for t in self._tontes(coord)),
+            [self.JOUR.isoformat(), self.LENDEMAIN.isoformat()],
+        )
+
+    def test_sans_le_rattachement_le_meme_relevé_ne_declare_rien(self) -> None:
+        """Contre-épreuve : on simule l'ancien comportement (identifiants seuls) en effaçant la
+        dernière progression vue à chaque cycle. Le relevé retombe alors EXACTEMENT sur le
+        défaut constaté : 62,9 min < 90, « travail trop court », rien d'inscrit."""
+        coord = self._coord()
+        self._cycle(coord, self.VEILLE, "tache-21", 0, 0.0)
+        self._cycle(coord, self.VEILLE, "tache-21", 48, 85.5)
+        coord._runtime_state["mower_job_suivi"].pop("derniere_progression")
+        self._cycle(coord, self.JOUR, "tache-22", 49, 2.0)
+        fin = self._cycle(coord, self.JOUR, "tache-22", 100, 62.9)
+        self.assertEqual(fin["mower_auto_declaration_state"], "travail_trop_court")
+        self.assertEqual(self._tontes(coord), [])
+
+    # ---- CE QUI NE DOIT JAMAIS ÊTRE RATTACHÉ --------------------------------------------
+    def test_une_coupe_de_bordure_apres_un_travail_inacheve_reste_trop_courte(self) -> None:
+        """⚠️ LA GARDE DU 02/09. Un travail est à 41 % quand une bordure est lancée : elle repart
+        de 0 %, très en dessous, donc ouvre son propre travail. Rattachée, elle hériterait des
+        81 min du travail inachevé et franchirait le plancher : une bordure inscrite comme tonte."""
+        coord = self._coord()
+        self._cycle(coord, self.JOUR, "vrai-travail", 0, 0.0)
+        self._cycle(coord, self.JOUR, "vrai-travail", 41, 81.4)
+        bordure = self._cycle(coord, self.JOUR, "bordure", 0, 81.4)
+        self.assertAlmostEqual(bordure["mower_job_minutes_total"], 0.0, places=1,
+                               msg="la bordure hérite des minutes du travail inachevé")
+        fin = self._cycle(coord, self.JOUR, "bordure", 100, 97.4)
+        self.assertAlmostEqual(fin["mower_job_minutes_total"], 16.0, places=1)
+        self.assertEqual(fin["mower_auto_declaration_state"], "travail_trop_court")
+        self.assertEqual(self._tontes(coord), [], "une bordure a été inscrite comme une tonte")
+
+    def test_la_tolerance_de_recul_est_de_cinq_points_exactement(self) -> None:
+        for nouvelle, rattachee in ((36.0, True), (35.9, False)):
+            with self.subTest(progression_de_depart=nouvelle):
+                coord = self._coord()
+                self._suivre(coord, self.JOUR, "a", 0, 0.0)
+                self._suivre(coord, self.JOUR, "a", 41, 80.0)
+                reprise = self._suivre(coord, self.JOUR, "b", nouvelle, 80.0)
+                total = reprise["mower_job_minutes_total"]
+                if rattachee:
+                    self.assertAlmostEqual(total, 80.0, places=1, msg="la borne -5 est incluse")
+                else:
+                    self.assertAlmostEqual(total, 0.0, places=1, msg="au-delà de -5, nouveau travail")
+
+    def test_une_progression_qui_avance_beaucoup_reste_la_meme_couverture(self) -> None:
+        coord = self._coord()
+        self._suivre(coord, self.JOUR, "a", 0, 0.0)
+        self._suivre(coord, self.JOUR, "a", 30, 50.0)
+        reprise = self._suivre(coord, self.LENDEMAIN, "b", 55, 1.0)
+        self.assertAlmostEqual(reprise["mower_job_minutes_total"], 51.0, places=1)
+
+    def test_une_nouvelle_tache_deja_a_100_est_un_repos_pas_un_travail(self) -> None:
+        coord = self._coord()
+        self._suivre(coord, self.JOUR, "a", 0, 0.0)
+        self._suivre(coord, self.JOUR, "a", 40, 60.0)
+        repos = self._suivre(coord, self.LENDEMAIN, "b", 100, 0.0)
+        self.assertEqual(repos["mower_job_completion_state"], "repos")
+        self.assertFalse(coord._runtime_state["mower_job_suivi"]["vu_inacheve"])
+
+    def test_un_travail_deja_termine_n_est_jamais_prolonge(self) -> None:
+        """Après la fin d'un travail (consommée), la tâche suivante est TOUJOURS un nouveau
+        travail, même si sa progression de départ est élevée : c'est la correction du 03/09."""
+        coord = self._coord()
+        self._cycle(coord, self.JOUR, "a", 0, 0.0)
+        self._cycle(coord, self.JOUR, "a", 100, 95.0)
+        suite = self._suivre(coord, self.JOUR, "b", 98, 95.0)
+        self.assertAlmostEqual(suite["mower_job_minutes_total"], 0.0, places=1)
+
+    def test_une_fin_de_travail_encore_en_attente_n_est_pas_prolongee(self) -> None:
+        """Le travail vient d'atteindre 100 % mais sa fin n'a pas encore été traitée (état
+        `termine`, `vu_inacheve` toujours vrai) : une tâche qui arrive à 97 % ne doit pas l'avaler,
+        sinon la complétion — donc la tonte — disparaît sans bruit."""
+        coord = self._coord()
+        self._suivre(coord, self.JOUR, "a", 0, 0.0)
+        fin = self._suivre(coord, self.JOUR, "a", 100, 90.0)
+        self.assertEqual(fin["mower_job_completion_state"], "termine", "prémisse")
+        suite = self._suivre(coord, self.JOUR, "b", 97, 90.0)
+        self.assertAlmostEqual(suite["mower_job_minutes_total"], 0.0, places=1)
+
+    def test_la_progression_vue_a_la_naissance_compte_pour_le_rattachement(self) -> None:
+        """Une tâche vue pour la première fois à 30 % (intégration démarrée en cours de route),
+        puis remplacée aussitôt par une autre qui repart de 30 % : c'est la même couverture."""
+        coord = self._coord()
+        self._suivre(coord, self.JOUR, "a", 30, 50.0)
+        suite = self._suivre(coord, self.JOUR, "b", 31, 60.0)
+        self.assertAlmostEqual(suite["mower_job_minutes_total"], 10.0, places=1)
+
+    def test_un_suivi_sans_derniere_progression_ne_rattache_rien(self) -> None:
+        """Mémoire persistée par une version antérieure : pas de progression connue, donc aucun
+        rattachement (côté prudent : au pire, le travail est jugé court et retardé)."""
+        coord = self._coord()
+        coord._runtime_state["mower_job_suivi"] = {
+            "task_id": "a", "vu_inacheve": True, "minutes_base": 0.0,
+            "jour": self.JOUR.isoformat(), "minutes_jour": 70.0,
+        }
+        reprise = self._suivre(coord, self.JOUR, "b", 50, 70.0)
+        self.assertAlmostEqual(reprise["mower_job_minutes_total"], 0.0, places=1)
+
+    def test_un_suivi_jamais_vu_inacheve_ne_rattache_rien(self) -> None:
+        coord = self._coord()
+        coord._runtime_state["mower_job_suivi"] = {
+            "task_id": "a", "vu_inacheve": False, "derniere_progression": 40.0,
+            "minutes_base": 0.0, "jour": self.JOUR.isoformat(), "minutes_jour": 70.0,
+        }
+        reprise = self._suivre(coord, self.JOUR, "b", 41, 70.0)
+        self.assertAlmostEqual(reprise["mower_job_minutes_total"], 0.0, places=1)
 
 
 class RecordMowingIdempotentTests(unittest.TestCase):
@@ -9002,6 +9445,20 @@ class PluieMesureeTests(unittest.TestCase):
         self.assertEqual(sante["pluie_lame_voisin_mm"], 0.1, "les deux sources sont croisées")
         self.assertEqual(sante["pluie_lame_station_mm"], 4.2, "les deux sources sont croisées")
 
+    def test_les_deux_rejets_sont_VISIBLES_et_pas_croises(self) -> None:
+        """Un saut de pluie impossible rejeté ne doit pas l'être en silence : la trace est publiée dans
+        `sensor_health`, côté station ET côté capteur « pluie du jour » (05/10/2026)."""
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord._get_conf = lambda _cle: None
+        sante = coordinator_mod.GazonIntelligentCoordinator._build_sensor_health(
+            coord,
+            temperature_source="capteur", humidite_capteur=None, vent_capteur=None,
+            etp_capteur=None, pluie_24h_sensor=None, eto_hourly={},
+            weather_profile={"pluie_gain_rejete_mm": 650.0, "pluie_mesuree_gain_rejete_mm": 29.8},
+        )
+        self.assertEqual(sante["pluie_gain_rejete_mm"], 650.0, "les deux sources sont croisées")
+        self.assertEqual(sante["pluie_mesuree_gain_rejete_mm"], 29.8, "les deux sources sont croisées")
+
     # ── le câblage, depuis la SORTIE RÉELLE ───────────────────────────────────────────
     def test_les_cles_publiees_traversent_advanced_context(self) -> None:
         """⚠️ On part des clés que le coordinateur produit VRAIMENT, pas d'une liste écrite ici.
@@ -9324,6 +9781,340 @@ class PasseHorsCoordinationTests(unittest.TestCase):
         self.assertEqual(passe["fin_motif"], "batterie_vide")
 
 
+class PasseTravailTermineTests(unittest.TestCase):
+    """Un travail terminé ne se « rappelle » pas : la machine rentre parce qu'elle a fini.
+
+    ⚠️ LE CAS DU 02/10/2026. Travail à 100 % à 19:55:27, batterie 61 %. Dans le MÊME cycle la
+    tonte devient interdite (l'espacement de trois jours s'enclenche parce que le travail vient de
+    finir). Aucune commande de rappel n'a été envoyée, pourtant le carnet étiquetait la passe
+    `rappelee` — donc hors de `mower_autonomous_return_battery_median`, qui mesure justement le
+    niveau auquel la machine décide d'elle-même que c'est fini.
+    """
+
+    def _coord(self, instant):
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord._runtime_state = {}
+        coord._current_datetime = lambda: instant
+        coord._current_date = lambda: instant.date()
+        coord._parse_datetime_value = (
+            coordinator_mod.GazonIntelligentCoordinator._parse_datetime_value.__get__(coord)
+        )
+        coord._minutes_creditables = (
+            coordinator_mod.GazonIntelligentCoordinator._minutes_creditables.__get__(coord)
+        )
+        coord._autorisee = None
+        coord._tonte_autorisee_au_cycle_precedent = lambda: coord._autorisee
+        return coord
+
+    @staticmethod
+    def _ctx(*, garage=False, tonte=False, batterie=None, progression=None):
+        return {"tondeuse_connectee": True, "tondeuse_erreur": None,
+                "mower_is_mowing": tonte, "mower_is_docked": garage, "mower_battery": batterie,
+                "mower_job_progress_pct": progression}
+
+    def _tondre(self, de, a, *, batterie, progression, autorisee=True, pas=10):
+        """Un échantillon toutes les `pas` minutes (sous le plafond de crédit de 15 min), la
+        batterie et la progression variant linéairement de `de` à `a`."""
+        etapes = []
+        minute = de
+        while minute <= a:
+            f = 0.0 if a == de else (minute - de) / (a - de)
+            etapes.append((minute, autorisee, self._ctx(
+                tonte=True,
+                batterie=round(batterie[0] + (batterie[1] - batterie[0]) * f),
+                progression=round(progression[0] + (progression[1] - progression[0]) * f),
+            )))
+            minute += pas
+        return etapes
+
+    def _rejouer(self, etapes):
+        """`etapes` : (minutes, autorisation publiée au cycle précédent, contexte)."""
+        t0 = datetime(2026, 10, 2, 18, 40, tzinfo=timezone.utc)
+        coord = self._coord(t0)
+        for minutes, autorisee, ctx in etapes:
+            instant = t0 + timedelta(minutes=minutes)
+            coord._current_datetime = lambda t=instant: t
+            coord._current_date = lambda t=instant: t.date()
+            coord._autorisee = autorisee
+            coord._suivre_passes_tondeuse(dict(ctx))
+        return coord._runtime_state["mower_passes"]["journal"][-1]
+
+    def test_le_travail_qui_atteint_100_puis_l_autorisation_qui_tombe_n_est_pas_un_rappel(self) -> None:
+        passe = self._rejouer([
+            (0, True, self._ctx(garage=True, batterie=95, progression=43)),
+            *self._tondre(1, 71, batterie=(95, 62), progression=(43, 99)),
+            # 100 % ET autorisation retirée dans le même cycle (espacement), puis rentrée.
+            (73, False, self._ctx(tonte=False, batterie=61, progression=100)),
+            (75, False, self._ctx(garage=True, batterie=58, progression=100)),
+        ])
+        self.assertEqual(passe["fin_motif"], "retour_autonome")
+        self.assertIs(passe["travail_termine"], True)
+        self.assertIs(passe["hors_coordination"], False)
+        self.assertEqual(passe["batterie_fin"], 58)
+        self.assertGreater(passe["minutes_tondues"], 60)
+
+    def test_une_vraie_passe_rappelee_reste_rappelee(self) -> None:
+        """La progression reste sous 100 : le retour vient bien du retrait de l'autorisation."""
+        passe = self._rejouer([
+            (0, True, self._ctx(garage=True, batterie=100, progression=20)),
+            *self._tondre(1, 39, batterie=(100, 58), progression=(20, 60)),
+            (40, False, self._ctx(tonte=True, batterie=58, progression=60)),
+            (41, False, self._ctx(garage=True, batterie=58, progression=60)),
+        ])
+        self.assertEqual(passe["fin_motif"], "rappelee")
+        self.assertIs(passe["travail_termine"], False)
+
+    def test_un_ancien_100_au_depart_ne_vaut_pas_un_travail_termine(self) -> None:
+        """La progression reste à 100 entre deux travaux : la passe démarre dessus, puis le
+        nouveau travail la fait retomber. Le rappel qui suit en est bien un."""
+        passe = self._rejouer([
+            (0, True, self._ctx(garage=True, batterie=100, progression=100)),
+            (1, True, self._ctx(tonte=True, batterie=100, progression=100)),
+            *self._tondre(3, 30, batterie=(99, 70), progression=(2, 35)),
+            (31, False, self._ctx(tonte=True, batterie=70, progression=35)),
+            (32, False, self._ctx(garage=True, batterie=70, progression=35)),
+        ])
+        self.assertEqual(passe["fin_motif"], "rappelee")
+        self.assertIs(passe["travail_termine"], False)
+
+    def test_un_100_fige_pendant_toute_la_passe_n_est_pas_un_travail_termine(self) -> None:
+        """Départ à la main alors que la progression sommeille à 100 : elle n'est jamais vue sous
+        100 dans la passe, donc rien n'a été « terminé » — le rappel qui suit en est un."""
+        passe = self._rejouer([
+            (0, True, self._ctx(garage=True, batterie=100, progression=100)),
+            *self._tondre(1, 31, batterie=(100, 70), progression=(100, 100)),
+            (32, False, self._ctx(tonte=True, batterie=70, progression=100)),
+            (33, False, self._ctx(garage=True, batterie=70, progression=100)),
+        ])
+        self.assertEqual(passe["fin_motif"], "rappelee")
+        self.assertIs(passe["travail_termine"], False)
+
+    def test_un_nouveau_travail_dans_la_meme_passe_relache_le_drapeau(self) -> None:
+        """100 % atteint, puis un nouveau travail repart sans rentrer : le terminé d'avant ne
+        doit pas absoudre le rappel d'après."""
+        passe = self._rejouer([
+            (0, True, self._ctx(garage=True, batterie=90, progression=50)),
+            *self._tondre(1, 21, batterie=(90, 80), progression=(50, 100)),
+            *self._tondre(23, 43, batterie=(78, 60), progression=(5, 30)),
+            (44, False, self._ctx(tonte=True, batterie=60, progression=30)),
+            (45, False, self._ctx(garage=True, batterie=60, progression=30)),
+        ])
+        self.assertEqual(passe["fin_motif"], "rappelee")
+        self.assertIs(passe["travail_termine"], False)
+
+    def test_la_batterie_vide_prime_sur_le_travail_termine(self) -> None:
+        passe = self._rejouer([
+            (0, True, self._ctx(garage=True, batterie=100, progression=60)),
+            *self._tondre(1, 81, batterie=(100, 12), progression=(60, 99)),
+            (83, False, self._ctx(tonte=False, batterie=12, progression=100)),
+            (84, False, self._ctx(garage=True, batterie=12, progression=100)),
+        ])
+        self.assertEqual(passe["fin_motif"], "batterie_vide")
+
+    def test_sans_mesure_de_progression_rien_ne_change(self) -> None:
+        """Pas de capteur de progression : on ne conclut jamais « travail terminé »."""
+        passe = self._rejouer([
+            (0, True, self._ctx(garage=True, batterie=100)),
+            *[(m, True, self._ctx(tonte=True, batterie=100 - m)) for m in range(1, 40, 10)],
+            (40, False, self._ctx(tonte=True, batterie=58)),
+            (41, False, self._ctx(garage=True, batterie=58)),
+        ])
+        self.assertEqual(passe["fin_motif"], "rappelee")
+        self.assertIs(passe["travail_termine"], False)
+
+    def test_les_passes_terminees_nourrissent_la_mediane_des_retours_autonomes(self) -> None:
+        """Le but du correctif, de bout en bout : trois travaux terminés, chacun avec
+        l'autorisation retirée au même cycle (espacement) — la mesure du niveau auquel la machine
+        décide d'elle-même que c'est fini doit sortir, et valoir leur médiane."""
+        t0 = datetime(2026, 10, 2, 18, 40, tzinfo=timezone.utc)
+        coord = self._coord(t0)
+        sortie = {}
+        for jour, batterie_fin in enumerate((55, 58, 61)):
+            etapes = [
+                (0, True, self._ctx(garage=True, batterie=95, progression=40)),
+                *self._tondre(1, 71, batterie=(95, batterie_fin + 3), progression=(40, 99)),
+                (73, False, self._ctx(tonte=False, batterie=batterie_fin + 3, progression=100)),
+                (75, False, self._ctx(garage=True, batterie=batterie_fin, progression=100)),
+            ]
+            for minutes, autorisee, ctx in etapes:
+                instant = t0 + timedelta(days=jour, minutes=minutes)
+                coord._current_datetime = lambda t=instant: t
+                coord._current_date = lambda t=instant: t.date()
+                coord._autorisee = autorisee
+                sortie = coord._suivre_passes_tondeuse(dict(ctx))
+        journal = coord._runtime_state["mower_passes"]["journal"]
+        self.assertEqual([p["fin_motif"] for p in journal], ["retour_autonome"] * 3)
+        self.assertEqual(sortie["mower_last_pass_end_reason"], "retour_autonome")
+        self.assertEqual(sortie["mower_autonomous_return_battery_median"], 58.0)
+
+class PasseTravailTermineParLeVraiRafraichissementTests(unittest.TestCase):
+    """Le même cas, mais par le VRAI cycle `_async_update_data` — pas en injectant la progression.
+
+    ⚠️ POURQUOI. `_suivre_passes_tondeuse` est appelé AVANT `_lire_progression_tonte` dans le
+    cycle : à la livraison, il recevait toujours `None` et le correctif n'agissait jamais en
+    production, alors que les tests qui lui passent la progression à la main restaient verts
+    (signalé en revue de la PR #80). Ce test fixe l'ORDRE d'appel, en faisant tourner le cycle.
+    """
+
+    def _coord(self):
+        coordinator = _build_coordinator()
+        coordinator._loaded = True
+        coordinator._auto_irrigation_task = None
+        coordinator._auto_irrigation_scheduler_task = None
+
+        async def _load_state():
+            return None
+
+        async def _save_state():
+            return None
+
+        async def _forecast_summary(entity_id):  # noqa: ARG001
+            return {}
+
+        coordinator._async_load_state = _load_state
+        coordinator._async_save_state = _save_state
+        coordinator._get_weather_forecast_summary = _forecast_summary
+        coordinator._get_weather_profile = lambda entity_id: {}  # noqa: ARG005
+        coordinator._get_float_state = lambda entity_id: None  # noqa: ARG005
+        coordinator._get_conf = lambda key: None  # noqa: ARG005
+        coordinator._get_float_conf = lambda key, default: default
+        coordinator._estimate_rosee = lambda *a, **k: 0.0  # noqa: ARG005
+
+        class _Brain:
+            memory: dict = {}
+            last_result = types.SimpleNamespace(tonte_autorisee=True)
+
+            def compute_snapshot(self, **kwargs):  # noqa: ARG002
+                return {
+                    "mode": "Normal", "phase_active": "Normal", "objectif_mm": 0.0,
+                    "tonte_autorisee": True, "tonte_statut": "autorisee",
+                    "arrosage_recommande": False, "type_arrosage": "auto",
+                    "conseil_principal": "ok", "action_recommandee": "ok", "action_a_eviter": "ok",
+                    "niveau_action": "surveiller", "fenetre_optimale": "matin",
+                    "risque_gazon": "faible", "phase_dominante": "Normal",
+                    "phase_dominante_source": "historique", "sous_phase": "Germination",
+                    "sous_phase_detail": "Germination", "sous_phase_age_days": 1,
+                    "sous_phase_progression": "early",
+                }
+
+        coordinator.brain = _Brain()
+        coordinator.history = []
+        return coordinator
+
+    def _cycle(self, coordinator, *, tonte, garage, batterie, progression, autorisee):
+        """Un cycle complet : la tondeuse et le capteur de progression sont ce que HA publierait ;
+        tout le reste du cycle tourne pour de vrai."""
+        coordinator.brain.last_result = types.SimpleNamespace(tonte_autorisee=autorisee)
+        coordinator._build_mower_snapshot = lambda *a, **k: {  # noqa: ARG005
+            "tondeuse_connectee": True, "tondeuse_erreur": None,
+            "mower_is_mowing": tonte, "mower_is_docked": garage, "mower_battery": batterie,
+        }
+        coordinator._lire_progression_tonte = lambda: {
+            "mower_job_progress_pct": progression, "mower_job_id": "tache-1",
+            "mower_job_status_raw": 1,
+        }
+        asyncio.run(coordinator._async_update_data())
+
+    def test_la_progression_arrive_au_carnet_dans_le_vrai_cycle(self) -> None:
+        coordinator = self._coord()
+        etapes = [
+            dict(tonte=True, garage=False, batterie=95, progression=43, autorisee=True),
+            dict(tonte=True, garage=False, batterie=70, progression=90, autorisee=True),
+            # 100 % ET l'autorisation retirée dans le même cycle (espacement), puis rentrée.
+            dict(tonte=False, garage=False, batterie=61, progression=100, autorisee=False),
+            dict(tonte=False, garage=True, batterie=58, progression=100, autorisee=False),
+        ]
+        # Le cycle crédite le temps écoulé entre deux échantillons : on avance l'horloge.
+        t0 = datetime(2026, 10, 2, 18, 40, tzinfo=timezone.utc)
+        for i, etape in enumerate(etapes):
+            instant = t0 + timedelta(minutes=10 * i)
+            coordinator._current_datetime = lambda t=instant: t
+            coordinator._current_date = lambda t=instant: t.date()
+            self._cycle(coordinator, **etape)
+            if i == 2:
+                en_cours = coordinator._runtime_state["mower_passes"]["en_cours"]
+                self.assertIs(
+                    en_cours["travail_termine_vu"], True,
+                    "la progression n'est pas parvenue au carnet : ordre d'appel du cycle",
+                )
+        journal = coordinator._runtime_state["mower_passes"]["journal"]
+        self.assertEqual(journal[-1]["fin_motif"], "retour_autonome")
+        self.assertIs(journal[-1]["travail_termine"], True)
+
+    def test_la_progression_lue_sur_le_capteur_arrive_au_carnet_sans_rien_injecter(self) -> None:
+        """Même scénario, mais `_lire_progression_tonte` n'est PAS remplacée : elle lit le capteur
+        `sensor.<tondeuse>_progression_de_la_tonte` dans les états de Home Assistant, comme en
+        production. Seuls les états publiés sont simulés ; le chemin capteur → lecture → carnet de
+        passes est celui du vrai cycle, sans qu'aucun test ne pose `mower_job_progress_pct`."""
+        coordinator = self._coord()
+        capteur = "sensor.esperance_jr_progression_de_la_tonte"
+        etats: dict[str, object] = {}
+        coordinator._resolve_mower_selection = lambda: {"entity_id": "lawn_mower.esperance_jr"}
+        coordinator.hass = types.SimpleNamespace(
+            states=types.SimpleNamespace(get=lambda entity_id: etats.get(entity_id))
+        )
+        t0 = datetime(2026, 10, 2, 18, 40, tzinfo=timezone.utc)
+        etapes = [
+            dict(tonte=True, garage=False, batterie=95, progression=43, autorisee=True),
+            dict(tonte=True, garage=False, batterie=70, progression=90, autorisee=True),
+            dict(tonte=False, garage=False, batterie=61, progression=100, autorisee=False),
+            dict(tonte=False, garage=True, batterie=58, progression=100, autorisee=False),
+        ]
+        for i, etape in enumerate(etapes):
+            instant = t0 + timedelta(minutes=10 * i)
+            coordinator._current_datetime = lambda t=instant: t
+            coordinator._current_date = lambda t=instant: t.date()
+            etats[capteur] = types.SimpleNamespace(
+                state=str(etape["progression"]), attributes={"task_id": "tache-1", "task_status": 1},
+            )
+            coordinator.brain.last_result = types.SimpleNamespace(tonte_autorisee=etape["autorisee"])
+            coordinator._build_mower_snapshot = lambda *a, e=etape, **k: {  # noqa: ARG005
+                "tondeuse_connectee": True, "tondeuse_erreur": None,
+                "mower_is_mowing": e["tonte"], "mower_is_docked": e["garage"],
+                "mower_battery": e["batterie"],
+            }
+            asyncio.run(coordinator._async_update_data())
+            if i == 2:
+                en_cours = coordinator._runtime_state["mower_passes"]["en_cours"]
+                self.assertIs(
+                    en_cours["travail_termine_vu"], True,
+                    "la progression lue sur le capteur n'est pas parvenue au carnet de passes",
+                )
+        journal = coordinator._runtime_state["mower_passes"]["journal"]
+        self.assertEqual(journal[-1]["fin_motif"], "retour_autonome")
+        self.assertIs(journal[-1]["travail_termine"], True)
+
+    def test_sans_capteur_de_progression_le_vrai_cycle_garde_la_passe_rappelee(self) -> None:
+        """Contre-épreuve : même cycle, capteur absent. Aucune progression n'est connue, donc
+        aucun « travail terminé » n'est conclu — le comportement antérieur à la correction."""
+        coordinator = self._coord()
+        coordinator._resolve_mower_selection = lambda: {"entity_id": "lawn_mower.esperance_jr"}
+        coordinator.hass = types.SimpleNamespace(
+            states=types.SimpleNamespace(get=lambda entity_id: None)
+        )
+        t0 = datetime(2026, 10, 2, 18, 40, tzinfo=timezone.utc)
+        etapes = [
+            dict(tonte=True, garage=False, batterie=95, autorisee=True),
+            dict(tonte=True, garage=False, batterie=70, autorisee=True),
+            dict(tonte=False, garage=False, batterie=61, autorisee=False),
+            dict(tonte=False, garage=True, batterie=58, autorisee=False),
+        ]
+        for i, etape in enumerate(etapes):
+            instant = t0 + timedelta(minutes=10 * i)
+            coordinator._current_datetime = lambda t=instant: t
+            coordinator._current_date = lambda t=instant: t.date()
+            coordinator.brain.last_result = types.SimpleNamespace(tonte_autorisee=etape["autorisee"])
+            coordinator._build_mower_snapshot = lambda *a, e=etape, **k: {  # noqa: ARG005
+                "tondeuse_connectee": True, "tondeuse_erreur": None,
+                "mower_is_mowing": e["tonte"], "mower_is_docked": e["garage"],
+                "mower_battery": e["batterie"],
+            }
+            asyncio.run(coordinator._async_update_data())
+        journal = coordinator._runtime_state["mower_passes"]["journal"]
+        self.assertEqual(journal[-1]["fin_motif"], "rappelee")
+        self.assertIs(journal[-1]["travail_termine"], False)
+
+
 class ProgressionTonteTests(unittest.TestCase):
     """La progression du TRAVAIL, publiée sans qu'elle décide de rien.
 
@@ -9381,6 +10172,173 @@ class ProgressionTonteTests(unittest.TestCase):
         for module in ("decision_mowing.py", "guidance.py", "decision.py", "decision_watering.py"):
             with self.subTest(module=module):
                 self.assertNotIn("mower_job_", (PACKAGE_DIR / module).read_text(encoding="utf-8"))
+
+
+class UnSautDePluieImpossibleNEstPasUneAverseTests(unittest.TestCase):
+    """05/10/2026 : « Herbe mouillée : ressuyage après 29,8 mm de pluie » par ciel dégagé.
+
+    À 15:02:36 le compteur de la station est tombé à 0 (secousses sur le toit de la pergola), il est revenu
+    à 29,8 huit secondes plus tard ; le `utility_meter` « Pluie du jour » a compté la remontée : 0,1 → 29,9 mm.
+    Le suivi de la pluie MESURÉE n'avait aucun plafond de plausibilité et en a fait 90 min de ressuyage.
+    """
+
+    T0 = datetime(2026, 10, 5, 12, 0, tzinfo=timezone.utc)
+
+    def _coord(self, runtime=None):
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord._runtime_state = runtime if runtime is not None else {}
+        coord._instant = self.T0
+        coord._current_datetime = lambda: coord._instant
+        coord._current_date = lambda: coord._instant.date()
+        coord._parse_datetime_value = (
+            coordinator_mod.GazonIntelligentCoordinator._parse_datetime_value.__get__(coord)
+        )
+        coord._minutes_depuis_derniere_lecture_pluie = (
+            coordinator_mod.GazonIntelligentCoordinator._minutes_depuis_derniere_lecture_pluie.__get__(coord)
+        )
+        coord._get_conf = lambda cle: "sensor.pluie_du_jour_ws90" if cle == "capteur_pluie_24h" else "sensor.cumul"
+        coord._lecture = None
+        coord._get_float_state = lambda _e: coord._lecture
+        return coord
+
+    def _voisin(self, lectures, coord=None):
+        """Rejoue (minutes, cumul) sur le suivi de la pluie MESURÉE (`capteur_pluie_24h`)."""
+        coord = coord or self._coord()
+        sortie = {}
+        for minutes, cumul in lectures:
+            coord._instant = self.T0 + timedelta(minutes=minutes)
+            sortie = coord._suivre_pluie_mesuree(cumul)
+        return sortie, coord
+
+    def _station(self, lectures, coord=None):
+        """Rejoue (minutes, compteur) sur le total du jour dérivé du compteur cumulatif de la station."""
+        coord = coord or self._coord()
+        sortie = {}
+        for minutes, compteur in lectures:
+            coord._instant = self.T0 + timedelta(minutes=minutes)
+            coord._lecture = compteur
+            sortie = coordinator_mod.GazonIntelligentCoordinator._suivre_pluie_du_jour(coord)
+        return sortie, coord
+
+    # ── le cas réel du 05/10 ──────────────────────────────────────────────────────────
+    def test_le_cas_reel_29_8_mm_en_une_lecture_n_est_pas_une_averse(self) -> None:
+        sortie, _ = self._voisin([(0, 0.1), (2, 0.1), (4, 29.9)])
+        self.assertEqual(sortie["pluie_mesuree_lame_mm"], 0.0, "une pluie fantôme ne doit pas armer de ressuyage")
+        self.assertIs(sortie["pluie_mesuree_active"], False, "ni une garde « il pleut »")
+        self.assertAlmostEqual(sortie["pluie_mesuree_gain_rejete_mm"], 29.8, places=2, msg="le rejet est TRACÉ")
+
+    def test_apres_le_saut_le_capteur_repart_de_sa_nouvelle_lecture(self) -> None:
+        """Sinon le même saut serait rejugé — et recompté dans la trace — à CHAQUE cycle."""
+        sortie, coord = self._voisin([(0, 0.1), (2, 0.1), (4, 29.9), (6, 29.9), (8, 29.9), (10, 29.9)])
+        self.assertAlmostEqual(sortie["pluie_mesuree_gain_rejete_mm"], 29.8, places=2)
+        self.assertEqual(sortie["pluie_mesuree_lame_mm"], 0.0)
+        # Et une vraie averse ensuite est bien vue, au-dessus du nouveau niveau.
+        sortie, _ = self._voisin([(12, 30.4)], coord=coord)
+        self.assertAlmostEqual(sortie["pluie_mesuree_lame_mm"], 0.5, places=2)
+        self.assertIs(sortie["pluie_mesuree_active"], True)
+
+    def test_le_saut_n_arme_aucun_ressuyage_de_tonte(self) -> None:
+        """De bout en bout : la lame que lit le ressuyage de la tonte reste nulle."""
+        decision_mowing = importlib.import_module("custom_components.gazon_intelligent.decision_mowing")
+        sortie, _ = self._voisin([(0, 0.1), (2, 0.1), (4, 29.9)])
+        lame = decision_mowing._lame_de_pluie_recente(sortie)
+        self.assertEqual(decision_mowing._ressuyage_effectif(90.0, lame), 0.0)
+
+    def test_la_chute_puis_remontee_du_compteur_de_la_station_ne_compte_rien(self) -> None:
+        """Le chemin de la station (déjà protégé par le maximum) : mêmes valeurs que le 05/10."""
+        sortie, _ = self._station([(0, 29.8), (2, 29.8), (4, 0.0), (6, 29.8)])
+        self.assertEqual(sortie["pluie_cumul_jour_mm"], 0.0)
+        self.assertEqual(sortie["pluie_cumul_lame_mm"], 0.0)
+
+    # ── une vraie pluie passe, y compris une très forte ───────────────────────────────
+    def test_deux_lectures_dans_la_meme_seconde_gardent_un_plafond_de_pas(self) -> None:
+        """Rafraîchissement immédiat après une action : temps écoulé nul, mais pas de plafond nul — sans le plancher
+        de pas, la moindre hausse (0,4 mm) serait rejetée."""
+        sortie, _ = self._voisin([(0, 1.0), (0, 1.4)])
+        self.assertAlmostEqual(sortie["pluie_mesuree_lame_mm"], 0.4, places=2)
+        self.assertEqual(sortie["pluie_mesuree_gain_rejete_mm"], 0.0)
+
+    def test_une_horloge_reculee_ne_donne_pas_un_plafond_negatif(self) -> None:
+        sortie, _ = self._voisin([(10, 1.0), (8, 1.4)])
+        self.assertAlmostEqual(sortie["pluie_mesuree_lame_mm"], 0.4, places=2)
+
+    def test_un_orage_violent_est_compte(self) -> None:
+        """54 mm/h relevés le 30/09 : 0,9 mm/min. Bien sous le plafond de 3 mm/min."""
+        sortie, _ = self._voisin([(0, 1.0), (2, 2.8)])
+        self.assertAlmostEqual(sortie["pluie_mesuree_lame_mm"], 1.8, places=2)
+        self.assertEqual(sortie["pluie_mesuree_gain_rejete_mm"], 0.0)
+
+    def test_le_plafond_vaut_3_mm_par_minute_sur_deux_minutes(self) -> None:
+        pile, _ = self._voisin([(0, 1.0), (2, 7.0)])  # 6,0 mm en 2 min : la limite, acceptée
+        self.assertAlmostEqual(pile["pluie_mesuree_lame_mm"], 6.0, places=2)
+        au_dessus, _ = self._voisin([(0, 1.0), (2, 7.1)])  # 6,1 mm : rejeté
+        self.assertEqual(au_dessus["pluie_mesuree_lame_mm"], 0.0)
+        self.assertAlmostEqual(au_dessus["pluie_mesuree_gain_rejete_mm"], 6.1, places=2)
+
+    def test_le_plafond_suit_le_temps_ecoule(self) -> None:
+        """Une lecture 10 min plus tard peut montrer jusqu'à 30 mm ; 4 min plus tard, 12 mm."""
+        ok, _ = self._voisin([(0, 1.0), (4, 13.0)])  # 12 mm en 4 min = 3 mm/min
+        self.assertAlmostEqual(ok["pluie_mesuree_lame_mm"], 12.0, places=2)
+        ko, _ = self._voisin([(0, 1.0), (4, 13.2)])
+        self.assertEqual(ko["pluie_mesuree_lame_mm"], 0.0)
+
+    def test_le_plafond_fixe_de_30_mm_reste_le_maximum_absolu(self) -> None:
+        sortie, _ = self._voisin([(0, 1.0), (60, 31.1)])  # 30,1 mm après une heure : rejeté comme avant
+        self.assertEqual(sortie["pluie_mesuree_lame_mm"], 0.0)
+        self.assertAlmostEqual(sortie["pluie_mesuree_gain_rejete_mm"], 30.1, places=2)
+        sortie, _ = self._voisin([(0, 1.0), (60, 31.0)])  # 30,0 mm : accepté
+        self.assertAlmostEqual(sortie["pluie_mesuree_lame_mm"], 30.0, places=2)
+
+    def test_une_coupure_du_capteur_compte_dans_le_temps_ecoule(self) -> None:
+        """Le capteur muet pendant 6 min ne met pas l'horodatage à jour : une vraie averse tombée pendant la
+        panne n'est pas rejetée au retour (cap = 3 mm × 6 min = 18 mm)."""
+        sortie, _ = self._voisin([(0, 1.0), (2, None), (4, None), (6, 14.0)])
+        self.assertAlmostEqual(sortie["pluie_mesuree_lame_mm"], 13.0, places=2)
+
+    def test_un_suivi_d_avant_le_correctif_garde_le_plafond_fixe(self) -> None:
+        """Pas d'horodatage de dernière lecture (état persisté d'avant) : plafond fixe seul, comme avant."""
+        runtime = {"pluie_mesuree": {"entite": "sensor.pluie_du_jour_ws90", "pic": 1.0}}
+        sortie, _ = self._voisin([(0, 21.0)], coord=self._coord(runtime=runtime))
+        self.assertAlmostEqual(sortie["pluie_mesuree_lame_mm"], 20.0, places=2)
+        runtime = {"pluie_mesuree": {"entite": "sensor.pluie_du_jour_ws90", "pic": 1.0}}
+        sortie, _ = self._voisin([(0, 40.0)], coord=self._coord(runtime=runtime))
+        self.assertEqual(sortie["pluie_mesuree_lame_mm"], 0.0)
+
+    def test_l_horodatage_de_derniere_lecture_est_persiste(self) -> None:
+        _sortie, coord = self._voisin([(0, 1.0), (2, 1.2)])
+        self.assertIn("derniere_lecture", coord._runtime_state["pluie_mesuree"])
+
+    # ── la station brute n'est PAS touchée ───────────────────────────────────────────
+    def test_la_station_garde_son_plafond_fixe(self) -> None:
+        """Contre-vérification du 05/10/2026 : la station était déjà protégée de la chute-remontée par son maximum
+        mémorisé ; le nouveau filtre ne lui est pas appliqué. Un vrai coup d'eau de 10 mm en 2 min (rejeté par le
+        capteur « pluie du jour ») y est compté comme avant, donc le ressuyage de la tonte le voit encore."""
+        sortie, coord = self._station([(0, 250.0), (2, 260.0)])
+        self.assertAlmostEqual(sortie["pluie_cumul_jour_mm"], 10.0, places=2)
+        self.assertEqual(sortie["pluie_gain_rejete_mm"], 0.0)
+        self.assertAlmostEqual(sortie["pluie_cumul_lame_mm"], 10.0, places=2)
+        self.assertNotIn("derniere_lecture", coord._runtime_state["pluie_cumul"], "la station n'a pas ce suivi")
+
+    def test_un_coup_d_eau_rejete_par_le_voisin_reste_vu_par_la_station(self) -> None:
+        """Les deux lames se combinent par le MAXIMUM : le rejet du voisin ne rend pas la tonte aveugle."""
+        decision_mowing = importlib.import_module("custom_components.gazon_intelligent.decision_mowing")
+        voisin, _ = self._voisin([(0, 1.0), (2, 11.0)])
+        station, _ = self._station([(0, 250.0), (2, 260.0)])
+        self.assertEqual(voisin["pluie_mesuree_lame_mm"], 0.0)
+        lame = decision_mowing._lame_de_pluie_recente({**voisin, **station})
+        self.assertAlmostEqual(lame, 10.0, places=2)
+
+    def test_la_station_garde_son_plafond_fixe_de_30_mm(self) -> None:
+        sortie, _ = self._station([(0, 250.0), (2, 281.0)])
+        self.assertEqual(sortie["pluie_cumul_jour_mm"], 0.0)
+        self.assertAlmostEqual(sortie["pluie_gain_rejete_mm"], 31.0, places=2)
+
+    def test_seul_le_chemin_du_voisin_appelle_la_regle(self) -> None:
+        import inspect
+        classe = coordinator_mod.GazonIntelligentCoordinator
+        self.assertIn("_plafond_gain_pluie(", inspect.getsource(classe._suivre_pluie_mesuree))
+        self.assertNotIn("_plafond_gain_pluie(", inspect.getsource(classe._suivre_pluie_du_jour))
+        self.assertIn("_PLUIE_GAIN_MAX_PAR_PAS_MM", inspect.getsource(classe._suivre_pluie_du_jour))
 
 
 class PluieActuelleTests(unittest.TestCase):
@@ -9526,6 +10484,70 @@ class UnitesDesCapteursTests(unittest.TestCase):
         src = (PACKAGE_DIR / "water.py").read_text(encoding="utf-8")
         self.assertEqual(src.count('"mph", "mi/h"'), 1, "la table de vent est écrite deux fois")
         self.assertIn("facteur_vent_vers_ms(unit)", src)
+
+
+class RoseeMaintenueDansUnCycleCompletTests(unittest.TestCase):
+    """La mémoire de la rosée traverse un VRAI cycle — capteurs → estimation → santé."""
+
+    CONF = {
+        "capteur_temperature": "sensor.station_temperature",
+        "capteur_point_de_rosee": "sensor.station_point_de_rosee",
+        "capteur_humidite": "sensor.station_humidite",
+        "type_sol": "limoneux",
+    }
+
+    def _cycle(self, lectures, *, memoire=None, rosee_mesuree=None):
+        coordinator = _build_update_data_coordinator(weather_temperature=20.0)
+        coordinator.__dict__.pop("_estimate_rosee", None)  # la VRAIE façade, pas la doublure du banc
+        coordinator._get_conf = lambda key: self.CONF.get(key)
+        coordinator._get_float_state = lambda entity_id: lectures.get(entity_id)
+        if rosee_mesuree is not None:
+            coordinator._lire_rosee = lambda: rosee_mesuree
+        if memoire is not None:
+            coordinator._runtime_state["rosee_memoire"] = {
+                "valeur": 1.0, "maj_a": coordinator._current_datetime().isoformat(), "maintenue": False,
+            }
+        result = asyncio.run(coordinator._async_update_data())
+        return result["sensor_health"], coordinator
+
+    # Écart 2,3 °C et humidité 80 % : la règle d'entrée ne voit plus de rosée.
+    BANDE = {"sensor.station_temperature": 20.0, "sensor.station_point_de_rosee": 17.7,
+             "sensor.station_humidite": 80.0}
+
+    def test_apres_une_rosee_la_bande_entre_2_0_et_2_5_degres_reste_mouillee(self) -> None:
+        sante, coordinator = self._cycle(self.BANDE, memoire=True)
+        self.assertIs(sante["rosee_maintenue"], True)
+        self.assertIs(coordinator._runtime_state["rosee_memoire"]["maintenue"], True)
+
+    def test_sans_rosee_precedente_la_meme_bande_reste_seche(self) -> None:
+        sante, coordinator = self._cycle(self.BANDE)
+        self.assertIs(sante["rosee_maintenue"], False)
+        self.assertIsNone(coordinator._runtime_state["rosee_memoire"])
+
+    def test_un_capteur_de_rosee_mesure_n_est_jamais_maintenu(self) -> None:
+        """L'hystérésis ne concerne que la rosée ESTIMÉE : une mesure directe se lit telle quelle."""
+        sante, _ = self._cycle(self.BANDE, memoire=True, rosee_mesuree=0.0)
+        self.assertIs(sante["rosee_maintenue"], False)
+
+    def test_la_rosee_estimee_arrive_dans_le_profil_meteo_du_cycle(self) -> None:
+        coordinator = _build_update_data_coordinator(weather_temperature=20.0)
+        coordinator.__dict__.pop("_estimate_rosee", None)
+        coordinator._get_conf = lambda key: self.CONF.get(key)
+        coordinator._get_float_state = lambda entity_id: self.BANDE.get(entity_id)
+        coordinator._runtime_state["rosee_memoire"] = {
+            "valeur": 1.0, "maj_a": coordinator._current_datetime().isoformat(), "maintenue": False,
+        }
+        vus: list[object] = []
+        calcul = type(coordinator.brain).compute_snapshot
+
+        def compute_snapshot(**kwargs):
+            vus.append(kwargs.get("rosee"))
+            return calcul(coordinator.brain, **kwargs)
+
+        coordinator.brain.compute_snapshot = compute_snapshot
+        asyncio.run(coordinator._async_update_data())
+        self.assertTrue(vus, "prémisse : le cerveau est appelé")
+        self.assertEqual(vus[-1], 1.0, "la rosée maintenue n'atteint pas la décision")
 
 
 class PluieDuJourDepuisCumulTests(unittest.TestCase):

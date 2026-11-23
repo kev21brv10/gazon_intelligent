@@ -360,7 +360,7 @@ def _phase_tondeuse(source: Mapping[str, Any] | None) -> str | None:
     if not isinstance(source, Mapping):
         return None
     operation = str(source.get("operation") or "").strip().lower()
-    if source.get("docked") is True or operation in {"docked", "charging", "idle", "parked", "home"}:
+    if source.get("docked") is True or operation in {"docked", "charging"}:
         return "station"
     if source.get("returning") is True or operation in {"returning", "going_home", "homing", "retour_station"}:
         return "retour"
@@ -458,7 +458,7 @@ def _evaluer_activites(
                 message="",
                 resolue=True,
             ))
-        elif SUJET_ACTIVITE_TONDEUSE in sujets_actifs and phase and phase != precedente:
+        if SUJET_ACTIVITE_TONDEUSE in sujets_actifs and phase and phase != precedente and not tondeuse_error:
             titre, message = {
                 "tonte": ("🤖 Tonte démarrée", "La tondeuse a démarré sa tonte."),
                 "retour": ("🤖 Retour demandé", "La tondeuse retourne à sa station."),
@@ -479,16 +479,28 @@ def _evaluer_activites(
     garage_state = str(garage_data.get("state") or "").lower() if garage_configure else None
     garage_state = garage_state if garage_state in {"open", "closed"} else None
     garage_error = str(garage_data.get("error") or "").strip() if garage_configure else ""
+    garage_alert = str(garage_data.get("alert") or "").strip() if garage_configure else ""
     if not suivi.get("garage_initialise"):
+        # ⚠️ L'anomalie n'est PAS mémorisée à l'initialisation : une anomalie déjà là au premier
+        # contrôle doit partir au suivant, pas être avalée comme un état de départ.
         suivi.update({
             "garage_initialise": True,
             "garage_state": garage_state,
             "garage_error": garage_error or None,
+            "garage_alert": None,
         })
     else:
         precedente = suivi.get("garage_state")
         erreur_precedente = str(suivi.get("garage_error") or "")
+        alerte_precedente = str(suivi.get("garage_alert") or "")
+        # ⚠️ Une anomalie NOUVELLE que l'erreur de commande (ou sa levée) a fait passer sous silence
+        # n'est PAS mémorisée : elle reste à annoncer au contrôle suivant. Avancer la mémoire ici la
+        # perdrait pour de bon (reproduit en relecture : erreur + anomalie au même contrôle, l'alerte
+        # persistante du volet ne partait jamais). Seule une anomalie qui APPARAÎT est retenue : une
+        # anomalie levée n'a rien à annoncer, sa résolution passe après l'erreur en cours.
+        anomalie_en_attente = False
         if SUJET_GARAGE_TONDEUSE in sujets_actifs and garage_error and garage_error != erreur_precedente:
+            anomalie_en_attente = bool(garage_alert) and garage_alert != alerte_precedente
             alertes.append(Alerte(
                 sujet=SUJET_GARAGE_TONDEUSE,
                 titre="⚠️ Garage de la tondeuse : commande impossible",
@@ -496,13 +508,36 @@ def _evaluer_activites(
                 niveau="action",
             ))
         elif SUJET_GARAGE_TONDEUSE in sujets_actifs and not garage_error and erreur_precedente:
+            anomalie_en_attente = bool(garage_alert) and garage_alert != alerte_precedente
             alertes.append(Alerte(
                 sujet=SUJET_GARAGE_TONDEUSE,
                 titre="",
                 message="",
                 resolue=True,
             ))
-        elif SUJET_GARAGE_TONDEUSE in sujets_actifs and garage_state and garage_state != precedente:
+        elif SUJET_GARAGE_TONDEUSE in sujets_actifs and garage_alert and garage_alert != alerte_precedente:
+            # Une anomalie du volet (bloqué, injoignable tondeuse dehors) : toujours une alerte
+            # persistante. « Injoignable tondeuse dehors » est critique — elle peut ne plus pouvoir rentrer.
+            titre_anomalie = {
+                "volet_indisponible": "🚨 Garage de la tondeuse : volet injoignable",
+                "volet_bloque": "⚠️ Garage de la tondeuse : volet bloqué",
+                "volet_ferme_dehors": "🚨 Garage de la tondeuse : volet fermé, tondeuse dehors",
+            }.get(garage_alert, "⚠️ Garage de la tondeuse : anomalie")
+            alertes.append(Alerte(
+                sujet=SUJET_GARAGE_TONDEUSE,
+                titre=titre_anomalie,
+                message=str(garage_data.get("alert_reason") or "").strip()
+                or "Le volet du garage de la tondeuse signale une anomalie.",
+                niveau="critique" if garage_alert in {"volet_indisponible", "volet_ferme_dehors"} else "action",
+            ))
+        elif SUJET_GARAGE_TONDEUSE in sujets_actifs and not garage_alert and alerte_precedente:
+            alertes.append(Alerte(
+                sujet=SUJET_GARAGE_TONDEUSE,
+                titre="",
+                message="",
+                resolue=True,
+            ))
+        if SUJET_GARAGE_TONDEUSE in sujets_actifs and garage_state and garage_state != precedente and not garage_error:
             ouvert = garage_state == "open"
             alertes.append(Alerte(
                 sujet=SUJET_GARAGE_TONDEUSE,
@@ -513,6 +548,7 @@ def _evaluer_activites(
             ))
         suivi["garage_state"] = garage_state
         suivi["garage_error"] = garage_error or None
+        suivi["garage_alert"] = (alerte_precedente or None) if anomalie_en_attente else (garage_alert or None)
     return alertes
 
 
@@ -942,6 +978,20 @@ def resume_du_gazon(
     return lignes
 
 
+def contexte_pour_alerte(sujet: str, lignes: Sequence[str]) -> list[str]:
+    """Ne donne à l'IA que les données liées à la catégorie de la notification."""
+    prefixes = {
+        SUJET_GRAINES: ("Phase :", "Cycles de graines", "Moment conseillé :", "Arrosage automatique :", "Météo :"),
+        SUJET_VERROU: ("Arrosage automatique :", "Cycles de graines", "Arrosage du jour :"),
+        SUJET_MESURES: ("Météo :",),
+        SUJET_TONDEUSE: ("Tonte :", "Météo :"),
+        SUJET_ACTIVITE_ARROSAGE: ("Arrosage du jour :", "Cycles de graines", "Arrosage automatique :"),
+        SUJET_ACTIVITE_TONDEUSE: ("Tonte :",),
+        SUJET_GARAGE_TONDEUSE: ("Tonte :",),
+    }.get(sujet, ())
+    return [ligne for ligne in lignes if ligne.startswith(prefixes)]
+
+
 # ── Options de l'entrée ────────────────────────────────────────────────────────────────────
 
 
@@ -1117,11 +1167,12 @@ async def async_publier(
         ):
             message = alerte.message
             if source_notifications(entry) == "conseiller_gazon":
+                contexte_alerte = contexte_pour_alerte(alerte.sujet, contexte)
                 instructions = ia.consigne_notification(
                     alerte.titre,
                     alerte.message,
                     niveau,
-                    contexte,
+                    contexte_alerte,
                     maintenant=instant,
                 )
                 try:
@@ -1131,7 +1182,16 @@ async def async_publier(
                         entite=ia.entite_effective(hass, entry),
                         delai_s=ia.DELAI_NOTIFICATION_S,
                     )
-                    message = message[: ia.MESSAGE_NOTIFICATION_MAX_CARACTERES]
+                    # Le texte du moteur reste lisible même si l'IA omet ou invente un fait.
+                    conseil = message.strip()
+                    faits = f"Faits vérifiés : {alerte.message}"
+                    place = ia.MESSAGE_NOTIFICATION_MAX_CARACTERES - len(faits) - len("Conseil IA : \n\n")
+                    message = (
+                        f"Conseil IA : {conseil[:place].rstrip()}\n\n{faits}"
+                        if place > 0 and ia.conseil_notification_utilisable(
+                            conseil, faits=alerte.message, contexte=contexte_alerte,
+                        ) else alerte.message
+                    )
                 except ia.IaIndisponible as err:
                     _LOGGER.warning(
                         "Conseiller Gazon indisponible pour la notification %s : %s. "

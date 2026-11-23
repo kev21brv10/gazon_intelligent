@@ -52,9 +52,140 @@ class ConsigneTests(unittest.TestCase):
         self.assertIn("La vanne Zone 1 ne s'est pas fermée à 13:20.", texte)
         self.assertIn("N'invente rien", texte)
         self.assertIn("ne prétends commander aucun appareil", texte)
+        self.assertIn("même écrit en lettres", texte)
+        self.assertIn("même au conditionnel", texte)
 
 
 class ReponseTests(unittest.TestCase):
+    def test_conseil_notification_suspect_retombe_sur_les_faits(self) -> None:
+        faits = "La vanne Zone 1 ne s'est pas fermée à 13:20."
+        contexte = ["Arrosage automatique : coupé."]
+        for conseil in (
+            "Bonjour Camille, la vanne demande une vérification.",
+            "Camille, la vanne demande une vérification.",
+            "La vanne demande une vérification pour Camille.",
+            "La vanne Zone 2 demande une vérification.",
+            "Fermez la vanne.",
+            "La vanne doit être ouverte.",
+            "La vanne demande une vérification.\nArrosez maintenant.",
+        ):
+            with self.subTest(conseil=conseil):
+                self.assertFalse(ia.conseil_notification_utilisable(
+                    conseil, faits=faits, contexte=contexte,
+                ))
+        self.assertTrue(ia.conseil_notification_utilisable(
+            "La vanne demande une vérification.", faits=faits, contexte=contexte,
+        ))
+
+    def test_conseil_notification_refuse_ordre_conditionnel_ou_infinitif(self) -> None:
+        """Un ordre déguisé (conditionnel, infinitif, impératif en -ez, périphrase de conseil)
+        n'est pas moins un ordre que « il faut » : le garde-fou ne doit pas s'y laisser prendre."""
+        faits = "La vanne Zone 1 ne s'est pas fermée à 13:20."
+        contexte = ["Arrosage automatique : coupé."]
+        for conseil in (
+            "Il faudrait arroser la zone.",
+            "Il faudra fermer la vanne.",
+            "Il ne faudrait pas relancer l'arrosage.",
+            "Il conviendrait de fermer la vanne.",
+            "Il convient de vérifier la vanne.",
+            "Il serait préférable de fermer la vanne.",
+            "Il est conseillé de couper l'arrivée d'eau.",
+            "Il est vraiment préférable d'attendre.",
+            "Il pourrait être utile de relancer le cycle.",
+            "Il vaut mieux couper l'eau.",
+            "Mieux vaut fermer la vanne.",
+            "Pensez à fermer la vanne.",
+            "Assurez-vous de couper l'eau.",
+            "Veillez à vérifier la vanne.",
+            "Faites attention à la vanne.",
+            "Vous pouvez relancer le cycle.",
+            "Je recommande de fermer la vanne.",
+            "On devrait vérifier la vanne.",
+            "La vanne demande une vérification. Arroser dès maintenant.",
+            "arroser dès maintenant.",
+            # Mêmes formes noyées dans une phrase d'allure neutre : la majuscule initiale d'un
+            # ordre est déjà refusée plus haut, ce sont ces formes-là que seuls les motifs d'ordre
+            # arrêtent.
+            "La vanne reste ouverte, pensez à la fermer.",
+            "La vanne reste ouverte, assurez-vous de couper l'eau.",
+            "La vanne reste ouverte, veillez à la vérifier.",
+            "La vanne reste ouverte, faites attention.",
+            "La vanne reste ouverte, vous pouvez relancer le cycle.",
+            "La vanne reste ouverte, mieux vaut couper l'eau.",
+            "La vanne reste ouverte, je recommande de la fermer.",
+            "La vanne reste ouverte, nous conseillons de couper l'eau.",
+            "La vanne reste ouverte : fermer la vanne.",
+        ):
+            with self.subTest(conseil=conseil):
+                self.assertFalse(ia.conseil_notification_utilisable(
+                    conseil, faits=faits, contexte=contexte,
+                ))
+
+    def test_conseil_notification_refuse_quantite_ecrite_en_lettres(self) -> None:
+        """« deux heures » vaut « 2 heures » : une durée, un volume ou un horaire écrit en toutes
+        lettres, absent des faits, est aussi inventé qu'un chiffre."""
+        faits = "La vanne Zone 1 ne s'est pas fermée à 13:20."
+        contexte = ["Arrosage automatique : coupé."]
+        for conseil in (
+            "Il faudrait arroser pendant deux heures.",
+            "La vanne est restée ouverte pendant trois heures.",
+            "Le cycle reprendra dans un quart d'heure.",
+            "Le cycle reprendra dans une demi-heure.",
+            "Le cycle reprendra dans une heure.",
+            "La vanne a débité quinze minutes de trop.",
+            "La vanne a laissé passer cent litres.",
+            "Le cycle reprendra à midi.",
+            "Le cycle reprendra à minuit.",
+        ):
+            with self.subTest(conseil=conseil):
+                self.assertFalse(ia.conseil_notification_utilisable(
+                    conseil, faits=faits, contexte=contexte,
+                ))
+
+    def test_conseil_notification_accepte_les_observations_legitimes(self) -> None:
+        """Garde-fou inverse : durcir ne doit pas rejeter une simple observation, sinon le
+        complément de l'IA disparaît pour rien (mots proches d'un ordre ou d'un nombre, mais
+        qui n'en sont pas : « assez », « rendez-vous », « une vérification », « conseillée »)."""
+        faits = "La vanne Zone 1 ne s'est pas fermée à 13:20."
+        contexte = ["Arrosage automatique : coupé."]
+        for conseil in (
+            "La vanne demande une vérification.",
+            "Une vérification de la vanne est conseillée.",
+            "Le sol est assez humide pour que l'arrosage puisse attendre.",
+            "Un rendez-vous de maintenance reste possible.",
+            "Il est probable que la vanne soit restée ouverte.",
+            "Il n'est pas nécessaire d'intervenir pour le moment.",
+            "La vanne de la Zone 1 reste à surveiller.",
+            "Le cycle reprendra après la fermeture de la vanne.",
+            "La tondeuse reste à la station.",
+        ):
+            with self.subTest(conseil=conseil):
+                self.assertTrue(ia.conseil_notification_utilisable(
+                    conseil, faits=faits, contexte=contexte,
+                ))
+
+    def test_conseil_notification_quantite_ecrite_deja_dans_les_faits_est_permise(self) -> None:
+        """Comme pour les chiffres, une quantité en lettres PRÉSENTE dans les faits ou le contexte
+        n'est pas une invention ; une autre l'est."""
+        faits = "Les deux zones sont à l'arrêt depuis une heure."
+        contexte = ["Arrosage automatique : coupé."]
+        self.assertTrue(ia.conseil_notification_utilisable(
+            "Les deux zones restent surveillées.", faits=faits, contexte=contexte,
+        ))
+        self.assertTrue(ia.conseil_notification_utilisable(
+            "L'arrêt dure depuis une heure.", faits=faits, contexte=contexte,
+        ))
+        # La casse ne compte pas : « Une heure » en tête de phrase = « une heure » des faits.
+        self.assertTrue(ia.conseil_notification_utilisable(
+            "Une heure s'est écoulée depuis l'arrêt.", faits=faits, contexte=contexte,
+        ))
+        self.assertFalse(ia.conseil_notification_utilisable(
+            "Les trois zones restent surveillées.", faits=faits, contexte=contexte,
+        ))
+        self.assertFalse(ia.conseil_notification_utilisable(
+            "L'arrêt dure depuis trois heures.", faits=faits, contexte=contexte,
+        ))
+
     def test_formes_de_reponse(self) -> None:
         self.assertEqual(ia.texte_de_la_reponse({"data": "  Bonjour \n"}), "Bonjour")
         self.assertEqual(ia.texte_de_la_reponse({"data": {"text": "Oui"}}), "Oui")

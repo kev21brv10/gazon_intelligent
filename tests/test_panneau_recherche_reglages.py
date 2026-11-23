@@ -124,6 +124,14 @@ class RechercheReglagesTests(unittest.TestCase):
         self.assertEqual(par_cle["tonte_vent_bloque"]["ongletCle"], "tonte")
         self.assertTrue(par_cle["tonte_vent_bloque"]["section"], "la section de DISPOSITION ne remonte pas")
 
+    def test_l_ideal_du_soir_se_cherche_dans_la_section_du_dessin_de_la_journee(self) -> None:
+        """Une recherche de « meilleur moment » doit amener à la carte qui montre aussi la
+        journée : matin ET soir se règlent au même endroit."""
+        par_cle = {it["cle"]: it for it in _rendre([""])["index"]}
+        for cle in ("tonte_soir_ideal_debut_avant_coucher", "tonte_soir_ideal_fin_avant_coucher"):
+            with self.subTest(cle=cle):
+                self.assertEqual(par_cle[cle]["section"], "Quand la tondeuse peut-elle travailler ?")
+
     def test_type_sol_reste_cherchable_sans_section_dediee(self) -> None:
         """`type_sol` (Choix) n'est pas placé par `DISPOSITION` (propre à `_installationHtml`) :
         il doit rester trouvable, juste sans le fil « onglet › section »."""

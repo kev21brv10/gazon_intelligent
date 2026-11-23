@@ -13,6 +13,7 @@ est choisie dans la page. Chaque appel peut avoir un coût chez le fournisseur c
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
@@ -26,6 +27,55 @@ DELAI_NOTIFICATION_S = 15
 MESSAGE_NOTIFICATION_MAX_CARACTERES = 1000
 # Au-delà, une question n'est plus une question : c'est un document collé par erreur.
 QUESTION_MAX_CARACTERES = 1000
+
+_DEBUTS_NEUTRES = frozenset({
+    "après", "avant", "ce", "cela", "cette", "ces", "des", "en", "il", "la", "le", "les",
+    "lorsque", "on", "pour", "quand", "si", "sur", "un", "une",
+})
+_NOMBRE = re.compile(r"\d+(?:[,.]\d+)?")
+_MOT_MAJUSCULE = re.compile(r"\b[A-ZÀ-ÖØ-Þ][a-zà-ÿ]{2,}\b")
+
+# Une quantité ou un horaire écrit en toutes lettres vaut un chiffre : « deux heures » = « 2 heures ».
+# Ni « un » ni « une » seuls (articles), seulement suivis d'une unité de durée ; « demi » et
+# « quart » couvrent « demi-heure » et « quart d'heure ».
+_QUANTITE_ECRITE = re.compile(
+    r"\b(?:zéro|deux|trois|quatre|cinq|six|sept|huit|neuf|dix|onze|douze|treize|quatorze|quinze|seize"
+    r"|vingts?|trente|quarante|cinquante|soixante|cents?|mille|millions?|demie?|quarts?|midi|minuit"
+    r"|(?:un|une)\s+(?:heure|minute|seconde)s?)\b",
+    re.IGNORECASE,
+)
+
+# Un ordre reste un ordre au conditionnel, à l'infinitif ou en périphrase de conseil.
+_ORDRE = re.compile(
+    r"\b(?:"
+    # Obligation : « il faut », « il faudrait », « il ne faudra pas » ; « doit », « devrait »…
+    r"il\s+(?:ne\s+)?(?:faut|faudrait|faudra)"
+    r"|doi(?:t|vent|s)|dev(?:ez|ons|riez|rions)|devr(?:ait|aient|ais|a|ont)"
+    # Conseil : « il convient de », « il vaut mieux », « mieux vaut », « il serait préférable de »…
+    r"|il\s+(?:convient|conviendrait|conviendra|importe)\s+(?:de|d['’])"
+    r"|il\s+vaut\s+mieux|mieux\s+vaut"
+    r"|il\s+(?:serait|sera|est|pourrait\s+être)\s+(?:\w+\s+)?"
+    r"(?:préférable|souhaitable|conseillé|recommandé|judicieux|prudent|opportun|nécessaire"
+    r"|indispensable|impératif|important|essentiel|primordial|crucial|urgent|bon|utile|sage)"
+    r"\s+(?:de|d['’])"
+    r"|(?:je|nous|on)\s+(?:vous\s+)?(?:conseill|recommand|suggèr|propos|invit)\w*"
+    r")\b",
+    re.IGNORECASE,
+)
+# Impératif à la 2e personne du pluriel (« fermez », « pensez à », « assurez-vous de »…) : tout
+# mot en -ez sauf les adverbes, prépositions et noms courants qui n'en sont pas.
+_IMPERATIF = re.compile(
+    r"\b(?!(?:chez|assez|rendez-vous)\b)[a-zà-ÿ]{2,}ez\b|\b(?:faites|dites)\b",
+    re.IGNORECASE,
+)
+# Infinitif d'ordre en tête de phrase : « Arroser dès maintenant. », « Fermer la vanne. »
+_INFINITIF_D_ORDRE = re.compile(
+    r"(?:^|[.!?;:])\s*(?:arroser|tondre|ouvrir|fermer|activer|désactiver|couper|allumer|éteindre"
+    r"|arrêter|stopper|démarrer|redémarrer|lancer|relancer|déclencher|programmer|forcer|reporter"
+    r"|reprendre|suspendre|interrompre|vérifier|contrôler|inspecter|nettoyer|remplacer|réparer"
+    r"|attendre|éviter|surveiller|prévoir|penser|veiller)\b",
+    re.IGNORECASE,
+)
 
 
 class IaIndisponible(Exception):
@@ -91,14 +141,45 @@ def consigne_notification(
     return (
         "Tu rédiges une notification claire en français pour la personne qui suit le gazon.\n"
         "Réponds uniquement par le message final, sans titre, sans markdown, en 3 phrases au plus.\n"
-        "Utilise une formulation neutre, sans nom, tutoiement ni détail personnel non fourni.\n"
-        "Conserve exactement les faits, nombres, horaires, noms d'appareils et action demandée. "
+        "Utilise une formulation neutre, sans nom, salutation, tutoiement ni détail personnel. "
+        "Le message factuel est affiché séparément : ton complément n'ajoute aucun nombre "
+        "(même écrit en lettres), horaire ni nouvelle action, et ne donne aucun ordre ni "
+        "conseil d'agir, même au conditionnel.\n"
+        "Ne modifie pas les faits ni leur urgence. "
         "N'invente rien, ne minimise jamais une urgence et ne prétends commander aucun appareil.\n"
         f"Niveau fixé par l'intégration : {niveau}.\n"
         f"Titre fixé par l'intégration : {titre}\n"
         f"Message factuel : {message}\n"
         f"Contexte du {maintenant.strftime('%d/%m/%Y à %H:%M')} :\n{contexte}"
     )
+
+
+def _quantites_ecrites(texte: str) -> set[str]:
+    """Quantités et horaires écrits en lettres, normalisés (casse, espaces)."""
+    return {" ".join(m.group().casefold().split()) for m in _QUANTITE_ECRITE.finditer(texte)}
+
+
+def conseil_notification_utilisable(texte: str, *, faits: str, contexte: Sequence[str]) -> bool:
+    """Rejette une réponse suspecte ; un faux rejet conserve le message factuel."""
+    if not texte or "\n" in texte or len(texte) > MESSAGE_NOTIFICATION_MAX_CARACTERES:
+        return False
+    if re.search(r"\b(?:bonjour|bonsoir|salut|cher|chère|hello)\b", texte, re.IGNORECASE):
+        return False
+    autorise = f"{faits} {' '.join(contexte)}"
+    if not set(_NOMBRE.findall(texte)) <= set(_NOMBRE.findall(autorise)):
+        return False
+    if not _quantites_ecrites(texte) <= _quantites_ecrites(autorise):
+        return False
+    if _ORDRE.search(texte) or _IMPERATIF.search(texte) or _INFINITIF_D_ORDRE.search(texte):
+        return False
+    mots_autorises = {mot.casefold() for mot in _MOT_MAJUSCULE.findall(autorise)}
+    for mot in _MOT_MAJUSCULE.finditer(texte):
+        if mot.group().casefold() in mots_autorises:
+            continue
+        debut_phrase = not texte[:mot.start()].strip() or texte[:mot.start()].rstrip().endswith((".", "!", "?"))
+        if not debut_phrase or mot.group().casefold() not in _DEBUTS_NEUTRES:
+            return False
+    return True
 
 
 def texte_de_la_reponse(reponse: Any) -> str:

@@ -169,6 +169,21 @@ _PLUIE_LAME_MAX_ENTREES: int = 200
 # les sauts de compteur. À recalibrer quand la station sera là et qu'on aura ses vrais écarts.
 _PLUIE_GAIN_MAX_PAR_PAS_MM: float = 30.0
 
+# ⚠️ PLAFOND DE PLAUSIBILITÉ PAR TEMPS ÉCOULÉ, POUR LE CAPTEUR « PLUIE DU JOUR » SEUL (05/10/2026). Le 05/10 à
+# 15:02, des secousses sur la station ont fait chuter son compteur à 0 pendant 8 s puis revenir à 29,8 ; le
+# `utility_meter` branché dessus a compté la remontée comme +29,8 mm, et le suivi de la pluie MESURÉE — qui n'avait
+# AUCUN plafond — a armé 90 min de ressuyage pour une pluie qui n'existait pas. Un gain ne peut pas dépasser ce
+# qu'une averse extrême verse dans le temps écoulé depuis la dernière lecture : ~3 mm/min pour les plus intenses
+# relevées en France. Le plafond fixe ci-dessus reste le MAXIMUM absolu ; le plancher de pas évite un plafond nul
+# quand deux lectures tombent dans la même seconde (rafraîchissement immédiat après une action).
+#
+# ⚠️ LIMITE CONNUE : le saut fantôme a la taille du cumul du jour au moment de la secousse. Un cumul inférieur au
+# plafond d'un pas (6 mm sur un cycle de 2 min) passerait donc ; seul un gros cumul est filtré. Le station brute garde
+# son plafond fixe : le ressuyage de la tonte prend le MAXIMUM des deux lames, un vrai coup d'eau rejeté par ce
+# filtre-ci serait encore compté par elle.
+_PLUIE_DEBIT_MAX_MM_PAR_MIN: float = 3.0
+_PLUIE_PAS_MIN_MINUTES: float = 2.0
+
 # Fenêtres pour lesquelles un renoncement à arroser est un vrai REFUS, digne d'être tracé.
 # Doit rester un sous-ensemble de `POSSIBLE_FENETRE_OPTIMALE_VALUES` (decision_models.py) :
 # une valeur inventée ici désactive silencieusement la trace pour cette fenêtre.

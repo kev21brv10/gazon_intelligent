@@ -93,12 +93,16 @@ class DureeAvecSecondesTests(unittest.TestCase):
 
 
 class GarageDelaisPasEnSecondesTests(unittest.TestCase):
-    def test_les_deux_delais_du_garage_se_reglent_au_quart_de_minute(self) -> None:
+    def test_les_deux_delais_du_garage_se_reglent_a_la_seconde(self) -> None:
+        """Demande du 04/10/2026 : « tout ça faut les mettre en seconde » (avant : quart de minute)."""
         par_cle = {r.cle: r for r in reglages_module.REGLAGES}
-        for cle in ("tondeuse_garage_avance_ouverture", "tondeuse_garage_delai_fermeture"):
+        for cle in ("tondeuse_garage_avance_ouverture_secondes", "tondeuse_garage_delai_fermeture_secondes"):
             with self.subTest(cle=cle):
-                self.assertEqual(par_cle[cle].pas, 0.25)
-                self.assertEqual(par_cle[cle].genre, "duree")
+                self.assertEqual(par_cle[cle].pas, 1)
+                self.assertEqual(par_cle[cle].genre, "nombre")
+                self.assertEqual(par_cle[cle].unite, "s")
+        for ancienne in ("tondeuse_garage_avance_ouverture", "tondeuse_garage_delai_fermeture"):
+            self.assertNotIn(ancienne, par_cle, "l'ancienne clé en minutes n'est plus un réglage")
 
 
 if __name__ == "__main__":
