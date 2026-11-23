@@ -7981,6 +7981,216 @@ class AutoDeclarationTonteTests(unittest.TestCase):
                           "une trace inerte annonce un cumul qu'elle n'a pas calculé")
 
 
+class LeTravailSurvitAuChangementDIdentifiantDeLaTondeuseTests(unittest.TestCase):
+    """⚠️ RELEVÉ LE 23/11/2026 : aucune tonte inscrite depuis le 10/11 (13 jours de retard)
+    alors que deux travaux avaient atteint 100 % et que le pilote relançait la tondeuse chaque
+    jour.
+
+    Le micrologiciel ouvre une TÂCHE par sortie, mais sa progression est la couverture cumulée de
+    la pelouse : elle continue d'une tâche à la suivante jusqu'à 100 %. Le suivi comparait les
+    seuls identifiants : la reprise du lendemain, sous un nouvel identifiant, passait pour un
+    nouveau travail, et chaque moitié restait sous le plancher de 90 min (63 et 85 min comptées
+    pour 148 et 166 min réellement tondues).
+
+    Les chiffres ci-dessous sont ceux de l'installation (capteurs début / fin / durée de la
+    dernière tonte et progression) : ce ne sont pas des valeurs de convenance.
+    """
+
+    VEILLE = date(2026, 11, 21)
+    JOUR = date(2026, 11, 22)
+    LENDEMAIN = date(2026, 11, 23)
+
+    def _coord(self, *, seuil=90):
+        brain_mod = importlib.import_module("custom_components.gazon_intelligent.gazon_brain")
+        coord = object.__new__(coordinator_mod.GazonIntelligentCoordinator)
+        coord.brain = brain_mod.GazonBrain()
+        coord.brain.memory["auto_mowing_declaration_enabled"] = True
+        coord.brain.memory["auto_mowing_declaration_minutes"] = seuil
+        coord._current_date = lambda: self.VEILLE
+        coord._runtime_state = {}
+        return coord
+
+    def _cycle(self, coord, jour, tache, progression, minutes_du_jour):
+        """Un cycle complet du coordinateur : suivi du travail, puis déclaration."""
+        coord._current_date = lambda: jour
+        return coord._declarer_tonte_du_jour(
+            {"mower_job_id": tache, "mower_job_progress_pct": float(progression),
+             "mower_mowing_minutes_today": float(minutes_du_jour)}
+        )
+
+    def _suivre(self, coord, jour, tache, progression, minutes_du_jour):
+        coord._current_date = lambda: jour
+        return coord._suivre_travail_tondeuse(
+            {"mower_job_id": tache, "mower_job_progress_pct": float(progression),
+             "mower_mowing_minutes_today": float(minutes_du_jour)}
+        )
+
+    def _tontes(self, coord):
+        return [i for i in coord.brain.history if i.get("type") == "tonte"]
+
+    # ---- LE CAS RELEVÉ ------------------------------------------------------------------
+    def test_21_au_22_novembre_deux_taches_un_seul_travail_de_148_minutes(self) -> None:
+        coord = self._coord()
+        # 21/11 : tâche 14:38 → 17:10, progression 0 → 48 %, 85,5 min de lame.
+        self._cycle(coord, self.VEILLE, "tache-21", 0, 0.0)
+        self._cycle(coord, self.VEILLE, "tache-21", 30, 52.0)
+        fin_veille = self._cycle(coord, self.VEILLE, "tache-21", 48, 85.5)
+        self.assertEqual(fin_veille["mower_auto_declaration_state"], "travail_en_cours", "prémisse")
+
+        # 22/11 : le compteur du jour repart de zéro ; la reprise porte un NOUVEL identifiant et
+        # repart de 49 %. Elle atteint 100 % à 15:37 avec 62,9 min de lame ce jour-là.
+        reprise = self._cycle(coord, self.JOUR, "tache-22", 49, 2.0)
+        self.assertAlmostEqual(
+            reprise["mower_job_minutes_total"], 87.5, places=1,
+            msg="la reprise sous un nouvel identifiant doit prolonger le travail de la veille",
+        )
+        self._cycle(coord, self.JOUR, "tache-22", 80, 40.0)
+        fin = self._cycle(coord, self.JOUR, "tache-22", 100, 62.9)
+
+        self.assertEqual(fin["mower_auto_declaration_state"], "declaree",
+                         "un travail terminé à 100 % est une tonte, même repris le lendemain")
+        self.assertAlmostEqual(fin["mower_job_minutes_total"], 148.4, places=1)
+        self.assertAlmostEqual(fin["mower_travail_termine_minutes_jour"], 148.4, places=1)
+        tontes = self._tontes(coord)
+        self.assertEqual([t.get("date") for t in tontes], [self.JOUR.isoformat()])
+
+    def test_22_au_23_novembre_le_second_travail_est_declare_lui_aussi(self) -> None:
+        """La chaîne entière du relevé : le premier travail se termine le 22 (déclaré), un
+        second naît le même soir à 0 %, passe la nuit et se termine le 23 à 12:24."""
+        coord = self._coord()
+        self._cycle(coord, self.VEILLE, "tache-21", 0, 0.0)
+        self._cycle(coord, self.VEILLE, "tache-21", 48, 85.5)
+        self._cycle(coord, self.JOUR, "tache-22", 49, 2.0)
+        premier = self._cycle(coord, self.JOUR, "tache-22", 100, 62.9)
+        self.assertEqual(premier["mower_auto_declaration_state"], "declaree", "prémisse")
+
+        # 16:27 : un NOUVEAU travail (la couverture repart de 0 après 100). 81,4 min jusqu'à 17:49.
+        # Le compteur du jour vaut déjà 62,9 à sa naissance : ce n'est pas son travail.
+        naissance = self._cycle(coord, self.JOUR, "tache-22b", 0, 62.9)
+        self.assertAlmostEqual(
+            naissance["mower_job_minutes_total"], 0.0, places=1,
+            msg="un nouveau cycle de couverture n'hérite RIEN du travail terminé",
+        )
+        soir = self._cycle(coord, self.JOUR, "tache-22b", 41, 144.3)
+        self.assertAlmostEqual(soir["mower_job_minutes_total"], 81.4, places=1)
+
+        # 23/11 : reprise à 42 % sous un autre identifiant, fin à 100 % à 12:24 (84,9 min).
+        self._cycle(coord, self.LENDEMAIN, "tache-23", 42, 2.0)
+        fin = self._cycle(coord, self.LENDEMAIN, "tache-23", 100, 84.9)
+
+        self.assertEqual(fin["mower_auto_declaration_state"], "declaree")
+        self.assertAlmostEqual(fin["mower_job_minutes_total"], 166.3, places=1)
+        self.assertEqual(
+            sorted(t.get("date") for t in self._tontes(coord)),
+            [self.JOUR.isoformat(), self.LENDEMAIN.isoformat()],
+        )
+
+    def test_sans_le_rattachement_le_meme_relevé_ne_declare_rien(self) -> None:
+        """Contre-épreuve : on simule l'ancien comportement (identifiants seuls) en effaçant la
+        dernière progression vue à chaque cycle. Le relevé retombe alors EXACTEMENT sur le
+        défaut constaté : 62,9 min < 90, « travail trop court », rien d'inscrit."""
+        coord = self._coord()
+        self._cycle(coord, self.VEILLE, "tache-21", 0, 0.0)
+        self._cycle(coord, self.VEILLE, "tache-21", 48, 85.5)
+        coord._runtime_state["mower_job_suivi"].pop("derniere_progression")
+        self._cycle(coord, self.JOUR, "tache-22", 49, 2.0)
+        fin = self._cycle(coord, self.JOUR, "tache-22", 100, 62.9)
+        self.assertEqual(fin["mower_auto_declaration_state"], "travail_trop_court")
+        self.assertEqual(self._tontes(coord), [])
+
+    # ---- CE QUI NE DOIT JAMAIS ÊTRE RATTACHÉ --------------------------------------------
+    def test_une_coupe_de_bordure_apres_un_travail_inacheve_reste_trop_courte(self) -> None:
+        """⚠️ LA GARDE DU 02/09. Un travail est à 41 % quand une bordure est lancée : elle repart
+        de 0 %, très en dessous, donc ouvre son propre travail. Rattachée, elle hériterait des
+        81 min du travail inachevé et franchirait le plancher : une bordure inscrite comme tonte."""
+        coord = self._coord()
+        self._cycle(coord, self.JOUR, "vrai-travail", 0, 0.0)
+        self._cycle(coord, self.JOUR, "vrai-travail", 41, 81.4)
+        bordure = self._cycle(coord, self.JOUR, "bordure", 0, 81.4)
+        self.assertAlmostEqual(bordure["mower_job_minutes_total"], 0.0, places=1,
+                               msg="la bordure hérite des minutes du travail inachevé")
+        fin = self._cycle(coord, self.JOUR, "bordure", 100, 97.4)
+        self.assertAlmostEqual(fin["mower_job_minutes_total"], 16.0, places=1)
+        self.assertEqual(fin["mower_auto_declaration_state"], "travail_trop_court")
+        self.assertEqual(self._tontes(coord), [], "une bordure a été inscrite comme une tonte")
+
+    def test_la_tolerance_de_recul_est_de_cinq_points_exactement(self) -> None:
+        for nouvelle, rattachee in ((36.0, True), (35.9, False)):
+            with self.subTest(progression_de_depart=nouvelle):
+                coord = self._coord()
+                self._suivre(coord, self.JOUR, "a", 0, 0.0)
+                self._suivre(coord, self.JOUR, "a", 41, 80.0)
+                reprise = self._suivre(coord, self.JOUR, "b", nouvelle, 80.0)
+                total = reprise["mower_job_minutes_total"]
+                if rattachee:
+                    self.assertAlmostEqual(total, 80.0, places=1, msg="la borne -5 est incluse")
+                else:
+                    self.assertAlmostEqual(total, 0.0, places=1, msg="au-delà de -5, nouveau travail")
+
+    def test_une_progression_qui_avance_beaucoup_reste_la_meme_couverture(self) -> None:
+        coord = self._coord()
+        self._suivre(coord, self.JOUR, "a", 0, 0.0)
+        self._suivre(coord, self.JOUR, "a", 30, 50.0)
+        reprise = self._suivre(coord, self.LENDEMAIN, "b", 55, 1.0)
+        self.assertAlmostEqual(reprise["mower_job_minutes_total"], 51.0, places=1)
+
+    def test_une_nouvelle_tache_deja_a_100_est_un_repos_pas_un_travail(self) -> None:
+        coord = self._coord()
+        self._suivre(coord, self.JOUR, "a", 0, 0.0)
+        self._suivre(coord, self.JOUR, "a", 40, 60.0)
+        repos = self._suivre(coord, self.LENDEMAIN, "b", 100, 0.0)
+        self.assertEqual(repos["mower_job_completion_state"], "repos")
+        self.assertFalse(coord._runtime_state["mower_job_suivi"]["vu_inacheve"])
+
+    def test_un_travail_deja_termine_n_est_jamais_prolonge(self) -> None:
+        """Après la fin d'un travail (consommée), la tâche suivante est TOUJOURS un nouveau
+        travail, même si sa progression de départ est élevée : c'est la correction du 03/09."""
+        coord = self._coord()
+        self._cycle(coord, self.JOUR, "a", 0, 0.0)
+        self._cycle(coord, self.JOUR, "a", 100, 95.0)
+        suite = self._suivre(coord, self.JOUR, "b", 98, 95.0)
+        self.assertAlmostEqual(suite["mower_job_minutes_total"], 0.0, places=1)
+
+    def test_une_fin_de_travail_encore_en_attente_n_est_pas_prolongee(self) -> None:
+        """Le travail vient d'atteindre 100 % mais sa fin n'a pas encore été traitée (état
+        `termine`, `vu_inacheve` toujours vrai) : une tâche qui arrive à 97 % ne doit pas l'avaler,
+        sinon la complétion — donc la tonte — disparaît sans bruit."""
+        coord = self._coord()
+        self._suivre(coord, self.JOUR, "a", 0, 0.0)
+        fin = self._suivre(coord, self.JOUR, "a", 100, 90.0)
+        self.assertEqual(fin["mower_job_completion_state"], "termine", "prémisse")
+        suite = self._suivre(coord, self.JOUR, "b", 97, 90.0)
+        self.assertAlmostEqual(suite["mower_job_minutes_total"], 0.0, places=1)
+
+    def test_la_progression_vue_a_la_naissance_compte_pour_le_rattachement(self) -> None:
+        """Une tâche vue pour la première fois à 30 % (intégration démarrée en cours de route),
+        puis remplacée aussitôt par une autre qui repart de 30 % : c'est la même couverture."""
+        coord = self._coord()
+        self._suivre(coord, self.JOUR, "a", 30, 50.0)
+        suite = self._suivre(coord, self.JOUR, "b", 31, 60.0)
+        self.assertAlmostEqual(suite["mower_job_minutes_total"], 10.0, places=1)
+
+    def test_un_suivi_sans_derniere_progression_ne_rattache_rien(self) -> None:
+        """Mémoire persistée par une version antérieure : pas de progression connue, donc aucun
+        rattachement (côté prudent : au pire, le travail est jugé court et retardé)."""
+        coord = self._coord()
+        coord._runtime_state["mower_job_suivi"] = {
+            "task_id": "a", "vu_inacheve": True, "minutes_base": 0.0,
+            "jour": self.JOUR.isoformat(), "minutes_jour": 70.0,
+        }
+        reprise = self._suivre(coord, self.JOUR, "b", 50, 70.0)
+        self.assertAlmostEqual(reprise["mower_job_minutes_total"], 0.0, places=1)
+
+    def test_un_suivi_jamais_vu_inacheve_ne_rattache_rien(self) -> None:
+        coord = self._coord()
+        coord._runtime_state["mower_job_suivi"] = {
+            "task_id": "a", "vu_inacheve": False, "derniere_progression": 40.0,
+            "minutes_base": 0.0, "jour": self.JOUR.isoformat(), "minutes_jour": 70.0,
+        }
+        reprise = self._suivre(coord, self.JOUR, "b", 41, 70.0)
+        self.assertAlmostEqual(reprise["mower_job_minutes_total"], 0.0, places=1)
+
+
 class RecordMowingIdempotentTests(unittest.TestCase):
     """`_append_history` ne déduplique pas : deux déclarations le même jour faisaient deux lignes.
 
